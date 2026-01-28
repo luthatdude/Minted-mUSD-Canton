@@ -863,7 +863,7 @@ describe("BLE Protocol Production Test", function () {
       // Try to decrease to 3 - should fail
       await expect(
         bridge.forceUpdateNonce(3n, "Attempting decrease")
-      ).to.be.revertedWith("NONCE_CANNOT_DECREASE");
+      ).to.be.revertedWith("NONCE_MUST_INCREASE");
     });
 
     it("Should reject forceUpdateNonce without reason", async function () {
@@ -890,6 +890,67 @@ describe("BLE Protocol Production Test", function () {
       await expect(bridge.forceUpdateNonce(100n, "Network emergency"))
         .to.emit(bridge, "NonceForceUpdated")
         .withArgs(0n, 100n, "Network emergency");
+    });
+
+    it("Should reject same-nonce update (no-op)", async function () {
+      await expect(
+        bridge.forceUpdateNonce(0n, "Same nonce")
+      ).to.be.revertedWith("NONCE_MUST_INCREASE");
+    });
+
+    it("Should pause and unpause attestation execution", async function () {
+      // Pause
+      await bridge.pause();
+
+      const chainId = (await ethers.provider.getNetwork()).chainId;
+      const amount = ethers.parseEther("1000");
+      const assets = ethers.parseEther("1100");
+
+      const hash = ethers.solidityPackedKeccak256(
+        ["bytes32", "uint256", "address", "uint256", "bool", "uint256", "uint256", "address"],
+        [ethers.id("pause-test"), assets, user.address, amount, true, 1n, chainId, await bridge.getAddress()]
+      );
+
+      const sigs = await signAndSort(hash, validators.slice(0, 3));
+
+      // Should reject while paused
+      await expect(
+        bridge.executeAttestation(
+          {
+            id: ethers.id("pause-test"),
+            globalCantonAssets: assets,
+            target: user.address,
+            amount,
+            isMint: true,
+            nonce: 1n,
+          },
+          sigs
+        )
+      ).to.be.revertedWithCustomError(bridge, "EnforcedPause");
+
+      // Unpause
+      await bridge.unpause();
+
+      // Should succeed after unpause
+      await bridge.executeAttestation(
+        {
+          id: ethers.id("pause-test"),
+          globalCantonAssets: assets,
+          target: user.address,
+          amount,
+          isMint: true,
+          nonce: 1n,
+        },
+        sigs
+      );
+
+      expect(await musd.balanceOf(user.address)).to.equal(amount);
+    });
+
+    it("Should reject pause from non-EMERGENCY_ROLE", async function () {
+      await expect(
+        bridge.connect(user).pause()
+      ).to.be.reverted;
     });
   });
 

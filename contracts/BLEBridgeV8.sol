@@ -9,6 +9,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -29,7 +30,7 @@ interface IAggregatorV3 {
     function decimals() external view returns (uint8);
 }
 
-contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable {
+contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -88,6 +89,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         __AccessControl_init();
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
+        __Pausable_init();
 
         require(_minSigs > 0, "INVALID_MIN_SIGS");
         require(_limit > 0, "INVALID_LIMIT");
@@ -150,6 +152,16 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                  EMERGENCY FUNCTIONS
     // ============================================================
 
+    /// @notice Pause all attestation execution
+    function pause() external onlyRole(EMERGENCY_ROLE) {
+        _pause();
+    }
+
+    /// @notice Resume attestation execution
+    function unpause() external onlyRole(EMERGENCY_ROLE) {
+        _unpause();
+    }
+
     /// @notice Force update the nonce in case of stuck transactions
     /// @dev Restricted to EMERGENCY_ROLE (should be a Timelock/Gnosis Safe)
     /// @param _newNonce The new nonce value to set
@@ -159,7 +171,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         string calldata _reason
     ) external onlyRole(EMERGENCY_ROLE) {
         require(bytes(_reason).length > 0, "REASON_REQUIRED");
-        require(_newNonce >= currentNonce, "NONCE_CANNOT_DECREASE");
+        require(_newNonce > currentNonce, "NONCE_MUST_INCREASE");
 
         uint256 oldNonce = currentNonce;
         currentNonce = _newNonce;
@@ -188,7 +200,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function executeAttestation(
         Attestation calldata att,
         bytes[] calldata signatures
-    ) external nonReentrant {
+    ) external nonReentrant whenNotPaused {
         require(signatures.length >= minSignatures, "INS_SIGS");
         require(att.nonce == currentNonce + 1, "INV_NONCE");
         require(att.target != address(0), "INVALID_TARGET");
