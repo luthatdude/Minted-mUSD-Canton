@@ -1,0 +1,10 @@
+sdk-version: 2.8.0
+name: ble-protocol
+version: 1.0.0
+source: .
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options:
+  - --target=2.1
