@@ -1,0 +1,122 @@
+# Minted Bridge - Docker Compose
+#
+# Usage:
+#   docker-compose up relay         # Start relay service only
+#   docker-compose up validator1    # Start validator 1
+#   docker-compose up               # Start everything
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # RELAY SERVICE
+  # Bridges finalized attestations from Canton to Ethereum
+  # ============================================================
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "relay:prod"]
+    environment:
+      - CANTON_HOST=${CANTON_HOST:-canton}
+      - CANTON_PORT=${CANTON_PORT:-6865}
+      - CANTON_TOKEN=${CANTON_TOKEN}
+      - CANTON_PARTY=${CANTON_PARTY}
+      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
+      - RELAYER_PRIVATE_KEY=${RELAYER_PRIVATE_KEY}
+      - CONFIRMATIONS=${CONFIRMATIONS:-2}
+      - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-5000}
+      - HEALTH_PORT=8080
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # VALIDATOR NODES
+  # Each validator runs independently with their own KMS key
+  # ============================================================
+  validator1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "validator:prod"]
+    environment:
+      - CANTON_HOST=${CANTON_HOST:-canton}
+      - CANTON_PORT=${CANTON_PORT:-6865}
+      - CANTON_TOKEN=${CANTON_TOKEN}
+      - VALIDATOR_PARTY=${VALIDATOR1_PARTY}
+      - VALIDATOR_ETH_ADDRESS=${VALIDATOR1_ETH_ADDRESS}
+      - KMS_KEY_ID=${VALIDATOR1_KMS_KEY_ID}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${VALIDATOR1_AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${VALIDATOR1_AWS_SECRET_ACCESS_KEY}
+      - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
+      - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
+      - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  validator2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "validator:prod"]
+    environment:
+      - CANTON_HOST=${CANTON_HOST:-canton}
+      - CANTON_PORT=${CANTON_PORT:-6865}
+      - CANTON_TOKEN=${CANTON_TOKEN}
+      - VALIDATOR_PARTY=${VALIDATOR2_PARTY}
+      - VALIDATOR_ETH_ADDRESS=${VALIDATOR2_ETH_ADDRESS}
+      - KMS_KEY_ID=${VALIDATOR2_KMS_KEY_ID}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${VALIDATOR2_AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${VALIDATOR2_AWS_SECRET_ACCESS_KEY}
+      - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
+      - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
+      - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  validator3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["npm", "run", "validator:prod"]
+    environment:
+      - CANTON_HOST=${CANTON_HOST:-canton}
+      - CANTON_PORT=${CANTON_PORT:-6865}
+      - CANTON_TOKEN=${CANTON_TOKEN}
+      - VALIDATOR_PARTY=${VALIDATOR3_PARTY}
+      - VALIDATOR_ETH_ADDRESS=${VALIDATOR3_ETH_ADDRESS}
+      - KMS_KEY_ID=${VALIDATOR3_KMS_KEY_ID}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${VALIDATOR3_AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${VALIDATOR3_AWS_SECRET_ACCESS_KEY}
+      - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
+      - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
+      - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

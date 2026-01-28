@@ -1,0 +1,506 @@
+/**
+ * Minted Protocol - Canton to Ethereum Relay Service
+ *
+ * Watches Canton for finalized attestations and submits them to BLEBridgeV9 on Ethereum.
+ *
+ * Flow:
+ *   1. Subscribe to Canton ledger via gRPC
+ *   2. Watch for FinalizeAttestation exercises
+ *   3. Fetch associated ValidatorSignature contracts
+ *   4. Format signatures for Ethereum (RSV format)
+ *   5. Submit to BLEBridgeV9.processAttestation()
+ *   6. Track bridged attestations to prevent duplicates
+ */
+
+import { ethers } from "ethers";
+import Ledger from "@daml/ledger";
+import { ContractId } from "@daml/types";
+import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
+
+// ============================================================
+//                     CONFIGURATION
+// ============================================================
+
+interface RelayConfig {
+  // Canton
+  cantonHost: string;
+  cantonPort: number;
+  cantonToken: string;
+  cantonParty: string;  // Aggregator party ID
+
+  // Ethereum
+  ethereumRpcUrl: string;
+  bridgeContractAddress: string;
+  relayerPrivateKey: string;  // Hot wallet for gas
+
+  // Operational
+  pollIntervalMs: number;
+  maxRetries: number;
+  confirmations: number;
+}
+
+const DEFAULT_CONFIG: RelayConfig = {
+  cantonHost: process.env.CANTON_HOST || "localhost",
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
+  cantonToken: process.env.CANTON_TOKEN || "",
+  cantonParty: process.env.CANTON_PARTY || "",
+
+  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
+  relayerPrivateKey: process.env.RELAYER_PRIVATE_KEY || "",
+
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
+  maxRetries: parseInt(process.env.MAX_RETRIES || "3"),
+  confirmations: parseInt(process.env.CONFIRMATIONS || "2"),
+};
+
+// ============================================================
+//                     DAML TYPES (generated)
+// ============================================================
+
+// These mirror your DAML templates
+interface AttestationPayload {
+  attestationId: string;
+  globalCantonAssets: string;  // Numeric as string
+  targetAddress: string;
+  amount: string;
+  isMint: boolean;
+  nonce: string;
+  chainId: string;
+  expiresAt: string;  // ISO timestamp
+}
+
+interface AttestationRequest {
+  aggregator: string;
+  validatorGroup: string[];
+  payload: AttestationPayload;
+  positionCids: ContractId<unknown>[];
+  collectedSignatures: string[];  // Set as array
+}
+
+interface ValidatorSignature {
+  requestId: ContractId<AttestationRequest>;
+  validator: string;
+  aggregator: string;
+  ecdsaSignature: string;
+  nonce: string;
+}
+
+// ============================================================
+//                     BLEBridgeV9 ABI (partial)
+// ============================================================
+
+const BRIDGE_ABI = [
+  {
+    "inputs": [
+      {
+        "components": [
+          { "name": "id", "type": "bytes32" },
+          { "name": "cantonAssets", "type": "uint256" },
+          { "name": "nonce", "type": "uint256" },
+          { "name": "timestamp", "type": "uint256" }
+        ],
+        "name": "att",
+        "type": "tuple"
+      },
+      { "name": "signatures", "type": "bytes[]" }
+    ],
+    "name": "processAttestation",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "currentNonce",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "minSignatures",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "name": "", "type": "bytes32" }],
+    "name": "usedAttestationIds",
+    "outputs": [{ "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+];
+
+// ============================================================
+//                     RELAY SERVICE
+// ============================================================
+
+class RelayService {
+  private config: RelayConfig;
+  private ledger: Ledger;
+  private provider: ethers.JsonRpcProvider;
+  private wallet: ethers.Wallet;
+  private bridgeContract: ethers.Contract;
+  private processedAttestations: Set<string> = new Set();
+  private isRunning: boolean = false;
+
+  constructor(config: RelayConfig) {
+    this.config = config;
+
+    // Initialize Canton connection
+    this.ledger = new Ledger({
+      token: config.cantonToken,
+      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+    });
+
+    // Initialize Ethereum connection
+    this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
+    this.wallet = new ethers.Wallet(config.relayerPrivateKey, this.provider);
+    this.bridgeContract = new ethers.Contract(
+      config.bridgeContractAddress,
+      BRIDGE_ABI,
+      this.wallet
+    );
+
+    console.log(`[Relay] Initialized`);
+    console.log(`[Relay] Canton: ${config.cantonHost}:${config.cantonPort}`);
+    console.log(`[Relay] Ethereum: ${config.ethereumRpcUrl}`);
+    console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
+    console.log(`[Relay] Relayer: ${this.wallet.address}`);
+  }
+
+  /**
+   * Start the relay service
+   */
+  async start(): Promise<void> {
+    console.log("[Relay] Starting...");
+    this.isRunning = true;
+
+    // Load already-processed attestations from chain
+    await this.loadProcessedAttestations();
+
+    // Main loop
+    while (this.isRunning) {
+      try {
+        await this.pollForAttestations();
+      } catch (error) {
+        console.error("[Relay] Poll error:", error);
+      }
+      await this.sleep(this.config.pollIntervalMs);
+    }
+  }
+
+  /**
+   * Stop the relay service
+   */
+  stop(): void {
+    console.log("[Relay] Stopping...");
+    this.isRunning = false;
+  }
+
+  /**
+   * Load attestation IDs that have already been processed on-chain
+   */
+  private async loadProcessedAttestations(): Promise<void> {
+    console.log("[Relay] Loading processed attestations from chain...");
+
+    // Query past AttestationReceived events
+    const filter = this.bridgeContract.filters.AttestationReceived();
+    const events = await this.bridgeContract.queryFilter(filter, -10000);
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (args) {
+        this.processedAttestations.add(args.id);
+      }
+    }
+
+    console.log(`[Relay] Found ${this.processedAttestations.size} processed attestations`);
+  }
+
+  /**
+   * Poll Canton for finalized attestations ready to bridge
+   */
+  private async pollForAttestations(): Promise<void> {
+    // Query active AttestationRequest contracts
+    const attestations = await this.ledger.query<AttestationRequest>(
+      "MintedProtocolV2:AttestationRequest" as any,
+      { aggregator: this.config.cantonParty }
+    );
+
+    for (const attestation of attestations) {
+      const payload = attestation.payload.payload;
+      const attestationId = payload.attestationId;
+
+      // Skip if already processed
+      if (this.processedAttestations.has(attestationId)) {
+        continue;
+      }
+
+      // Check if we have enough signatures
+      const signatures = attestation.payload.collectedSignatures;
+      const minSigs = await this.bridgeContract.minSignatures();
+
+      if (signatures.length < Number(minSigs)) {
+        console.log(`[Relay] Attestation ${attestationId}: ${signatures.length}/${minSigs} signatures`);
+        continue;
+      }
+
+      // Check if nonce matches expected
+      const currentNonce = await this.bridgeContract.currentNonce();
+      const expectedNonce = Number(currentNonce) + 1;
+
+      if (Number(payload.nonce) !== expectedNonce) {
+        console.log(`[Relay] Attestation ${attestationId}: nonce mismatch (got ${payload.nonce}, expected ${expectedNonce})`);
+        continue;
+      }
+
+      // Fetch validator signatures
+      const validatorSigs = await this.fetchValidatorSignatures(attestation.contractId);
+
+      if (validatorSigs.length < Number(minSigs)) {
+        console.log(`[Relay] Attestation ${attestationId}: not enough valid signatures`);
+        continue;
+      }
+
+      // Bridge it
+      console.log(`[Relay] Bridging attestation ${attestationId}...`);
+      await this.bridgeAttestation(payload, validatorSigs);
+    }
+  }
+
+  /**
+   * Fetch ValidatorSignature contracts for an attestation
+   */
+  private async fetchValidatorSignatures(
+    requestId: ContractId<AttestationRequest>
+  ): Promise<ValidatorSignature[]> {
+    const signatures = await this.ledger.query<ValidatorSignature>(
+      "MintedProtocolV2:ValidatorSignature" as any,
+      { requestId }
+    );
+    return signatures.map(s => s.payload);
+  }
+
+  /**
+   * Submit attestation to Ethereum
+   */
+  private async bridgeAttestation(
+    payload: AttestationPayload,
+    validatorSigs: ValidatorSignature[]
+  ): Promise<void> {
+    const attestationId = payload.attestationId;
+
+    try {
+      // Convert attestation ID to bytes32
+      const idBytes32 = ethers.id(attestationId);
+
+      // Check if already used on-chain
+      const isUsed = await this.bridgeContract.usedAttestationIds(idBytes32);
+      if (isUsed) {
+        console.log(`[Relay] Attestation ${attestationId} already processed on-chain`);
+        this.processedAttestations.add(attestationId);
+        return;
+      }
+
+      // Format signatures for Ethereum
+      const messageHash = this.buildMessageHash(payload, idBytes32);
+      const formattedSigs = await this.formatSignatures(validatorSigs, messageHash);
+
+      // Sort signatures by signer address (required by BLEBridgeV9)
+      const sortedSigs = sortSignaturesBySignerAddress(formattedSigs, messageHash);
+
+      // Build attestation struct
+      const attestation = {
+        id: idBytes32,
+        cantonAssets: ethers.parseUnits(payload.globalCantonAssets, 18),
+        nonce: BigInt(payload.nonce),
+        timestamp: BigInt(Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600), // 1hr before expiry
+      };
+
+      // Estimate gas
+      const gasEstimate = await this.bridgeContract.processAttestation.estimateGas(
+        attestation,
+        sortedSigs
+      );
+
+      // Submit transaction
+      console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
+
+      const tx = await this.bridgeContract.processAttestation(
+        attestation,
+        sortedSigs,
+        {
+          gasLimit: gasEstimate * 120n / 100n,  // 20% buffer
+        }
+      );
+
+      console.log(`[Relay] Transaction submitted: ${tx.hash}`);
+
+      // Wait for confirmations
+      const receipt = await tx.wait(this.config.confirmations);
+
+      if (receipt.status === 1) {
+        console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
+        this.processedAttestations.add(attestationId);
+      } else {
+        console.error(`[Relay] Transaction reverted: ${tx.hash}`);
+      }
+
+    } catch (error: any) {
+      console.error(`[Relay] Failed to bridge attestation ${attestationId}:`, error.message);
+
+      // Check if it's a revert with reason
+      if (error.reason) {
+        console.error(`[Relay] Revert reason: ${error.reason}`);
+      }
+
+      // Don't mark as processed so we can retry
+      throw error;
+    }
+  }
+
+  /**
+   * Build the message hash that validators signed
+   */
+  private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
+    const chainId = Number(payload.chainId);
+
+    return ethers.solidityPackedKeccak256(
+      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      [
+        idBytes32,
+        ethers.parseUnits(payload.globalCantonAssets, 18),
+        BigInt(payload.nonce),
+        BigInt(Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600),
+        chainId,
+        this.config.bridgeContractAddress,
+      ]
+    );
+  }
+
+  /**
+   * Format validator signatures for Ethereum
+   */
+  private async formatSignatures(
+    validatorSigs: ValidatorSignature[],
+    messageHash: string
+  ): Promise<string[]> {
+    const formatted: string[] = [];
+
+    for (const sig of validatorSigs) {
+      try {
+        // If signature is already in RSV format (0x + 130 hex chars)
+        if (sig.ecdsaSignature.startsWith("0x") && sig.ecdsaSignature.length === 132) {
+          formatted.push(sig.ecdsaSignature);
+        }
+        // If signature is DER encoded (from AWS KMS)
+        else {
+          const derBuffer = Buffer.from(sig.ecdsaSignature.replace("0x", ""), "hex");
+          const rsvSig = formatKMSSignature(
+            derBuffer,
+            messageHash,
+            sig.validator  // Validator's Ethereum address
+          );
+          formatted.push(rsvSig);
+        }
+      } catch (error) {
+        console.warn(`[Relay] Failed to format signature from ${sig.validator}:`, error);
+      }
+    }
+
+    return formatted;
+  }
+
+  /**
+   * Sleep helper
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
+// ============================================================
+//                     HEALTH CHECK SERVER
+// ============================================================
+
+import * as http from "http";
+
+function startHealthServer(port: number, relay: RelayService): http.Server {
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+      }));
+    } else if (req.url === "/metrics") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        processedCount: (relay as any).processedAttestations.size,
+      }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  server.listen(port, () => {
+    console.log(`[Health] Server listening on port ${port}`);
+  });
+
+  return server;
+}
+
+// ============================================================
+//                     MAIN
+// ============================================================
+
+async function main(): Promise<void> {
+  console.log("===========================================");
+  console.log("  Minted Protocol - Canton-Ethereum Relay  ");
+  console.log("===========================================");
+  console.log("");
+
+  // Validate config
+  if (!DEFAULT_CONFIG.bridgeContractAddress) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
+  }
+  if (!DEFAULT_CONFIG.relayerPrivateKey) {
+    throw new Error("RELAYER_PRIVATE_KEY not set");
+  }
+  if (!DEFAULT_CONFIG.cantonParty) {
+    throw new Error("CANTON_PARTY not set");
+  }
+
+  // Create relay service
+  const relay = new RelayService(DEFAULT_CONFIG);
+
+  // Start health server
+  const healthPort = parseInt(process.env.HEALTH_PORT || "8080");
+  const healthServer = startHealthServer(healthPort, relay);
+
+  // Handle shutdown
+  const shutdown = () => {
+    console.log("\n[Main] Shutting down...");
+    relay.stop();
+    healthServer.close();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  // Start relay
+  await relay.start();
+}
+
+main().catch((error) => {
+  console.error("[Main] Fatal error:", error);
+  process.exit(1);
+});
+
+export { RelayService, RelayConfig };

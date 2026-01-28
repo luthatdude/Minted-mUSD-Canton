@@ -1,0 +1,400 @@
+/**
+ * Minted Protocol - Canton Validator Node
+ *
+ * Watches for AttestationRequest contracts and signs them using AWS KMS.
+ *
+ * Flow:
+ *   1. Subscribe to Canton ledger
+ *   2. Watch for new AttestationRequest contracts
+ *   3. Verify collateral requirements
+ *   4. Sign with AWS KMS
+ *   5. Submit ValidatorSignature to Canton
+ */
+
+import Ledger from "@daml/ledger";
+import { ContractId } from "@daml/types";
+import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
+import { ethers } from "ethers";
+
+// ============================================================
+//                     CONFIGURATION
+// ============================================================
+
+interface ValidatorConfig {
+  // Canton
+  cantonHost: string;
+  cantonPort: number;
+  cantonToken: string;
+  validatorParty: string;  // This validator's party ID
+
+  // AWS KMS
+  awsRegion: string;
+  kmsKeyId: string;  // KMS key ARN or alias
+
+  // Ethereum (for address derivation)
+  ethereumAddress: string;  // Validator's Ethereum address
+
+  // Operational
+  pollIntervalMs: number;
+  minCollateralRatioBps: number;  // 11000 = 110%
+}
+
+const DEFAULT_CONFIG: ValidatorConfig = {
+  cantonHost: process.env.CANTON_HOST || "localhost",
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
+  cantonToken: process.env.CANTON_TOKEN || "",
+  validatorParty: process.env.VALIDATOR_PARTY || "",
+
+  awsRegion: process.env.AWS_REGION || "us-east-1",
+  kmsKeyId: process.env.KMS_KEY_ID || "",
+
+  ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
+
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000"),
+  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000"),
+};
+
+// ============================================================
+//                     DAML TYPES
+// ============================================================
+
+interface AttestationPayload {
+  attestationId: string;
+  globalCantonAssets: string;
+  targetAddress: string;
+  amount: string;
+  isMint: boolean;
+  nonce: string;
+  chainId: string;
+  expiresAt: string;
+}
+
+interface AttestationRequest {
+  aggregator: string;
+  validatorGroup: string[];
+  payload: AttestationPayload;
+  positionCids: ContractId<unknown>[];
+  collectedSignatures: string[];
+}
+
+interface InstitutionalEquityPosition {
+  bank: string;
+  validatorGroup: string[];
+  aggregator: string;
+  totalValue: string;
+  referenceId: string;
+  lastUpdated: string;
+}
+
+// ============================================================
+//                     VALIDATOR NODE
+// ============================================================
+
+class ValidatorNode {
+  private config: ValidatorConfig;
+  private ledger: Ledger;
+  private kmsClient: KMSClient;
+  private signedAttestations: Set<string> = new Set();
+  private isRunning: boolean = false;
+
+  constructor(config: ValidatorConfig) {
+    this.config = config;
+
+    // Initialize Canton connection
+    this.ledger = new Ledger({
+      token: config.cantonToken,
+      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+    });
+
+    // Initialize AWS KMS
+    this.kmsClient = new KMSClient({ region: config.awsRegion });
+
+    console.log(`[Validator] Initialized`);
+    console.log(`[Validator] Party: ${config.validatorParty}`);
+    console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
+    console.log(`[Validator] KMS Key: ${config.kmsKeyId}`);
+  }
+
+  /**
+   * Start the validator node
+   */
+  async start(): Promise<void> {
+    console.log("[Validator] Starting...");
+    this.isRunning = true;
+
+    // Main loop
+    while (this.isRunning) {
+      try {
+        await this.pollForAttestations();
+      } catch (error) {
+        console.error("[Validator] Poll error:", error);
+      }
+      await this.sleep(this.config.pollIntervalMs);
+    }
+  }
+
+  /**
+   * Stop the validator node
+   */
+  stop(): void {
+    console.log("[Validator] Stopping...");
+    this.isRunning = false;
+  }
+
+  /**
+   * Poll for attestation requests that need signing
+   */
+  private async pollForAttestations(): Promise<void> {
+    // Query AttestationRequest contracts where we're in the validator group
+    const attestations = await this.ledger.query<AttestationRequest>(
+      "MintedProtocolV2:AttestationRequest" as any,
+      {}  // Query all, filter locally
+    );
+
+    for (const attestation of attestations) {
+      const request = attestation.payload;
+      const payload = request.payload;
+      const attestationId = payload.attestationId;
+
+      // Check if we're in the validator group
+      if (!request.validatorGroup.includes(this.config.validatorParty)) {
+        continue;
+      }
+
+      // Check if we've already signed
+      if (request.collectedSignatures.includes(this.config.validatorParty)) {
+        continue;
+      }
+
+      // Check if we've signed in this session (prevent double-signing during latency)
+      if (this.signedAttestations.has(attestationId)) {
+        continue;
+      }
+
+      // Check expiration
+      const expiresAt = new Date(payload.expiresAt);
+      if (expiresAt <= new Date()) {
+        console.log(`[Validator] Attestation ${attestationId} expired, skipping`);
+        continue;
+      }
+
+      // Verify collateral
+      const isValid = await this.verifyCollateral(request);
+      if (!isValid) {
+        console.log(`[Validator] Attestation ${attestationId} failed collateral check, skipping`);
+        continue;
+      }
+
+      // Sign it
+      console.log(`[Validator] Signing attestation ${attestationId}...`);
+      await this.signAttestation(attestation.contractId, payload);
+    }
+  }
+
+  /**
+   * Verify the attestation has sufficient collateral backing
+   */
+  private async verifyCollateral(request: AttestationRequest): Promise<boolean> {
+    const payload = request.payload;
+
+    // Fetch all linked equity positions
+    let totalValue = 0n;
+    for (const positionCid of request.positionCids) {
+      try {
+        const positions = await this.ledger.query<InstitutionalEquityPosition>(
+          "MintedProtocolV2:InstitutionalEquityPosition" as any,
+          {}
+        );
+
+        // Find matching position
+        for (const pos of positions) {
+          // ContractId comparison is tricky - match by reference
+          totalValue += BigInt(Math.floor(parseFloat(pos.payload.totalValue) * 1e18));
+        }
+      } catch (error) {
+        console.warn(`[Validator] Failed to fetch position:`, error);
+      }
+    }
+
+    // Verify collateral ratio
+    const requestedAmount = BigInt(Math.floor(parseFloat(payload.amount) * 1e18));
+    const reportedAssets = BigInt(Math.floor(parseFloat(payload.globalCantonAssets) * 1e18));
+
+    // Check reported assets match fetched total
+    // Allow small rounding difference
+    const assetsDiff = totalValue > reportedAssets
+      ? totalValue - reportedAssets
+      : reportedAssets - totalValue;
+
+    if (assetsDiff > 1000000n) {  // 0.000001 tolerance
+      console.warn(`[Validator] Asset mismatch: reported=${payload.globalCantonAssets}, found=${totalValue}`);
+      return false;
+    }
+
+    // Check collateral ratio (e.g., 110%)
+    const requiredCollateral = requestedAmount * BigInt(this.config.minCollateralRatioBps) / 10000n;
+
+    if (reportedAssets < requiredCollateral) {
+      console.warn(`[Validator] Insufficient collateral: ${reportedAssets} < ${requiredCollateral}`);
+      return false;
+    }
+
+    console.log(`[Validator] Collateral verified: ${payload.globalCantonAssets} >= ${requiredCollateral} (${this.config.minCollateralRatioBps / 100}%)`);
+    return true;
+  }
+
+  /**
+   * Sign attestation and submit to Canton
+   */
+  private async signAttestation(
+    contractId: ContractId<AttestationRequest>,
+    payload: AttestationPayload
+  ): Promise<void> {
+    const attestationId = payload.attestationId;
+
+    try {
+      // Build message hash (same as Solidity contract expects)
+      const messageHash = this.buildMessageHash(payload);
+
+      // Sign with KMS
+      const signature = await this.signWithKMS(messageHash);
+
+      // Submit to Canton
+      await this.ledger.exercise(
+        "MintedProtocolV2:AttestationRequest" as any,
+        contractId,
+        "ProvideSignature",
+        {
+          validator: this.config.validatorParty,
+          ecdsaSignature: signature,
+        }
+      );
+
+      // Mark as signed
+      this.signedAttestations.add(attestationId);
+      console.log(`[Validator] Signed attestation ${attestationId}`);
+
+    } catch (error: any) {
+      console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
+
+      // If it's "already signed", mark it to prevent retries
+      if (error.message?.includes("VALIDATOR_ALREADY_SIGNED")) {
+        this.signedAttestations.add(attestationId);
+      }
+    }
+  }
+
+  /**
+   * Build the message hash for signing
+   */
+  private buildMessageHash(payload: AttestationPayload): string {
+    const idBytes32 = ethers.id(payload.attestationId);
+    const chainId = Number(payload.chainId);
+    const timestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
+
+    // This must match what BLEBridgeV9 expects
+    return ethers.solidityPackedKeccak256(
+      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      [
+        idBytes32,
+        ethers.parseUnits(payload.globalCantonAssets, 18),
+        BigInt(payload.nonce),
+        BigInt(timestamp),
+        chainId,
+        process.env.BRIDGE_CONTRACT_ADDRESS || ethers.ZeroAddress,
+      ]
+    );
+  }
+
+  /**
+   * Sign a message hash using AWS KMS
+   */
+  private async signWithKMS(messageHash: string): Promise<string> {
+    // Convert to eth signed message hash
+    const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
+    const hashBytes = Buffer.from(ethSignedHash.slice(2), "hex");
+
+    // Sign with KMS
+    const command = new SignCommand({
+      KeyId: this.config.kmsKeyId,
+      Message: hashBytes,
+      MessageType: "DIGEST",
+      SigningAlgorithm: "ECDSA_SHA_256",
+    });
+
+    const response = await this.kmsClient.send(command);
+
+    if (!response.Signature) {
+      throw new Error("KMS returned empty signature");
+    }
+
+    // Convert DER to RSV format
+    const derSignature = Buffer.from(response.Signature);
+    const rsvSignature = this.derToRsv(derSignature, ethSignedHash);
+
+    return rsvSignature;
+  }
+
+  /**
+   * Convert DER-encoded signature to RSV format
+   * Uses the logic from signer.ts
+   */
+  private derToRsv(derSig: Buffer, messageHash: string): string {
+    // Import the formatting function
+    const { formatKMSSignature } = require("./signer");
+    return formatKMSSignature(derSig, messageHash, this.config.ethereumAddress);
+  }
+
+  /**
+   * Sleep helper
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
+// ============================================================
+//                     MAIN
+// ============================================================
+
+async function main(): Promise<void> {
+  console.log("===========================================");
+  console.log("  Minted Protocol - Validator Node         ");
+  console.log("===========================================");
+  console.log("");
+
+  // Validate config
+  if (!DEFAULT_CONFIG.validatorParty) {
+    throw new Error("VALIDATOR_PARTY not set");
+  }
+  if (!DEFAULT_CONFIG.kmsKeyId) {
+    throw new Error("KMS_KEY_ID not set");
+  }
+  if (!DEFAULT_CONFIG.ethereumAddress) {
+    throw new Error("VALIDATOR_ETH_ADDRESS not set");
+  }
+
+  // Create validator node
+  const validator = new ValidatorNode(DEFAULT_CONFIG);
+
+  // Handle shutdown
+  const shutdown = () => {
+    console.log("\n[Main] Shutting down...");
+    validator.stop();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  // Start validator
+  await validator.start();
+}
+
+main().catch((error) => {
+  console.error("[Main] Fatal error:", error);
+  process.exit(1);
+});
+
+export { ValidatorNode, ValidatorConfig };
