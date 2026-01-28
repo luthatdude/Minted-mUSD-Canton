@@ -412,6 +412,286 @@ main = script do
   numericPrecisionTest
   debug ""
 
+  debug "Running: mUSD Asset Tests"
+  musdAssetTest
+  debug ""
+
+  debug "Running: mUSD Attestation-Gated Mint Test"
+  musdAttestationMintTest
+  debug ""
+
+  debug "Running: mUSD Transfer Proposal Test"
+  musdTransferTest
+  debug ""
+
+  debug "Running: mUSD Mint Request Test"
+  musdMintRequestTest
+  debug ""
+
+  debug "Running: mUSD Mint Proposal Test"
+  musdMintProposalTest
+  debug ""
+
   debug "========================================="
   debug "All tests passed!"
   debug "========================================="
+
+
+-- =========================================
+-- MintedMUSD Asset Tests
+-- =========================================
+
+-- Test: Basic mUSD operations (split, merge, redeem)
+musdAssetTest : Script ()
+musdAssetTest = script do
+  issuer <- allocateParty "Issuer"
+  alice <- allocateParty "Alice"
+
+  -- Create issuer role
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with issuer
+
+  -- Direct mint (admin/bootstrap path)
+  musdCid <- submit issuer do
+    exerciseCmd roleCid MintedMUSD.Mint with
+      owner = alice
+      amount = 10000.000000000000000000
+
+  -- Split
+  (half1Cid, half2Cid) <- submit alice do
+    exerciseCmd musdCid MintedMUSD.Split with
+      splitAmount = 4000.000000000000000000
+
+  -- Verify split amounts by merging them back
+  mergedCid <- submit alice do
+    exerciseCmd half1Cid MintedMUSD.Merge with
+      otherCid = half2Cid
+
+  -- Redeem (burn)
+  submit alice do
+    exerciseCmd mergedCid MintedMUSD.Redeem
+
+  debug "mUSD asset test passed - split, merge, redeem all work"
+  pure ()
+
+
+-- Test: Attestation-gated minting
+musdAttestationMintTest : Script ()
+musdAttestationMintTest = script do
+  issuer <- allocateParty "Issuer"
+  bank <- allocateParty "Bank"
+  aggregator <- allocateParty "Aggregator"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+  alice <- allocateParty "Alice"
+
+  let validators = [validator1, validator2, validator3]
+  now <- getTime
+  let expiresAt = addRelTime now (hours 1)
+  let mintAmount : Numeric 18 = 1000000.000000000000000000
+  let collateral : Numeric 18 = 1100000.000000000000000000
+
+  -- Setup: Create equity position
+  positionCid <- submit bank do
+    createCmd InstitutionalEquityPosition with
+      bank = bank
+      validatorGroup = validators
+      aggregator = aggregator
+      totalValue = collateral
+      referenceId = "BANK-MUSD-MINT"
+      lastUpdated = now
+
+  -- Setup: Create attestation
+  let payload = AttestationPayload with
+        attestationId = "ATT-MUSD-001"
+        globalCantonAssets = collateral
+        targetAddress = "0x1234567890123456789012345678901234567890"
+        amount = mintAmount
+        isMint = True
+        nonce = 1
+        chainId = 1
+        expiresAt = expiresAt
+
+  attestationCid <- submit aggregator do
+    createCmd AttestationRequest with
+      aggregator
+      validatorGroup = validators
+      payload
+      positionCids = [positionCid]
+      collectedSignatures = Set.empty
+
+  -- Collect 3 validator signatures
+  (attCid1, sig1Cid) <- submit validator1 do
+    exerciseCmd attestationCid ProvideSignature with
+      validator = validator1
+      ecdsaSignature = "0xsig1"
+
+  (attCid2, sig2Cid) <- submit validator2 do
+    exerciseCmd attCid1 ProvideSignature with
+      validator = validator2
+      ecdsaSignature = "0xsig2"
+
+  (attCid3, sig3Cid) <- submit validator3 do
+    exerciseCmd attCid2 ProvideSignature with
+      validator = validator3
+      ecdsaSignature = "0xsig3"
+
+  -- Create issuer role
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with issuer
+
+  -- Mint mUSD gated by the finalized attestation
+  musdCid <- submit issuer do
+    exerciseCmd roleCid MintFromAttestation with
+      owner = alice
+      mintAmount = mintAmount
+      attestationCid = attCid3
+      signatureCids = [sig1Cid, sig2Cid, sig3Cid]
+      requiredSignatures = 3
+
+  debug "Attestation-gated mint test passed - mUSD minted after 3-of-3 validator approval"
+  pure ()
+
+
+-- Test: Transfer proposal flow (accept/reject/cancel)
+musdTransferTest : Script ()
+musdTransferTest = script do
+  issuer <- allocateParty "Issuer"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Create issuer role and mint
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with issuer
+
+  musdCid <- submit issuer do
+    exerciseCmd roleCid MintedMUSD.Mint with
+      owner = alice
+      amount = 5000.000000000000000000
+
+  -- Alice proposes transfer to Bob
+  proposalCid <- submit alice do
+    exerciseCmd musdCid MintedMUSD.Transfer with
+      newOwner = bob
+
+  -- Bob accepts
+  bobMusdCid <- submit bob do
+    exerciseCmd proposalCid MintedMUSD.Accept
+
+  -- Verify Bob owns it by splitting (only owner can split)
+  (half1, half2) <- submit bob do
+    exerciseCmd bobMusdCid MintedMUSD.Split with
+      splitAmount = 2000.000000000000000000
+
+  -- Test cancel: Bob proposes back to Alice, then cancels
+  proposalCid2 <- submit bob do
+    exerciseCmd half1 MintedMUSD.Transfer with
+      newOwner = alice
+
+  cancelledCid <- submit bob do
+    exerciseCmd proposalCid2 MintedMUSD.Cancel
+
+  debug "Transfer proposal test passed - accept and cancel both work"
+  pure ()
+
+
+-- Test: User-initiated mint request (MintRequest)
+musdMintRequestTest : Script ()
+musdMintRequestTest = script do
+  issuer <- allocateParty "Issuer"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Alice requests minting 1000 mUSD
+  requestCid <- submit alice do
+    createCmd MintedMUSD.MintRequest with
+      issuer = issuer
+      owner = alice
+      amount = 1000.000000000000000000
+
+  -- Issuer approves
+  musdCid <- submit issuer do
+    exerciseCmd requestCid ApproveMint
+
+  -- Verify Alice got the mUSD by splitting
+  (half1, half2) <- submit alice do
+    exerciseCmd musdCid MintedMUSD.Split with
+      splitAmount = 500.000000000000000000
+
+  debug "  Approve path works"
+
+  -- Bob requests, issuer rejects
+  requestCid2 <- submit bob do
+    createCmd MintedMUSD.MintRequest with
+      issuer = issuer
+      owner = bob
+      amount = 999999.000000000000000000
+
+  submit issuer do
+    exerciseCmd requestCid2 RejectMint
+
+  debug "  Reject path works"
+
+  -- Alice requests, then cancels
+  requestCid3 <- submit alice do
+    createCmd MintedMUSD.MintRequest with
+      issuer = issuer
+      owner = alice
+      amount = 500.000000000000000000
+
+  submit alice do
+    exerciseCmd requestCid3 CancelMintRequest
+
+  debug "Mint request test passed - approve, reject, cancel all work"
+  pure ()
+
+
+-- Test: Issuer-initiated mint proposal (MintProposal)
+musdMintProposalTest : Script ()
+musdMintProposalTest = script do
+  issuer <- allocateParty "Issuer"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Issuer proposes minting 2000 mUSD to Alice
+  proposalCid <- submit issuer do
+    createCmd MintedMUSD.MintProposal with
+      issuer = issuer
+      owner = alice
+      amount = 2000.000000000000000000
+
+  -- Alice accepts
+  musdCid <- submit alice do
+    exerciseCmd proposalCid AcceptMint
+
+  -- Verify Alice got the mUSD
+  submit alice do
+    exerciseCmd musdCid MintedMUSD.Redeem
+
+  debug "  Accept path works"
+
+  -- Issuer proposes to Bob, Bob declines
+  proposalCid2 <- submit issuer do
+    createCmd MintedMUSD.MintProposal with
+      issuer = issuer
+      owner = bob
+      amount = 1000.000000000000000000
+
+  submit bob do
+    exerciseCmd proposalCid2 DeclineMint
+
+  debug "  Decline path works"
+
+  -- Issuer proposes, then withdraws
+  proposalCid3 <- submit issuer do
+    createCmd MintedMUSD.MintProposal with
+      issuer = issuer
+      owner = alice
+      amount = 3000.000000000000000000
+
+  submit issuer do
+    exerciseCmd proposalCid3 WithdrawMintProposal
+
+  debug "Mint proposal test passed - accept, decline, withdraw all work"
+  pure ()

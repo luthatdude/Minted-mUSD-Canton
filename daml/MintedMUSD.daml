@@ -154,3 +154,79 @@ template IssuerRole
           issuer
           owner
           amount
+
+
+-- =========================================
+-- MINT REQUEST / PROPOSAL WORKFLOWS
+-- =========================================
+
+-- | User-initiated mint request.
+-- Separation of duties: the user requests minting, the issuer approves
+-- after verifying collateral or off-ledger conditions.
+template MintRequest
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory owner
+    observer issuer
+
+    ensure amount > 0.0
+
+    -- | Issuer approves the request and mints mUSD.
+    choice ApproveMint : ContractId MUSD
+      controller issuer
+      do
+        create MUSD with
+          issuer
+          owner
+          amount
+
+    -- | Issuer rejects the request.
+    choice RejectMint : ()
+      controller issuer
+      do
+        return ()
+
+    -- | Owner cancels their own request.
+    choice CancelMintRequest : ()
+      controller owner
+      do
+        return ()
+
+
+-- | Issuer-initiated mint proposal (airdrop-safe).
+-- The issuer proposes minting to a user, but the user must explicitly
+-- accept because they become a signatory on the resulting MUSD contract.
+template MintProposal
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer
+    observer owner
+
+    ensure amount > 0.0
+
+    -- | Owner accepts the mint proposal.
+    choice AcceptMint : ContractId MUSD
+      controller owner
+      do
+        create MUSD with
+          issuer
+          owner
+          amount
+
+    -- | Owner declines the mint proposal.
+    choice DeclineMint : ()
+      controller owner
+      do
+        return ()
+
+    -- | Issuer withdraws the proposal.
+    choice WithdrawMintProposal : ()
+      controller issuer
+      do
+        return ()
