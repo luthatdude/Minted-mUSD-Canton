@@ -269,6 +269,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         uint256 oracleValue = uint256(answer);
         uint8 oracleDecimals = navOracle.decimals();
+        require(oracleDecimals <= 18, "UNSUPPORTED_ORACLE_DECIMALS");
 
         // Normalize to 18 decimals
         uint256 normalizedOracleValue = oracleValue * (10 ** (18 - oracleDecimals));
@@ -350,6 +351,9 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         uint256 oracleValue = uint256(answer);
         uint8 oracleDecimals = navOracle.decimals();
+        if (oracleDecimals > 18) {
+            return (false, type(uint256).max);
+        }
         uint256 normalizedOracleValue = oracleValue * (10 ** (18 - oracleDecimals));
 
         if (reportedAssets > normalizedOracleValue) {
@@ -368,5 +372,6 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
     // Storage gap for future upgrades - MUST be at the end
-    uint256[44] private __gap;
+    // 12 state variables declared above → 50 - 12 = 38
+    uint256[38] private __gap;
 }

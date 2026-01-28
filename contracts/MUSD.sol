@@ -53,6 +53,10 @@ contract MUSD is ERC20, AccessControl {
     function burn(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) {
         // FIX M-01: Check blacklist on burn
         require(!isBlacklisted[from], "SENDER_BLACKLISTED");
+        // FIX M-04: Require allowance — bridge cannot unilaterally burn user tokens
+        if (from != msg.sender) {
+            _spendAllowance(from, msg.sender, amount);
+        }
         _burn(from, amount);
         emit Burn(from, amount);
     }

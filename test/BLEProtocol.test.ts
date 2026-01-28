@@ -466,6 +466,9 @@ describe("BLE Protocol Production Test", function () {
         sigs1
       );
 
+      // Approve bridge to burn user's tokens (must happen before blacklist)
+      await musd.connect(user).approve(await bridge.getAddress(), amount);
+
       // Now blacklist the user
       await musd.setBlacklist(user.address, true);
 
@@ -642,6 +645,9 @@ describe("BLE Protocol Production Test", function () {
         },
         sigs1
       );
+
+      // Approve bridge to burn user's tokens
+      await musd.connect(user).approve(await bridge.getAddress(), halfLimit);
 
       // Burn some
       const burnAmount = halfLimit / 2n;
