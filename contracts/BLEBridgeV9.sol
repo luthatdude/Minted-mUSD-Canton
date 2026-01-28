@@ -1,0 +1,259 @@
+// SPDX-License-Identifier: MIT
+// BLE Protocol - V9
+// Refactored: Canton attestations update supply cap, not mint directly
+
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
+interface IMUSD {
+    function setSupplyCap(uint256 _cap) external;
+    function supplyCap() external view returns (uint256);
+    function totalSupply() external view returns (uint256);
+}
+
+contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
+    using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
+
+    bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+
+    IMUSD public musdToken;
+
+    // Canton attestation state
+    uint256 public attestedCantonAssets;  // Total assets Canton has attested to
+    uint256 public collateralRatioBps;    // Required ratio (e.g., 11000 = 110%)
+    uint256 public currentNonce;
+    uint256 public minSignatures;
+    uint256 public lastAttestationTime;
+
+    // Attestation tracking
+    mapping(bytes32 => bool) public usedAttestationIds;
+
+    struct Attestation {
+        bytes32 id;
+        uint256 cantonAssets;      // Total assets on Canton (e.g., $500M)
+        uint256 nonce;
+        uint256 timestamp;
+    }
+
+    // Events
+    event AttestationReceived(
+        bytes32 indexed id,
+        uint256 cantonAssets,
+        uint256 newSupplyCap,
+        uint256 nonce,
+        uint256 timestamp
+    );
+    event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets);
+    event CollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
+    event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
+        uint256 _minSigs,
+        address _musdToken,
+        uint256 _collateralRatioBps
+    ) public initializer {
+        __AccessControl_init();
+        __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
+        __Pausable_init();
+
+        require(_minSigs > 0, "INVALID_MIN_SIGS");
+        require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
+        require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(EMERGENCY_ROLE, msg.sender);
+
+        minSignatures = _minSigs;
+        musdToken = IMUSD(_musdToken);
+        collateralRatioBps = _collateralRatioBps;
+    }
+
+    // ============================================================
+    //                    ADMIN FUNCTIONS
+    // ============================================================
+
+    function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_musdToken != address(0), "INVALID_ADDRESS");
+        musdToken = IMUSD(_musdToken);
+    }
+
+    function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_minSigs > 0, "INVALID_MIN_SIGS");
+        minSignatures = _minSigs;
+    }
+
+    function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+        uint256 oldRatio = collateralRatioBps;
+        collateralRatioBps = _ratioBps;
+        emit CollateralRatioUpdated(oldRatio, _ratioBps);
+
+        // Recalculate supply cap with new ratio
+        if (attestedCantonAssets > 0) {
+            _updateSupplyCap(attestedCantonAssets);
+        }
+    }
+
+    // ============================================================
+    //                  EMERGENCY FUNCTIONS
+    // ============================================================
+
+    function pause() external onlyRole(EMERGENCY_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(EMERGENCY_ROLE) {
+        _unpause();
+    }
+
+    /// @notice Emergency reduction of supply cap
+    function emergencyReduceCap(uint256 _newCap, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
+        require(bytes(_reason).length > 0, "REASON_REQUIRED");
+        uint256 oldCap = musdToken.supplyCap();
+        require(_newCap < oldCap, "NOT_A_REDUCTION");
+        require(_newCap >= musdToken.totalSupply(), "CAP_BELOW_SUPPLY");
+
+        musdToken.setSupplyCap(_newCap);
+        emit EmergencyCapReduction(oldCap, _newCap, _reason);
+    }
+
+    /// @notice Force update nonce for stuck attestations
+    function forceUpdateNonce(uint256 _newNonce, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
+        require(bytes(_reason).length > 0, "REASON_REQUIRED");
+        require(_newNonce > currentNonce, "NONCE_MUST_INCREASE");
+        currentNonce = _newNonce;
+    }
+
+    /// @notice Invalidate an attestation ID
+    function invalidateAttestationId(bytes32 _attestationId) external onlyRole(EMERGENCY_ROLE) {
+        require(!usedAttestationIds[_attestationId], "ALREADY_USED");
+        usedAttestationIds[_attestationId] = true;
+    }
+
+    // ============================================================
+    //                  CORE ATTESTATION LOGIC
+    // ============================================================
+
+    /// @notice Process Canton attestation and update mUSD supply cap
+    /// @param att The attestation data from Canton validators
+    /// @param signatures Validator signatures
+    function processAttestation(
+        Attestation calldata att,
+        bytes[] calldata signatures
+    ) external nonReentrant whenNotPaused {
+        require(signatures.length >= minSignatures, "INSUFFICIENT_SIGNATURES");
+        require(att.nonce == currentNonce + 1, "INVALID_NONCE");
+        require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");
+        require(att.cantonAssets > 0, "ZERO_ASSETS");
+        require(att.timestamp <= block.timestamp, "FUTURE_TIMESTAMP");
+        require(att.timestamp > lastAttestationTime, "STALE_ATTESTATION");
+
+        // Verify signatures
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            att.id,
+            att.cantonAssets,
+            att.nonce,
+            att.timestamp,
+            block.chainid,
+            address(this)
+        ));
+
+        bytes32 ethHash = messageHash.toEthSignedMessageHash();
+
+        address lastSigner = address(0);
+        for (uint256 i = 0; i < signatures.length; i++) {
+            address signer = ethHash.recover(signatures[i]);
+            require(hasRole(VALIDATOR_ROLE, signer), "INVALID_VALIDATOR");
+            require(signer > lastSigner, "UNSORTED_SIGNATURES");
+            lastSigner = signer;
+        }
+
+        // Mark attestation as used
+        usedAttestationIds[att.id] = true;
+        currentNonce++;
+        lastAttestationTime = att.timestamp;
+        attestedCantonAssets = att.cantonAssets;
+
+        // Update supply cap based on attested assets
+        uint256 newCap = _updateSupplyCap(att.cantonAssets);
+
+        emit AttestationReceived(att.id, att.cantonAssets, newCap, att.nonce, att.timestamp);
+    }
+
+    // ============================================================
+    //                    INTERNAL FUNCTIONS
+    // ============================================================
+
+    /// @notice Calculate and update supply cap based on attested assets
+    /// @param _attestedAssets Total assets attested by Canton
+    /// @return newCap The new supply cap
+    function _updateSupplyCap(uint256 _attestedAssets) internal returns (uint256 newCap) {
+        // supplyCap = attestedAssets / (collateralRatio / 10000)
+        // e.g., $500M assets at 110% ratio = $454.5M cap
+        newCap = (_attestedAssets * 10000) / collateralRatioBps;
+
+        uint256 oldCap = musdToken.supplyCap();
+
+        // Only update if cap is changing
+        if (newCap != oldCap) {
+            // Safety: never set cap below current supply
+            uint256 currentSupply = musdToken.totalSupply();
+            if (newCap < currentSupply) {
+                newCap = currentSupply;
+            }
+
+            musdToken.setSupplyCap(newCap);
+            emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+        }
+    }
+
+    // ============================================================
+    //                      VIEW FUNCTIONS
+    // ============================================================
+
+    /// @notice Get the current supply cap based on attestations
+    function getCurrentSupplyCap() external view returns (uint256) {
+        return musdToken.supplyCap();
+    }
+
+    /// @notice Get remaining mintable mUSD
+    function getRemainingMintable() external view returns (uint256) {
+        uint256 cap = musdToken.supplyCap();
+        uint256 supply = musdToken.totalSupply();
+        return cap > supply ? cap - supply : 0;
+    }
+
+    /// @notice Calculate what supply cap would be for given assets
+    function calculateSupplyCap(uint256 _assets) external view returns (uint256) {
+        return (_assets * 10000) / collateralRatioBps;
+    }
+
+    /// @notice Get health ratio (attested assets / current supply)
+    function getHealthRatio() external view returns (uint256 ratioBps) {
+        uint256 supply = musdToken.totalSupply();
+        if (supply == 0) return type(uint256).max;
+        return (attestedCantonAssets * 10000) / supply;
+    }
+
+    // ============================================================
+    //                      UPGRADEABILITY
+    // ============================================================
+
+    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+
+    uint256[40] private __gap;
+}
