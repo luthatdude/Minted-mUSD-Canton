@@ -110,8 +110,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         // Transfer USDC from user to this contract
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // Send net amount to treasury
-        usdc.safeApprove(address(treasury), usdcAfterFee);
+        // FIX H-04: Reset approval to 0 first, then set to avoid safeApprove revert
+        // safeApprove reverts if current allowance is non-zero (preventing front-running)
+        usdc.forceApprove(address(treasury), usdcAfterFee);
         treasury.deposit(address(this), usdcAfterFee);
 
         // Track fees

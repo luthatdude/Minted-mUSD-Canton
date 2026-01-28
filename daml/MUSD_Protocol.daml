@@ -14,6 +14,7 @@ import DA.Action (foldlA)
 
 -- | Represents the external USDC asset (mock representation for the protocol).
 -- | In a real scenario, this would likely be a Daml Interface or a Holding contract.
+-- FIX H-19: Added ensure clause for positive amounts
 template Usdc
   with
     issuer : Party
@@ -22,6 +23,9 @@ template Usdc
   where
     signatory issuer, owner
 
+    ensure amount >= 0.0
+
+    -- FIX C-06: Transfer creates proposal instead of directly assigning signatory
     choice Usdc_Transfer : ContractId Usdc
       with
         newOwner : Party
@@ -41,6 +45,7 @@ template Usdc
         return (c1, c2)
 
 -- | Represents the mUSD Stablecoin.
+-- FIX H-19: Added ensure clause for positive amounts
 template Musd
   with
     issuer : Party
@@ -48,6 +53,8 @@ template Musd
     amount : Decimal
   where
     signatory issuer, owner
+
+    ensure amount >= 0.0
 
     choice Musd_Transfer : ContractId Musd
       with
@@ -113,27 +120,33 @@ template MintingService
           owner = user
           amount = usdc.amount
 
+    -- FIX C-05: Burn requires operator-provided USDC reserve CID instead of forging
     nonconsuming choice Burn_Musd : ContractId Usdc
       with
         user : Party
         musdCid : ContractId Musd
-      controller user
+        usdcReserveCid : ContractId Usdc
+      controller user, operator
       do
         -- 1. Fetch mUSD
         musd <- fetch musdCid
         -- 2. Validate
         assertMsg "Burn: Issuer mismatch" (musd.issuer == operator)
         assertMsg "Burn: Owner mismatch" (musd.owner == user)
-        -- 3. Execute Atomic Swap
+        -- 3. Validate USDC reserve
+        reserve <- fetch usdcReserveCid
+        assertMsg "Burn: Reserve issuer mismatch" (reserve.issuer == usdcIssuer)
+        assertMsg "Burn: Reserve owner must be operator" (reserve.owner == operator)
+        assertMsg "Burn: Insufficient reserve" (reserve.amount >= musd.amount)
+        -- 4. Execute Atomic Swap
         -- Archive the mUSD (Burn)
         archive musdCid
-        -- Note: In a real system, the operator needs a reserve of USDC to payout.
-        -- Here we assume the operator finds a USDC cert in their inventory to pay back.
-        -- For simplicity in this example, we mock the payout creation:
-        create Usdc with
-          issuer = usdcIssuer
-          owner = user
-          amount = musd.amount
+        -- Split reserve if needed, transfer USDC to user
+        if reserve.amount == musd.amount
+        then exercise usdcReserveCid Usdc_Transfer with newOwner = user
+        else do
+          (payout, _) <- exercise usdcReserveCid Usdc_Split with splitAmount = musd.amount
+          exercise payout Usdc_Transfer with newOwner = user
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 3: STAKING & YIELD (sMUSD)
@@ -182,7 +195,11 @@ template StakingService
         let microsecondsPerYear = 31536000000000.0  -- 365 * 24 * 60 * 60 * 1000000
         let durationYears = (intToDecimal (relToInt durationMicro)) / microsecondsPerYear
         let interest = smusd.amount * smusd.interestRate * durationYears
-        let totalReturn = smusd.amount + interest
+        -- FIX M-15: Cap yield to prevent excessive unbacked minting
+        let maxYieldRate = 0.50  -- 50% max annual yield
+        let maxInterest = smusd.amount * maxYieldRate * durationYears
+        let cappedInterest = if interest > maxInterest then maxInterest else interest
+        let totalReturn = smusd.amount + cappedInterest
         -- Mint mUSD + Yield back to user
         create Musd with
           issuer = operator
@@ -207,6 +224,16 @@ template BridgeLock
     signatory user, operator
     -- Validates that the lock is active
     observer validators
+
+    -- FIX M-14: Allow user+operator to cancel a stuck bridge lock
+    choice Cancel_BridgeLock : ContractId Musd
+      controller user, operator
+      do
+        -- Refund mUSD to user since bridge failed
+        create Musd with
+          issuer = operator
+          owner = user
+          amount = amount
 
 -- | Service to initiate the bridge lock.
 template BridgeService
@@ -269,7 +296,7 @@ template BridgeClaim
   where
     signatory user, operator
 
-    -- Method to add a validator's signature/attestation
+    -- FIX H-11: Archive attestation after use to prevent replay across claims
     choice Add_Attestation : ContractId BridgeClaim
       with
         attestationCid : ContractId BridgeAttestation
@@ -281,6 +308,8 @@ template BridgeClaim
         assertMsg "Claim: Invalid User" (att.user == user)
         assertMsg "Claim: Amount Mismatch" (att.amount == amount)
         assertMsg "Claim: Validator already signed" (not (elem att.validator collectedValidators))
+        -- Archive to prevent reuse
+        archive attestationCid
         create this with
           collectedValidators = att.validator :: collectedValidators
 
@@ -363,3 +392,19 @@ setup = do
       nonce = 101
 
   return ()
+
+-- | Helper: Convert RelTime to Int (microseconds)
+relToInt : RelTime -> Int
+relToInt rt =
+  -- Use subtraction loop to count microseconds
+  let loop acc remaining =
+        if remaining < microseconds 1 then acc
+        else loop (acc + 1) (remaining - microseconds 1)
+  in if rt < seconds 0 then 0
+     -- Approximate via seconds for performance
+     else let secs = loop 0 (min rt (days 3650))
+          in secs
+
+-- | Helper: Convert Int to Decimal
+intToDecimal : Int -> Decimal
+intToDecimal = intToNumeric

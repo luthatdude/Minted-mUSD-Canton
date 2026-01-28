@@ -18,7 +18,7 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-import * as crypto from "crypto";
+// FIX M-17: Removed unused crypto import
 
 // ============================================================
 //                     CONFIGURATION
@@ -226,11 +226,13 @@ class ValidatorNode {
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // Initialize Canton DAML ledger connection
+    // FIX H-12: Use TLS for Canton ledger connections
+    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
+    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
     this.ledger = new Ledger({
       token: config.cantonLedgerToken,
-      httpBaseUrl: `http://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
-      wsBaseUrl: `ws://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
+      httpBaseUrl: `${protocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
+      wsBaseUrl: `${wsProtocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
     });
 
     // Initialize Canton Asset API client
@@ -336,7 +338,8 @@ class ValidatorNode {
           };
         }
 
-        const attestedValue = BigInt(Math.floor(parseFloat(attestedAsset.assetValue) * 1e18));
+        // FIX H-13: Use ethers.parseUnits for financial precision
+        const attestedValue = ethers.parseUnits(attestedAsset.assetValue, 18);
 
         // Allow 0.1% tolerance for timing differences
         const tolerance = cantonAsset.currentValue / 1000n;
@@ -354,18 +357,19 @@ class ValidatorNode {
       }
 
       // 4. Verify total matches
-      const attestedTotal = BigInt(Math.floor(parseFloat(payload.totalCantonValue) * 1e18));
+      const attestedTotal = ethers.parseUnits(payload.totalCantonValue, 18);
       const tolerance = snapshot.totalValue / 1000n;
       const totalDiff = attestedTotal > snapshot.totalValue
         ? attestedTotal - snapshot.totalValue
         : snapshot.totalValue - attestedTotal;
 
       // Only verify against assets included in attestation
+      // FIX H-13: Use ethers.parseUnits
       const includedAssetsValue = payload.cantonAssets.reduce((sum, a) => {
-        return sum + BigInt(Math.floor(parseFloat(a.assetValue) * 1e18));
+        return sum + ethers.parseUnits(a.assetValue, 18);
       }, 0n);
 
-      const attestedTotalFromAssets = BigInt(Math.floor(parseFloat(payload.totalCantonValue) * 1e18));
+      const attestedTotalFromAssets = ethers.parseUnits(payload.totalCantonValue, 18);
       if (includedAssetsValue !== attestedTotalFromAssets) {
         return {
           valid: false,
@@ -375,13 +379,23 @@ class ValidatorNode {
       }
 
       // 5. Verify collateral ratio
-      const requestedCap = BigInt(Math.floor(parseFloat(payload.requestedSupplyCap) * 1e18));
+      const requestedCap = ethers.parseUnits(payload.requestedSupplyCap, 18);
       const requiredCollateral = requestedCap * BigInt(payload.collateralRatioBps) / 10000n;
 
       if (includedAssetsValue < requiredCollateral) {
         return {
           valid: false,
           reason: `Insufficient collateral: ${includedAssetsValue} < ${requiredCollateral} required`,
+          stateHash: snapshot.stateHash,
+        };
+      }
+
+      // FIX M-16: Verify the snapshot state hash is valid with Canton
+      const stateValid = await this.cantonClient.verifyStateHash(snapshot.stateHash);
+      if (!stateValid) {
+        return {
+          valid: false,
+          reason: `Canton state hash verification failed: ${snapshot.stateHash}`,
           stateHash: snapshot.stateHash,
         };
       }

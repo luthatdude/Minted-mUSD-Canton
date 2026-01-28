@@ -143,17 +143,21 @@ class RelayService {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private bridgeContract: ethers.Contract;
+  // FIX M-18: Bounded cache with eviction
   private processedAttestations: Set<string> = new Set();
+  private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
 
   constructor(config: RelayConfig) {
     this.config = config;
 
-    // Initialize Canton connection
+    // FIX H-12: Use TLS for Canton ledger connections
+    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
+    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
     this.ledger = new Ledger({
       token: config.cantonToken,
-      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
     });
 
     // Initialize Ethereum connection
@@ -393,9 +397,16 @@ class RelayService {
 
     for (const sig of validatorSigs) {
       try {
-        // If signature is already in RSV format (0x + 130 hex chars)
+        // FIX M-19: Validate RSV format more strictly (check hex content + v value)
         if (sig.ecdsaSignature.startsWith("0x") && sig.ecdsaSignature.length === 132) {
-          formatted.push(sig.ecdsaSignature);
+          // Verify it's valid hex and has a valid v value (1b or 1c = 27 or 28)
+          const vByte = sig.ecdsaSignature.slice(130, 132).toLowerCase();
+          if (/^[0-9a-f]+$/.test(sig.ecdsaSignature.slice(2)) &&
+              (vByte === "1b" || vByte === "1c")) {
+            formatted.push(sig.ecdsaSignature);
+          } else {
+            console.warn(`[Relay] Invalid RSV signature from ${sig.validator}: bad v value`);
+          }
         }
         // If signature is DER encoded (from AWS KMS)
         else {
@@ -429,8 +440,21 @@ class RelayService {
 
 import * as http from "http";
 
+// FIX H-15: Health server with optional bearer token authentication
 function startHealthServer(port: number, relay: RelayService): http.Server {
+  const healthToken = process.env.HEALTH_AUTH_TOKEN || "";
+
   const server = http.createServer(async (req, res) => {
+    // FIX H-15: Require auth token for metrics endpoint (operational state)
+    if (healthToken && req.url === "/metrics") {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${healthToken}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
+
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -448,8 +472,10 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
     }
   });
 
-  server.listen(port, () => {
-    console.log(`[Health] Server listening on port ${port}`);
+  // FIX M-22: Bind to localhost by default instead of 0.0.0.0
+  const bindHost = process.env.HEALTH_BIND_HOST || "127.0.0.1";
+  server.listen(port, bindHost, () => {
+    console.log(`[Health] Server listening on ${bindHost}:${port}`);
   });
 
   return server;

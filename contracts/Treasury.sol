@@ -87,15 +87,20 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice Deploy USDC to a yield strategy
     /// @param strategy The strategy contract address (must have STRATEGY_ROLE)
     /// @param amount Amount to deploy
+    // FIX H-03: Require strategy to have STRATEGY_ROLE before sending funds
+    // FIX M-12: Guard against division by zero when totalAssets is 0
     function deployToStrategy(
         address strategy,
         uint256 amount
     ) external onlyRole(TREASURY_ADMIN_ROLE) nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
         require(amount <= availableReserves(), "INSUFFICIENT_RESERVES");
+        // FIX H-03: Only deploy to authorized strategy contracts
+        require(hasRole(STRATEGY_ROLE, strategy), "STRATEGY_NOT_AUTHORIZED");
 
-        // Check deployment limit
+        // FIX M-12: Guard against division by zero
         uint256 totalAssets = availableReserves() + deployedToStrategies;
+        require(totalAssets > 0, "NO_ASSETS_AVAILABLE");
         uint256 newDeployed = deployedToStrategies + amount;
         require(
             (newDeployed * 10000) / totalAssets <= maxDeploymentBps,

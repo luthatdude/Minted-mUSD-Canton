@@ -96,9 +96,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         minSignatures = _minSigs;
     }
 
+    // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
+    // For production, this should be behind a timelock contract.
     function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+        // FIX M-05: Prevent drastic ratio changes (max 10% change at a time)
         uint256 oldRatio = collateralRatioBps;
+        uint256 diff = _ratioBps > oldRatio ? _ratioBps - oldRatio : oldRatio - _ratioBps;
+        require(diff <= 1000, "RATIO_CHANGE_TOO_LARGE"); // Max 10% change per call
+
         collateralRatioBps = _ratioBps;
         emit CollateralRatioUpdated(oldRatio, _ratioBps);
 
@@ -210,12 +216,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         // Only update if cap is changing
         if (newCap != oldCap) {
-            // Safety: never set cap below current supply
-            uint256 currentSupply = musdToken.totalSupply();
-            if (newCap < currentSupply) {
-                newCap = currentSupply;
-            }
-
+            // FIX M-04: Do NOT floor at currentSupply when cap drops.
+            // If assets decreased, the cap should reflect reality (no new minting).
+            // Existing tokens remain but the cap correctly signals undercollateralization.
             musdToken.setSupplyCap(newCap);
             emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
         }

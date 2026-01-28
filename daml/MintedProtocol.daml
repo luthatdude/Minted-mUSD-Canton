@@ -72,15 +72,18 @@ template PriceOracle
     signatory operator
     observer observers
 
-    nonconsuming choice GetPrice : Decimal
+    -- FIX M-13: Return Optional instead of abort, let caller validate
+    nonconsuming choice GetPrice : Optional Decimal
       with
         symbol : Text
       controller observers
       do
-        let priceOpt = head [ p | (s, p) <- prices, s == symbol ]
-        case priceOpt of
-          None -> abort $ "Price not found for " <> symbol
-          Some p -> return p
+        let matches = [ p | (s, p) <- prices, s == symbol ]
+        case matches of
+          [] -> return None
+          (p :: _) -> do
+            assertMsg "PRICE_MUST_BE_POSITIVE" (p > 0.0)
+            return (Some p)
 
     choice UpdatePrices : ContractId PriceOracle
       with
@@ -100,8 +103,9 @@ template LiquidityPool
   where
     signatory operator
 
-    -- Swaps mUSD for Collateral
-    nonconsuming choice Swap_mUSD_For_Collateral : AssetId
+    -- FIX C-07: Made CONSUMING to update poolAsset CID after split
+    -- Previously nonconsuming, which left poolAsset pointing to an archived contract
+    choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, AssetId)
       with
         musdCid : AssetId
         receiver : Party
@@ -109,20 +113,15 @@ template LiquidityPool
       do
         musd <- fetch musdCid
         assertMsg "Must be mUSD" $ musd.symbol == musdSymbol
-        -- Calculate collateral to return
-        -- If 1 Collateral = 1000 mUSD (Rate = 1000), and we give 1000 mUSD, we get 1 Collateral
         let collateralOut = musd.amount / exchangeRate
-        -- Verification (simplified)
         poolHoldings <- fetch poolAsset
         assertMsg "Insufficient Liquidity" $ poolHoldings.amount >= collateralOut
-        -- Take mUSD (Archive it or move to pool owner - archiving for protocol simplicity)
-        -- In a real scenario, the LP keeps the mUSD.
         archive musdCid
-        -- Split pool asset to give to user
         (remainingPool, payout) <- exercise poolAsset Asset_Split with splitAmount = collateralOut
-        -- Transfer payout to receiver
         userAsset <- exercise payout Asset_Transfer with newOwner = receiver
-        return userAsset
+        -- Update pool with new collateral CID
+        newPool <- create this with poolAsset = remainingPool
+        return (newPool, userAsset)
 
 -- | The Vault (CDP) holding collateral and tracking debt
 template Vault
@@ -157,7 +156,10 @@ template Vault
         -- Check Collateral Value
         colData <- fetch collateral
         oracle <- fetch oracleCid
+        -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
         let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+        assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
+        let price = price
         assertMsg "Price not available" $ price > 0.0
         let colValue = colData.amount * price
         let newDebt = debtAmount + mintAmount
@@ -213,7 +215,10 @@ template LeverageManager
                 -- Value = Amt * Price
                 -- MaxDebt = Value / Ratio
                 -- Available = MaxDebt - CurrentDebt
-                let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+                -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
+        let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+        assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
+        let price = price
                 let colValue = colData.amount * price
                 let maxDebt = colValue / vault.minCollateralRatio
                 let borrowable = maxDebt - vault.debtAmount
@@ -224,9 +229,8 @@ template LeverageManager
                   (vAfterBorrow, mUSD) <- exercise currentVaultCid Vault_Borrow with
                       mintAmount = borrowable
                       oracleCid = oracleCid
-                  -- 3. Swap mUSD -> Collateral
-                  -- Note: We exercise on the Pool to swap
-                  newCollateral <- exercise poolCid Swap_mUSD_For_Collateral with
+                  -- 3. Swap mUSD -> Collateral (FIX C-07: handle new pool CID)
+                  (newPoolCid, newCollateral) <- exercise poolCid Swap_mUSD_For_Collateral with
                       musdCid = mUSD
                       receiver = user
                   -- 4. Deposit

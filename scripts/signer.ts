@@ -58,27 +58,48 @@ export function formatKMSSignature(
     throw new Error("INVALID_DER: Missing sequence tag");
   }
 
-  const totalLength = derSig[1];
-  if (totalLength + 2 > derSig.length) {
+  // FIX H-16: Handle multi-byte DER length encoding and validate trailing bytes
+  let totalLength: number;
+  let headerOffset: number;
+  if (derSig[1] & 0x80) {
+    const numLenBytes = derSig[1] & 0x7f;
+    if (numLenBytes > 2 || 2 + numLenBytes > derSig.length) {
+      throw new Error("INVALID_DER: Unsupported length encoding");
+    }
+    totalLength = 0;
+    for (let i = 0; i < numLenBytes; i++) {
+      totalLength = (totalLength << 8) | derSig[2 + i];
+    }
+    headerOffset = 2 + numLenBytes;
+  } else {
+    totalLength = derSig[1];
+    headerOffset = 2;
+  }
+  if (headerOffset + totalLength > derSig.length) {
     throw new Error("INVALID_DER: Length exceeds buffer");
+  }
+  // FIX H-16: Reject signatures with unexpected trailing bytes
+  if (headerOffset + totalLength < derSig.length) {
+    throw new Error("INVALID_DER: Trailing bytes after DER sequence");
   }
 
   // Parse R component
-  if (derSig[2] !== DER_INTEGER_TAG) {
+  if (derSig[headerOffset] !== DER_INTEGER_TAG) {
     throw new Error("INVALID_DER: Missing R integer tag");
   }
 
-  const rLen = derSig[3];
+  const rLen = derSig[headerOffset + 1];
 
   // FIX T-01: Bounds check for R
-  if (4 + rLen > derSig.length) {
+  if (headerOffset + 2 + rLen > derSig.length) {
     throw new Error("INVALID_DER: R length exceeds buffer");
   }
 
-  const r = derSig.subarray(4, 4 + rLen);
+  const rStart = headerOffset + 2;
+  const r = derSig.subarray(rStart, rStart + rLen);
 
   // Parse S component
-  const sTagIndex = 4 + rLen;
+  const sTagIndex = rStart + rLen;
   if (sTagIndex >= derSig.length) {
     throw new Error("INVALID_DER: Missing S component");
   }

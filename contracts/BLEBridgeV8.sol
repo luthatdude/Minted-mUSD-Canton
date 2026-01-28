@@ -158,7 +158,8 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Resume attestation execution
-    function unpause() external onlyRole(EMERGENCY_ROLE) {
+    /// FIX M-02: Unpause requires DEFAULT_ADMIN_ROLE (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
@@ -316,8 +317,9 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         dailyBurned += amount;
     }
 
+    // FIX M-03: Use >= to prevent boundary timing attack at exact reset second
     function _resetDailyLimitsIfNeeded() internal {
-        if (block.timestamp > lastReset + 1 days) {
+        if (block.timestamp >= lastReset + 1 days) {
             dailyMinted = 0;
             dailyBurned = 0;
             lastReset = block.timestamp;

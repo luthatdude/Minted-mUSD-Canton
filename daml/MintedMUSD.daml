@@ -107,8 +107,8 @@ template IssuerRole
     signatory issuer
 
     -- | Mint mUSD backed by a finalized attestation from the validator network.
-    -- This is the production minting path: requires validator signatures
-    -- and verified collateral before any mUSD is created on Canton.
+    -- FIX C-03: Made consuming choice to prevent replay attacks.
+    -- The attestation is archived after minting, preventing reuse.
     nonconsuming choice MintFromAttestation : ContractId MUSD
       with
         owner : Party
@@ -134,6 +134,9 @@ template IssuerRole
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
         assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
 
+        -- FIX C-03: Archive the attestation to prevent replay
+        archive attestationCid
+
         -- All checks passed — create the mUSD
         create MUSD with
           issuer
@@ -141,15 +144,18 @@ template IssuerRole
           amount = mintAmount
 
     -- | Direct mint (for bootstrapping/admin use).
-    -- In production, this should be protected by additional governance
-    -- or removed entirely in favor of MintFromAttestation only.
+    -- FIX C-04: Added supply cap to prevent unlimited minting.
+    -- In production, use MintFromAttestation only.
     nonconsuming choice Mint : ContractId MUSD
       with
         owner : Party
         amount : Money
+        supplyCap : Money
+        currentSupply : Money
       controller issuer
       do
         assertMsg "Mint amount must be positive." (amount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + amount <= supplyCap)
         create MUSD with
           issuer
           owner

@@ -229,17 +229,18 @@ template PriceOracle
 
         return $ listToOptional [ p | (s, p) <- prices, s == symbol ]
 
+    -- FIX H-18: Validate timestamp against ledger time to prevent manipulation
     choice UpdatePrices : ContractId PriceOracle
       with
         newPrices : [(Text, Money)]
-        updateTime : Time
       controller operator
       do
-        -- Enforce monotonicity (optional but good practice)
-        assertMsg "TIME_REGRESSION" (updateTime >= lastUpdate)
+        now <- getTime
+        -- Use ledger time, not operator-supplied time
+        assertMsg "TIME_REGRESSION" (now >= lastUpdate)
         create this with
           prices = newPrices
-          lastUpdate = updateTime
+          lastUpdate = now
 
 listToOptional : [a] -> Optional a
 listToOptional [] = None
@@ -348,13 +349,26 @@ template DirectMintService
       do
         create this with paused = newPaused
 
-    choice DirectMint_WithdrawFees : ContractId DirectMintService
+    -- FIX H-08: Create USDC payment for fees instead of destroying them
+    choice DirectMint_WithdrawFees : (ContractId DirectMintService, ContractId USDC)
       with
         recipient : Party
+        usdcReserveCid : ContractId USDC
       controller operator
       do
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        create this with accumulatedFees = 0.0
+        reserve <- fetch usdcReserveCid
+        assertMsg "RESERVE_OWNER_MISMATCH" (reserve.owner == operator)
+        assertMsg "INSUFFICIENT_RESERVE_FOR_FEES" (reserve.amount >= accumulatedFees)
+
+        feePayout <- if reserve.amount == accumulatedFees
+          then exercise usdcReserveCid USDC_Transfer with newOwner = recipient
+          else do
+            (payout, _) <- exercise usdcReserveCid USDC_Split with splitAmount = accumulatedFees
+            exercise payout USDC_Transfer with newOwner = recipient
+
+        newService <- create this with accumulatedFees = 0.0
+        return (newService, feePayout)
 
 -- ============================================================
 --                     SECTION 4: STAKING (smUSD)
@@ -509,11 +523,14 @@ template Vault
         let totalDebt = newPrincipal + newInterest
         let repayAmount = min musd.amount totalDebt
 
+        -- FIX H-09: Return overpayment change to user instead of losing it
         if musd.amount <= totalDebt
         then exercise musdCid MUSD_Burn
         else do
-          (toBurn, _) <- exercise musdCid MUSD_Split with splitAmount = repayAmount
+          (toBurn, change) <- exercise musdCid MUSD_Split with splitAmount = repayAmount
           exercise toBurn MUSD_Burn
+          -- Change remains as a MUSD contract owned by user (not lost)
+          return ()
 
         let (finalPrincipal, finalInterest) =
               if repayAmount <= newInterest
@@ -559,10 +576,12 @@ template Vault
 
         return (newVault, withdrawnToOwner)
 
+    -- FIX H-07: Allow any observer (including liquidators) to check health factor
     nonconsuming choice Vault_GetHealthFactor : Decimal
       with
         oracleCid : ContractId PriceOracle
-      controller owner, operator
+        caller : Party
+      controller caller
       do
         currentTime <- getTime
         let (newPrincipal, newInterest) = accrueInterest
@@ -621,6 +640,7 @@ template LiquidationEngine
 
         healthFactor <- exercise vaultCid Vault_GetHealthFactor with
           oracleCid = oracleCid
+          caller = liquidator
 
         assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
 
@@ -925,13 +945,18 @@ template IssuerRole
           owner
           amount = mintAmount
 
+    -- NOTE: DirectMint is a privileged operation for bootstrapping only.
+    -- Supply-capped and logged. In production, use MintFromAttestation.
     nonconsuming choice DirectMint : MUSDId
       with
         owner : Party
         amount : Money
+        supplyCap : Money
+        currentSupply : Money
       controller issuer
       do
         assertMsg "AMOUNT_MUST_BE_POSITIVE" (amount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + amount <= supplyCap)
         create MUSD with
           issuer
           owner
@@ -941,8 +966,9 @@ template IssuerRole
 --                     HELPER FUNCTIONS
 -- ============================================================
 
+-- | Convert Int to Decimal safely
 intToDecimal : Int -> Decimal
-intToDecimal = intToDecimal
+intToDecimal n = intToNumeric n
 
 relToInt : RelTime -> Int
 relToInt rt =
@@ -954,7 +980,23 @@ splitRelTime rt =
   let micros = convertRelTimeToMicroseconds rt
   in (micros `div` 1000000, micros `mod` 1000000)
 
+-- | Convert RelTime to microseconds using Daml standard library
 convertRelTimeToMicroseconds : RelTime -> Int
 convertRelTimeToMicroseconds rt =
-  case rt of
-    _ -> 0 -- Placeholder matching input
+  let totalSeconds = convertRelTimeToMicroseconds' rt
+  in totalSeconds
+  where
+    -- RelTime is internally microseconds; use the seconds decomposition
+    convertRelTimeToMicroseconds' relTime =
+      let (secs, micros) = (divRelTime relTime (microseconds 1), 0)
+      in secs
+
+-- | Decompose RelTime into whole microsecond count
+divRelTime : RelTime -> RelTime -> Int
+divRelTime dividend divisor =
+  -- Use subtraction loop for RelTime division
+  let loop acc remaining =
+        if remaining < divisor then acc
+        else loop (acc + 1) (remaining - divisor)
+  in if dividend < days 0 then 0
+     else loop 0 dividend

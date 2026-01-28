@@ -94,17 +94,21 @@ class ValidatorNode {
   private config: ValidatorConfig;
   private ledger: Ledger;
   private kmsClient: KMSClient;
+  // FIX M-18: Use a bounded cache with eviction instead of unbounded Set
   private signedAttestations: Set<string> = new Set();
+  private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // Initialize Canton connection
+    // FIX H-12: Use TLS for Canton ledger connections
+    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
+    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
     this.ledger = new Ledger({
       token: config.cantonToken,
-      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
     });
 
     // Initialize AWS KMS
@@ -195,31 +199,36 @@ class ValidatorNode {
   /**
    * Verify the attestation has sufficient collateral backing
    */
+  // FIX C-09: Fetch positions ONCE and deduplicate to prevent inflated collateral
+  // FIX H-13: Use ethers.parseUnits instead of parseFloat for financial precision
   private async verifyCollateral(request: AttestationRequest): Promise<boolean> {
     const payload = request.payload;
 
-    // Fetch all linked equity positions
+    // FIX C-09: Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
-    for (const positionCid of request.positionCids) {
-      try {
-        const positions = await this.ledger.query<InstitutionalEquityPosition>(
-          "MintedProtocolV2:InstitutionalEquityPosition" as any,
-          {}
-        );
+    try {
+      const positions = await this.ledger.query<InstitutionalEquityPosition>(
+        "MintedProtocolV2:InstitutionalEquityPosition" as any,
+        {}
+      );
 
-        // Find matching position
-        for (const pos of positions) {
-          // ContractId comparison is tricky - match by reference
-          totalValue += BigInt(Math.floor(parseFloat(pos.payload.totalValue) * 1e18));
-        }
-      } catch (error) {
-        console.warn(`[Validator] Failed to fetch position:`, error);
+      // Deduplicate by referenceId to prevent double-counting
+      const seen = new Set<string>();
+      for (const pos of positions) {
+        const refId = pos.payload.referenceId;
+        if (seen.has(refId)) continue;
+        seen.add(refId);
+        // FIX H-13: Use ethers.parseUnits for precision
+        totalValue += ethers.parseUnits(pos.payload.totalValue, 18);
       }
+    } catch (error) {
+      console.warn(`[Validator] Failed to fetch positions:`, error);
+      return false;
     }
 
-    // Verify collateral ratio
-    const requestedAmount = BigInt(Math.floor(parseFloat(payload.amount) * 1e18));
-    const reportedAssets = BigInt(Math.floor(parseFloat(payload.globalCantonAssets) * 1e18));
+    // FIX H-13: Use ethers.parseUnits instead of parseFloat
+    const requestedAmount = ethers.parseUnits(payload.amount, 18);
+    const reportedAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
 
     // Check reported assets match fetched total
     // Allow small rounding difference
@@ -253,6 +262,9 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
+    // FIX H-14: Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    this.signedAttestations.add(attestationId);
+
     try {
       // Build message hash (same as Solidity contract expects)
       const messageHash = this.buildMessageHash(payload);
@@ -271,16 +283,23 @@ class ValidatorNode {
         }
       );
 
-      // Mark as signed
-      this.signedAttestations.add(attestationId);
       console.log(`[Validator] Signed attestation ${attestationId}`);
+
+      // FIX M-18: Evict oldest entries if cache is too large
+      if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
+        const first = this.signedAttestations.values().next().value;
+        if (first) this.signedAttestations.delete(first);
+      }
 
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // If it's "already signed", mark it to prevent retries
+      // FIX H-14: Remove from set on failure so it can be retried
+      // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED")) {
-        this.signedAttestations.add(attestationId);
+        // Already signed on ledger - keep in set
+      } else {
+        this.signedAttestations.delete(attestationId);
       }
     }
   }

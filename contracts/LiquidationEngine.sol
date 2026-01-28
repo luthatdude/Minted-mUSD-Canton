@@ -18,6 +18,16 @@ interface ICollateralVaultLiq {
     function seize(address user, address token, uint256 amount, address liquidator) external;
 }
 
+interface IPriceOracleLiqExt {
+    function getPrice(address token) external view returns (uint256);
+    function getValueUsd(address token, uint256 amount) external view returns (uint256);
+}
+
+// FIX H-01: Token decimals interface for proper seizure calculation
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
+}
+
 interface IBorrowModule {
     function totalDebt(address user) external view returns (uint256);
     function healthFactor(address user) external view returns (uint256);
@@ -118,7 +128,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 actualRepay = debtToRepay > maxRepay ? maxRepay : debtToRepay;
 
         // Calculate collateral to seize
-        // collateralToSeize = debtRepaid * (1 + penalty) / collateralPrice
+        // FIX H-01: Use oracle.getValueUsd for proper decimal normalization
         (bool enabled, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
         require(enabled, "COLLATERAL_NOT_SUPPORTED");
 
@@ -126,13 +136,17 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         require(collateralPrice > 0, "INVALID_PRICE");
 
         // debtRepaid is in 18 decimals (mUSD), price is in 18 decimals (USD per token)
-        // collateralToSeize = actualRepay * (10000 + penaltyBps) / 10000 / collateralPrice * 10^tokenDecimals
-        // Simplified: seize value in USD = actualRepay * (10000 + penaltyBps) / 10000
+        // seize value in USD = actualRepay * (10000 + penaltyBps) / 10000
         uint256 seizeValueUsd = (actualRepay * (10000 + penaltyBps)) / 10000;
 
-        // Convert USD value to collateral token amount
-        // seizeAmount = seizeValueUsd * 10^18 / collateralPrice (both in 18 dec)
-        uint256 seizeAmount = (seizeValueUsd * 1e18) / collateralPrice;
+        // FIX H-01: Convert USD value to collateral token amount accounting for token decimals
+        // collateralPrice is USD per 1 full token (18 decimals)
+        // For a token with D decimals: seizeAmount = seizeValueUsd * 10^D / collateralPrice
+        uint8 tokenDecimals = 18; // Default; PriceOracle.getValueUsd handles normalization
+        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
+            tokenDecimals = d;
+        } catch {}
+        uint256 seizeAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         // Cap at available collateral
         uint256 available = vault.deposits(borrower, collateralToken);
@@ -182,7 +196,12 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         if (collateralPrice == 0) return 0;
 
         uint256 seizeValueUsd = (debtToRepay * (10000 + penaltyBps)) / 10000;
-        collateralAmount = (seizeValueUsd * 1e18) / collateralPrice;
+        // FIX H-01: Account for token decimals in estimate
+        uint8 tokenDecimals = 18;
+        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
+            tokenDecimals = d;
+        } catch {}
+        collateralAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         uint256 available = vault.deposits(borrower, collateralToken);
         if (collateralAmount > available) {

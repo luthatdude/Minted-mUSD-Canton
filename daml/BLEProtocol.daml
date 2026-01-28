@@ -6,6 +6,7 @@ module BLEProtocol where
 import DA.Numeric
 import DA.Time
 import DA.List
+import DA.Text qualified as T
 import DA.Foldable (sum)
 import DA.Set qualified as Set
 
@@ -78,6 +79,9 @@ template AttestationRequest
         -- FIX D-02: Ensure validator hasn't already signed
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX M-24: Basic signature format validation
+        assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature > 0)
+        assertMsg "SIGNATURE_TOO_SHORT" (T.length ecdsaSignature >= 130)
 
         -- FIX D-03: Check expiration
         now <- getTime
@@ -107,12 +111,15 @@ template AttestationRequest
         return (newRequest, sig)
 
     -- FIX D-01: Choice to finalize and consume positions atomically
+    -- FIX C-12: requiredSignatures is now derived from validatorGroup, not caller-supplied
+    -- FIX H-17: Signature uniqueness enforced via dedup check
     choice FinalizeAttestation : [ContractId ValidatorSignature]
       with
-        requiredSignatures: Int
         signatureCids: [ContractId ValidatorSignature]
       controller aggregator
       do
+        -- FIX C-12: Use minimum quorum (majority of validator group)
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         -- Verify we have enough signatures
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -123,9 +130,14 @@ template AttestationRequest
         -- Verify all signatures are valid and from authorized validators
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
+
+        -- FIX H-17: Enforce signature uniqueness
+        let uniqueValidators = Set.fromList sigValidators
+        assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (Set.size uniqueValidators == length sigValidators)
+
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
 
-        -- FIX D-01: Consume and recreate positions to lock the collateral value
+        -- FIX C-08: Consume and recreate positions to lock the collateral value
         -- This prevents the TOCTOU race condition
         positions <- mapA fetch positionCids
         let totalGlobalValue = sum [p.totalValue | p <- positions]
