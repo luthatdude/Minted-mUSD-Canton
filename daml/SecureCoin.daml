@@ -1,0 +1,65 @@
+module SecureCoin where
+
+-- | A secure Coin template demonstrating the Proposal pattern.
+-- This fixes common vulnerabilities regarding unilateral signatory assignment (air-dropping)
+-- and ensures authorization flows are explicit.
+
+template Coin
+  with
+    owner : Party
+    amount : Decimal
+    issuer : Party
+  where
+    -- The issuer and owner must both sign. This ensures the issuer acknowledges the liability
+    -- and the owner acknowledges ownership.
+    signatory issuer, owner
+
+    -- Ensure non-negative and non-zero amounts to prevent logic errors or spam.
+    ensure amount > 0.0
+
+    -- | Initiate a transfer. This consumes the current Coin and creates a Proposal.
+    -- This prevents double-spending during the proposal phase.
+    choice ProposeTransfer : ContractId CoinTransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create CoinTransferProposal with coin = this; newOwner
+
+    -- | Allow the issuer to archive the coin (e.g., redeeming for fiat).
+    choice Redeem : ()
+      controller issuer
+      do return ()
+
+-- | A proposal contract to handle the handshake between the current owner and the new owner.
+template CoinTransferProposal
+  with
+    coin : Coin
+    newOwner : Party
+  where
+    -- Signatory matches the original Coin to authorize the transition.
+    signatory coin.issuer, coin.owner
+
+    -- The new owner must be an observer to see the proposal and act on it.
+    observer newOwner
+
+    -- | The new owner accepts the transfer.
+    -- By exercising this choice, the newOwner authorizes becoming a signatory on the new Coin.
+    choice Accept : ContractId Coin
+      controller newOwner
+      do
+        create coin with owner = newOwner
+
+    -- | The new owner rejects the transfer.
+    -- The original coin is returned to the original owner.
+    choice Reject : ContractId Coin
+      controller newOwner
+      do
+        create coin
+
+    -- | The original owner changes their mind and cancels the transfer.
+    -- The original coin is returned.
+    choice Cancel : ContractId Coin
+      controller coin.owner
+      do
+        create coin
