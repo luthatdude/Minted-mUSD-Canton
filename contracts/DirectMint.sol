@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // BLE Protocol - DirectMint
-// User deposits USDC, receives mUSD 1:1. Redeems mUSD for USDC 1:1.
+// User-facing mint/redeem: USDC <-> mUSD
 
 pragma solidity ^0.8.20;
 
@@ -8,161 +8,216 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
-interface IMUSDMintBurn {
+interface IMUSD {
     function mint(address to, uint256 amount) external;
     function burn(address from, uint256 amount) external;
+    function supplyCap() external view returns (uint256);
+    function totalSupply() external view returns (uint256);
 }
 
-interface ITreasury {
-    function deposit(address from, uint256 amount) external;
-    function withdraw(address to, uint256 amount) external;
-}
-
-/// @title DirectMint
-/// @notice 1:1 USDC ↔ mUSD mint/redeem module
-/// @dev User deposits USDC into Treasury, receives mUSD. Redeems mUSD, gets USDC back.
-///      USDC uses 6 decimals, mUSD uses 18 decimals — this contract handles the scaling.
-contract DirectMint is AccessControl, ReentrancyGuard {
+contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
+    bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     IERC20 public immutable usdc;
-    IMUSDMintBurn public immutable musd;
-    ITreasury public immutable treasury;
+    IMUSD public immutable musd;
+    address public treasury;
 
-    bool public paused;
+    // Fees in basis points (100 = 1%)
+    uint256 public mintFeeBps;
+    uint256 public redeemFeeBps;
+    uint256 public constant MAX_FEE_BPS = 500; // 5% max
 
-    // Daily mint/redeem limits per user (in USDC 6-decimal units)
-    uint256 public dailyLimitPerUser;
-    mapping(address => uint256) public dailyMinted;    // user => amount minted today
-    mapping(address => uint256) public dailyRedeemed;  // user => amount redeemed today
-    mapping(address => uint256) public lastMintDay;    // user => day number of last mint
-    mapping(address => uint256) public lastRedeemDay;  // user => day number of last redeem
+    // Accumulated fees
+    uint256 public accumulatedFees;
 
-    // USDC has 6 decimals, mUSD has 18 decimals
-    uint256 private constant SCALING_FACTOR = 1e12; // 10^(18-6)
+    // Per-transaction limits
+    uint256 public minMintAmount;
+    uint256 public maxMintAmount;
+    uint256 public minRedeemAmount;
+    uint256 public maxRedeemAmount;
 
-    event Minted(address indexed user, uint256 usdcAmount, uint256 musdAmount);
-    event Redeemed(address indexed user, uint256 musdAmount, uint256 usdcAmount);
-    event DailyLimitUpdated(uint256 oldLimit, uint256 newLimit);
-    event PauseToggled(bool paused);
+    // Events
+    event Minted(address indexed user, uint256 usdcIn, uint256 musdOut, uint256 fee);
+    event Redeemed(address indexed user, uint256 musdIn, uint256 usdcOut, uint256 fee);
+    event FeesWithdrawn(address indexed to, uint256 amount);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event FeesUpdated(uint256 mintFeeBps, uint256 redeemFeeBps);
+    event LimitsUpdated(uint256 minMint, uint256 maxMint, uint256 minRedeem, uint256 maxRedeem);
 
     constructor(
         address _usdc,
         address _musd,
-        address _treasury,
-        uint256 _dailyLimitPerUser
+        address _treasury
     ) {
         require(_usdc != address(0), "INVALID_USDC");
         require(_musd != address(0), "INVALID_MUSD");
         require(_treasury != address(0), "INVALID_TREASURY");
 
         usdc = IERC20(_usdc);
-        musd = IMUSDMintBurn(_musd);
-        treasury = ITreasury(_treasury);
-        dailyLimitPerUser = _dailyLimitPerUser;
+        musd = IMUSD(_musd);
+        treasury = _treasury;
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TREASURY_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+
+        // Default limits
+        minMintAmount = 1e6;        // 1 USDC
+        maxMintAmount = 1_000_000e6; // 1M USDC
+        minRedeemAmount = 1e6;
+        maxRedeemAmount = 1_000_000e6;
     }
 
-    modifier whenNotPaused() {
-        require(!paused, "PAUSED");
-        _;
-    }
+    // ============================================================
+    //                    CORE FUNCTIONS
+    // ============================================================
 
-    /// @notice Deposit USDC and receive mUSD at 1:1 ratio
+    /// @notice Mint mUSD by depositing USDC
     /// @param usdcAmount Amount of USDC to deposit (6 decimals)
-    function mint(uint256 usdcAmount) external nonReentrant whenNotPaused {
-        require(usdcAmount > 0, "INVALID_AMOUNT");
+    /// @return musdOut Amount of mUSD minted (18 decimals)
+    function mint(uint256 usdcAmount) external nonReentrant whenNotPaused returns (uint256 musdOut) {
+        require(usdcAmount >= minMintAmount, "BELOW_MIN");
+        require(usdcAmount <= maxMintAmount, "ABOVE_MAX");
 
-        // Check daily limit
-        _checkAndUpdateDailyMint(msg.sender, usdcAmount);
+        // Convert USDC (6 decimals) to mUSD (18 decimals)
+        uint256 musdAmount = usdcAmount * 1e12;
 
-        // Scale USDC (6 dec) to mUSD (18 dec)
-        uint256 musdAmount = usdcAmount * SCALING_FACTOR;
+        // Check supply cap
+        require(musd.totalSupply() + musdAmount <= musd.supplyCap(), "EXCEEDS_SUPPLY_CAP");
 
-        // User approves this contract for USDC, we forward to Treasury
-        // First transfer USDC from user to this contract, then deposit to Treasury
-        usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
-        usdc.safeIncreaseAllowance(address(treasury), usdcAmount);
-        treasury.deposit(address(this), usdcAmount);
+        // Calculate fee
+        uint256 fee = (musdAmount * mintFeeBps) / 10000;
+        musdOut = musdAmount - fee;
 
-        // Mint mUSD to user
-        musd.mint(msg.sender, musdAmount);
+        // Transfer USDC to treasury
+        usdc.safeTransferFrom(msg.sender, treasury, usdcAmount);
 
-        emit Minted(msg.sender, usdcAmount, musdAmount);
+        // Mint mUSD to user (minus fee)
+        musd.mint(msg.sender, musdOut);
+
+        // Track fees (in mUSD terms, will be collected as USDC)
+        if (fee > 0) {
+            accumulatedFees += fee / 1e12; // Convert back to USDC decimals
+        }
+
+        emit Minted(msg.sender, usdcAmount, musdOut, fee);
     }
 
-    /// @notice Redeem mUSD for USDC at 1:1 ratio
+    /// @notice Redeem mUSD for USDC
     /// @param musdAmount Amount of mUSD to redeem (18 decimals)
-    function redeem(uint256 musdAmount) external nonReentrant whenNotPaused {
-        require(musdAmount > 0, "INVALID_AMOUNT");
-        require(musdAmount % SCALING_FACTOR == 0, "AMOUNT_NOT_ALIGNED");
+    /// @return usdcOut Amount of USDC returned (6 decimals)
+    function redeem(uint256 musdAmount) external nonReentrant whenNotPaused returns (uint256 usdcOut) {
+        // Convert to USDC decimals for limit checks
+        uint256 usdcEquivalent = musdAmount / 1e12;
+        require(usdcEquivalent >= minRedeemAmount, "BELOW_MIN");
+        require(usdcEquivalent <= maxRedeemAmount, "ABOVE_MAX");
 
-        // Scale mUSD (18 dec) back to USDC (6 dec)
-        uint256 usdcAmount = musdAmount / SCALING_FACTOR;
+        // Calculate fee
+        uint256 fee = (musdAmount * redeemFeeBps) / 10000;
+        uint256 musdAfterFee = musdAmount - fee;
+        usdcOut = musdAfterFee / 1e12;
 
-        // Check daily limit
-        _checkAndUpdateDailyRedeem(msg.sender, usdcAmount);
+        require(usdcOut > 0, "ZERO_OUTPUT");
 
-        // Burn mUSD from user (user must have approved DirectMint as spender)
+        // Check treasury has enough USDC
+        require(usdc.balanceOf(treasury) >= usdcOut, "INSUFFICIENT_TREASURY");
+
+        // Burn user's mUSD
         musd.burn(msg.sender, musdAmount);
 
-        // Withdraw USDC from Treasury to user
-        treasury.withdraw(msg.sender, usdcAmount);
+        // Transfer USDC from treasury to user
+        usdc.safeTransferFrom(treasury, msg.sender, usdcOut);
 
-        emit Redeemed(msg.sender, musdAmount, usdcAmount);
-    }
-
-    // ============================================================
-    //                  DAILY LIMIT LOGIC
-    // ============================================================
-
-    function _currentDay() internal view returns (uint256) {
-        return block.timestamp / 1 days;
-    }
-
-    function _checkAndUpdateDailyMint(address user, uint256 amount) internal {
-        if (dailyLimitPerUser == 0) return; // 0 = no limit
-
-        uint256 today = _currentDay();
-        if (lastMintDay[user] != today) {
-            dailyMinted[user] = 0;
-            lastMintDay[user] = today;
+        // Track fees
+        if (fee > 0) {
+            accumulatedFees += fee / 1e12;
         }
 
-        dailyMinted[user] += amount;
-        require(dailyMinted[user] <= dailyLimitPerUser, "DAILY_MINT_LIMIT_EXCEEDED");
-    }
-
-    function _checkAndUpdateDailyRedeem(address user, uint256 amount) internal {
-        if (dailyLimitPerUser == 0) return;
-
-        uint256 today = _currentDay();
-        if (lastRedeemDay[user] != today) {
-            dailyRedeemed[user] = 0;
-            lastRedeemDay[user] = today;
-        }
-
-        dailyRedeemed[user] += amount;
-        require(dailyRedeemed[user] <= dailyLimitPerUser, "DAILY_REDEEM_LIMIT_EXCEEDED");
+        emit Redeemed(msg.sender, musdAmount, usdcOut, fee);
     }
 
     // ============================================================
-    //                  ADMIN
+    //                    VIEW FUNCTIONS
     // ============================================================
 
-    function setDailyLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        uint256 old = dailyLimitPerUser;
-        dailyLimitPerUser = _limit;
-        emit DailyLimitUpdated(old, _limit);
+    /// @notice Preview how much mUSD user will receive for USDC deposit
+    function previewMint(uint256 usdcAmount) external view returns (uint256 musdOut, uint256 fee) {
+        uint256 musdAmount = usdcAmount * 1e12;
+        fee = (musdAmount * mintFeeBps) / 10000;
+        musdOut = musdAmount - fee;
     }
 
-    function togglePause() external onlyRole(PAUSER_ROLE) {
-        paused = !paused;
-        emit PauseToggled(paused);
+    /// @notice Preview how much USDC user will receive for mUSD redemption
+    function previewRedeem(uint256 musdAmount) external view returns (uint256 usdcOut, uint256 fee) {
+        fee = (musdAmount * redeemFeeBps) / 10000;
+        uint256 musdAfterFee = musdAmount - fee;
+        usdcOut = musdAfterFee / 1e12;
+    }
+
+    /// @notice Check how much more mUSD can be minted
+    function remainingMintable() external view returns (uint256) {
+        uint256 cap = musd.supplyCap();
+        uint256 supply = musd.totalSupply();
+        return cap > supply ? cap - supply : 0;
+    }
+
+    /// @notice Check treasury balance
+    function treasuryBalance() external view returns (uint256) {
+        return usdc.balanceOf(treasury);
+    }
+
+    // ============================================================
+    //                    ADMIN FUNCTIONS
+    // ============================================================
+
+    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
+        require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
+        mintFeeBps = _mintFeeBps;
+        redeemFeeBps = _redeemFeeBps;
+        emit FeesUpdated(_mintFeeBps, _redeemFeeBps);
+    }
+
+    function setLimits(
+        uint256 _minMint,
+        uint256 _maxMint,
+        uint256 _minRedeem,
+        uint256 _maxRedeem
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_minMint <= _maxMint, "INVALID_MINT_LIMITS");
+        require(_minRedeem <= _maxRedeem, "INVALID_REDEEM_LIMITS");
+        minMintAmount = _minMint;
+        maxMintAmount = _maxMint;
+        minRedeemAmount = _minRedeem;
+        maxRedeemAmount = _maxRedeem;
+        emit LimitsUpdated(_minMint, _maxMint, _minRedeem, _maxRedeem);
+    }
+
+    function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_treasury != address(0), "INVALID_TREASURY");
+        address oldTreasury = treasury;
+        treasury = _treasury;
+        emit TreasuryUpdated(oldTreasury, _treasury);
+    }
+
+    function withdrawFees(address to) external onlyRole(TREASURY_ROLE) {
+        uint256 fees = accumulatedFees;
+        require(fees > 0, "NO_FEES");
+        accumulatedFees = 0;
+        usdc.safeTransferFrom(treasury, to, fees);
+        emit FeesWithdrawn(to, fees);
+    }
+
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }
