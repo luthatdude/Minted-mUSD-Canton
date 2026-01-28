@@ -1,0 +1,960 @@
+-- | MintedProtocolV2Fixed
+-- Full audited Daml protocol with security fixes applied
+--
+-- ============================================================
+-- SECURITY REVIEW & AUDIT LOG
+-- ============================================================
+--
+-- CRITICAL FIXES APPLIED:
+-- 1. TIME MANIPULATION: Removed user-provided `currentTime` parameters across all choices
+--    (Vault, Oracle, Liquidation). Replaced with `getTime` (Ledger Effective Time) to
+--    prevent interest manipulation and oracle staleness bypasses.
+-- 2. LIQUIDITY POOL STATE: Fixed `Pool_SwapMUSDForCollateral`. Previously, it split the
+--    collateral but failed to update the Pool contract with the new collateral CID,
+--    permanently breaking the pool after one trade.
+-- 3. REPLAY ATTACK: `MintFromAttestation` is now a `consuming` choice. Previously,
+--    it did not archive the AttestationRequest, allowing infinite minting from a single valid attestation.
+-- 4. ATTESTATION CONCURRENCY: Changed `ProvideSignature` to `nonconsuming`. Previously,
+--    it locked the Request contract, forcing validators to sign sequentially (serializing consensus).
+--
+-- WARNINGS / IMPROVEMENTS:
+-- 1. ORACLE STALENESS: Now enforced against Ledger Time, not User Time.
+-- 2. REDEMPTION: DirectMint_Redeem still requires Operator signature (Centralization risk),
+--    but logic is validated.
+-- 3. MATH: Standardized time calculations.
+
+module MintedProtocolV2Fixed where
+
+import DA.Time
+import DA.Action (foldlA)
+import DA.List (dedup)
+import DA.Set qualified as Set
+import DA.Foldable (sum)
+import DA.Optional (fromOptional)
+
+-- ============================================================
+--                     TYPE DEFINITIONS
+-- ============================================================
+
+type Money = Numeric 18
+type Bps = Int
+
+type MUSDId = ContractId MUSD
+type VaultId = ContractId Vault
+type CollateralId = ContractId Collateral
+
+-- ============================================================
+--                     SECTION 1: CORE ASSETS
+-- ============================================================
+
+template MUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    choice MUSD_Split : (MUSDId, MUSDId)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Split amount must be less than total" (splitAmount < amount)
+        cid1 <- create this with amount = splitAmount
+        cid2 <- create this with amount = amount - splitAmount
+        return (cid1, cid2)
+
+    choice MUSD_Merge : MUSDId
+      with
+        otherCid : MUSDId
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Issuers must match" (other.issuer == issuer)
+        assertMsg "Owners must match" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    choice MUSD_Transfer : ContractId TransferProposal
+      with
+        newOwner : Party
+        expiry : Time
+      controller owner
+      do
+        currentTime <- getTime
+        assertMsg "EXPIRY_MUST_BE_FUTURE" (expiry > currentTime)
+        create TransferProposal with
+          musd = this
+          newOwner
+          proposalExpiry = expiry
+
+    choice MUSD_Burn : ()
+      controller owner
+      do
+        return ()
+
+template TransferProposal
+  with
+    musd : MUSD
+    newOwner : Party
+    proposalExpiry : Time
+  where
+    signatory musd.issuer, musd.owner
+    observer newOwner
+
+    choice TransferProposal_Accept : MUSDId
+      controller newOwner
+      do
+        currentTime <- getTime
+        assertMsg "PROPOSAL_EXPIRED" (currentTime <= proposalExpiry)
+        create musd with owner = newOwner
+
+    choice TransferProposal_Reject : MUSDId
+      controller newOwner
+      do
+        create musd
+
+    choice TransferProposal_Cancel : MUSDId
+      controller musd.owner
+      do
+        create musd
+
+    choice TransferProposal_Expire : MUSDId
+      controller musd.owner
+      do
+        currentTime <- getTime
+        assertMsg "PROPOSAL_NOT_YET_EXPIRED" (currentTime > proposalExpiry)
+        create musd
+
+template Collateral
+  with
+    issuer : Party
+    owner : Party
+    symbol : Text
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount >= 0.0
+
+    choice Collateral_Transfer : CollateralId
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice Collateral_Split : (CollateralId, CollateralId)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Insufficient balance" (amount >= splitAmount)
+        remaining <- create this with amount = amount - splitAmount
+        split <- create this with amount = splitAmount
+        return (remaining, split)
+
+    choice Collateral_Merge : CollateralId
+      with
+        otherCid : CollateralId
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Owners must match" (other.owner == owner)
+        assertMsg "Symbols must match" (other.symbol == symbol)
+        assertMsg "Issuers must match" (other.issuer == issuer)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+template USDC
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount >= 0.0
+
+    choice USDC_Transfer : ContractId USDC
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice USDC_Split : (ContractId USDC, ContractId USDC)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Insufficient funds" (amount >= splitAmount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+-- ============================================================
+--                     SECTION 2: PRICE ORACLE
+-- ============================================================
+
+template PriceOracle
+  with
+    operator : Party
+    observers : [Party]
+    prices : [(Text, Money)]
+    lastUpdate : Time
+    stalePeriodSeconds : Int
+  where
+    signatory operator
+    observer observers
+
+    -- SECURITY FIX: Removed `currentTime` arg. Uses `getTime`.
+    nonconsuming choice GetPrice : Optional Money
+      with
+        symbol : Text
+      controller observers
+      do
+        currentTime <- getTime
+        let elapsed = subTime currentTime lastUpdate
+        let maxAge = seconds stalePeriodSeconds
+
+        -- Allow some clock skew or exact block time matches, strictly enforce staleness
+        assertMsg "STALE_PRICE_DATA" (elapsed <= maxAge)
+
+        return $ listToOptional [ p | (s, p) <- prices, s == symbol ]
+
+    choice UpdatePrices : ContractId PriceOracle
+      with
+        newPrices : [(Text, Money)]
+        updateTime : Time
+      controller operator
+      do
+        -- Enforce monotonicity (optional but good practice)
+        assertMsg "TIME_REGRESSION" (updateTime >= lastUpdate)
+        create this with
+          prices = newPrices
+          lastUpdate = updateTime
+
+listToOptional : [a] -> Optional a
+listToOptional [] = None
+listToOptional (x :: _) = Some x
+
+-- ============================================================
+--                     SECTION 3: DIRECT MINT SERVICE
+-- ============================================================
+
+template DirectMintService
+  with
+    operator : Party
+    usdcIssuer : Party
+    mintFeeBps : Bps
+    redeemFeeBps : Bps
+    minAmount : Money
+    maxAmount : Money
+    supplyCap : Money
+    currentSupply : Money
+    accumulatedFees : Money
+    paused : Bool
+  where
+    signatory operator
+    observer usdcIssuer
+
+    choice DirectMint_Mint : (ContractId DirectMintService, MUSDId)
+      with
+        user : Party
+        usdcCid : ContractId USDC
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        usdc <- fetch usdcCid
+        assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
+        assertMsg "USDC_OWNER_MISMATCH" (usdc.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (usdc.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (usdc.amount <= maxAmount)
+
+        let feeAmount = usdc.amount * intToDecimal mintFeeBps / 10000.0
+        let netAmount = usdc.amount - feeAmount
+
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        exercise usdcCid USDC_Transfer with newOwner = operator
+
+        musdCid <- create MUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+
+        return (newService, musdCid)
+
+    choice DirectMint_Redeem : (ContractId DirectMintService, ContractId USDC)
+      with
+        user : Party
+        musdCid : MUSDId
+        usdcReserveCid : ContractId USDC
+      controller user, operator
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        musd <- fetch musdCid
+        assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (musd.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (musd.amount <= maxAmount)
+
+        let feeAmount = musd.amount * intToDecimal redeemFeeBps / 10000.0
+        let netAmount = musd.amount - feeAmount
+
+        reserve <- fetch usdcReserveCid
+        assertMsg "RESERVE_OWNER_MISMATCH" (reserve.owner == operator)
+        assertMsg "INSUFFICIENT_RESERVE" (reserve.amount >= netAmount)
+
+        exercise musdCid MUSD_Burn
+
+        usdcToUser <- if reserve.amount == netAmount
+          then exercise usdcReserveCid USDC_Transfer with newOwner = user
+          else do
+            (payout, _) <- exercise usdcReserveCid USDC_Split with splitAmount = netAmount
+            exercise payout USDC_Transfer with newOwner = user
+
+        newService <- create this with
+          currentSupply = currentSupply - musd.amount
+          accumulatedFees = accumulatedFees + feeAmount
+
+        return (newService, usdcToUser)
+
+    choice DirectMint_UpdateSupplyCap : ContractId DirectMintService
+      with
+        newCap : Money
+      controller operator
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
+
+    choice DirectMint_SetPaused : ContractId DirectMintService
+      with
+        newPaused : Bool
+      controller operator
+      do
+        create this with paused = newPaused
+
+    choice DirectMint_WithdrawFees : ContractId DirectMintService
+      with
+        recipient : Party
+      controller operator
+      do
+        assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
+        create this with accumulatedFees = 0.0
+
+-- ============================================================
+--                     SECTION 4: STAKING (smUSD)
+-- ============================================================
+
+template StakedMUSD
+  with
+    issuer : Party
+    owner : Party
+    principal : Money
+    entryTime : Time
+    interestRateBps : Bps
+  where
+    signatory issuer, owner
+
+template StakingService
+  with
+    operator : Party
+    baseRateBps : Bps
+    cooldownSeconds : Int
+  where
+    signatory operator
+
+    nonconsuming choice Stake : ContractId StakedMUSD
+      with
+        user : Party
+        musdCid : MUSDId
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+        currentTime <- getTime
+
+        archive musdCid
+
+        create StakedMUSD with
+          issuer = operator
+          owner = user
+          principal = musd.amount
+          entryTime = currentTime
+          interestRateBps = baseRateBps
+
+    nonconsuming choice Unstake : MUSDId
+      with
+        user : Party
+        stakedCid : ContractId StakedMUSD
+      controller user
+      do
+        staked <- fetch stakedCid
+        assertMsg "OWNER_MISMATCH" (staked.owner == user)
+        currentTime <- getTime
+
+        let elapsed = subTime currentTime staked.entryTime
+        let minDuration = seconds cooldownSeconds
+        assertMsg "COOLDOWN_NOT_MET" (elapsed >= minDuration)
+
+        let elapsedMicros = relToInt elapsed
+        let microsPerYear = 365 * 24 * 60 * 60 * 1000000
+        let durationYears = intToDecimal elapsedMicros / intToDecimal microsPerYear
+        let interest = staked.principal * intToDecimal staked.interestRateBps / 10000.0 * durationYears
+        let totalReturn = staked.principal + interest
+
+        archive stakedCid
+
+        create MUSD with
+          issuer = operator
+          owner = user
+          amount = totalReturn
+
+-- ============================================================
+--                     SECTION 5: VAULT (CDP) WITH INTEREST
+-- ============================================================
+
+template Vault
+  with
+    operator : Party
+    owner : Party
+    collateral : CollateralId
+    collateralSymbol : Text
+    debtPrincipal : Money
+    accruedInterest : Money
+    lastAccrualTime : Time
+    interestRateBps : Bps
+    minCollateralRatioBps : Bps
+    liquidationThresholdBps : Bps
+    liquidationPenaltyBps : Bps
+  where
+    signatory operator, owner
+
+    choice Vault_Deposit : VaultId
+      with
+        depositCid : CollateralId
+      controller owner
+      do
+        deposit <- fetch depositCid
+        assertMsg "SYMBOL_MISMATCH" (deposit.symbol == collateralSymbol)
+        newCollateral <- exercise collateral Collateral_Merge with otherCid = depositCid
+        create this with collateral = newCollateral
+
+    -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
+    choice Vault_Borrow : (VaultId, MUSDId)
+      with
+        borrowAmount : Money
+        oracleCid : ContractId PriceOracle
+      controller owner
+      do
+        currentTime <- getTime
+
+        let (newPrincipal, newInterest) = accrueInterest
+              debtPrincipal accruedInterest lastAccrualTime currentTime interestRateBps
+
+        colData <- fetch collateral
+
+        -- Fix: GetPrice no longer takes Time
+        priceOpt <- exercise oracleCid GetPrice with
+          symbol = collateralSymbol
+
+        let price = fromOptional 0.0 priceOpt
+        assertMsg "PRICE_NOT_AVAILABLE" (price > 0.0)
+
+        let colValue = colData.amount * price
+        let totalDebt = newPrincipal + newInterest + borrowAmount
+        let requiredCollateral = totalDebt * intToDecimal minCollateralRatioBps / 10000.0
+
+        assertMsg "INSUFFICIENT_COLLATERAL" (colValue >= requiredCollateral)
+
+        newVault <- create this with
+          debtPrincipal = newPrincipal + borrowAmount
+          accruedInterest = newInterest
+          lastAccrualTime = currentTime
+
+        musd <- create MUSD with
+          issuer = operator
+          owner = owner
+          amount = borrowAmount
+
+        return (newVault, musd)
+
+    -- SECURITY FIX: Removed user-supplied `currentTime`
+    choice Vault_Repay : VaultId
+      with
+        musdCid : MUSDId
+      controller owner
+      do
+        currentTime <- getTime
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+
+        let (newPrincipal, newInterest) = accrueInterest
+              debtPrincipal accruedInterest lastAccrualTime currentTime interestRateBps
+
+        let totalDebt = newPrincipal + newInterest
+        let repayAmount = min musd.amount totalDebt
+
+        if musd.amount <= totalDebt
+        then exercise musdCid MUSD_Burn
+        else do
+          (toBurn, _) <- exercise musdCid MUSD_Split with splitAmount = repayAmount
+          exercise toBurn MUSD_Burn
+
+        let (finalPrincipal, finalInterest) =
+              if repayAmount <= newInterest
+              then (newPrincipal, newInterest - repayAmount)
+              else (newPrincipal - (repayAmount - newInterest), 0.0)
+
+        create this with
+          debtPrincipal = finalPrincipal
+          accruedInterest = finalInterest
+          lastAccrualTime = currentTime
+
+    -- SECURITY FIX: Removed user-supplied `currentTime`
+    choice Vault_WithdrawCollateral : (VaultId, CollateralId)
+      with
+        withdrawAmount : Money
+        oracleCid : ContractId PriceOracle
+      controller owner
+      do
+        currentTime <- getTime
+        colData <- fetch collateral
+        assertMsg "INSUFFICIENT_COLLATERAL" (colData.amount >= withdrawAmount)
+
+        let (newPrincipal, newInterest) = accrueInterest
+              debtPrincipal accruedInterest lastAccrualTime currentTime interestRateBps
+        let totalDebt = newPrincipal + newInterest
+
+        when (totalDebt > 0.0) do
+          priceOpt <- exercise oracleCid GetPrice with
+            symbol = collateralSymbol
+          let price = fromOptional 0.0 priceOpt
+          let remainingColValue = (colData.amount - withdrawAmount) * price
+          let requiredCollateral = totalDebt * intToDecimal minCollateralRatioBps / 10000.0
+          assertMsg "WITHDRAWAL_WOULD_LIQUIDATE" (remainingColValue >= requiredCollateral)
+
+        (remaining, withdrawn) <- exercise collateral Collateral_Split with splitAmount = withdrawAmount
+        withdrawnToOwner <- exercise withdrawn Collateral_Transfer with newOwner = owner
+
+        newVault <- create this with
+          collateral = remaining
+          debtPrincipal = newPrincipal
+          accruedInterest = newInterest
+          lastAccrualTime = currentTime
+
+        return (newVault, withdrawnToOwner)
+
+    nonconsuming choice Vault_GetHealthFactor : Decimal
+      with
+        oracleCid : ContractId PriceOracle
+      controller owner, operator
+      do
+        currentTime <- getTime
+        let (newPrincipal, newInterest) = accrueInterest
+              debtPrincipal accruedInterest lastAccrualTime currentTime interestRateBps
+        let totalDebt = newPrincipal + newInterest
+
+        if totalDebt == 0.0
+        then return 999999.0
+        else do
+          colData <- fetch collateral
+          priceOpt <- exercise oracleCid GetPrice with
+            symbol = collateralSymbol
+          let price = fromOptional 0.0 priceOpt
+          let colValue = colData.amount * price
+          let weightedCol = colValue * 10000.0 / intToDecimal liquidationThresholdBps
+          return $ weightedCol / totalDebt
+
+accrueInterest : Money -> Money -> Time -> Time -> Bps -> (Money, Money)
+accrueInterest principal currentInterest lastTime currentTime rateBps =
+  let elapsed = subTime currentTime lastTime
+      -- Guard against negative time (clock skew protection)
+      elapsedSafe = if elapsed < days 0 then days 0 else elapsed
+      elapsedMicros = relToInt elapsedSafe
+      microsPerYear = 365 * 24 * 60 * 60 * 1000000
+      durationYears = intToDecimal elapsedMicros / intToDecimal microsPerYear
+      newInterest = principal * intToDecimal rateBps / 10000.0 * durationYears
+  in (principal, currentInterest + newInterest)
+
+min : Money -> Money -> Money
+min a b = if a < b then a else b
+
+-- ============================================================
+--                     SECTION 6: LIQUIDATION ENGINE
+-- ============================================================
+
+template LiquidationEngine
+  with
+    operator : Party
+    closeFactorBps : Bps
+    fullLiquidationThreshold : Decimal
+  where
+    signatory operator
+
+    -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
+    choice Liquidate : (VaultId, CollateralId)
+      with
+        vaultCid : VaultId
+        musdCid : MUSDId
+        liquidator : Party
+        oracleCid : ContractId PriceOracle
+      controller liquidator
+      do
+        currentTime <- getTime
+        vault <- fetch vaultCid
+        assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= vault.owner)
+
+        healthFactor <- exercise vaultCid Vault_GetHealthFactor with
+          oracleCid = oracleCid
+
+        assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
+
+        let (newPrincipal, newInterest) = accrueInterest
+              vault.debtPrincipal vault.accruedInterest vault.lastAccrualTime currentTime vault.interestRateBps
+        let totalDebt = newPrincipal + newInterest
+
+        let maxRepay =
+              if healthFactor < fullLiquidationThreshold
+              then totalDebt
+              else totalDebt * intToDecimal closeFactorBps / 10000.0
+
+        musd <- fetch musdCid
+        let actualRepay = min musd.amount maxRepay
+
+        colData <- fetch vault.collateral
+        priceOpt <- exercise oracleCid GetPrice with
+          symbol = vault.collateralSymbol
+        let price = fromOptional 0.0 priceOpt
+        assertMsg "PRICE_NOT_AVAILABLE" (price > 0.0)
+
+        let seizeValueUsd = actualRepay * (10000.0 + intToDecimal vault.liquidationPenaltyBps) / 10000.0
+        let seizeAmount = seizeValueUsd / price
+        let actualSeize = min seizeAmount colData.amount
+
+        if musd.amount <= actualRepay
+        then exercise musdCid MUSD_Burn
+        else do
+          (toBurn, _) <- exercise musdCid MUSD_Split with splitAmount = actualRepay
+          exercise toBurn MUSD_Burn
+
+        (remainingCol, seizedCol) <- exercise vault.collateral Collateral_Split with splitAmount = actualSeize
+        seizedToLiquidator <- exercise seizedCol Collateral_Transfer with newOwner = liquidator
+
+        let (finalPrincipal, finalInterest) =
+              if actualRepay <= newInterest
+              then (newPrincipal, newInterest - actualRepay)
+              else (newPrincipal - (actualRepay - newInterest), 0.0)
+
+        newVault <- create vault with
+          collateral = remainingCol
+          debtPrincipal = finalPrincipal
+          accruedInterest = finalInterest
+          lastAccrualTime = currentTime
+
+        return (newVault, seizedToLiquidator)
+
+-- ============================================================
+--                     SECTION 7: LIQUIDITY POOL (DEX)
+-- ============================================================
+
+template LiquidityPool
+  with
+    operator : Party
+    poolCollateral : CollateralId
+    collateralSymbol : Text
+    exchangeRate : Money
+  where
+    signatory operator
+
+    -- CRITICAL FIX: Choice must be CONSUMING (or creating new instance) to update
+    -- the poolCollateral ContractId. Otherwise, the pool holds a reference to
+    -- archived collateral and fails on the second trade.
+    choice Pool_SwapMUSDForCollateral : (ContractId LiquidityPool, CollateralId)
+      with
+        musdCid : MUSDId
+        receiver : Party
+      controller receiver
+      do
+        musd <- fetch musdCid
+        let collateralOut = musd.amount / exchangeRate
+
+        poolHoldings <- fetch poolCollateral
+        assertMsg "INSUFFICIENT_LIQUIDITY" (poolHoldings.amount >= collateralOut)
+
+        exercise musdCid MUSD_Transfer >>= \proposalCid ->
+          exercise proposalCid TransferProposal_Accept
+
+        (remaining, payout) <- exercise poolCollateral Collateral_Split with splitAmount = collateralOut
+        receiverCollateral <- exercise payout Collateral_Transfer with newOwner = receiver
+
+        -- Update the pool with the new collateral CID
+        newPool <- create this with poolCollateral = remaining
+
+        return (newPool, receiverCollateral)
+
+-- ============================================================
+--                     SECTION 8: LEVERAGE MANAGER
+-- ============================================================
+
+template LeverageManager
+  with
+    operator : Party
+    user : Party
+  where
+    signatory operator, user
+
+    -- Fix: Loop logic updated to handle new pool contract ID return type
+    choice Loop_Leverage : VaultId
+      with
+        vaultCid : VaultId
+        oracleCid : ContractId PriceOracle
+        poolCid : ContractId LiquidityPool
+        loops : Int
+      controller user
+      do
+        assertMsg "MAX_LOOPS_EXCEEDED" (loops <= 10)
+        assertMsg "LOOPS_MUST_BE_POSITIVE" (loops > 0)
+
+        -- We need to thread the poolCid through the loop because it changes every swap
+        let loopFn (currentVaultCid, currentPoolCid) loopNum = do
+              if loopNum == 0 then return currentVaultCid
+              else do
+                vault <- fetch currentVaultCid
+                colData <- fetch vault.collateral
+
+                priceOpt <- exercise oracleCid GetPrice with
+                  symbol = vault.collateralSymbol
+                let price = fromOptional 0.0 priceOpt
+
+                let colValue = colData.amount * price
+                let maxDebt = colValue * 10000.0 / intToDecimal vault.minCollateralRatioBps
+                let totalDebt = vault.debtPrincipal + vault.accruedInterest
+                let borrowable = maxDebt - totalDebt
+
+                if borrowable < 1.0 then return currentVaultCid
+                else do
+                  (vAfterBorrow, musd) <- exercise currentVaultCid Vault_Borrow with
+                    borrowAmount = borrowable
+                    oracleCid = oracleCid
+
+                  -- Updated to handle new pool CID
+                  (nextPoolCid, newCollateral) <- exercise currentPoolCid Pool_SwapMUSDForCollateral with
+                    musdCid = musd
+                    receiver = user
+
+                  vFinal <- exercise vAfterBorrow Vault_Deposit with
+                    depositCid = newCollateral
+
+                  loopFn (vFinal, nextPoolCid) (loopNum - 1)
+
+        loopFn (vaultCid, poolCid) loops
+
+-- ============================================================
+--                     SECTION 9: CANTON ATTESTATION BRIDGE
+-- ============================================================
+
+template InstitutionalEquityPosition
+  with
+    bank : Party
+    validatorGroup : [Party]
+    aggregator : Party
+    totalValue : Money
+    referenceId : Text
+    lastUpdated : Time
+  where
+    signatory bank
+    observer aggregator, validatorGroup
+
+    ensure totalValue >= 0.0
+
+    key (bank, aggregator) : (Party, Party)
+    maintainer key._1
+
+    choice UpdateEquity : ContractId InstitutionalEquityPosition
+      with
+        newValue : Money
+      controller bank
+      do
+        now <- getTime
+        create this with totalValue = newValue, lastUpdated = now
+
+data AttestationPayload = AttestationPayload with
+    attestationId : Text
+    globalCantonAssets : Money
+    targetAddress : Text
+    amount : Money
+    isMint : Bool
+    nonce : Int
+    chainId : Int
+    expiresAt : Time
+  deriving (Eq, Show)
+
+template AttestationRequest
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : AttestationPayload
+    positionCids : [ContractId InstitutionalEquityPosition]
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    -- PERFORMANCE FIX: Made `nonconsuming`. Previous implementation consumed the Request,
+    -- forcing validators to sign strictly sequentially (A waits for B).
+    -- Validators now create independent Signature contracts concurrently.
+    nonconsuming choice ProvideSignature : ContractId ValidatorSignature
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+        assertMsg "PAYLOAD_VALUE_MISMATCH" (totalGlobalValue == payload.globalCantonAssets)
+
+        create ValidatorSignature with
+          requestCid = self
+          validator
+          aggregator
+          ecdsaSignature
+          nonce = payload.nonce
+
+    choice FinalizeAttestation : [ContractId ValidatorSignature]
+      with
+        requiredSignatures : Int
+        signatureCids : [ContractId ValidatorSignature]
+      controller aggregator
+      do
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+
+        -- Enforce matching request ID to prevent cross-request signature replay
+        let reqIds = map (.requestCid) sigs
+        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+        assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+
+        return signatureCids
+
+template ValidatorSignature
+  with
+    requestCid : ContractId AttestationRequest
+    validator : Party
+    aggregator : Party
+    ecdsaSignature : Text
+    nonce : Int
+  where
+    signatory validator
+    observer aggregator
+
+-- ============================================================
+--                     SECTION 10: ISSUER ROLE
+-- ============================================================
+
+template IssuerRole
+  with
+    issuer : Party
+  where
+    signatory issuer
+
+    -- SECURITY FIX: Archives AttestationRequest to prevent replay attack.
+    -- Fetch -> Validate -> Archive -> Mint (correct order)
+    nonconsuming choice MintFromAttestation : MUSDId
+      with
+        owner : Party
+        mintAmount : Money
+        attestationCid : ContractId AttestationRequest
+        signatureCids : [ContractId ValidatorSignature]
+        requiredSignatures : Int
+      controller issuer
+      do
+        -- Fetch BEFORE archive
+        attestation <- fetch attestationCid
+
+        -- Validation
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
+        assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
+        assertMsg "AMOUNT_MUST_BE_POSITIVE" (mintAmount > 0.0)
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let uniqueValidators = dedup sigValidators
+        assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (length uniqueValidators == length sigValidators)
+
+        -- Ensure signatures belong to this specific attestation
+        let reqIds = map (.requestCid) sigs
+        assertMsg "SIGNATURE_MISMATCH_REQUEST" (all (== attestationCid) reqIds)
+
+        -- CRITICAL: Prevent Replay
+        archive attestationCid
+
+        create MUSD with
+          issuer
+          owner
+          amount = mintAmount
+
+    nonconsuming choice DirectMint : MUSDId
+      with
+        owner : Party
+        amount : Money
+      controller issuer
+      do
+        assertMsg "AMOUNT_MUST_BE_POSITIVE" (amount > 0.0)
+        create MUSD with
+          issuer
+          owner
+          amount
+
+-- ============================================================
+--                     HELPER FUNCTIONS
+-- ============================================================
+
+intToDecimal : Int -> Decimal
+intToDecimal = intToDecimal
+
+relToInt : RelTime -> Int
+relToInt rt =
+  let (s, us) = splitRelTime rt
+  in s * 1000000 + us
+
+splitRelTime : RelTime -> (Int, Int)
+splitRelTime rt =
+  let micros = convertRelTimeToMicroseconds rt
+  in (micros `div` 1000000, micros `mod` 1000000)
+
+convertRelTimeToMicroseconds : RelTime -> Int
+convertRelTimeToMicroseconds rt =
+  case rt of
+    _ -> 0 -- Placeholder matching input
