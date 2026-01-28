@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 
 contract MUSD is ERC20, AccessControl {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
+    bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
 
     uint256 public supplyCap;
@@ -28,7 +29,11 @@ contract MUSD is ERC20, AccessControl {
         emit SupplyCapUpdated(0, _initialSupplyCap);
     }
 
-    function setSupplyCap(uint256 _cap) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setSupplyCap(uint256 _cap) external {
+        require(
+            hasRole(DEFAULT_ADMIN_ROLE, msg.sender) || hasRole(CAP_MANAGER_ROLE, msg.sender),
+            "NOT_AUTHORIZED"
+        );
         require(_cap > 0, "INVALID_SUPPLY_CAP");
         uint256 oldCap = supplyCap;
         supplyCap = _cap;
