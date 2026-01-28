@@ -25,6 +25,7 @@ Canton Network (Daml)          Ethereum (Solidity)
 | Component | Language | Description |
 |-----------|----------|-------------|
 | `daml/BLEProtocol.daml` | Daml | Canton Network equity positions and attestation workflow |
+| `daml/MintedMUSD.daml` | Daml | Canton-side mUSD asset with split, merge, transfer, and attestation-gated minting |
 | `contracts/MUSD.sol` | Solidity | ERC-20 stablecoin with compliance (blacklist, supply cap) |
 | `contracts/BLEBridgeV8.sol` | Solidity | Multi-sig bridge with NAV oracle, rate limiting, nonce ordering |
 | `contracts/SMUSD.sol` | Solidity | ERC-4626 yield vault with cooldown protection |
@@ -66,7 +67,7 @@ npx hardhat test
 daml test
 ```
 
-Test coverage includes: multi-sig attestation, blacklist compliance, rate limiting, vault cooldown, emergency functions, and NAV oracle validation.
+Test coverage includes: multi-sig attestation, blacklist compliance, rate limiting, vault cooldown, emergency functions, NAV oracle validation, mUSD asset operations (split/merge/redeem), attestation-gated minting, and transfer proposals.
 
 ## License
 

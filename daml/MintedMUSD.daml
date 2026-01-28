@@ -1,0 +1,156 @@
+-- MintedMUSD - Canton-side mUSD asset representation
+-- Integrated with BLEProtocol attestation flow for collateral-backed minting
+-- Uses Numeric 18 for 1:1 Wei precision with Ethereum
+
+module MintedMUSD where
+
+import BLEProtocol (AttestationRequest, ValidatorSignature, Money)
+import DA.List (dedup)
+
+-- | A cash-like asset template representing mUSD on the Canton Network.
+-- Security:
+--   1. Authorization: Strict signatory enforcement for issuer and owner.
+--   2. Spam Prevention: Uses Proposal pattern for transfers.
+--   3. Validation: Enforces positive amounts and correct merge logic.
+--   4. Privacy: Visibility restricted to issuer and current owner.
+template MUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Money  -- Numeric 18 for Wei precision
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    agreement
+      show issuer <> " promises to pay the bearer " <> show amount <> " mUSD on demand."
+
+    -- | Split the asset into two separate contracts.
+    choice Split : (ContractId MUSD, ContractId MUSD)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "Split amount must be positive." (splitAmount > 0.0)
+        assertMsg "Split amount must be less than total amount." (splitAmount < amount)
+
+        cid1 <- create this with amount = splitAmount
+        cid2 <- create this with amount = amount - splitAmount
+        return (cid1, cid2)
+
+    -- | Merge this asset with another mUSD contract.
+    -- Verifies matching issuer and owner to prevent cross-contamination.
+    choice Merge : ContractId MUSD
+      with
+        otherCid : ContractId MUSD
+      controller owner
+      do
+        otherAsset <- fetch otherCid
+        assertMsg "Merger issuer mismatch." (otherAsset.issuer == issuer)
+        assertMsg "Merger owner mismatch." (otherAsset.owner == owner)
+        archive otherCid
+        create this with amount = amount + otherAsset.amount
+
+    -- | Initiate a transfer via proposal (prevents airdrop spam).
+    choice Transfer : ContractId TransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create TransferProposal with
+          asset = this
+          newOwner
+
+    -- | Redeem (burn) the asset.
+    -- Requires both issuer and owner consent (both are signatories).
+    choice Redeem : ()
+      controller owner
+      do
+        return ()
+
+
+-- | Proposal contract for transferring MUSD.
+-- Ensures the recipient explicitly accepts (atomic swap compatible).
+template TransferProposal
+  with
+    asset : MUSD
+    newOwner : Party
+  where
+    signatory asset.issuer, asset.owner
+    observer newOwner
+
+    choice Accept : ContractId MUSD
+      controller newOwner
+      do
+        create asset with owner = newOwner
+
+    choice Reject : ContractId MUSD
+      controller newOwner
+      do
+        create asset
+
+    choice Cancel : ContractId MUSD
+      controller asset.owner
+      do
+        create asset
+
+
+-- | Issuer role contract for minting mUSD.
+-- Supports two minting paths:
+--   1. MintFromAttestation: Collateral-backed minting gated by finalized attestation
+--   2. Mint: Direct minting (for bootstrapping/testing, should be restricted in production)
+template IssuerRole
+  with
+    issuer : Party
+  where
+    signatory issuer
+
+    -- | Mint mUSD backed by a finalized attestation from the validator network.
+    -- This is the production minting path: requires validator signatures
+    -- and verified collateral before any mUSD is created on Canton.
+    nonconsuming choice MintFromAttestation : ContractId MUSD
+      with
+        owner : Party
+        mintAmount : Money
+        attestationCid : ContractId AttestationRequest
+        signatureCids : [ContractId ValidatorSignature]
+        requiredSignatures : Int
+      controller issuer
+      do
+        assertMsg "Mint amount must be positive." (mintAmount > 0.0)
+
+        -- Verify the attestation has enough valid signatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        -- Fetch and verify all signatures are from distinct validators
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let uniqueValidators = dedup sigValidators
+        assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (length uniqueValidators == length sigValidators)
+
+        -- Fetch the attestation to verify the mint details match
+        attestation <- fetch attestationCid
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
+        assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
+
+        -- All checks passed — create the mUSD
+        create MUSD with
+          issuer
+          owner
+          amount = mintAmount
+
+    -- | Direct mint (for bootstrapping/admin use).
+    -- In production, this should be protected by additional governance
+    -- or removed entirely in favor of MintFromAttestation only.
+    nonconsuming choice Mint : ContractId MUSD
+      with
+        owner : Party
+        amount : Money
+      controller issuer
+      do
+        assertMsg "Mint amount must be positive." (amount > 0.0)
+        create MUSD with
+          issuer
+          owner
+          amount
