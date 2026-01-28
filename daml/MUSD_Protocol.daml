@@ -1,0 +1,365 @@
+-- | MUSD_Protocol
+-- Full mUSD protocol implementation on Canton/Daml
+-- Sections: Asset definitions, Direct minting, Staking/yield, Canton attestation bridge
+
+module MUSD_Protocol where
+
+import DA.Time
+import DA.Date
+import DA.Action (foldlA)
+
+-- | -----------------------------------------------------------------------------------------
+-- | SECTION 1: ASSET DEFINITIONS
+-- | -----------------------------------------------------------------------------------------
+
+-- | Represents the external USDC asset (mock representation for the protocol).
+-- | In a real scenario, this would likely be a Daml Interface or a Holding contract.
+template Usdc
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+  where
+    signatory issuer, owner
+
+    choice Usdc_Transfer : ContractId Usdc
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice Usdc_Split : (ContractId Usdc, ContractId Usdc)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Insufficient funds" (amount > splitAmount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+-- | Represents the mUSD Stablecoin.
+template Musd
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+  where
+    signatory issuer, owner
+
+    choice Musd_Transfer : ContractId Musd
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice Musd_Merge : ContractId Musd
+      with
+        otherCid : ContractId Musd
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Merge: Issuers must match" (other.issuer == issuer)
+        assertMsg "Merge: Owners must match" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+-- | Represents the Staked mUSD (sMUSD) which accrues yield.
+template Smusd
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal         -- The principal amount
+    entryTime : Time         -- When the stake started
+    interestRate : Decimal   -- Annual percentage (e.g., 0.05 for 5%)
+  where
+    signatory issuer, owner
+
+-- | -----------------------------------------------------------------------------------------
+-- | SECTION 2: DIRECT MINTING (USDC -> mUSD)
+-- | -----------------------------------------------------------------------------------------
+
+-- | A service contract provided by the Issuer allowing users to swap USDC for mUSD.
+-- | Security Critical: This defines the exchange rate and custody transfer.
+template MintingService
+  with
+    operator : Party       -- The protocol operator/issuer
+    usdcIssuer : Party     -- The trusted issuer of USDC
+  where
+    signatory operator
+    observer usdcIssuer
+
+    nonconsuming choice Mint_Musd : ContractId Musd
+      with
+        user : Party
+        usdcCid : ContractId Usdc
+      controller user
+      do
+        -- 1. Fetch the provided USDC
+        usdc <- fetch usdcCid
+        -- 2. Validate Inputs
+        assertMsg "Mint: Currency mismatch" (usdc.issuer == usdcIssuer)
+        assertMsg "Mint: Owner mismatch" (usdc.owner == user)
+        assertMsg "Mint: Amount must be positive" (usdc.amount > 0.0)
+        -- 3. Execute Atomic Swap
+        -- Transfer USDC to the Operator (Reserve)
+        exercise usdcCid Usdc_Transfer with newOwner = operator
+        -- Mint equal amount of mUSD to the User (1:1 Peg)
+        create Musd with
+          issuer = operator
+          owner = user
+          amount = usdc.amount
+
+    nonconsuming choice Burn_Musd : ContractId Usdc
+      with
+        user : Party
+        musdCid : ContractId Musd
+      controller user
+      do
+        -- 1. Fetch mUSD
+        musd <- fetch musdCid
+        -- 2. Validate
+        assertMsg "Burn: Issuer mismatch" (musd.issuer == operator)
+        assertMsg "Burn: Owner mismatch" (musd.owner == user)
+        -- 3. Execute Atomic Swap
+        -- Archive the mUSD (Burn)
+        archive musdCid
+        -- Note: In a real system, the operator needs a reserve of USDC to payout.
+        -- Here we assume the operator finds a USDC cert in their inventory to pay back.
+        -- For simplicity in this example, we mock the payout creation:
+        create Usdc with
+          issuer = usdcIssuer
+          owner = user
+          amount = musd.amount
+
+-- | -----------------------------------------------------------------------------------------
+-- | SECTION 3: STAKING & YIELD (sMUSD)
+-- | -----------------------------------------------------------------------------------------
+
+template StakingService
+  with
+    operator : Party
+    baseRate : Decimal     -- e.g. 0.05
+  where
+    signatory operator
+
+    nonconsuming choice Stake : ContractId Smusd
+      with
+        user : Party
+        musdCid : ContractId Musd
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "Stake: Issuer mismatch" (musd.issuer == operator)
+        currentTime <- getTime
+        -- Lock/Archive mUSD
+        archive musdCid
+        -- Issue sMUSD
+        create Smusd with
+          issuer = operator
+          owner = user
+          amount = musd.amount
+          entryTime = currentTime
+          interestRate = baseRate
+
+    nonconsuming choice Unstake : ContractId Musd
+      with
+        user : Party
+        smusdCid : ContractId Smusd
+      controller user
+      do
+        smusd <- fetch smusdCid
+        assertMsg "Unstake: Owner mismatch" (smusd.owner == user)
+        currentTime <- getTime
+        archive smusdCid
+        -- Calculate Yield
+        -- Formula: Amount * Rate * (TimeDelta in Years)
+        -- Note: Daml math with Time requires conversion to microseconds
+        let durationMicro = subTime currentTime smusd.entryTime
+        let microsecondsPerYear = 31536000000000.0  -- 365 * 24 * 60 * 60 * 1000000
+        let durationYears = (intToDecimal (relToInt durationMicro)) / microsecondsPerYear
+        let interest = smusd.amount * smusd.interestRate * durationYears
+        let totalReturn = smusd.amount + interest
+        -- Mint mUSD + Yield back to user
+        create Musd with
+          issuer = operator
+          owner = user
+          amount = totalReturn
+
+-- | -----------------------------------------------------------------------------------------
+-- | SECTION 4: CANTON ATTESTATION FLOW (BRIDGE)
+-- | -----------------------------------------------------------------------------------------
+
+-- | Step 1: User locks assets on the source domain to request bridging.
+template BridgeLock
+  with
+    operator : Party        -- Bridge operator
+    user : Party            -- User bridging funds
+    amount : Decimal
+    targetDomainId : Text   -- Where the funds should go
+    targetAddress : Text    -- User's address/party on target
+    validators : [Party]    -- List of required validators
+    nonce : Int             -- Unique ID for this transaction
+  where
+    signatory user, operator
+    -- Validates that the lock is active
+    observer validators
+
+-- | Service to initiate the bridge lock.
+template BridgeService
+  with
+    operator : Party
+    validators : [Party]
+  where
+    signatory operator
+    observer validators
+
+    nonconsuming choice Lock_Musd_For_Bridge : ContractId BridgeLock
+      with
+        user : Party
+        musdCid : ContractId Musd
+        targetDomain : Text
+        targetAddr : Text
+        nonce : Int
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "Bridge: Only mUSD can be bridged" (musd.issuer == operator)
+        -- Transfer mUSD to operator (Locking mechanism)
+        -- Alternatively, we could archive it here if the bridge mints fresh on the other side.
+        -- Here we archive to remove from circulation on Source Domain.
+        archive musdCid
+        create BridgeLock with
+          operator = operator
+          user = user
+          amount = musd.amount
+          targetDomainId = targetDomain
+          targetAddress = targetAddr
+          validators = validators
+          nonce = nonce
+
+-- | Step 2: Attestation (The Proof).
+-- | Validators observe the BridgeLock and create an attestation.
+template BridgeAttestation
+  with
+    validator : Party
+    user : Party
+    amount : Decimal
+    targetDomainId : Text
+    nonce : Int
+    signature : Text         -- Cryptographic proof (simplified as text here)
+  where
+    signatory validator
+    observer user
+
+-- | Step 3: Redemption / Minting on Target Side.
+-- | This contract would exist on the Target Canton domain.
+-- | It collects attestations and mints the wrapped token.
+template BridgeClaim
+  with
+    operator : Party
+    user : Party
+    amount : Decimal
+    nonce : Int
+    requiredSignatures : Int
+    collectedValidators : [Party]
+  where
+    signatory user, operator
+
+    -- Method to add a validator's signature/attestation
+    choice Add_Attestation : ContractId BridgeClaim
+      with
+        attestationCid : ContractId BridgeAttestation
+      controller user
+      do
+        att <- fetch attestationCid
+        -- Security Checks
+        assertMsg "Claim: Invalid Nonce" (att.nonce == nonce)
+        assertMsg "Claim: Invalid User" (att.user == user)
+        assertMsg "Claim: Amount Mismatch" (att.amount == amount)
+        assertMsg "Claim: Validator already signed" (not (elem att.validator collectedValidators))
+        create this with
+          collectedValidators = att.validator :: collectedValidators
+
+    -- Finalize and Mint if threshold met
+    choice Finalize_Bridge_Mint : ContractId Musd
+      with
+      controller user
+      do
+        assertMsg "Claim: Not enough signatures" (length collectedValidators >= requiredSignatures)
+        create Musd with
+          issuer = operator
+          owner = user
+          amount = amount
+
+-- | -----------------------------------------------------------------------------------------
+-- | SECTION 5: INITIALIZATION / SETUP SCRIPT
+-- | -----------------------------------------------------------------------------------------
+
+-- | Helper to set up the environment
+setup : Script ()
+setup = do
+  -- 1. Allocate Parties
+  operator <- allocateParty "Musd_Issuer"
+  usdcBank <- allocateParty "Circle_Mock"
+  alice <- allocateParty "Alice"
+  validator1 <- allocateParty "Validator_1"
+  validator2 <- allocateParty "Validator_2"
+
+  -- 2. Issue USDC to Alice
+  usdcCid <- submit usdcBank do
+    createCmd Usdc with
+      issuer = usdcBank
+      owner = alice
+      amount = 1000.0
+
+  -- 3. Deploy Protocol Services
+  mintingSvc <- submit operator do
+    createCmd MintingService with
+      operator = operator
+      usdcIssuer = usdcBank
+
+  stakingSvc <- submit operator do
+    createCmd StakingService with
+      operator = operator
+      baseRate = 0.05
+
+  bridgeSvc <- submit operator do
+    createCmd BridgeService with
+      operator = operator
+      validators = [validator1, validator2]
+
+  -- 4. Alice Mints mUSD (Swaps USDC)
+  musdCid <- submit alice do
+    exerciseCmd mintingSvc Mint_Musd with
+      user = alice
+      usdcCid = usdcCid
+
+  -- 5. Alice Stakes mUSD
+  smusdCid <- submit alice do
+    exerciseCmd stakingSvc Stake with
+      user = alice
+      musdCid = musdCid
+
+  -- Time passes... (Simulated)
+  passTime (days 365)
+
+  -- 6. Alice Unstakes (Gets Yield)
+  finalMusd <- submit alice do
+    exerciseCmd stakingSvc Unstake with
+      user = alice
+      smusdCid = smusdCid
+
+  -- 7. Alice Bridges to another Canton Domain
+  submit alice do
+    exerciseCmd bridgeSvc Lock_Musd_For_Bridge with
+      user = alice
+      musdCid = finalMusd
+      targetDomain = "canton-domain-beta"
+      targetAddr = "Party::Alice::Target"
+      nonce = 101
+
+  return ()
