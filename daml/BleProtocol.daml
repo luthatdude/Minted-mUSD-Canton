@@ -1,6 +1,6 @@
 module BleProtocol where
 
-import DA.Date
+import DA.Date hiding (datetime)
 import DA.Time
 import Daml.Script
 

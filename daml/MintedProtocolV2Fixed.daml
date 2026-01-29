@@ -25,11 +25,9 @@
 
 module MintedProtocolV2Fixed where
 
-import Prelude hiding (sum, min, intToDecimal, all, elem, div)
+import Prelude hiding (sum, all, elem)
 import DA.Foldable (sum, all, elem)
 import DA.Action (when, foldlA)
-import DA.Internal.Desugar (intToDecimal)
-import DA.Internal.Prelude (div)
 import DA.Time
 import DA.List (dedup)
 import DA.Set qualified as Set
