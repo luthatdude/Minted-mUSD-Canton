@@ -315,6 +315,11 @@ template DirectMintService
     currentSupply : Money
     accumulatedFees : Money
     paused : Bool
+    -- 24h rolling window rate limiting
+    dailyMintLimit : Money       -- Max net mint volume per 24h window
+    dailyMinted : Money          -- Cumulative mints in current window
+    dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
+    lastRateLimitReset : Time    -- Timestamp of last window reset
   where
     signatory operator
     observer usdcIssuer
@@ -338,6 +343,17 @@ template DirectMintService
 
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
 
+        -- 24h rolling window rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMintedToday = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMintedToday + netAmount <= dailyMintLimit)
+
         -- FIX D-H02: USDC_Transfer now returns proposal; accept it
         usdcProposal <- exercise usdcCid USDC_Transfer with newOwner = operator
         exercise usdcProposal USDCTransferProposal_Accept
@@ -350,6 +366,9 @@ template DirectMintService
         newService <- create this with
           currentSupply = currentSupply + netAmount
           accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
 
         return (newService, musdCid)
 
@@ -387,9 +406,21 @@ template DirectMintService
             usdcProp <- exercise payout USDC_Transfer with newOwner = user
             exercise usdcProp USDCTransferProposal_Accept
 
+        -- Track burn in rate limit window (burns offset mints)
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+
         newService <- create this with
           currentSupply = currentSupply - musd.amount
           accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted
+          dailyBurned = resetBurned + musd.amount
+          lastRateLimitReset = resetTime
 
         return (newService, usdcToUser)
 
@@ -407,6 +438,14 @@ template DirectMintService
       controller operator
       do
         create this with paused = newPaused
+
+    choice DirectMint_SetDailyMintLimit : ContractId DirectMintService
+      with
+        newLimit : Money
+      controller operator
+      do
+        assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
+        create this with dailyMintLimit = newLimit
 
     -- FIX H-08: Create USDC payment for fees instead of destroying them
     choice DirectMint_WithdrawFees : (ContractId DirectMintService, ContractId USDC)

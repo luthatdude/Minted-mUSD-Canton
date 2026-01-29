@@ -242,6 +242,11 @@ template CantonDirectMintService
     targetChainId : Int          -- Default: 1 (Ethereum mainnet)
     targetTreasury : Text        -- Ethereum Treasury address
     nextNonce : Int              -- Auto-incrementing nonce for bridge requests
+    -- 24h rolling window rate limiting
+    dailyMintLimit : Money       -- Max net mint volume per 24h window
+    dailyMinted : Money          -- Cumulative mints in current window
+    dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
+    lastRateLimitReset : Time    -- Timestamp of last window reset
   where
     signatory operator
     observer usdcIssuer
@@ -267,6 +272,17 @@ template CantonDirectMintService
 
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
 
+        -- 24h rolling window rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
         exercise usdcCid CantonUSDC_Transfer with newOwner = operator
@@ -278,7 +294,6 @@ template CantonDirectMintService
           amount = netAmount
 
         -- Emit bridge-out request — pipe the backing stables to Ethereum
-        now <- getTime
         bridgeReq <- create BridgeOutRequest with
           operator = operator
           user = user
@@ -290,11 +305,14 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- Update service state
+        -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
           accumulatedFees = accumulatedFees + feeAmount
           nextNonce = nextNonce + 1
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
 
         return (newService, musdCid, bridgeReq)
 
@@ -333,9 +351,20 @@ template CantonDirectMintService
           createdAt = now
           fulfilled = False
 
+        -- Track burn in rate limit window (burns offset mints)
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+
         newService <- create this with
           currentSupply = currentSupply - musd.amount
           accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted
+          dailyBurned = resetBurned + musd.amount
+          lastRateLimitReset = resetTime
 
         return (newService, redemptionCid)
 
@@ -354,6 +383,14 @@ template CantonDirectMintService
       controller operator
       do
         create this with paused = newPaused
+
+    choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
+      with
+        newLimit : Money
+      controller operator
+      do
+        assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
+        create this with dailyMintLimit = newLimit
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
       controller operator
