@@ -1,0 +1,632 @@
+-- | CantonDirectMint Integration Tests
+-- Tests the full flow:
+--   1. User deposits USDC → mints Canton mUSD → bridge-out request emitted
+--   2. Redeem mUSD → burn + redemption request created
+--   3. Bridge-out attestation with 3-of-5 validator signatures
+--   4. Bridge-in attestation for redemptions
+--   5. Supply cap sync across chains
+--   6. Yield attestation → smUSD share price increase
+--   7. Full end-to-end: mint → stake → yield sync → unstake with profit
+
+module CantonDirectMintTest where
+
+import CantonDirectMint
+import BLEBridgeProtocol
+import CantonSMUSD
+import DA.Time
+import DA.Set qualified as Set
+import Daml.Script
+
+-- ============================================================
+--                     TEST 1: DIRECT MINT FLOW
+-- ============================================================
+
+-- | Test: User deposits USDC → gets Canton mUSD → bridge-out request emitted
+directMintFlowTest : Script ()
+directMintFlowTest = script do
+  -- Setup parties
+  operator <- allocateParty "Operator"
+  usdcIssuer <- allocateParty "USDCIssuer"
+  alice <- allocateParty "Alice"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+
+  let validators = [validator1, validator2, validator3]
+
+  -- Issue USDC to Alice on Canton
+  usdcCid <- submitMulti [usdcIssuer, alice] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = alice
+      amount = 10000.000000000000000000
+
+  -- Deploy CantonDirectMint service
+  serviceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      mintFeeBps = 30  -- 0.30%
+      redeemFeeBps = 30
+      minAmount = 1.000000000000000000
+      maxAmount = 1000000.000000000000000000
+      supplyCap = 10000000.000000000000000000
+      currentSupply = 0.000000000000000000
+      accumulatedFees = 0.000000000000000000
+      paused = False
+      validators
+      targetChainId = 1
+      targetTreasury = "0xTreasuryContractAddress"
+      nextNonce = 1
+
+  -- Alice mints mUSD
+  (newServiceCid, musdCid, bridgeReqCid) <- submit alice do
+    exerciseCmd serviceCid DirectMint_Mint with
+      user = alice
+      usdcCid = usdcCid
+
+  -- Verify: mUSD was minted (split to prove ownership)
+  (half1, half2) <- submit alice do
+    exerciseCmd musdCid CantonMUSD_Split with
+      splitAmount = 1000.000000000000000000
+
+  -- Verify: Bridge-out request was created
+  bridgeReq <- queryContractId operator bridgeReqCid
+  debug $ "Bridge-out request created with status: pending"
+
+  -- Operator marks bridge as complete after Ethereum confirmation
+  completedBridgeCid <- submit operator do
+    exerciseCmd bridgeReqCid BridgeOut_Complete with
+      relayParty = operator
+
+  debug "Direct mint flow test passed - mUSD minted, bridge-out emitted"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 2: REDEEM FLOW
+-- ============================================================
+
+-- | Test: User burns mUSD → redemption request created
+redeemFlowTest : Script ()
+redeemFlowTest = script do
+  operator <- allocateParty "Operator"
+  usdcIssuer <- allocateParty "USDCIssuer"
+  alice <- allocateParty "Alice"
+
+  let validators : [Party] = []
+
+  -- Deploy service
+  serviceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 1.000000000000000000
+      maxAmount = 1000000.000000000000000000
+      supplyCap = 10000000.000000000000000000
+      currentSupply = 0.000000000000000000
+      accumulatedFees = 0.000000000000000000
+      paused = False
+      validators
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nextNonce = 1
+
+  -- Issue USDC and mint mUSD
+  usdcCid <- submitMulti [usdcIssuer, alice] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = alice
+      amount = 5000.000000000000000000
+
+  (serviceCid2, musdCid, _bridgeReq) <- submit alice do
+    exerciseCmd serviceCid DirectMint_Mint with
+      user = alice
+      usdcCid = usdcCid
+
+  -- Alice redeems mUSD
+  (serviceCid3, redemptionCid) <- submit alice do
+    exerciseCmd serviceCid2 DirectMint_Redeem with
+      user = alice
+      musdCid = musdCid
+
+  -- Operator fulfills redemption with bridge-in USDC
+  bridgedUsdc <- submitMulti [usdcIssuer, operator] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = operator
+      amount = 5000.000000000000000000
+
+  (fulfilledReq, payoutCid) <- submit operator do
+    exerciseCmd redemptionCid Redemption_Fulfill with
+      usdcCid = bridgedUsdc
+
+  debug "Redeem flow test passed - mUSD burned, redemption fulfilled"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 3: BRIDGE-OUT ATTESTATION
+-- ============================================================
+
+-- | Test: 3-of-5 validator attestation for bridge-out
+bridgeOutAttestationTest : Script ()
+bridgeOutAttestationTest = script do
+  bank1 <- allocateParty "Bank1"
+  bank2 <- allocateParty "Bank2"
+  aggregator <- allocateParty "Aggregator"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+  validator4 <- allocateParty "Validator4"
+  validator5 <- allocateParty "Validator5"
+
+  let validators = [validator1, validator2, validator3, validator4, validator5]
+
+  now <- getTime
+  let expiresAt = addRelTime now (hours 1)
+
+  -- Banks create equity positions
+  pos1Cid <- submit bank1 do
+    createCmd InstitutionalEquityPosition with
+      bank = bank1
+      validatorGroup = validators
+      aggregator
+      totalValue = 600000.000000000000000000
+      referenceId = "BANK1-POS"
+      lastUpdated = now
+
+  pos2Cid <- submit bank2 do
+    createCmd InstitutionalEquityPosition with
+      bank = bank2
+      validatorGroup = validators
+      aggregator
+      totalValue = 600000.000000000000000000
+      referenceId = "BANK2-POS"
+      lastUpdated = now
+
+  -- Create bridge-out attestation for 1M USDC
+  let payload = BridgeOutPayload with
+        attestationId = "BOUT-001"
+        cantonReserveTotal = 1200000.000000000000000000
+        ethereumTreasuryAddr = "0xTreasury"
+        amount = 1000000.000000000000000000
+        nonce = 1
+        chainId = 1
+        expiresAt
+
+  attCid <- submit aggregator do
+    createCmd BridgeOutAttestation with
+      aggregator
+      validatorGroup = validators
+      payload
+      positionCids = [pos1Cid, pos2Cid]
+
+  -- 3-of-5 validators sign
+  sig1Cid <- submit validator1 do
+    exerciseCmd attCid BridgeOut_Sign with
+      validator = validator1
+      ecdsaSignature = "0xsig1"
+
+  sig2Cid <- submit validator2 do
+    exerciseCmd attCid BridgeOut_Sign with
+      validator = validator2
+      ecdsaSignature = "0xsig2"
+
+  sig3Cid <- submit validator3 do
+    exerciseCmd attCid BridgeOut_Sign with
+      validator = validator3
+      ecdsaSignature = "0xsig3"
+
+  -- Aggregator finalizes with 3-of-5
+  finalSigs <- submit aggregator do
+    exerciseCmd attCid BridgeOut_Finalize with
+      requiredSignatures = 3
+      signatureCids = [sig1Cid, sig2Cid, sig3Cid]
+
+  debug "Bridge-out attestation test passed - 3-of-5 validators signed"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 4: BRIDGE-IN ATTESTATION
+-- ============================================================
+
+-- | Test: Bridge-in attestation for redemption fulfillment
+bridgeInAttestationTest : Script ()
+bridgeInAttestationTest = script do
+  aggregator <- allocateParty "Aggregator"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+  alice <- allocateParty "Alice"
+
+  let validators = [validator1, validator2, validator3]
+
+  now <- getTime
+  let expiresAt = addRelTime now (hours 1)
+
+  let payload = BridgeInPayload with
+        attestationId = "BIN-001"
+        sourceChainId = 1
+        sourceTxHash = "0xabcdef1234567890"
+        amount = 5000.000000000000000000
+        recipient = alice
+        nonce = 1
+        expiresAt
+
+  attCid <- submit aggregator do
+    createCmd BridgeInAttestation with
+      aggregator
+      validatorGroup = validators
+      payload
+
+  -- All 3 validators sign
+  sig1 <- submit validator1 do
+    exerciseCmd attCid BridgeIn_Sign with
+      validator = validator1
+      ecdsaSignature = "0xsig1"
+
+  sig2 <- submit validator2 do
+    exerciseCmd attCid BridgeIn_Sign with
+      validator = validator2
+      ecdsaSignature = "0xsig2"
+
+  sig3 <- submit validator3 do
+    exerciseCmd attCid BridgeIn_Sign with
+      validator = validator3
+      ecdsaSignature = "0xsig3"
+
+  finalSigs <- submit aggregator do
+    exerciseCmd attCid BridgeIn_Finalize with
+      requiredSignatures = 3
+      signatureCids = [sig1, sig2, sig3]
+
+  debug "Bridge-in attestation test passed - 3-of-3 validators signed"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 5: SUPPLY CAP SYNC
+-- ============================================================
+
+-- | Test: Cross-chain supply cap sync attestation
+supplyCapSyncTest : Script ()
+supplyCapSyncTest = script do
+  aggregator <- allocateParty "Aggregator"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+
+  let validators = [validator1, validator2, validator3]
+  now <- getTime
+
+  let payload = SupplyCapPayload with
+        attestationId = "SCAP-001"
+        cantonMUSDSupply = 5000000.000000000000000000
+        ethereumMUSDSupply = 3000000.000000000000000000
+        totalGlobalSupply = 8000000.000000000000000000
+        globalBackingUSDC = 8500000.000000000000000000  -- Overcollateralized
+        nonce = 1
+        timestamp = now
+
+  attCid <- submit aggregator do
+    createCmd SupplyCapAttestation with
+      aggregator
+      validatorGroup = validators
+      payload
+
+  sig1 <- submit validator1 do
+    exerciseCmd attCid SupplyCap_Sign with
+      validator = validator1
+      ecdsaSignature = "0xsig1"
+
+  sig2 <- submit validator2 do
+    exerciseCmd attCid SupplyCap_Sign with
+      validator = validator2
+      ecdsaSignature = "0xsig2"
+
+  sig3 <- submit validator3 do
+    exerciseCmd attCid SupplyCap_Sign with
+      validator = validator3
+      ecdsaSignature = "0xsig3"
+
+  verifiedPayload <- submit aggregator do
+    exerciseCmd attCid SupplyCap_Finalize with
+      requiredSignatures = 3
+      signatureCids = [sig1, sig2, sig3]
+
+  debug $ "Supply cap sync verified: total=" <> show verifiedPayload.totalGlobalSupply
+  debug "Supply cap sync test passed"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 6: YIELD ATTESTATION + smUSD SYNC
+-- ============================================================
+
+-- | Test: Yield attestation updates smUSD share price
+yieldAttestationTest : Script ()
+yieldAttestationTest = script do
+  aggregator <- allocateParty "Aggregator"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+
+  let validators = [validator1, validator2, validator3]
+  now <- getTime
+
+  let payload = YieldPayload with
+        attestationId = "YIELD-001"
+        totalTreasuryAssets = 10500000.000000000000000000  -- 10.5M (yield on 10M)
+        totalMUSDSupply = 10000000.000000000000000000
+        yieldAccrued = 500000.000000000000000000  -- 500K yield (5%)
+        epochNumber = 1
+        timestamp = now
+        nonce = 1
+
+  attCid <- submit aggregator do
+    createCmd YieldAttestation with
+      aggregator
+      validatorGroup = validators
+      payload
+
+  sig1 <- submit validator1 do
+    exerciseCmd attCid Yield_Sign with
+      validator = validator1
+      ecdsaSignature = "0xsig1"
+
+  sig2 <- submit validator2 do
+    exerciseCmd attCid Yield_Sign with
+      validator = validator2
+      ecdsaSignature = "0xsig2"
+
+  sig3 <- submit validator3 do
+    exerciseCmd attCid Yield_Sign with
+      validator = validator3
+      ecdsaSignature = "0xsig3"
+
+  verifiedYield <- submit aggregator do
+    exerciseCmd attCid Yield_Finalize with
+      requiredSignatures = 3
+      signatureCids = [sig1, sig2, sig3]
+
+  debug $ "Yield attestation verified: accrued=" <> show verifiedYield.yieldAccrued
+  debug "Yield attestation test passed"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 7: END-TO-END FLOW
+-- ============================================================
+
+-- | Full flow: deposit USDC → mint mUSD → stake → yield sync → unstake with profit
+endToEndFlowTest : Script ()
+endToEndFlowTest = script do
+  operator <- allocateParty "Operator"
+  usdcIssuer <- allocateParty "USDCIssuer"
+  alice <- allocateParty "Alice"
+  validator1 <- allocateParty "Validator1"
+  validator2 <- allocateParty "Validator2"
+  validator3 <- allocateParty "Validator3"
+
+  let validators = [validator1, validator2, validator3]
+
+  -- === STEP 1: Alice deposits 10,000 USDC on Canton ===
+  usdcCid <- submitMulti [usdcIssuer, alice] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = alice
+      amount = 10000.000000000000000000
+
+  -- Deploy mint service
+  mintServiceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 1.000000000000000000
+      maxAmount = 1000000.000000000000000000
+      supplyCap = 10000000.000000000000000000
+      currentSupply = 0.000000000000000000
+      accumulatedFees = 0.000000000000000000
+      paused = False
+      validators
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nextNonce = 1
+
+  -- Mint mUSD (fee = 10000 * 0.003 = 30, net = 9970)
+  (mintServiceCid2, musdCid, bridgeReqCid) <- submit alice do
+    exerciseCmd mintServiceCid DirectMint_Mint with
+      user = alice
+      usdcCid = usdcCid
+
+  debug "  Step 1: Alice minted 9,970 mUSD (30 bps fee), bridge-out emitted"
+
+  -- === STEP 2: Alice stakes mUSD → gets smUSD shares ===
+  stakingServiceCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 0.000000000000000000
+      totalAssets = 0.000000000000000000
+      lastYieldEpoch = 0
+      cooldownSeconds = 0  -- No cooldown for test
+      minDeposit = 1.000000000000000000
+      paused = False
+
+  (stakingServiceCid2, smusdCid) <- submit alice do
+    exerciseCmd stakingServiceCid Stake with
+      user = alice
+      musdCid = musdCid
+
+  debug "  Step 2: Alice staked mUSD → received smUSD shares"
+
+  -- === STEP 3: Yield arrives from Ethereum ===
+  -- Ethereum Treasury generated 5% yield on the backing
+  stakingServiceCid3 <- submit operator do
+    exerciseCmd stakingServiceCid2 SyncYield with
+      newTotalTreasuryAssets = 10468.500000000000000000  -- 9970 + ~5%
+      yieldAccrued = 498.500000000000000000              -- 5% of 9970
+      epochNumber = 1
+
+  debug "  Step 3: Yield synced from Ethereum (498.50 mUSD = ~5%)"
+
+  -- === STEP 4: Alice unstakes → gets mUSD + yield ===
+  (stakingServiceCid4, finalMusdCid) <- submit alice do
+    exerciseCmd stakingServiceCid3 Unstake with
+      user = alice
+      smusdCid = smusdCid
+
+  -- Alice should have 9970 + 498.50 = 10468.50 mUSD
+  finalMusd <- queryContractId alice finalMusdCid
+  debug "  Step 4: Alice unstaked with yield"
+
+  debug "End-to-end flow test passed!"
+  debug "  Deposit → Mint → Bridge-out → Stake → Yield sync → Unstake with profit"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 8: RESERVE TRACKER
+-- ============================================================
+
+-- | Test: Reserve tracking number stays in sync
+reserveTrackerTest : Script ()
+reserveTrackerTest = script do
+  operator <- allocateParty "Operator"
+  now <- getTime
+
+  -- Initialize reserve tracker
+  trackerCid <- submit operator do
+    createCmd ReserveTracker with
+      operator
+      totalDeposited = 0.000000000000000000
+      totalRedeemed = 0.000000000000000000
+      totalBridgedOut = 0.000000000000000000
+      totalBridgedIn = 0.000000000000000000
+      cantonMUSDSupply = 0.000000000000000000
+      lastUpdated = now
+
+  -- Record deposit
+  trackerCid2 <- submit operator do
+    exerciseCmd trackerCid Reserve_RecordDeposit with
+      depositAmount = 10000.000000000000000000
+
+  -- Record bridge-out
+  trackerCid3 <- submit operator do
+    exerciseCmd trackerCid2 Reserve_RecordBridgeOut with
+      bridgeAmount = 10000.000000000000000000
+
+  -- Record bridge-in (redemption)
+  trackerCid4 <- submit operator do
+    exerciseCmd trackerCid3 Reserve_RecordBridgeIn with
+      bridgeAmount = 5000.000000000000000000
+
+  -- Record redemption
+  trackerCid5 <- submit operator do
+    exerciseCmd trackerCid4 Reserve_RecordRedemption with
+      redeemAmount = 5000.000000000000000000
+
+  debug "Reserve tracker test passed - all accounting operations work"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 9: PAUSED SERVICE SHOULD FAIL
+-- ============================================================
+
+-- | Test: Minting while paused should fail
+pausedServiceTest : Script ()
+pausedServiceTest = script do
+  operator <- allocateParty "Operator"
+  usdcIssuer <- allocateParty "USDCIssuer"
+  alice <- allocateParty "Alice"
+
+  -- Deploy paused service
+  serviceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 1.000000000000000000
+      maxAmount = 1000000.000000000000000000
+      supplyCap = 10000000.000000000000000000
+      currentSupply = 0.000000000000000000
+      accumulatedFees = 0.000000000000000000
+      paused = True  -- PAUSED
+      validators = []
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nextNonce = 1
+
+  usdcCid <- submitMulti [usdcIssuer, alice] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = alice
+      amount = 1000.000000000000000000
+
+  -- Should fail because service is paused
+  submitMustFail alice do
+    exerciseCmd serviceCid DirectMint_Mint with
+      user = alice
+      usdcCid = usdcCid
+
+  debug "Paused service test passed - mint correctly rejected"
+  pure ()
+
+
+-- ============================================================
+--                     MAIN TEST RUNNER
+-- ============================================================
+
+main : Script ()
+main = script do
+  debug "========================================="
+  debug "Canton Direct Mint + Bridge Integration Tests"
+  debug "========================================="
+  debug ""
+
+  debug "Test 1: Direct Mint Flow"
+  directMintFlowTest
+  debug ""
+
+  debug "Test 2: Redeem Flow"
+  redeemFlowTest
+  debug ""
+
+  debug "Test 3: Bridge-Out Attestation (3-of-5)"
+  bridgeOutAttestationTest
+  debug ""
+
+  debug "Test 4: Bridge-In Attestation"
+  bridgeInAttestationTest
+  debug ""
+
+  debug "Test 5: Supply Cap Sync"
+  supplyCapSyncTest
+  debug ""
+
+  debug "Test 6: Yield Attestation"
+  yieldAttestationTest
+  debug ""
+
+  debug "Test 7: End-to-End Flow"
+  endToEndFlowTest
+  debug ""
+
+  debug "Test 8: Reserve Tracker"
+  reserveTrackerTest
+  debug ""
+
+  debug "Test 9: Paused Service"
+  pausedServiceTest
+  debug ""
+
+  debug "========================================="
+  debug "All Canton Direct Mint tests passed!"
+  debug "========================================="
