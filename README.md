@@ -1,6 +1,6 @@
 # Minted mUSD Protocol
 
-A cross-chain stablecoin protocol spanning **Canton Network** (DAML) and **Ethereum** (Solidity). mUSD is minted 1:1 against stablecoins. Canton serves as the institutional-grade accounting and settlement layer; Ethereum serves as the yield and DeFi execution layer. All backing reserves flow to Ethereum's Treasury for yield generation — there is no Canton Treasury.
+A cross-chain stablecoin protocol spanning **Canton Network** (DAML) and **Ethereum** (Solidity). mUSD is minted 1:1 against stablecoins. Canton serves as the institutional-grade accounting, compliance, and settlement layer; Ethereum serves as the yield and DeFi execution layer. All backing reserves flow to Ethereum's Treasury for yield generation — there is no Canton Treasury.
 
 ## Architecture
 
@@ -9,15 +9,15 @@ A cross-chain stablecoin protocol spanning **Canton Network** (DAML) and **Ether
 │                                      CANTON NETWORK (DAML)                                         │
 │                                                                                                    │
 │  ┌───────────────────┐  ┌───────────────────┐  ┌─────────────────────────┐  ┌───────────────────┐  │
-│  │  MintedMUSD       │  │  CantonSMUSD      │  │  Leveraged Vault (CDP) │  │  CantonDirectMint │  │
-│  │  (DAML Asset)     │  │  (Yield Vault)    │  │                         │  │                   │  │
-│  │                   │  │                   │  │  • AdjustLeverage       │  │  • Deposit stables│  │
-│  │  • Split/Merge    │  │  • Deposit        │  │    (atomic loop: deposit│  │  • Mint mUSD      │  │
-│  │  • Transfer       │  │  • Withdraw       │  │    → borrow → swap DEX │  │  • Burn mUSD      │  │
-│  │  • Blacklist      │  │  • Yield accrual  │  │    → add collateral)   │  │  • Redeem stables │  │
-│  │  • BridgeToETH    │  │  • CooldownTicket │  │  • Repay / Withdraw    │  │  • Fees & limits  │  │
-│  │                   │  │                   │  │  • Liquidate            │  │  • Auto bridge-out│  │
-│  └────────┬──────────┘  └───────────────────┘  └─────────────────────────┘  └───────────────────┘  │
+│  │  MintedMUSD        │  │  CantonSMUSD      │  │  Leveraged Vault (CDP) │  │  CantonDirectMint │  │
+│  │  (DAML Asset)      │  │  (Yield Vault)    │  │                         │  │                   │  │
+│  │                    │  │                   │  │  • AdjustLeverage       │  │  • Deposit stables│  │
+│  │  • Split/Merge     │  │  • Deposit        │  │    (atomic loop: deposit│  │  • Mint mUSD      │  │
+│  │  • Transfer        │  │  • Withdraw       │  │    → borrow → swap DEX │  │  • Burn mUSD      │  │
+│  │  • MPA agreement   │  │  • Yield accrual  │  │    → add collateral)   │  │  • Redeem stables │  │
+│  │  • BridgeToETH     │  │  • CooldownTicket │  │  • Repay / Withdraw    │  │  • Rate limiting  │  │
+│  │                    │  │                   │  │  • Liquidate            │  │  • Compliance hook│  │
+│  └────────┬───────────┘  └───────────────────┘  └─────────────────────────┘  └───────────────────┘  │
 │           │                                                                                        │
 │           ▼ bridgeToEthereum()                                          receiveFromEthereum() ▲   │
 │  ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
@@ -25,18 +25,31 @@ A cross-chain stablecoin protocol spanning **Canton Network** (DAML) and **Ether
 │  │    Burns Canton mUSD → Attestation → Validators sign → Relay to Ethereum                    │  │
 │  │    Receives attestation from Ethereum → Validates → Mints Canton mUSD                       │  │
 │  └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                                    │
+│  ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │  ComplianceRegistry (DAML)                                                                   │  │
+│  │  Blacklist / Freeze / ValidateMint / ValidateTransfer / ValidateRedemption                   │  │
+│  └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                 ║ ▲
                                     3-of-5      ║ ║      3-of-5
                                   Attestation   ║ ║    Attestation
                                   (burn proof)  ▼ ║   (burn proof)
 ┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              RELAY SERVICE (TypeScript)                                            │
+│  relay-service.ts → Watches Canton for finalized attestations, submits to BLEBridgeV9             │
+│  validator-node-v2.ts → Canton Asset API + AWS KMS signing + collateral ratio checks              │
+│  Docker Compose → relay + 3 validators, secrets, health checks, resource limits                   │
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                ║ ▲
+                                                ▼ ║
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                      ETHEREUM (Solidity)                                           │
 │                                                                                                    │
 │  ┌──────────────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │                           BLEBridge (Solidity)                                               │  │
-│  │    Burns Ethereum mUSD → Attestation → Validators sign → Relay to Canton                    │  │
-│  │    Receives attestation from Canton → Validates → Mints Ethereum mUSD                       │  │
+│  │                     BLEBridgeV9 (Solidity) — 24h rate-limited supply cap                     │  │
+│  │    Receives attestation from Canton → Validates sigs → Updates supply cap (rate-limited)     │  │
+│  │    Emergency controls, collateral ratio enforcement, nonce replay protection                 │  │
 │  └──────────────────────────────────────────────────────────────────────────────────────────────┘  │
 │           │                                                                         ▲              │
 │           ▼ receiveFromCanton()                                      bridgeToCanton() │           │
@@ -51,354 +64,295 @@ A cross-chain stablecoin protocol spanning **Canton Network** (DAML) and **Ether
 │                                                                                      │             │
 │                                                                                      ▼             │
 │                                                                            ┌───────────────────┐  │
-│                                                                            │    Treasury       │  │
-│                                                                            │   (USDC Pool)     │  │
+│                                                                            │  TreasuryV2       │  │
+│                                                                            │  (USDC Pool)      │  │
 │                                                                            │                   │  │
 │                                                                            │  • Strategies     │  │
 │                                                                            │  • Yield → smUSD  │  │
+│                                                                            │  • PendleSelector │  │
 │                                                                            └───────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 Global Supply = Canton mUSD + Ethereum mUSD (conserved across bridge operations)
 ```
 
-## Frontend Architecture
+## Infrastructure
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        Next.js 14 / React 18 / TypeScript               │
-│                                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐    │
-│  │  Layout → Navbar → ChainToggle (Ethereum ↔ Canton)              │    │
-│  └──────────────────────┬───────────────────────────────────────────┘    │
-│                         │                                                │
-│            ┌────────────┴────────────┐                                   │
-│            ▼                         ▼                                   │
-│  ┌─────────────────────┐  ┌─────────────────────────┐                   │
-│  │  Ethereum Mode      │  │  Canton Mode             │                  │
-│  │  (ethers.js)        │  │  (Daml JSON API)         │                  │
-│  │                     │  │                           │                  │
-│  │  DashboardPage      │  │  CantonDashboard          │                  │
-│  │  MintPage           │  │  CantonMint               │                  │
-│  │  StakePage          │  │  CantonStake              │                  │
-│  │  BorrowPage         │  │  CantonBorrow             │                  │
-│  │  LiquidationsPage   │  │  CantonLiquidations       │                  │
-│  │  BridgePage         │  │  CantonBridge             │                  │
-│  │  AdminPage          │  │  CantonAdmin              │                  │
-│  └─────────────────────┘  └─────────────────────────┘                   │
-│                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │  Hooks                                                             │  │
-│  │  useWallet   → MetaMask provider / signer                         │  │
-│  │  useContract → ethers.js Contract instances (10 ABIs)             │  │
-│  │  useCanton   → Daml JSON API query / exercise / create            │  │
-│  │  useChain    → Ethereum / Canton toggle state                     │  │
-│  │  useTx       → Transaction loading / hash / error / success       │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │  Shared Components                                                 │  │
-│  │  StatCard  → Reusable protocol stat display                       │  │
-│  │  TxButton  → Transaction button with loading spinner              │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │  Lib                                                               │  │
-│  │  config.ts → Contract addresses, Canton host/port/token           │  │
-│  │  format.ts → USD, token, bps, health factor formatting            │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────┘
+┌──────────────┐     ┌──────────────┐     ┌──────────────────────────┐     ┌─────────────────┐
+│   Internet   │────▶│  NGINX Proxy │────▶│   Canton Participant     │────▶│   PostgreSQL    │
+│              │     │  (TLS + Rate │     │   (Ledger + JSON API)    │     │   (StatefulSet) │
+│              │     │   Limiting)  │     │                          │     │                 │
+└──────────────┘     └──────────────┘     └──────────────────────────┘     └─────────────────┘
+                     2 replicas            1 replica (stateful)             1 replica + PVC
+                     10r/s read            gRPC health probes              Encrypted storage
+                     2r/s write            Non-root, read-only rootfs
+                     TLS 1.2/1.3           Admin API localhost-only
 ```
 
-## Design Decision: No Canton Treasury
+All components deployed via Kubernetes manifests in `k8s/` with:
+- Pod Security Standards (restricted)
+- NetworkPolicy (default-deny + explicit allow)
+- PodDisruptionBudgets
+- Pinned image versions (no `:latest`)
 
-Canton Network is built for institutional settlement, privacy, and compliance — not DeFi yield. There is no Aave, Morpho, Pendle, or Curve on Canton. The tokenized assets on Canton are institutional instruments held in permissioned sub-networks, not open lending pools.
+## Solidity Contracts
 
-All backing stables flow to Ethereum's Treasury, where they are deployed to yield strategies. Canton is a **pure accounting layer**:
-
-- `CantonDirectMint` mints mUSD and immediately creates a `BridgeOutRequest` to move backing stables to ETH Treasury
-- `CantonDirectMint` redeem burns mUSD and creates a `BridgeInRequest` to pull stables back from ETH
-- `CantonSMUSD` syncs its exchange rate from Ethereum via `SMUSD_SyncYield` attestations
-- No stables are held idle on Canton
-
-## Canton Templates (DAML)
-
-All 14 templates are in `daml/Minted/Protocol/V3.daml` (1122 lines).
-
-### Core Asset Layer
-
-| Template | Key | Choices | Description |
-|----------|-----|---------|-------------|
-| `Asset` | — | `Asset_Transfer`, `Asset_Split`, `Asset_Merge` | Generic UTXO token. Split produces two contracts, merge archives the other. |
-| `MintedMUSD` | — | `MUSD_Transfer`, `MUSD_Split`, `MUSD_Merge`, `MUSD_BridgeToEthereum`, `MUSD_SetBlacklist` | mUSD-specific asset with compliance (blacklist checked on every operation) and bridge-to-ETH consuming choice that creates an `AttestationRequest`. |
-| `PriceOracle` | `(provider, symbol)` | — | Provider-signed price feed. Keyed for unique lookup by provider and symbol pair. |
-| `LiquidityPool` | — | `Swap_mUSD_For_Collateral`, `Swap_Collateral_For_mUSD` | On-chain DEX for atomic leverage operations in vaults. |
-
-### Mint / Redeem
-
-| Template | Choices | Description |
-|----------|---------|-------------|
-| `CantonDirectMint` | `CantonMint_Mint`, `CantonMint_Redeem`, `CantonMint_UpdateConfig` | Deposit Canton stables → mint mUSD + auto `BridgeOutRequest` to ETH Treasury. Redeem burns mUSD + creates `BridgeInRequest`. Tracks `totalMinted` and `totalBridgedOut`. |
-| `MintServiceConfig` | (data type) | Fee bps (mint/redeem), min/max amounts, pause flag. |
-
-### Staking (Yield Vault)
-
-| Template | Choices | Description |
-|----------|---------|-------------|
-| `CantonSMUSD` | `SMUSD_Deposit`, `SMUSD_Withdraw`, `SMUSD_SyncYield`, `SMUSD_UpdateConfig` | Deposit mUSD → smUSD shares at current exchange rate. Withdraw after cooldown. Yield synced from ETH via provider attestation. Share price = `totalAssets / totalShares`. |
-| `CooldownTicket` | — | Tracks deposit time and enforces cooldown period before withdrawal. Partial burns reissue a remainder ticket. |
-| `SmUSDConfig` | (data type) | Cooldown seconds, max total deposits cap. |
-
-### Leveraged Vaults (CDP)
-
-| Template | Choices | Description |
-|----------|---------|-------------|
-| `Vault` | `AdjustLeverage`, `Vault_Repay`, `Vault_WithdrawCollateral`, `Liquidate` | Collateralized debt position. Atomic leverage: deposit collateral + borrow mUSD + swap via DEX in one transaction. Interest accrual is continuous. Liquidation enforces close factor, penalty split (keeper bonus + protocol fee), and dust threshold. |
-| `VaultConfig` | (data type) | Liquidation threshold, interest rate bps, penalty bps, bonus bps, close factor bps, dust threshold. |
-| `VaultManager` | `OpenVault`, `UpdateDefaultConfig`, `UpdateVaultConfig` | Factory for creating vaults with default config. Admin can update defaults and per-vault configs. |
-| `LiquidationReceipt` | — | Immutable audit trail per liquidation: debt repaid, collateral seized, penalty, keeper bonus, protocol fee, health before/after, full vs partial. |
-| `LiquidationOrder` | `ClaimOrder`, `CompleteOrder`, `CancelOrder` | Keeper coordination. Status: `Pending → Claimed → Executed` (or `Cancelled`). |
-
-### Bridge Protocol
-
-| Template | Choices | Description |
-|----------|---------|-------------|
-| `BridgeService` | `Bridge_ReceiveFromEthereum`, `Bridge_AssignNonce`, `Bridge_CompleteBridgeOut`, `Bridge_Pause`, `Bridge_Unpause`, `Bridge_UpdateValidators` | Coordinates all bridge operations. Mints `MintedMUSD` on Canton when receiving from ETH (after attestation validation). Tracks nonces, `totalBridgedIn`, `totalBridgedOut`. |
-| `AttestationRequest` | `Attestation_Sign`, `Attestation_Complete`, `Attestation_Cancel` | Multi-party validation. Validators sign independently; auto-promotes to `BridgeSigned` at threshold (e.g. 3-of-5). Unique request ID, nonce, chain ID for replay protection. |
-| `BridgeOutRequest` | `BridgeOut_SetTarget`, `BridgeOut_AssignNonce`, `BridgeOut_Complete`, `BridgeOut_Cancel` | Canton → ETH transfer. User sets ETH address, provider assigns nonce, completes after ETH confirms. |
-| `BridgeInRequest` | `BridgeIn_Complete`, `BridgeIn_Cancel` | ETH → Canton transfer. Provider completes by minting Canton-side stables. |
-
-### Compliance
-
-| Feature | Implementation |
-|---------|---------------|
-| Blacklist | `MintedMUSD.blacklisted` flag, checked on transfer / split / merge / bridge |
-| Pause | `CantonDirectMint.config.paused`, `BridgeService.paused` |
-| Supply tracking | `CantonDirectMint.totalMinted`, `CantonDirectMint.totalBridgedOut`, `BridgeService.totalBridgedIn/Out` |
-
-## Ethereum Contracts (Solidity)
-
-Contract source is maintained separately. ABIs are in `src/abis/` (10 files).
+15 contracts in `contracts/` compiled with Solidity 0.8.26.
 
 | Contract | Type | Description |
 |----------|------|-------------|
 | `MUSD` | ERC-20 | Role-based mint/burn, supply cap, blacklist |
 | `SMUSD` | ERC-4626 | Yield vault with cooldown, base rate, max deposits |
-| `DirectMint` | — | 1:1 USDC ↔ mUSD with configurable fees, limits, pause |
-| `Treasury` | — | USDC reserve pool, strategy deployment, return recording |
-| `BLEBridgeV9` | — | Canton attestation bridge, multi-sig, supply cap, emergency controls |
-| `CollateralVault` | — | Multi-token collateral with per-token factors and thresholds |
-| `BorrowModule` | — | mUSD borrowing against collateral, interest accrual, health factor |
-| `LiquidationEngine` | — | Liquidation with close factor and collateral seizure |
-| `PriceOracle` | — | Chainlink-compatible feeds with staleness checks |
-| `ERC20` | — | Standard token interface for generic interactions |
+| `DirectMint` | Minting | 1:1 USDC ↔ mUSD with configurable fees, limits, pause |
+| `DirectMintV2` | Minting | Upgraded DirectMint |
+| `BLEBridgeV8` | Bridge | Canton attestation bridge with daily mint limit (predecessor) |
+| `BLEBridgeV9` | Bridge | Refactored: attestations update supply cap (rate-limited), multi-sig, emergency controls |
+| `Treasury` | Reserve | USDC reserve pool, strategy deployment, return recording |
+| `TreasuryV2` | Reserve | Enhanced treasury with yield strategies and PendleMarketSelector |
+| `CollateralVault` | CDP | Multi-token collateral with per-token factors and thresholds |
+| `BorrowModule` | CDP | mUSD borrowing against collateral, interest accrual, health factor |
+| `LiquidationEngine` | CDP | Liquidation with close factor and collateral seizure |
+| `PriceOracle` | Oracle | Chainlink-compatible feeds with staleness checks |
+| `PendleMarketSelector` | Yield | Market selection for TreasuryV2 yield strategies |
+| `MockERC20` / `MockAggregatorV3` / `MockStrategy` | Testing | Mock contracts for Hardhat tests |
 
-## User Flows
+### BLEBridgeV9 Rate Limiting
 
-### Mint on Canton (stables → ETH Treasury)
-
-```
-User deposits 100 Canton USDC
-  → CantonDirectMint.CantonMint_Mint()
-  → Fee deducted (e.g. 0.30%)
-  → 99.70 mUSD minted to user on Canton
-  → BridgeOutRequest created (100 USDC → ETH Treasury)
-  → Relay picks up request, bridges stables to Ethereum
-  → ETH Treasury receives USDC, deploys to yield strategies
-```
-
-### Redeem on Canton (pull stables from ETH)
+24h rolling window on supply cap increases. Cap decreases (from reduced attestations) offset increases within the same window:
 
 ```
-User burns 100 Canton mUSD
-  → CantonDirectMint.CantonMint_Redeem()
-  → Fee deducted
-  → BridgeInRequest created (pull USDC from ETH Treasury)
-  → Relay bridges stables back to Canton
-  → User receives Canton USDC
+dailyCapIncreaseLimit = 50,000,000 (configurable)
+netCapIncrease = dailyCapIncreased - dailyCapDecreased
+require(netCapIncrease < dailyCapIncreaseLimit)
+Window resets after 24h (block.timestamp >= lastRateLimitReset + 1 days)
 ```
 
-### Bridge: Canton → Ethereum
+View functions: `getNetDailyCapIncrease()`, `getRemainingDailyCapLimit()`
 
-```
-User holds MintedMUSD on Canton
-  → MUSD_BridgeToEthereum(ethAddress, chainId, validators, requiredSigs)
-  → Canton mUSD burned (consuming choice)
-  → AttestationRequest created
-  → 3 of 5 validators call Attestation_Sign
-  → Status auto-promotes to BridgeSigned at threshold
-  → Relay submits attestation to BLEBridgeV9.processAttestation()
-  → Ethereum mUSD minted to user's ETH wallet
-```
+## Canton Templates (DAML)
 
-### Bridge: Ethereum → Canton
+### Core Assets
 
-```
-User burns mUSD on Ethereum via BLEBridge
-  → Validators create AttestationRequest on Canton (EthereumToCanton)
-  → 3 of 5 sign
-  → Provider calls BridgeService.Bridge_ReceiveFromEthereum()
-  → Validates: attestation signed, correct direction, sequential nonce
-  → MintedMUSD created on Canton for recipient
-```
+| Template | File | Description |
+|----------|------|-------------|
+| `MUSD` | `MintedProtocolV2Fixed.daml` | mUSD token with `agreement` clause embedding MPA hash + URI. Split/Merge/Transfer/Burn. |
+| `CantonMUSD` | `CantonDirectMint.daml` | Canton-side mUSD with MPA agreement clause. Transfer/Split/Merge/Burn. |
+| `CantonUSDC` | `CantonDirectMint.daml` | USDC deposit representation on Canton. |
+| `Collateral` | `MintedProtocolV2Fixed.daml` | Generic collateral token with transfer-via-proposal pattern. |
+| `USDC` | `MintedProtocolV2Fixed.daml` | USDC token with transfer-via-proposal pattern. |
 
-### Stake for Yield (Canton)
+### Mint / Redeem
 
+| Template | File | Key Features |
+|----------|------|-------------|
+| `DirectMintService` | `MintedProtocolV2Fixed.daml` | Mint/Redeem with fees, supply cap, 24h rate limiting, MPA propagation. |
+| `CantonDirectMintService` | `CantonDirectMint.daml` | Canton mint + auto BridgeOutRequest. 24h rate limiting, compliance hooks, MPA propagation. |
+
+Rate limiting on both services:
 ```
-User deposits mUSD into CantonSMUSD
-  → SMUSD_Deposit: mUSD burned, smUSD shares issued, CooldownTicket created
-  → Yield synced from ETH: provider calls SMUSD_SyncYield(newTotalAssets)
-  → Share price increases as totalAssets grows
-  → After cooldown: SMUSD_Withdraw burns shares, returns mUSD at new rate
+dailyMintLimit, dailyMinted, dailyBurned, lastRateLimitReset
+Net calculation: burns offset mints within the same 24h window
+Window auto-resets after 24 hours
 ```
 
-### Leveraged Vault
+### Compliance
 
-```
-VaultManager.OpenVault(owner, token) → empty vault
-  → AdjustLeverage: deposit collateral + borrow mUSD + swap via DEX atomically
-  → Health check enforced after every adjustment
-  → If health < threshold: anyone calls Liquidate
-    → Liquidator provides mUSD, receives discounted collateral
-    → Penalty split: keeper bonus + protocol fee
-    → LiquidationReceipt created (immutable audit trail)
-```
+| Template | File | Description |
+|----------|------|-------------|
+| `ComplianceRegistry` | `Compliance.daml` | Blacklist (Set-based O(log n)), freeze, bulk import (max 100), audit reasons. |
 
-## Canton Vault System Detail
+Choices: `BlacklistUser`, `RemoveFromBlacklist`, `FreezeUser`, `UnfreezeUser`, `ValidateMint`, `ValidateTransfer`, `ValidateRedemption`, `IsCompliant`, `BulkBlacklist`
 
-### Interest Accrual
+Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`. When set, `DirectMint_Mint` validates the minter and `DirectMint_Redeem` validates the redeemer before processing. Frozen parties can receive but cannot send.
 
-```
-totalDebt = principalDebt + accruedInterest + calcInterest(now)
-calcInterest = principal × rateBps × elapsedSeconds / (10000 × 31536000)
-```
+### Staking
 
-### Vault Config
+| Template | File | Description |
+|----------|------|-------------|
+| `StakingService` | `MintedProtocolV2Fixed.daml` | Stake mUSD → StakedMUSD with interest accrual. Unstake tracks supply cap via IssuerRole. |
+| `CantonStakingService` | `CantonSMUSD.daml` | Canton yield vault. Share-price model (totalAssets/totalShares). Yield synced from ETH. |
+| `CantonSMUSD` | `CantonSMUSD.daml` | Individual smUSD share position. |
 
-| Parameter | Example | Description |
-|-----------|---------|-------------|
-| `liquidationThreshold` | 1.5 | 150% min collateral ratio |
-| `interestRateBps` | 500 | 5% APR |
-| `liquidationPenaltyBps` | 1000 | 10% penalty on seized collateral |
-| `liquidationBonusBps` | 500 | 5% keeper bonus from penalty |
-| `closeFactorBps` | 5000 | 50% max debt per liquidation |
-| `dustThreshold` | 10.0 | Force full liquidation below this |
+### Vaults (CDP)
 
-### Mint Service Config
+| Template | File | Description |
+|----------|------|-------------|
+| `Vault` | `MintedProtocolV2Fixed.daml` | CDP with interest accrual, oracle-checked collateral, MPA propagation to borrowed MUSD. |
+| `LiquidationEngine` | `MintedProtocolV2Fixed.daml` | Liquidation with close factor, penalty, partial/full modes. |
+| `LiquidityPool` | `MintedProtocolV2Fixed.daml` | DEX for atomic leverage (swap mUSD for collateral). |
+| `LeverageManager` | `MintedProtocolV2Fixed.daml` | Multi-loop leverage: borrow → swap → deposit (max 10 loops). |
 
-| Parameter | Example | Description |
-|-----------|---------|-------------|
-| `mintFeeBps` | 30 | 0.30% mint fee |
-| `redeemFeeBps` | 30 | 0.30% redeem fee |
-| `minAmount` | 100.0 | Minimum per transaction |
-| `maxAmount` | 1000000.0 | Maximum per transaction |
-| `paused` | False | Emergency pause |
+### Bridge Protocol
 
-### smUSD Config
+| Template | File | Description |
+|----------|------|-------------|
+| `AttestationRequest` | `MintedProtocolV2Fixed.daml` | Multi-party validation with signature tracking, supermajority quorum, expiry. |
+| `ValidatorSignature` | `MintedProtocolV2Fixed.daml` | Individual validator ECDSA signature. |
+| `IssuerRole` | `MintedProtocolV2Fixed.daml` | Supply-cap-tracked minting via attestation or direct. MPA fields. |
+| `BridgeOutRequest` | `CantonDirectMint.daml` | Canton → Ethereum bridge request with validator list and nonce. |
+| `RedemptionRequest` | `CantonDirectMint.daml` | Pending redemption awaiting USDC bridge-in from Ethereum. |
 
-| Parameter | Example | Description |
-|-----------|---------|-------------|
-| `cooldownSeconds` | 86400 | 24 hour withdrawal cooldown |
-| `maxTotalDeposits` | 10000000.0 | Cap on total mUSD staked |
+### Price Oracle
+
+| Template | File | Description |
+|----------|------|-------------|
+| `PriceOracle` | `MintedProtocolV2Fixed.daml` | Price feed with staleness enforcement via ledger time. |
+| `InstitutionalEquityPosition` | `MintedProtocolV2Fixed.daml` | Bank-signed equity positions for attestation collateral checks. |
+
+### Master Participation Agreement (MPA)
+
+Every minted mUSD/CantonMUSD token carries:
+- `agreementHash`: SHA-256 hex digest (64 chars) of the MPA PDF
+- `agreementUri`: URI to the legal terms document
+- DAML `agreement` clause: embedded in ledger audit trail
+
+The `ensure` clause validates hash length and non-empty URI. MPA fields propagate through `DirectMintService`, `CantonDirectMintService`, `StakingService`, `CantonStakingService`, `Vault`, and `IssuerRole`.
+
+## Relay Service
+
+Production-hardened TypeScript bridge infrastructure in `relay/`.
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `relay-service.ts` | ~600 | Watches Canton ledger for finalized attestations, submits to BLEBridgeV9 on Ethereum. DER→RSV signature conversion, duplicate tracking, bounded cache. |
+| `validator-node-v2.ts` | ~400 | Canton Asset API integration, AWS KMS signing, collateral ratio validation (110% default). |
+| `validator-node.ts` | ~300 | Base validator implementation. |
+| `signer.ts` | ~200 | DER-to-RSV ECDSA signature conversion with 40+ security fixes. |
+
+Docker deployment (`docker-compose.yml`):
+- Relay + 3 validator nodes
+- Docker secrets for private keys and AWS credentials
+- Network isolation (internal + external bridges)
+- Resource limits (512M relay, 512M per validator)
+- Read-only rootfs, non-root user, health checks
 
 ## Frontend
 
-Next.js 14 / TypeScript / Tailwind CSS with dual-chain toggle. Every page renders Ethereum (ethers.js + MetaMask) or Canton (Daml JSON API) mode based on the active chain selection.
-
-### Pages
+Next.js 14 / TypeScript / Tailwind CSS with dual-chain toggle in `frontend/`.
 
 | Page | Ethereum Mode | Canton Mode |
 |------|---------------|-------------|
 | Dashboard | mUSD supply, treasury balance, vault stats, bridge health | Asset counts, service status, vault count |
 | Mint/Redeem | USDC ↔ mUSD via DirectMint contract | CantonDirectMint exercise via Daml JSON API |
-| Stake | smUSD ERC-4626 deposit/redeem with cooldown | CantonSMUSD deposit/withdraw with cooldown ticket |
+| Stake | smUSD ERC-4626 deposit/redeem with cooldown | CantonSMUSD deposit/withdraw |
 | Borrow | Collateral deposit, borrow/repay, health factor | Vault CDP with oracle price feeds |
 | Liquidations | Check liquidatability, estimate seizure, execute | Browse vaults by health ratio |
 | Bridge | BLEBridgeV9 attestation events and health | Lock/attest/claim workflow |
 | Admin | All contract admin panels (6 subsections) | IssuerRole, Oracle, service configuration |
 
-### Tech Stack
+## Tests
 
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| Next.js | 14.1 | React framework with file-based routing |
-| React | 18.2 | UI library |
-| TypeScript | 5.3 | Static typing |
-| Tailwind CSS | 3.4 | Utility-first styling with custom brand palette |
-| ethers.js | 6.9 | Ethereum provider, signer, contract interaction |
-| recharts | 2.10 | Charts and data visualization |
-| lucide-react | 0.312 | Icon library |
-| Daml JSON API | — | Canton Network ledger interaction (custom hook) |
+| File | Tests | Coverage |
+|------|-------|----------|
+| `test/BLEProtocol.test.ts` | 27 | BLEBridgeV9 attestation, multi-sig, supply cap, nonce, emergency, rate limiting |
+| `test/TreasuryV2.test.ts` | 33 | Treasury strategies, yield recording, withdrawals, edge cases |
+| `daml/Test.daml` | 11 | Canton bridge attestation flow, institutional equity, MintedMUSD operations |
+| `daml/CantonDirectMintTest.daml` | 9 | DirectMint, redeem, bridge-out, supply cap sync, staking, yield, end-to-end |
+
+Run tests:
+```bash
+npx hardhat test           # Solidity
+cd daml && daml test       # DAML
+```
 
 ## Repository Structure
 
 ```
-├── daml/
-│   └── Minted/Protocol/
-│       └── V3.daml                    # All Canton templates (14 templates, 1122 lines)
-├── src/
-│   ├── abis/                          # Ethereum contract ABIs (10 files)
-│   │   ├── BLEBridgeV9.ts
-│   │   ├── BorrowModule.ts
-│   │   ├── CollateralVault.ts
-│   │   ├── DirectMint.ts
-│   │   ├── ERC20.ts
-│   │   ├── LiquidationEngine.ts
-│   │   ├── MUSD.ts
-│   │   ├── PriceOracle.ts
-│   │   ├── SMUSD.ts
-│   │   └── Treasury.ts
-│   ├── components/
-│   │   ├── canton/                    # Canton-mode UI components (7)
-│   │   │   ├── CantonAdmin.tsx
-│   │   │   ├── CantonBorrow.tsx
-│   │   │   ├── CantonBridge.tsx
-│   │   │   ├── CantonDashboard.tsx
-│   │   │   ├── CantonLiquidations.tsx
-│   │   │   ├── CantonMint.tsx
-│   │   │   └── CantonStake.tsx
-│   │   ├── ChainToggle.tsx            # Ethereum / Canton switch
-│   │   ├── Layout.tsx                 # Main layout wrapper
-│   │   ├── Navbar.tsx                 # Navigation with wallet connection
-│   │   ├── StatCard.tsx               # Reusable stat display
-│   │   └── TxButton.tsx               # Transaction button with loading state
-│   ├── hooks/
-│   │   ├── useCanton.ts               # Daml JSON API client wrapper
-│   │   ├── useChain.ts                # Ethereum / Canton toggle state
-│   │   ├── useContract.ts             # ethers.js contract instances
-│   │   ├── useTx.ts                   # Transaction state management
-│   │   └── useWallet.ts               # MetaMask wallet connection
-│   ├── lib/
-│   │   ├── config.ts                  # Contract addresses, Canton config
-│   │   └── format.ts                  # USD, token, bps, health formatting
-│   ├── pages/
-│   │   ├── index.tsx                  # Router (Ethereum or Canton based on toggle)
-│   │   ├── _app.tsx                   # Next.js app wrapper
-│   │   ├── _document.tsx              # HTML document wrapper
-│   │   ├── AdminPage.tsx
-│   │   ├── BorrowPage.tsx
-│   │   ├── BridgePage.tsx
-│   │   ├── DashboardPage.tsx
-│   │   ├── LiquidationsPage.tsx
-│   │   ├── MintPage.tsx
-│   │   └── StakePage.tsx
-│   ├── styles/
-│   │   └── globals.css                # Tailwind CSS with custom brand theme
-│   └── global.d.ts                    # TypeScript type declarations
-├── .env.example                       # Environment variable template
-├── next.config.js                     # Next.js configuration
-├── tailwind.config.js                 # Tailwind CSS theme (brand colors 50-950)
-├── postcss.config.js                  # PostCSS configuration
-├── tsconfig.json                      # TypeScript config (strict, path aliases)
-└── package.json                       # Dependencies and scripts
+├── .github/workflows/
+│   └── ci.yml                           # CI: Solidity, DAML, Docker, Slither, Trivy, kubeval
+├── contracts/                           # Solidity contracts (15 files)
+│   ├── BLEBridgeV8.sol                  # Bridge V8 (predecessor, with daily mint limit)
+│   ├── BLEBridgeV9.sol                  # Bridge V9 (supply cap model, 24h rate limiting)
+│   ├── MUSD.sol                         # ERC-20 mUSD token
+│   ├── SMUSD.sol                        # ERC-4626 staking vault
+│   ├── DirectMint.sol / DirectMintV2.sol
+│   ├── Treasury.sol / TreasuryV2.sol
+│   ├── CollateralVault.sol / BorrowModule.sol / LiquidationEngine.sol
+│   ├── PriceOracle.sol / PendleMarketSelector.sol
+│   ├── interfaces/IStrategy.sol
+│   └── mocks/                           # MockERC20, MockAggregatorV3, MockStrategy
+├── daml/                                # Canton DAML templates
+│   ├── MintedProtocolV2Fixed.daml       # Audited protocol (MUSD, Vault, Staking, Oracle, Bridge)
+│   ├── CantonDirectMint.daml            # Canton mint service + bridge requests
+│   ├── CantonSMUSD.daml                 # Canton staking vault (share-price model)
+│   ├── Compliance.daml                  # Blacklist/freeze registry with compliance hooks
+│   ├── BLEBridgeProtocol.daml           # Bridge protocol types
+│   ├── BLEProtocol.daml                 # Bridge protocol
+│   ├── MintedMUSD.daml                  # Standalone mUSD asset module
+│   ├── CantonDirectMintTest.daml        # Integration tests (9 tests)
+│   ├── Test.daml                        # Integration tests (11 tests)
+│   └── daml.yaml                        # DAML project config
+├── frontend/                            # Next.js 14 / TypeScript / Tailwind
+│   ├── src/abis/                        # Ethereum contract ABIs (10 files)
+│   ├── src/components/canton/           # Canton-mode UI components (7)
+│   ├── src/components/                  # Shared components (ChainToggle, Layout, Navbar, etc.)
+│   ├── src/hooks/                       # useCanton, useChain, useContract, useTx, useWallet
+│   ├── src/pages/                       # 7 pages + routing
+│   └── src/lib/                         # config.ts, format.ts
+├── relay/                               # Bridge relay service (TypeScript)
+│   ├── relay-service.ts                 # Canton→Ethereum attestation relay
+│   ├── validator-node-v2.ts             # Enhanced validator with Canton Asset API
+│   ├── validator-node.ts                # Base validator
+│   ├── signer.ts                        # DER→RSV signature conversion
+│   ├── docker-compose.yml               # Relay + 3 validators orchestration
+│   └── Dockerfile                       # Multi-stage production build
+├── k8s/                                 # Kubernetes deployment manifests
+│   ├── base/
+│   │   ├── namespace.yaml               # Namespace with pod-security-standards
+│   │   └── postgres-statefulset.yaml    # PostgreSQL 16.4 with encrypted PVC
+│   └── canton/
+│       ├── participant-deployment.yaml  # Canton + JSON API sidecar
+│       ├── participant-config.yaml      # HOCON config + bootstrap script
+│       ├── nginx-configmap.yaml         # NGINX reverse proxy config (TLS + rate limiting)
+│       ├── nginx-deployment.yaml        # NGINX deployment (2 replicas, LoadBalancer)
+│       ├── network-policy.yaml          # Default-deny + explicit allow rules
+│       ├── secrets.yaml                 # Template secrets (postgres, TLS)
+│       └── pod-disruption-budget.yaml   # PDBs for Canton and PostgreSQL
+├── test/                                # Hardhat test suites
+│   ├── BLEProtocol.test.ts              # 27 tests
+│   └── TreasuryV2.test.ts              # 33 tests
+├── hardhat.config.ts
+├── package.json
+└── tsconfig.json
 ```
 
 ## Setup
 
+### Development
+
 ```bash
 npm install
-cp .env.example .env.local   # Fill in contract addresses and Canton config
-npm run dev                   # http://localhost:3000
+npx hardhat compile         # Compile Solidity
+npx hardhat test            # Run Solidity tests
+cd daml && daml build       # Build DAML
+cd daml && daml test        # Run DAML tests
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local  # Fill in contract addresses and Canton config
+npm run dev                  # http://localhost:3000
+```
+
+### Relay Service
+
+```bash
+cd relay
+npm install
+# Create secrets in relay/secrets/
+docker compose up            # Start relay + 3 validators
+```
+
+### Kubernetes Deployment
+
+```bash
+kubectl apply -f k8s/base/namespace.yaml
+kubectl apply -f k8s/base/
+kubectl apply -f k8s/canton/
 ```
 
 ### Environment Variables
@@ -425,32 +379,65 @@ NEXT_PUBLIC_CANTON_TOKEN=<JWT_TOKEN>
 
 ### Prerequisites
 
-- Node.js 18+
-- DAML SDK 2.8.0 (for Canton development)
+- Node.js 20+
+- DAML SDK 2.9.3
+- Docker (for relay service)
+- kubectl (for K8s deployment)
 
-## What's Not Built Yet
+## CI/CD
 
-| Component | Description |
-|-----------|-------------|
-| Relay service | TypeScript bridge relayer monitoring both chains |
-| Canton rate limiting | 24h rolling window on mint/burn volume |
-| Solidity source | `.sol` files (ABIs only in this repo) |
-| Integration tests | Hardhat + DAML test suites |
+GitHub Actions pipeline (`.github/workflows/ci.yml`):
+
+| Job | Tools | Purpose |
+|-----|-------|---------|
+| `solidity` | Hardhat | Compile, test, coverage |
+| `solidity-security` | Slither | Static analysis, SARIF upload |
+| `daml` | DAML SDK | Build and test Canton templates |
+| `relay` | TypeScript | Compile check |
+| `docker` | Buildx + Trivy | Build relay image, vulnerability scan |
+| `k8s-validate` | kubeval | Validate Kubernetes manifests |
+| `audit` | npm audit | Dependency vulnerability scan |
 
 ## Roadmap
 
 - [x] Canton leveraged vault system (Vault, Liquidation, Oracle, DEX)
 - [x] Canton DirectMint (thin layer, auto bridge-out to ETH Treasury)
 - [x] Canton smUSD (yield vault synced from ETH attestations)
-- [x] Canton bridge protocol (BridgeService, AttestationRequest, 3-of-5 multi-sig)
+- [x] Canton bridge protocol (AttestationRequest, ValidatorSignature, 3-of-5 multi-sig)
 - [x] MintedMUSD (Canton mUSD with compliance + bridge-to-ETH choice)
-- [x] Ethereum contract ABIs (MUSD, SMUSD, DirectMint, Treasury, Bridge, Borrow, Liquidation, Oracle)
+- [x] Solidity contracts (MUSD, SMUSD, DirectMint, Treasury, Bridge, Borrow, Liquidation, Oracle)
 - [x] Frontend with Ethereum + Canton dual-mode UI
-- [ ] Relay service (TypeScript bridge infrastructure)
-- [ ] Canton rate limiting (24h rolling window)
-- [ ] Solidity source contracts in this repo
-- [ ] Integration tests (Hardhat + DAML test)
-- [ ] Mainnet deployment
+- [x] Relay service (TypeScript bridge infrastructure, Docker orchestration)
+- [x] Canton rate limiting (24h rolling window on mint/burn volume — all layers)
+- [x] Compliance registry (blacklist, freeze, transaction validation hooks)
+- [x] Master Participation Agreement embedded in token templates
+- [x] NGINX API gateway with TLS termination and rate limiting
+- [x] Kubernetes deployment manifests (Canton, PostgreSQL, NGINX, NetworkPolicy)
+- [x] CI/CD pipeline (Solidity, DAML, Docker, Slither, Trivy, kubeval)
+- [x] Integration tests (60 Hardhat + 20 DAML tests)
+- [ ] Mainnet deployment (deployment scripts, network config, contract verification)
+- [ ] Monitoring stack (Prometheus, Grafana dashboards for Canton + Bridge health)
+
+## Security
+
+### Audit Fixes Applied
+
+98 security findings resolved across Solidity and DAML:
+- Time manipulation: All user-supplied timestamps replaced with `getTime` (DAML) / `block.timestamp` (Solidity)
+- Replay attacks: Attestations archived after use (consuming choices)
+- Signature deduplication: Set-based tracking prevents double-signing
+- Transfer proposals: Dual-signatory pattern prevents unsolicited asset assignment
+- Supply cap enforcement: Tracked in contract state, not caller-supplied
+- Storage layout: V8→V9 incompatibility documented, migration contract required
+
+### Rate Limiting (Defense in Depth)
+
+| Layer | Mechanism |
+|-------|-----------|
+| NGINX | Per-IP (10r/s read, 2r/s write), global circuit breaker (500r/s), connection limit (20/IP) |
+| BLEBridgeV9 | 24h rolling window on supply cap increases (`dailyCapIncreaseLimit`) |
+| CantonDirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
+| DirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
 
 ## License
 
