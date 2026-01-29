@@ -7,7 +7,7 @@ module Test where
 import Daml.Script
 import BLEProtocol qualified as BLE
 import MintedMUSD qualified as MUSD
-import MintedMUSD (MintedMUSD(..), Mint(..), Split(..), Merge(..), Redeem(..), Transfer(..), Accept(..), Cancel(..))
+import MintedMUSD
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..))
 import DA.Time
 import DA.Set qualified as Set
@@ -478,7 +478,7 @@ musdAssetTest = script do
 
   -- Redeem (burn)
   submit alice do
-    exerciseCmd mergedCid MintedMUSD.Redeem
+    exerciseCmd mergedCid MUSD_Redeem
 
   debug "mUSD asset test passed - split, merge, redeem all work"
   pure ()
@@ -695,12 +695,12 @@ musdMintProposalTest = script do
 
   -- Alice accepts (now requires IssuerRole for supply cap)
   (roleCid2, musdCid) <- submit alice do
-    exerciseCmd proposalCid AcceptMint with
+    exerciseCmd proposalCid MintProposal_Accept with
       issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD
   submit alice do
-    exerciseCmd musdCid MintedMUSD.Redeem
+    exerciseCmd musdCid MUSD_Redeem
 
   debug "  Accept path works"
 
@@ -712,7 +712,7 @@ musdMintProposalTest = script do
       amount = 1000.000000000000000000
 
   submit bob do
-    exerciseCmd proposalCid2 DeclineMint
+    exerciseCmd proposalCid2 MintProposal_Decline
 
   debug "  Decline path works"
 
@@ -724,7 +724,7 @@ musdMintProposalTest = script do
       amount = 3000.000000000000000000
 
   submit issuer do
-    exerciseCmd proposalCid3 WithdrawMintProposal
+    exerciseCmd proposalCid3 MintProposal_Withdraw
 
   debug "Mint proposal test passed - accept, decline, withdraw all work"
   pure ()
