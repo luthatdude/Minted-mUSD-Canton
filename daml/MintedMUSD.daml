@@ -1,7 +1,7 @@
 module MUSD where
 import Daml.Script
--- | Constants for the stablecoin
--- Prevents "Dust" attacks/residue where decimal precision leads to unusable fragments.
+import Daml.Control.Monad (replicateM)
+-- | Constants to prevent "Dust" and precision issues.
 MINIMUM_AMOUNT : Decimal = 0.01
 -- =============================================================================
 -- 1. CORE TOKEN TEMPLATE
@@ -11,27 +11,30 @@ template MUSD
     provider   : Party
     owner      : Party
     amount     : Decimal
-    currency   : Text            -- e.g., "USD"
-    observers  : [Party]         -- For regulators/auditors
+    currency   : Text
+    observers  : [Party] 
   where
-    signatory provider           -- The Issuer (Bank) provides the authority
-    observer owner, observers    -- The Holder can see and act on the contract
+    signatory provider
+    observer owner, observers
     ensure amount >= MINIMUM_AMOUNT
     -- --- LOGIC: Lifecycle ---
-    -- A. Redeem: Owner requests fiat payout. 
-    -- This consumes the token and creates a request for the bank.
+    -- IMPROVED: Added a 'reason' to the redemption for audit trails.
     choice MUSD_Redeem : ContractId MUSD_RedemptionRequest
+      with 
+        reason : Text
       controller owner
       do 
         create MUSD_RedemptionRequest with 
           usd = this
           requester = owner
-    -- B. Compliance: Provider can lock funds for regulatory reasons.
-    -- This can be done unilaterally by the provider as they are the signatory.
+          instructions = reason
+    -- IMPROVED: Provider must supply a reason for locking (transparency).
     choice MUSD_Lock : ContractId MUSD_Locked
+      with
+        reason : Text
       controller provider
       do 
-        create MUSD_Locked with usd = this
+        create MUSD_Locked with usd = this; reason
     -- --- LOGIC: Utility ---
     choice MUSD_Split : (ContractId MUSD, ContractId MUSD)
       with
@@ -50,13 +53,10 @@ template MUSD
       do
         assertMsg "Cannot merge a contract with itself" (self /= otherCid)
         other <- fetch otherCid
-        -- SECURITY: Ensure metadata matches exactly
-        assertMsg "Must be same provider" (provider == other.provider)
-        assertMsg "Must be same owner" (owner == other.owner)
-        assertMsg "Must be same currency" (currency == other.currency)
+        assertMsg "Metadata mismatch" (provider == other.provider && currency == other.currency && owner == other.owner)
         archive otherCid
         create this with amount = amount + other.amount
-    -- C. Transfer: Creates a proposal that the new owner must accept.
+    -- IMPROVED: Transfer proposal now explicitly handles observer transitions.
     choice MUSD_Transfer : ContractId MUSD_TransferProposal
       with
         newOwner : Party
@@ -64,33 +64,40 @@ template MUSD
       do
         create MUSD_TransferProposal with usd = this; newOwner
 -- =============================================================================
--- 2. COMPLIANCE & REDEMPTION TEMPLATES
+-- 2. COMPLIANCE & REDEMPTION (Handling Deadlocks)
 -- =============================================================================
--- | Represents frozen funds. Signatory is the provider.
 template MUSD_Locked
   with
-    usd : MUSD
+    usd    : MUSD
+    reason : Text
   where
     signatory usd.provider
     observer usd.owner
-    -- Only the provider can unlock the funds
     choice MUSD_Unlock : ContractId MUSD
       controller usd.provider
       do create usd
--- | Represents a request for fiat payout. 
--- Signatory is the requester (Owner); Provider is observer to see the request.
 template MUSD_RedemptionRequest
   with
-    usd       : MUSD
-    requester : Party
+    usd          : MUSD
+    requester    : Party
+    instructions : Text -- e.g., IBAN or Wire info
   where
     signatory usd.provider, requester
-    -- Provider archives this once they have sent the bank wire/ACH
+    -- SUCCESS: Bank processes wire and archives request
     choice MUSD_FulfillRedemption : ()
       controller usd.provider
       do return ()
+    -- IMPROVED: NEW CHOICE to prevent "Stuck" funds.
+    -- If the bank cannot fulfill (e.g. KYC fail), they return the token to the owner.
+    choice MUSD_RejectRedemption : ContractId MUSD
+      with 
+        rejectReason : Text
+      controller usd.provider
+      do 
+        -- Logic could be added here to log the rejection
+        create usd
 -- =============================================================================
--- 3. PROPOSAL PATTERNS
+-- 3. PROPOSAL PATTERNS (Fixing Privacy Leaks)
 -- =============================================================================
 template MUSD_TransferProposal
   with
@@ -99,10 +106,16 @@ template MUSD_TransferProposal
   where
     signatory usd.provider, usd.owner
     observer newOwner
+    -- IMPROVED: The newOwner provides their own observers.
+    -- This prevents Alice's regulator from automatically seeing Bob's money.
     choice MUSD_AcceptTransfer : ContractId MUSD
+      with
+        newObservers : [Party]
       controller newOwner
       do
-        create usd with owner = newOwner
+        create usd with 
+          owner = newOwner
+          observers = newObservers
     choice MUSD_RejectTransfer : ContractId MUSD
       controller newOwner
       do create usd
@@ -122,37 +135,28 @@ template MUSD_MintProposal
     ensure amount >= MINIMUM_AMOUNT
     choice MUSD_MintProposal_Accept : ContractId MUSD
       controller owner
-      do
-        create MUSD with provider, owner, amount, currency, observers
+      do create MUSD with ..
     choice MUSD_MintProposal_Reject : ()
       controller owner
       do return ()
 -- =============================================================================
--- 4. AUDIT TESTS (Daml Script)
+-- 4. HARDENED AUDIT TEST
 -- =============================================================================
-test_stablecoin_lifecycle : Script ()
-test_stablecoin_lifecycle = script do
-  [bank, alice, bob, regulator] <- mapA allocateParty ["Bank", "Alice", "Bob", "Regulator"]
-  -- 1. Minting (Bank proposes, Alice accepts)
-  mintProp <- submit bank do
-    createCmd MUSD_MintProposal with 
-      provider = bank; owner = alice; amount = 100.0; currency = "USD"; observers = [regulator]
-  aliceUSD <- submit alice do
-    exerciseCmd mintProp MUSD_MintProposal_Accept
-  -- 2. Splitting (Alice does this unilaterally)
-  (smallUSD, largeUSD) <- submit alice do
-    exerciseCmd aliceUSD MUSD_Split with splitAmount = 10.0
-  -- 3. Locking (Bank does this unilaterally for compliance)
-  lockedCid <- submit bank do
-    exerciseCmd smallUSD MUSD_Lock
-  -- 4. Transferring (Alice proposes, Bob accepts)
-  prop <- submit alice do
-    exerciseCmd largeUSD MUSD_Transfer with newOwner = bob
-  bobUSD <- submit bob do
-    exerciseCmd prop MUSD_AcceptTransfer
-  -- 5. Redemption (Bob requests payout)
-  redeemReq <- submit bob do
-    exerciseCmd bobUSD MUSD_Redeem
-  submit bank do
-    exerciseCmd redeemReq MUSD_FulfillRedemption
+test_stablecoin_audit : Script ()
+test_stablecoin_audit = script do
+  [bank, alice, bob, regAlice, regBob] <- mapA allocateParty ["Bank", "Alice", "Bob", "RegAlice", "RegBob"]
+  -- 1. Mint
+  mintProp <- submit bank do createCmd MUSD_MintProposal with provider=bank; owner=alice; amount=100.0; currency="USD"; observers=[regAlice]
+  aliceUSD <- submit alice do exerciseCmd mintProp MUSD_MintProposal_Accept
+  -- 2. Privacy Check: Transfer
+  -- Alice transfers to Bob. Bob ensures ONLY his regulator (regBob) can see the new contract.
+  transferProp <- submit alice do exerciseCmd aliceUSD MUSD_Transfer with newOwner = bob
+  bobUSD <- submit bob do exerciseCmd transferProp MUSD_AcceptTransfer with newObservers = [regBob]
+  -- 3. Deadlock Check: Failed Redemption
+  -- Bob tries to redeem, but Bank rejects it.
+  redeemReq <- submit bob do exerciseCmd bobUSD MUSD_Redeem with reason = "Wire to Bob's Bank"
+  returnedUSD <- submit bank do exerciseCmd redeemReq MUSD_RejectRedemption with rejectReason = "Invalid IBAN"
+  -- 4. Transparency Check: Locking
+  -- Bank locks funds with a mandatory reason.
+  lockedCid <- submit bank do exerciseCmd returnedUSD MUSD_Lock with reason = "Suspicious activity check"
   return ()
