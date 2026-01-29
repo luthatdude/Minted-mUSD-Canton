@@ -92,9 +92,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install DAML SDK
+      - name: Install DAML SDK 2.10.3
         run: |
-          curl -sSL https://get.daml.com/ | sh
+          curl -sSL https://get.daml.com/ | sh -s 2.10.3
           echo "$HOME/.daml/bin" >> $GITHUB_PATH
 
       - name: Verify DAML installation
