@@ -13,7 +13,7 @@
  */
 
 import { ethers } from "ethers";
-import Ledger from "@daml/ledger";
+import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
@@ -237,10 +237,10 @@ class RelayService {
    */
   private async pollForAttestations(): Promise<void> {
     // Query active AttestationRequest contracts
-    const attestations = await this.ledger.query<AttestationRequest>(
-      "MintedProtocolV2:AttestationRequest" as any,
+    const attestations = await (this.ledger.query as any)(
+      "MintedProtocolV2:AttestationRequest",
       { aggregator: this.config.cantonParty }
-    );
+    ) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
       const payload = attestation.payload.payload;
@@ -289,10 +289,10 @@ class RelayService {
   private async fetchValidatorSignatures(
     requestId: ContractId<AttestationRequest>
   ): Promise<ValidatorSignature[]> {
-    const signatures = await this.ledger.query<ValidatorSignature>(
-      "MintedProtocolV2:ValidatorSignature" as any,
+    const signatures = await (this.ledger.query as any)(
+      "MintedProtocolV2:ValidatorSignature",
       { requestId }
-    );
+    ) as CreateEvent<ValidatorSignature>[];
     return signatures.map(s => s.payload);
   }
 

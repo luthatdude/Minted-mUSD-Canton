@@ -11,7 +11,7 @@
  *   5. Submit ValidatorSignature to Canton
  */
 
-import Ledger from "@daml/ledger";
+import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
@@ -160,10 +160,10 @@ class ValidatorNode {
    */
   private async pollForAttestations(): Promise<void> {
     // Query AttestationRequest contracts where we're in the validator group
-    const attestations = await this.ledger.query<AttestationRequest>(
-      "MintedProtocolV2:AttestationRequest" as any,
+    const attestations = await (this.ledger.query as any)(
+      "MintedProtocolV2:AttestationRequest",
       {}  // Query all, filter locally
-    );
+    ) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -216,10 +216,10 @@ class ValidatorNode {
     // FIX C-09: Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
     try {
-      const positions = await this.ledger.query<InstitutionalEquityPosition>(
-        "MintedProtocolV2:InstitutionalEquityPosition" as any,
+      const positions = await (this.ledger.query as any)(
+        "MintedProtocolV2:InstitutionalEquityPosition",
         {}
-      );
+      ) as CreateEvent<InstitutionalEquityPosition>[];
 
       // Deduplicate by referenceId to prevent double-counting
       const seen = new Set<string>();
@@ -282,8 +282,8 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
-      await this.ledger.exercise(
-        "MintedProtocolV2:AttestationRequest" as any,
+      await (this.ledger.exercise as any)(
+        "MintedProtocolV2:AttestationRequest",
         contractId,
         "ProvideSignature",
         {

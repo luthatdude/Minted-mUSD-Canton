@@ -14,7 +14,7 @@
  * This allows Canton to choose which assets back mUSD.
  */
 
-import Ledger from "@daml/ledger";
+import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
@@ -161,7 +161,7 @@ class CantonAssetClient {
       throw new Error(`Canton API error: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     return {
       snapshotId: data.snapshotId,
@@ -204,7 +204,7 @@ class CantonAssetClient {
       throw new Error(`Canton API error: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     return data.assets.map((a: any) => ({
       assetId: a.assetId,
       category: a.category,
@@ -240,7 +240,7 @@ class CantonAssetClient {
       return false;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     return data.valid === true;
   }
 }
@@ -309,10 +309,10 @@ class ValidatorNode {
 
   private async pollForAttestations(): Promise<void> {
     // Query AttestationRequest contracts
-    const attestations = await this.ledger.query<AttestationRequest>(
-      "MintedProtocolV3:AttestationRequest" as any,
+    const attestations = await (this.ledger.query as any)(
+      "MintedProtocolV3:AttestationRequest",
       {}
-    );
+    ) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -472,8 +472,8 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
-      await this.ledger.exercise(
-        "MintedProtocolV3:AttestationRequest" as any,
+      await (this.ledger.exercise as any)(
+        "MintedProtocolV3:AttestationRequest",
         contractId,
         "ProvideSignature",
         {
