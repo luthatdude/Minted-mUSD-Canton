@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title PendleMarketSelector
@@ -48,7 +48,12 @@ interface ISY {
     function exchangeRate() external view returns (uint256);
 }
 
-contract PendleMarketSelector is OwnableUpgradeable {
+contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // CONSTANTS
@@ -133,8 +138,9 @@ contract PendleMarketSelector is OwnableUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 
-    function initialize() external initializer {
-        __Ownable_init();
+    function initialize(address _owner) external initializer {
+        __Ownable_init(_owner);
+        __UUPSUpgradeable_init();
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -189,22 +195,41 @@ contract PendleMarketSelector is OwnableUpgradeable {
         view
         returns (MarketInfo[] memory markets)
     {
-        // First pass: count valid markets
+        // FIX M-01: Single pass — cache MarketInfo to avoid double external calls.
+        // Build temporary array with all whitelisted markets' info, then filter.
+        uint256 len = whitelistedMarkets.length;
+        MarketInfo[] memory temp = new MarketInfo[](len);
+        bool[] memory valid = new bool[](len);
         uint256 validCount = 0;
-        for (uint256 i = 0; i < whitelistedMarkets.length; i++) {
-            if (_isValidMarket(whitelistedMarkets[i], category)) {
-                validCount++;
-            }
+
+        for (uint256 i = 0; i < len; i++) {
+            address market = whitelistedMarkets[i];
+            if (!isWhitelisted[market]) continue;
+            if (keccak256(bytes(marketCategory[market])) != keccak256(bytes(category))) continue;
+
+            IPendleMarket pendleMarket = IPendleMarket(market);
+            if (pendleMarket.isExpired()) continue;
+
+            uint256 expiry = pendleMarket.expiry();
+            if (expiry < block.timestamp + minTimeToExpiry) continue;
+
+            // Get info once (expensive external calls)
+            MarketInfo memory info = _getMarketInfo(market);
+
+            if (info.tvlSy < minTvlUsd) continue;
+            if (info.impliedAPY < minApyBps) continue;
+
+            temp[i] = info;
+            valid[i] = true;
+            validCount++;
         }
 
-        // Second pass: populate array
+        // Compact into result array
         markets = new MarketInfo[](validCount);
         uint256 index = 0;
-
-        for (uint256 i = 0; i < whitelistedMarkets.length; i++) {
-            address market = whitelistedMarkets[i];
-            if (_isValidMarket(market, category)) {
-                markets[index] = _getMarketInfo(market);
+        for (uint256 i = 0; i < len; i++) {
+            if (valid[i]) {
+                markets[index] = temp[i];
                 index++;
             }
         }
@@ -376,6 +401,8 @@ contract PendleMarketSelector is OwnableUpgradeable {
      * @param category Asset category (e.g., "USD", "ETH")
      */
     function whitelistMarket(address market, string calldata category) external onlyOwner {
+        // FIX L-07: Validate market address
+        require(market != address(0), "ZERO_ADDRESS");
         if (!isWhitelisted[market]) {
             whitelistedMarkets.push(market);
             isWhitelisted[market] = true;
@@ -463,4 +490,14 @@ contract PendleMarketSelector is OwnableUpgradeable {
     function whitelistedCount() external view returns (uint256) {
         return whitelistedMarkets.length;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // UPGRADEABILITY
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice FIX H-02: UUPS upgrade authorization
+    function _authorizeUpgrade(address) internal override onlyOwner {}
+
+    /// @dev FIX H-02: Storage gap for future upgrades
+    uint256[40] private __gap;
 }

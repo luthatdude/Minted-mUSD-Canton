@@ -2,7 +2,7 @@
 // BLE Protocol - Liquidation Engine
 // Liquidates undercollateralized positions in the borrowing system
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -144,10 +144,9 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         // FIX H-01: Convert USD value to collateral token amount accounting for token decimals
         // collateralPrice is USD per 1 full token (18 decimals)
         // For a token with D decimals: seizeAmount = seizeValueUsd * 10^D / collateralPrice
-        uint8 tokenDecimals = 18; // Default; PriceOracle.getValueUsd handles normalization
-        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
-            tokenDecimals = d;
-        } catch {}
+        // FIX L-04: Require decimals() to succeed instead of silently defaulting to 18,
+        // which would cause wildly incorrect seizure amounts for non-18-decimal tokens.
+        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
         uint256 seizeAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         // Cap at available collateral
@@ -202,11 +201,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         if (collateralPrice == 0) return 0;
 
         uint256 seizeValueUsd = (debtToRepay * (10000 + penaltyBps)) / 10000;
-        // FIX H-01: Account for token decimals in estimate
-        uint8 tokenDecimals = 18;
-        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
-            tokenDecimals = d;
-        } catch {}
+        // FIX L-04: Require decimals() — view function, safe to let revert for unsupported tokens
+        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
         collateralAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         uint256 available = vault.deposits(borrower, collateralToken);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -42,8 +42,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     uint256 public redeemFeeBps;
     uint256 public constant MAX_FEE_BPS = 500; // 5% max
 
-    // Accumulated fees (in USDC decimals)
-    uint256 public accumulatedFees;
+    // FIX C-02: Separate mint fees (held locally) from redeem fees (held in Treasury)
+    uint256 public mintFees;
+    uint256 public redeemFees;
     address public feeRecipient;
 
     // Per-transaction limits (in USDC decimals, 6 decimals)
@@ -116,9 +117,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         usdc.forceApprove(address(treasury), usdcAfterFee);
         treasury.deposit(address(this), usdcAfterFee);
 
-        // Track fees
+        // Track mint fees (held in this contract)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            mintFees += feeUsdc;
         }
 
         // Mint mUSD to user
@@ -151,9 +152,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw from TreasuryV2 (handles reserve + strategy unwinding)
         treasury.withdraw(msg.sender, usdcOut);
 
-        // Track fees
+        // Track redeem fees (these remain in the Treasury)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            redeemFees += feeUsdc;
         }
 
         emit Redeemed(msg.sender, musdAmount, usdcOut, feeUsdc);
@@ -228,12 +229,28 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         emit FeeRecipientUpdated(old, _recipient);
     }
 
+    /// @notice Withdraw accumulated mint fees (held in this contract)
     function withdrawFees() external onlyRole(FEE_MANAGER_ROLE) {
-        uint256 feesToWithdraw = accumulatedFees;
-        require(feesToWithdraw > 0, "NO_FEES");
-        accumulatedFees = 0;
-        usdc.safeTransfer(feeRecipient, feesToWithdraw);
-        emit FeesWithdrawn(feeRecipient, feesToWithdraw);
+        uint256 fees = mintFees;
+        require(fees > 0, "NO_FEES");
+        mintFees = 0;
+        usdc.safeTransfer(feeRecipient, fees);
+        emit FeesWithdrawn(feeRecipient, fees);
+    }
+
+    /// @notice FIX C-02: Withdraw accumulated redeem fees from Treasury
+    /// Redeem fees stay in Treasury during redeem(); this function extracts them.
+    function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
+        uint256 fees = redeemFees;
+        require(fees > 0, "NO_REDEEM_FEES");
+        redeemFees = 0;
+        treasury.withdraw(feeRecipient, fees);
+        emit FeesWithdrawn(feeRecipient, fees);
+    }
+
+    /// @notice View total accumulated fees (mint + redeem) for accounting
+    function totalAccumulatedFees() external view returns (uint256) {
+        return mintFees + redeemFees;
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {
@@ -247,6 +264,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Emergency token recovery (not USDC)
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(usdc), "CANNOT_RECOVER_USDC");
+        // FIX M-06: Also block mUSD recovery to prevent extraction of protocol tokens
+        require(token != address(musd), "CANNOT_RECOVER_MUSD");
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 }

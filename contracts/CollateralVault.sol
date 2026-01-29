@@ -2,7 +2,7 @@
 // BLE Protocol - Collateral Vault
 // Accepts ERC-20 collateral deposits (WETH, WBTC, etc.) for overcollateralized borrowing
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -35,6 +35,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
 
     event CollateralAdded(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
     event CollateralUpdated(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
+    // FIX M-05: Separate event for disable/enable to avoid misleading 0-value emissions
+    event CollateralDisabled(address indexed token);
+    event CollateralEnabled(address indexed token);
     event Deposited(address indexed user, address indexed token, uint256 amount);
     event Withdrawn(address indexed user, address indexed token, uint256 amount);
     event Seized(address indexed user, address indexed token, uint256 amount, address indexed liquidator);
@@ -97,7 +100,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
         collateralConfigs[token].enabled = false;
-        emit CollateralUpdated(token, 0, 0);
+        // FIX M-05: Emit specific disable event instead of misleading CollateralUpdated(0, 0)
+        emit CollateralDisabled(token);
     }
 
     /// FIX S-C03: Re-enable a previously disabled collateral token
@@ -105,7 +109,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
         require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
         collateralConfigs[token].enabled = true;
-        emit CollateralUpdated(token, collateralConfigs[token].collateralFactorBps, collateralConfigs[token].liquidationThresholdBps);
+        // FIX M-05: Use specific enable event
+        emit CollateralEnabled(token);
     }
 
     // ============================================================

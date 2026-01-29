@@ -422,7 +422,8 @@ describe("BLE Protocol Production Test", function () {
           },
           sigs
         )
-      ).to.be.revertedWith("RECEIVER_BLACKLISTED");
+      // FIX H-01: MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
+      ).to.be.revertedWith("COMPLIANCE_REJECT");
     });
 
     // FIX M-01: Test burn from blacklisted address is rejected
@@ -512,7 +513,8 @@ describe("BLE Protocol Production Test", function () {
           },
           sigs2
         )
-      ).to.be.revertedWith("SENDER_BLACKLISTED");
+      // FIX H-01: MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
+      ).to.be.revertedWith("COMPLIANCE_REJECT");
     });
   });
 
@@ -1015,8 +1017,10 @@ describe("BLE Protocol Production Test", function () {
     });
 
     it("Should pass when NAV within acceptable deviation", async function () {
-      // Set oracle to report 1.1M (matching the attestation)
-      await mockOracle.setAnswer(1100000_00000000n);
+      // Set oracle to report 1100 in 8 decimals (= 1100e8).
+      // After normalization to 18 decimals: 1100e8 * 10^10 = 1100e18 = parseEther("1100")
+      // This matches the attestation's globalCantonAssets of parseEther("1100").
+      await mockOracle.setAnswer(1100_00000000n);
 
       await bridge.setNavOracle(
         await mockOracle.getAddress(),

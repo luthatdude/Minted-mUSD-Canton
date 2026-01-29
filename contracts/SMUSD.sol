@@ -3,7 +3,7 @@
 // Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
 //        S-03 (Donation attack mitigation), S-04 (SafeERC20)
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";

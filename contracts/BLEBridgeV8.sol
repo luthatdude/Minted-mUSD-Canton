@@ -4,7 +4,7 @@
 //        B-04 (Storage gap), B-05 (Attestation ID uniqueness)
 // Additions: NAV Oracle check, Emergency nonce recovery
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
