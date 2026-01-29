@@ -47,7 +47,8 @@ template Asset
       controller owner
       do
         assertMsg "Split amount must be positive" $ splitAmount > 0.0
-        assertMsg "Insufficient balance" $ amount >= splitAmount
+        -- FIX D-M04: Strict inequality to prevent zero-remainder splits
+        assertMsg "Insufficient balance" $ amount > splitAmount
         remaining <- create this with amount = amount - splitAmount
         split <- create this with amount = splitAmount
         return (remaining, split)

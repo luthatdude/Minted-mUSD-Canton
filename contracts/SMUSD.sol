@@ -34,12 +34,11 @@ contract SMUSD is ERC4626, AccessControl {
         return super.deposit(assets, receiver);
     }
 
-    // FIX M-01: Only update cooldown when minting for yourself.
+    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
+    // Matches deposit() behavior — any path that increases shares must reset cooldown.
     function mint(uint256 shares, address receiver) public override returns (uint256) {
-        if (msg.sender == receiver) {
-            lastDeposit[receiver] = block.timestamp;
-            emit CooldownUpdated(receiver, block.timestamp);
-        }
+        lastDeposit[receiver] = block.timestamp;
+        emit CooldownUpdated(receiver, block.timestamp);
         return super.mint(shares, receiver);
     }
 

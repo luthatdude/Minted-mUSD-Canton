@@ -552,7 +552,8 @@ musdAttestationMintTest = script do
       currentSupply = 0.0
 
   -- Mint mUSD gated by the finalized attestation
-  musdCid <- submitMulti [issuer, aggregator] [] do
+  -- FIX: MintFromAttestation now returns (ContractId IssuerRole, ContractId MUSD) as consuming choice
+  (roleCid2, musdCid) <- submitMulti [issuer, aggregator] [] do
     exerciseCmd roleCid MintFromAttestation with
       owner = alice
       mintAmount = mintAmount

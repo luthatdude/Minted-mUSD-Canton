@@ -142,9 +142,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
         } else {
-            uint256 remaining = repayAmount - pos.accruedInterest;
+            // FIX S-C02: Renamed to 'principalPayment' to avoid shadowing outer 'remaining'
+            uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
-            pos.principal -= remaining;
+            pos.principal -= principalPayment;
         }
 
         // Burn the repaid mUSD

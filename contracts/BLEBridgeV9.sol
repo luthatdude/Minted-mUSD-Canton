@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 // BLE Protocol - V9
 // Refactored: Canton attestations update supply cap, not mint directly
+//
+// WARNING (S-C01): V9 has INCOMPATIBLE storage layout with V8.
+// V8 has 12 state variables (musdToken, totalCantonAssets, currentNonce, minSignatures,
+// dailyMintLimit, dailyMinted, dailyBurned, lastReset, navOracle, maxNavDeviationBps,
+// navOracleEnabled, usedAttestationIds) + __gap[38] = 50 slots.
+// V9 has 8 state variables (musdToken, attestedCantonAssets, collateralRatioBps, currentNonce,
+// minSignatures, lastAttestationTime, lastRatioChangeTime, usedAttestationIds) + __gap[42] = 50 slots.
+// Direct UUPS upgrade from V8->V9 will corrupt storage. A migration contract is required.
 
 pragma solidity ^0.8.20;
 
@@ -57,6 +65,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
     event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
     event MUSDTokenUpdated(address indexed oldToken, address indexed newToken);
+    // FIX S-H03: Event for attestation invalidation audit trail
+    event AttestationInvalidated(bytes32 indexed attestationId, string reason);
+    // FIX S-M02: Event for min signatures change
+    event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -95,8 +107,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         musdToken = IMUSD(_musdToken);
     }
 
+    // FIX S-M02: Emit event for admin parameter change
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minSigs > 0, "INVALID_MIN_SIGS");
+        emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
 
@@ -154,9 +168,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Invalidate an attestation ID
-    function invalidateAttestationId(bytes32 _attestationId) external onlyRole(EMERGENCY_ROLE) {
+    /// FIX S-H03: Added reason parameter and event emission for audit trail
+    function invalidateAttestationId(bytes32 _attestationId, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(!usedAttestationIds[_attestationId], "ALREADY_USED");
+        require(bytes(_reason).length > 0, "REASON_REQUIRED");
         usedAttestationIds[_attestationId] = true;
+        emit AttestationInvalidated(_attestationId, _reason);
     }
 
     // ============================================================

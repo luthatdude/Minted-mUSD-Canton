@@ -15,22 +15,10 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-import * as fs from "fs";
 // FIX M-20: Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
-
-// FIX I-C01: Read Docker secrets from /run/secrets/ with env var fallback
-function readSecret(name: string, envVar: string): string {
-  const secretPath = `/run/secrets/${name}`;
-  try {
-    if (fs.existsSync(secretPath)) {
-      return fs.readFileSync(secretPath, "utf-8").trim();
-    }
-  } catch {
-    // Fall through to env var
-  }
-  return process.env[envVar] || "";
-}
+// FIX T-M01: Use shared readSecret utility
+import { readSecret } from "./utils";
 
 // ============================================================
 //                     CONFIGURATION

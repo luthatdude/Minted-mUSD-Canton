@@ -113,9 +113,9 @@ template IssuerRole
     signatory issuer
 
     -- | Mint mUSD backed by a finalized attestation from the validator network.
-    -- FIX D-C02: requiredSignatures derived from attestation's validatorGroup.
-    -- Archives attestation to prevent replay.
-    nonconsuming choice MintFromAttestation : ContractId MUSD
+    -- FIX D-C01/D-C02: Consuming choice — supply tracked in contract state.
+    -- Archives attestation to prevent replay. Returns updated IssuerRole.
+    choice MintFromAttestation : (ContractId IssuerRole, ContractId MUSD)
       with
         owner : Party
         mintAmount : Money
@@ -124,6 +124,8 @@ template IssuerRole
       controller issuer
       do
         assertMsg "Mint amount must be positive." (mintAmount > 0.0)
+        -- FIX D-C01: Enforce supply cap from contract state
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + mintAmount <= supplyCap)
 
         -- Fetch the attestation to derive quorum and verify mint details
         attestation <- fetch attestationCid
@@ -143,11 +145,13 @@ template IssuerRole
         -- Archive the attestation to prevent replay
         archive attestationCid
 
-        -- All checks passed — create the mUSD
-        create MUSD with
+        -- All checks passed — create the mUSD and update supply
+        musdCid <- create MUSD with
           issuer
           owner
           amount = mintAmount
+        newRole <- create this with currentSupply = currentSupply + mintAmount
+        return (newRole, musdCid)
 
     -- | Direct mint (for bootstrapping/admin use).
     -- FIX D-C01: Consuming choice — supply tracked in contract state.

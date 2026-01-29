@@ -31,6 +31,7 @@ import DA.List (dedup)
 import DA.Set qualified as Set
 import DA.Foldable (sum)
 import DA.Optional (fromOptional)
+import DA.Text qualified as T
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -142,12 +143,15 @@ template Collateral
     -- FIX D-H01: Require strictly positive amounts
     ensure amount > 0.0
 
-    choice Collateral_Transfer : CollateralId
+    -- FIX D-H01: Transfer via proposal pattern to prevent unsolicited assignments
+    choice Collateral_Transfer : ContractId CollateralTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create CollateralTransferProposal with
+          collateral = this
+          newOwner
 
     choice Collateral_Split : (CollateralId, CollateralId)
       with
@@ -155,7 +159,8 @@ template Collateral
       controller owner
       do
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
-        assertMsg "Insufficient balance" (amount >= splitAmount)
+        -- FIX D-M06: Strict inequality to prevent zero-remainder splits
+        assertMsg "Insufficient balance" (amount > splitAmount)
         remaining <- create this with amount = amount - splitAmount
         split <- create this with amount = splitAmount
         return (remaining, split)
@@ -172,6 +177,27 @@ template Collateral
         archive otherCid
         create this with amount = amount + other.amount
 
+-- FIX D-H01: Collateral transfer proposal (dual-signatory safe)
+template CollateralTransferProposal
+  with
+    collateral : Collateral
+    newOwner : Party
+  where
+    signatory collateral.issuer, collateral.owner
+    observer newOwner
+
+    choice CollateralTransferProposal_Accept : CollateralId
+      controller newOwner
+      do create collateral with owner = newOwner
+
+    choice CollateralTransferProposal_Reject : CollateralId
+      controller newOwner
+      do create collateral
+
+    choice CollateralTransferProposal_Cancel : CollateralId
+      controller collateral.owner
+      do create collateral
+
 template USDC
   with
     issuer : Party
@@ -183,12 +209,15 @@ template USDC
     -- FIX D-H01: Require strictly positive amounts
     ensure amount > 0.0
 
-    choice USDC_Transfer : ContractId USDC
+    -- FIX D-H02: Transfer via proposal pattern to prevent unsolicited assignments
+    choice USDC_Transfer : ContractId USDCTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create USDCTransferProposal with
+          usdc = this
+          newOwner
 
     choice USDC_Split : (ContractId USDC, ContractId USDC)
       with
@@ -196,10 +225,32 @@ template USDC
       controller owner
       do
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
-        assertMsg "Insufficient funds" (amount >= splitAmount)
+        -- FIX D-M05: Strict inequality to prevent zero-remainder splits
+        assertMsg "Insufficient funds" (amount > splitAmount)
         c1 <- create this with amount = splitAmount
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
+
+-- FIX D-H02: USDC transfer proposal (dual-signatory safe)
+template USDCTransferProposal
+  with
+    usdc : USDC
+    newOwner : Party
+  where
+    signatory usdc.issuer, usdc.owner
+    observer newOwner
+
+    choice USDCTransferProposal_Accept : ContractId USDC
+      controller newOwner
+      do create usdc with owner = newOwner
+
+    choice USDCTransferProposal_Reject : ContractId USDC
+      controller newOwner
+      do create usdc
+
+    choice USDCTransferProposal_Cancel : ContractId USDC
+      controller usdc.owner
+      do create usdc
 
 -- ============================================================
 --                     SECTION 2: PRICE ORACLE
@@ -287,7 +338,9 @@ template DirectMintService
 
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
 
-        exercise usdcCid USDC_Transfer with newOwner = operator
+        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
+        usdcProposal <- exercise usdcCid USDC_Transfer with newOwner = operator
+        exercise usdcProposal USDCTransferProposal_Accept
 
         musdCid <- create MUSD with
           issuer = operator
@@ -324,11 +377,15 @@ template DirectMintService
 
         exercise musdCid MUSD_Burn
 
+        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
         usdcToUser <- if reserve.amount == netAmount
-          then exercise usdcReserveCid USDC_Transfer with newOwner = user
+          then do
+            usdcProp <- exercise usdcReserveCid USDC_Transfer with newOwner = user
+            exercise usdcProp USDCTransferProposal_Accept
           else do
             (payout, _) <- exercise usdcReserveCid USDC_Split with splitAmount = netAmount
-            exercise payout USDC_Transfer with newOwner = user
+            usdcProp <- exercise payout USDC_Transfer with newOwner = user
+            exercise usdcProp USDCTransferProposal_Accept
 
         newService <- create this with
           currentSupply = currentSupply - musd.amount
@@ -363,11 +420,15 @@ template DirectMintService
         assertMsg "RESERVE_OWNER_MISMATCH" (reserve.owner == operator)
         assertMsg "INSUFFICIENT_RESERVE_FOR_FEES" (reserve.amount >= accumulatedFees)
 
+        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
         feePayout <- if reserve.amount == accumulatedFees
-          then exercise usdcReserveCid USDC_Transfer with newOwner = recipient
+          then do
+            usdcProp <- exercise usdcReserveCid USDC_Transfer with newOwner = recipient
+            exercise usdcProp USDCTransferProposal_Accept
           else do
             (payout, _) <- exercise usdcReserveCid USDC_Split with splitAmount = accumulatedFees
-            exercise payout USDC_Transfer with newOwner = recipient
+            usdcProp <- exercise payout USDC_Transfer with newOwner = recipient
+            exercise usdcProp USDCTransferProposal_Accept
 
         newService <- create this with accumulatedFees = 0.0
         return (newService, feePayout)
@@ -571,7 +632,9 @@ template Vault
           assertMsg "WITHDRAWAL_WOULD_LIQUIDATE" (remainingColValue >= requiredCollateral)
 
         (remaining, withdrawn) <- exercise collateral Collateral_Split with splitAmount = withdrawAmount
-        withdrawnToOwner <- exercise withdrawn Collateral_Transfer with newOwner = owner
+        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        colProposal <- exercise withdrawn Collateral_Transfer with newOwner = owner
+        withdrawnToOwner <- exercise colProposal CollateralTransferProposal_Accept
 
         newVault <- create this with
           collateral = remaining
@@ -678,7 +741,9 @@ template LiquidationEngine
           exercise toBurn MUSD_Burn
 
         (remainingCol, seizedCol) <- exercise vault.collateral Collateral_Split with splitAmount = actualSeize
-        seizedToLiquidator <- exercise seizedCol Collateral_Transfer with newOwner = liquidator
+        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        colProposal <- exercise seizedCol Collateral_Transfer with newOwner = liquidator
+        seizedToLiquidator <- exercise colProposal CollateralTransferProposal_Accept
 
         let (finalPrincipal, finalInterest) =
               if actualRepay <= newInterest
@@ -730,7 +795,9 @@ template LiquidityPool
         exercise proposalCid TransferProposal_Accept
 
         (remaining, payout) <- exercise poolCollateral Collateral_Split with splitAmount = collateralOut
-        receiverCollateral <- exercise payout Collateral_Transfer with newOwner = receiver
+        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        collateralProposal <- exercise payout Collateral_Transfer with newOwner = receiver
+        receiverCollateral <- exercise collateralProposal CollateralTransferProposal_Accept
 
         -- Update the pool with the new collateral CID
         newPool <- create this with poolCollateral = remaining
@@ -848,6 +915,9 @@ template AttestationRequest
     signatory aggregator
     observer validatorGroup
 
+    -- FIX D-M02: Enforce validator group size bounds
+    ensure length validatorGroup > 0 && length validatorGroup <= 100
+
     -- FIX D-H04: Changed to consuming choice with signature tracking (like BLEProtocol)
     choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
       with
@@ -858,6 +928,9 @@ template AttestationRequest
         -- FIX D-H04: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX D-M03: Validate signature format (hex-encoded ECDSA = 130+ chars)
+        assertMsg "EMPTY_SIGNATURE" (T.length ecdsaSignature > 0)
+        assertMsg "SIGNATURE_TOO_SHORT" (T.length ecdsaSignature >= 130)
 
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
@@ -865,7 +938,11 @@ template AttestationRequest
         positions <- mapA fetch positionCids
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
-        assertMsg "PAYLOAD_VALUE_MISMATCH" (totalGlobalValue == payload.globalCantonAssets)
+        -- FIX D-M01: Use tolerance-based comparison instead of exact equality (Numeric 18 rounding)
+        let valueDiff = if totalGlobalValue >= payload.globalCantonAssets
+              then totalGlobalValue - payload.globalCantonAssets
+              else payload.globalCantonAssets - totalGlobalValue
+        assertMsg "PAYLOAD_VALUE_MISMATCH" (valueDiff < 1.0)
 
         -- FIX D-H04: Update tracking and recreate request
         let newSignatures = Set.insert validator collectedSignatures
@@ -907,6 +984,9 @@ template AttestationRequest
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
+        -- FIX D-H04: Archive signatures after finalization to prevent reuse
+        mapA_ archive signatureCids
+
         return signatureCids
 
 template ValidatorSignature
@@ -936,9 +1016,9 @@ template IssuerRole
   where
     signatory issuer
 
-    -- FIX D-C03: requiredSignatures derived from validatorGroup (not caller-supplied)
-    -- Archives attestation to prevent replay.
-    nonconsuming choice MintFromAttestation : MUSDId
+    -- FIX D-C01/D-C03: Consuming choice — supply tracked in contract state.
+    -- Archives attestation to prevent replay. Returns updated IssuerRole.
+    choice MintFromAttestation : (ContractId IssuerRole, MUSDId)
       with
         owner : Party
         mintAmount : Money
@@ -946,6 +1026,10 @@ template IssuerRole
         signatureCids : [ContractId ValidatorSignature]
       controller issuer
       do
+        -- FIX D-C01: Enforce supply cap from contract state
+        assertMsg "AMOUNT_MUST_BE_POSITIVE" (mintAmount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + mintAmount <= supplyCap)
+
         -- Fetch BEFORE archive
         attestation <- fetch attestationCid
 
@@ -955,7 +1039,6 @@ template IssuerRole
         -- Validation
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
         assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
-        assertMsg "AMOUNT_MUST_BE_POSITIVE" (mintAmount > 0.0)
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
@@ -970,10 +1053,12 @@ template IssuerRole
         -- CRITICAL: Prevent Replay
         archive attestationCid
 
-        create MUSD with
+        musdCid <- create MUSD with
           issuer
           owner
           amount = mintAmount
+        newRole <- create this with currentSupply = currentSupply + mintAmount
+        return (newRole, musdCid)
 
     -- FIX D-C04: Consuming choice — supply tracked in contract state (not caller-supplied).
     choice DirectMint : (ContractId IssuerRole, MUSDId)

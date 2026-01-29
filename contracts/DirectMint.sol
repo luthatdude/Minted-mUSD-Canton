@@ -233,6 +233,16 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         emit FeesWithdrawn(feeRecipient, fees);
     }
 
+    /// @notice FIX S-H02: Withdraw accumulated redeem fees from Treasury
+    /// Redeem fees stay in Treasury during redeem(); this function extracts them.
+    function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
+        uint256 fees = redeemFees;
+        require(fees > 0, "NO_REDEEM_FEES");
+        redeemFees = 0;
+        treasury.withdraw(feeRecipient, fees);
+        emit FeesWithdrawn(feeRecipient, fees);
+    }
+
     /// @notice View total accumulated fees (mint + redeem) for accounting
     function totalAccumulatedFees() external view returns (uint256) {
         return mintFees + redeemFees;

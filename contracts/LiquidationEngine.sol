@@ -130,8 +130,9 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
 
         // Calculate collateral to seize
         // FIX H-01: Use oracle.getValueUsd for proper decimal normalization
-        (bool enabled, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
-        require(enabled, "COLLATERAL_NOT_SUPPORTED");
+        // FIX S-M05: Allow liquidation even if collateral token is disabled
+        // Disabled collateral positions must still be liquidatable for protocol safety
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         require(collateralPrice > 0, "INVALID_PRICE");

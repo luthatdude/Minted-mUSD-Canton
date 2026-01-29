@@ -142,15 +142,19 @@ template Smusd
 
 -- | A service contract provided by the Issuer allowing users to swap USDC for mUSD.
 -- | Security Critical: This defines the exchange rate and custody transfer.
+-- FIX D-H03: Add supply cap tracking to prevent unbounded minting
 template MintingService
   with
     operator : Party       -- The protocol operator/issuer
     usdcIssuer : Party     -- The trusted issuer of USDC
+    supplyCap : Decimal    -- Maximum supply allowed
+    currentSupply : Decimal -- Current minted supply
   where
     signatory operator
     observer usdcIssuer
 
-    nonconsuming choice Mint_Musd : ContractId Musd
+    -- FIX D-H03: Consuming choice to track supply cap
+    choice Mint_Musd : (ContractId MintingService, ContractId Musd)
       with
         user : Party
         usdcCid : ContractId Usdc
@@ -162,14 +166,20 @@ template MintingService
         assertMsg "Mint: Currency mismatch" (usdc.issuer == usdcIssuer)
         assertMsg "Mint: Owner mismatch" (usdc.owner == user)
         assertMsg "Mint: Amount must be positive" (usdc.amount > 0.0)
+        -- FIX D-H03: Enforce supply cap
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + usdc.amount <= supplyCap)
         -- 3. Execute Atomic Swap
         -- Transfer USDC to the Operator (Reserve)
-        exercise usdcCid Usdc_Transfer with newOwner = operator
+        -- FIX D-C08: Usdc_Transfer returns proposal; accept it
+        usdcProposal <- exercise usdcCid Usdc_Transfer with newOwner = operator
+        exercise usdcProposal UsdcTransferProposal_Accept
         -- Mint equal amount of mUSD to the User (1:1 Peg)
-        create Musd with
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = usdc.amount
+        newService <- create this with currentSupply = currentSupply + usdc.amount
+        return (newService, musdCid)
 
     -- FIX C-05: Burn requires operator-provided USDC reserve CID instead of forging
     nonconsuming choice Burn_Musd : ContractId Usdc
@@ -193,11 +203,15 @@ template MintingService
         -- Archive the mUSD (Burn)
         archive musdCid
         -- Split reserve if needed, transfer USDC to user
+        -- FIX D-C08: Usdc_Transfer returns proposal; accept it
         if reserve.amount == musd.amount
-        then exercise usdcReserveCid Usdc_Transfer with newOwner = user
+        then do
+          usdcProp <- exercise usdcReserveCid Usdc_Transfer with newOwner = user
+          exercise usdcProp UsdcTransferProposal_Accept
         else do
           (payout, _) <- exercise usdcReserveCid Usdc_Split with splitAmount = musd.amount
-          exercise payout Usdc_Transfer with newOwner = user
+          usdcProp <- exercise payout Usdc_Transfer with newOwner = user
+          exercise usdcProp UsdcTransferProposal_Accept
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 3: STAKING & YIELD (sMUSD)
@@ -411,6 +425,8 @@ setup = do
     createCmd MintingService with
       operator = operator
       usdcIssuer = usdcBank
+      supplyCap = 1000000.0
+      currentSupply = 0.0
 
   stakingSvc <- submit operator do
     createCmd StakingService with
@@ -423,7 +439,7 @@ setup = do
       validators = [validator1, validator2]
 
   -- 4. Alice Mints mUSD (Swaps USDC)
-  musdCid <- submit alice do
+  (mintingSvc2, musdCid) <- submit alice do
     exerciseCmd mintingSvc Mint_Musd with
       user = alice
       usdcCid = usdcCid
