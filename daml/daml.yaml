@@ -7,5 +7,4 @@ dependencies:
   - daml-stdlib
   - daml-script
 build-options:
-  - "--allow-redefinitions=no"
   - "--warn-unused-imports=no"
