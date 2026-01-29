@@ -68,6 +68,9 @@ template AttestationRequest
     signatory aggregator
     observer validatorGroup
 
+    -- FIX H-6: Bound validator group size to prevent DoS via O(n^2) dedup
+    ensure length validatorGroup > 0 && length validatorGroup <= 100
+
     -- FIX D-01: Consuming choice to prevent TOCTOU
     -- Positions are locked when attestation begins
     choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
@@ -118,7 +121,9 @@ template AttestationRequest
         signatureCids: [ContractId ValidatorSignature]
       controller aggregator
       do
-        -- FIX C-12: Use minimum quorum (majority of validator group)
+        -- FIX C-12: Derive quorum from validator group size (supermajority).
+        -- FIX H-3: Intentionally SUPERMAJORITY (>50%+1) for stronger security:
+        --   5 validators -> 4 required (80%), 7 validators -> 5 required (71%)
         let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         -- Verify we have enough signatures
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)

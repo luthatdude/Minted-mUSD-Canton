@@ -157,10 +157,9 @@ template Vault
         colData <- fetch collateral
         oracle <- fetch oracleCid
         -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
+        -- FIX H-4: Removed duplicate `let price = price` and redundant assertion
         let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
         assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
-        let price = price
-        assertMsg "Price not available" $ price > 0.0
         let colValue = colData.amount * price
         let newDebt = debtAmount + mintAmount
         -- Check Solvency
@@ -216,9 +215,9 @@ template LeverageManager
                 -- MaxDebt = Value / Ratio
                 -- Available = MaxDebt - CurrentDebt
                 -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
-        let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
-        assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
-        let price = price
+                -- FIX H-4: Removed duplicate `let price = price`
+                let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+                assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
                 let colValue = colData.amount * price
                 let maxDebt = colValue / vault.minCollateralRatio
                 let borrowable = maxDebt - vault.debtAmount

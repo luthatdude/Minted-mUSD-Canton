@@ -19,6 +19,8 @@ import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
 // FIX M-17: Removed unused crypto import
+// FIX M-20: Use static import instead of dynamic require
+import { formatKMSSignature } from "./signer";
 
 // ============================================================
 //                     CONFIGURATION
@@ -50,7 +52,8 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
-  cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865"),
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865", 10),
   cantonLedgerToken: process.env.CANTON_LEDGER_TOKEN || "",
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -63,8 +66,8 @@ const DEFAULT_CONFIG: ValidatorConfig = {
   ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
 
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000"),
-  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
+  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
 };
 
 // ============================================================
@@ -220,15 +223,17 @@ class ValidatorNode {
   private ledger: Ledger;
   private cantonClient: CantonAssetClient;
   private kmsClient: KMSClient;
+  // FIX C-6: Bounded cache with eviction (was unbounded — memory leak)
   private signedAttestations: Set<string> = new Set();
+  private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX H-12: Use TLS for Canton ledger connections
-    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
-    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonLedgerToken,
       httpBaseUrl: `${protocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
@@ -423,6 +428,9 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
+    // FIX C-6: Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    this.signedAttestations.add(attestationId);
+
     try {
       // Build message hash
       const messageHash = this.buildMessageHash(payload);
@@ -445,12 +453,27 @@ class ValidatorNode {
       this.signedAttestations.add(attestationId);
       console.log(`[Validator] ✓ Signed attestation ${attestationId}`);
 
+      // FIX C-6: Evict oldest entries if cache exceeds limit
+      if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
+        const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
+        let evicted = 0;
+        for (const key of this.signedAttestations) {
+          if (evicted >= toEvict) break;
+          this.signedAttestations.delete(key);
+          evicted++;
+        }
+      }
+
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
+      // FIX C-6: Remove from set on failure so it can be retried
+      // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED") ||
           error.message?.includes("already signed")) {
-        this.signedAttestations.add(attestationId);
+        // Already signed on ledger - keep in set
+      } else {
+        this.signedAttestations.delete(attestationId);
       }
     }
   }
@@ -489,7 +512,7 @@ class ValidatorNode {
       throw new Error("KMS returned empty signature");
     }
 
-    const { formatKMSSignature } = require("./signer");
+    // FIX M-20: Uses static import declared at top of file
     return formatKMSSignature(
       Buffer.from(response.Signature),
       ethSignedHash,
@@ -521,6 +544,19 @@ async function main(): Promise<void> {
   }
   if (!DEFAULT_CONFIG.cantonAssetApiUrl) {
     throw new Error("CANTON_ASSET_API_URL not set");
+  }
+  // FIX M-23: Validate required addresses at startup
+  if (!DEFAULT_CONFIG.ethereumAddress) {
+    throw new Error("VALIDATOR_ETH_ADDRESS not set");
+  }
+  if (!DEFAULT_CONFIG.bridgeContractAddress) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
+  }
+  if (!DEFAULT_CONFIG.cantonLedgerToken) {
+    throw new Error("CANTON_LEDGER_TOKEN not set");
+  }
+  if (!DEFAULT_CONFIG.cantonAssetApiKey) {
+    throw new Error("CANTON_ASSET_API_KEY not set");
   }
 
   const validator = new ValidatorNode(DEFAULT_CONFIG);

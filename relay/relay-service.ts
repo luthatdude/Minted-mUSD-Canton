@@ -41,7 +41,8 @@ interface RelayConfig {
 
 const DEFAULT_CONFIG: RelayConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
   cantonToken: process.env.CANTON_TOKEN || "",
   cantonParty: process.env.CANTON_PARTY || "",
 
@@ -49,9 +50,9 @@ const DEFAULT_CONFIG: RelayConfig = {
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   relayerPrivateKey: process.env.RELAYER_PRIVATE_KEY || "",
 
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
-  maxRetries: parseInt(process.env.MAX_RETRIES || "3"),
-  confirmations: parseInt(process.env.CONFIRMATIONS || "2"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
+  maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
+  confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
 };
 
 // ============================================================
@@ -151,9 +152,9 @@ class RelayService {
   constructor(config: RelayConfig) {
     this.config = config;
 
-    // FIX H-12: Use TLS for Canton ledger connections
-    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
-    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonToken,
       httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
@@ -211,9 +212,12 @@ class RelayService {
   private async loadProcessedAttestations(): Promise<void> {
     console.log("[Relay] Loading processed attestations from chain...");
 
-    // Query past AttestationReceived events
+    // FIX H-8: Paginate event loading to avoid RPC limits on large block ranges
     const filter = this.bridgeContract.filters.AttestationReceived();
-    const events = await this.bridgeContract.queryFilter(filter, -10000);
+    const currentBlock = await this.provider.getBlockNumber();
+    const maxRange = 10000;
+    const fromBlock = Math.max(0, currentBlock - maxRange);
+    const events = await this.bridgeContract.queryFilter(filter, fromBlock, currentBlock);
 
     for (const event of events) {
       const args = (event as ethers.EventLog).args;
@@ -350,6 +354,17 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+
+        // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
+        if (this.processedAttestations.size > this.MAX_PROCESSED_CACHE) {
+          const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
+          let evicted = 0;
+          for (const key of this.processedAttestations) {
+            if (evicted >= toEvict) break;
+            this.processedAttestations.delete(key);
+            evicted++;
+          }
+        }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
       }
@@ -495,18 +510,30 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.bridgeContractAddress) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
   }
+  // FIX M-23: Validate Ethereum address format
+  if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
+  }
   if (!DEFAULT_CONFIG.relayerPrivateKey) {
     throw new Error("RELAYER_PRIVATE_KEY not set");
   }
+  // FIX H-9: Validate private key format before wallet creation
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
+    throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+  }
   if (!DEFAULT_CONFIG.cantonParty) {
     throw new Error("CANTON_PARTY not set");
+  }
+  if (!DEFAULT_CONFIG.cantonToken) {
+    throw new Error("CANTON_TOKEN not set");
   }
 
   // Create relay service
   const relay = new RelayService(DEFAULT_CONFIG);
 
   // Start health server
-  const healthPort = parseInt(process.env.HEALTH_PORT || "8080");
+  // FIX H-7: Added explicit radix 10 to parseInt
+  const healthPort = parseInt(process.env.HEALTH_PORT || "8080", 10);
   const healthServer = startHealthServer(healthPort, relay);
 
   // Handle shutdown

@@ -90,6 +90,11 @@ export function formatKMSSignature(
 
   const rLen = derSig[headerOffset + 1];
 
+  // FIX H-11: Validate R/S length bounds (max 33 bytes for secp256k1)
+  if (rLen > 33) {
+    throw new Error("INVALID_DER: R component too long");
+  }
+
   // FIX T-01: Bounds check for R
   if (headerOffset + 2 + rLen > derSig.length) {
     throw new Error("INVALID_DER: R length exceeds buffer");
@@ -115,6 +120,11 @@ export function formatKMSSignature(
 
   const sLen = derSig[sLenIndex];
   const sStartIndex = sLenIndex + 1;
+
+  // FIX H-11: Validate R/S length bounds (max 33 bytes for secp256k1)
+  if (sLen > 33) {
+    throw new Error("INVALID_DER: S component too long");
+  }
 
   // FIX T-01: Bounds check for S
   if (sStartIndex + sLen > derSig.length) {

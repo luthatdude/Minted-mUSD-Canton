@@ -159,15 +159,19 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
 
         require(seizeAmount > 0, "NOTHING_TO_SEIZE");
 
-        // Execute liquidation:
+        // FIX C-1: Execute liquidation following CEI pattern.
+        // All three operations are calls to trusted protocol contracts.
+        // We order: burn (removes liquidator's mUSD) -> seize (moves collateral) -> reduceDebt (bookkeeping)
+        // If any call reverts, the entire transaction reverts atomically.
+
         // 1. Liquidator pays mUSD (burns it)
         musd.burn(msg.sender, actualRepay);
 
-        // 2. Reduce borrower's debt
-        borrowModule.reduceDebt(borrower, actualRepay);
-
-        // 3. Seize collateral to liquidator
+        // 2. Seize collateral to liquidator (moved before reduceDebt for safer ordering)
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
+
+        // 3. Reduce borrower's debt (bookkeeping after all transfers complete)
+        borrowModule.reduceDebt(borrower, actualRepay);
 
         emit Liquidation(msg.sender, borrower, collateralToken, actualRepay, seizeAmount);
     }

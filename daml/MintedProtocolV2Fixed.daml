@@ -970,33 +970,15 @@ template IssuerRole
 intToDecimal : Int -> Decimal
 intToDecimal n = intToNumeric n
 
+-- FIX C-3: Use O(1) divRelTime from DA.Time instead of O(n) subtraction loop
 relToInt : RelTime -> Int
 relToInt rt =
-  let (s, us) = splitRelTime rt
-  in s * 1000000 + us
-
-splitRelTime : RelTime -> (Int, Int)
-splitRelTime rt =
-  let micros = convertRelTimeToMicroseconds rt
-  in (micros `div` 1000000, micros `mod` 1000000)
+  if rt < seconds 0 then 0
+  else DA.Time.divRelTime rt (microseconds 1)
 
 -- | Convert RelTime to microseconds using Daml standard library
+-- FIX C-3: Use DA.Time.divRelTime for O(1) conversion instead of O(n) subtraction loop
 convertRelTimeToMicroseconds : RelTime -> Int
 convertRelTimeToMicroseconds rt =
-  let totalSeconds = convertRelTimeToMicroseconds' rt
-  in totalSeconds
-  where
-    -- RelTime is internally microseconds; use the seconds decomposition
-    convertRelTimeToMicroseconds' relTime =
-      let (secs, micros) = (divRelTime relTime (microseconds 1), 0)
-      in secs
-
--- | Decompose RelTime into whole microsecond count
-divRelTime : RelTime -> RelTime -> Int
-divRelTime dividend divisor =
-  -- Use subtraction loop for RelTime division
-  let loop acc remaining =
-        if remaining < divisor then acc
-        else loop (acc + 1) (remaining - divisor)
-  in if dividend < days 0 then 0
-     else loop 0 dividend
+  if rt < seconds 0 then 0
+  else DA.Time.divRelTime rt (microseconds 1)

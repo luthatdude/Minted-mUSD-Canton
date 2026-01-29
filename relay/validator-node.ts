@@ -15,6 +15,8 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
+// FIX M-20: Use static import instead of dynamic require
+import { formatKMSSignature } from "./signer";
 
 // ============================================================
 //                     CONFIGURATION
@@ -41,7 +43,8 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
   cantonToken: process.env.CANTON_TOKEN || "",
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -50,8 +53,8 @@ const DEFAULT_CONFIG: ValidatorConfig = {
 
   ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
 
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000"),
-  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
+  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
 };
 
 // ============================================================
@@ -102,9 +105,9 @@ class ValidatorNode {
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX H-12: Use TLS for Canton ledger connections
-    const protocol = process.env.CANTON_USE_TLS === "true" ? "https" : "http";
-    const wsProtocol = process.env.CANTON_USE_TLS === "true" ? "wss" : "ws";
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonToken,
       httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
@@ -285,10 +288,15 @@ class ValidatorNode {
 
       console.log(`[Validator] Signed attestation ${attestationId}`);
 
-      // FIX M-18: Evict oldest entries if cache is too large
+      // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
-        const first = this.signedAttestations.values().next().value;
-        if (first) this.signedAttestations.delete(first);
+        const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
+        let evicted = 0;
+        for (const key of this.signedAttestations) {
+          if (evicted >= toEvict) break;
+          this.signedAttestations.delete(key);
+          evicted++;
+        }
       }
 
     } catch (error: any) {
@@ -321,7 +329,8 @@ class ValidatorNode {
         BigInt(payload.nonce),
         BigInt(timestamp),
         chainId,
-        process.env.BRIDGE_CONTRACT_ADDRESS || ethers.ZeroAddress,
+        // FIX C-7: Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
+        process.env.BRIDGE_CONTRACT_ADDRESS || (() => { throw new Error("BRIDGE_CONTRACT_ADDRESS not set"); })(),
       ]
     );
   }
@@ -359,9 +368,8 @@ class ValidatorNode {
    * Convert DER-encoded signature to RSV format
    * Uses the logic from signer.ts
    */
+  // FIX M-20: Use static import (declared at top of file) instead of dynamic require
   private derToRsv(derSig: Buffer, messageHash: string): string {
-    // Import the formatting function
-    const { formatKMSSignature } = require("./signer");
     return formatKMSSignature(derSig, messageHash, this.config.ethereumAddress);
   }
 
@@ -392,6 +400,20 @@ async function main(): Promise<void> {
   }
   if (!DEFAULT_CONFIG.ethereumAddress) {
     throw new Error("VALIDATOR_ETH_ADDRESS not set");
+  }
+  // FIX M-23: Validate Ethereum address format
+  if (!ethers.isAddress(DEFAULT_CONFIG.ethereumAddress)) {
+    throw new Error("VALIDATOR_ETH_ADDRESS is not a valid Ethereum address");
+  }
+  // FIX C-7: Validate bridge contract address at startup
+  if (!process.env.BRIDGE_CONTRACT_ADDRESS) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
+  }
+  if (!ethers.isAddress(process.env.BRIDGE_CONTRACT_ADDRESS)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
+  }
+  if (!DEFAULT_CONFIG.cantonToken) {
+    throw new Error("CANTON_TOKEN not set");
   }
 
   // Create validator node

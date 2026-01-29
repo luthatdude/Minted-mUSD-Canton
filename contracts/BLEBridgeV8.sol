@@ -246,18 +246,18 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             lastSigner = signer;
         }
 
-        // Mark attestation ID as used
+        // FIX C-2: Follow CEI pattern — all state changes before external calls
+        // Effects: update all state before interacting with external musdToken
         usedAttestationIds[att.id] = true;
+        totalCantonAssets = att.globalCantonAssets;
+        currentNonce++;
 
-        // Execute mint or burn
+        // Interactions: external calls after all state is committed
         if (att.isMint) {
             musdToken.mint(att.target, att.amount);
         } else {
             musdToken.burn(att.target, att.amount);
         }
-
-        totalCantonAssets = att.globalCantonAssets;
-        currentNonce++;
 
         emit AttestationExecuted(att.id, att.target, att.amount, att.isMint, att.nonce);
     }

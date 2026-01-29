@@ -23,7 +23,8 @@ template Usdc
   where
     signatory issuer, owner
 
-    ensure amount >= 0.0
+    -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
+    ensure amount > 0.0
 
     -- FIX C-06: Transfer creates proposal instead of directly assigning signatory
     choice Usdc_Transfer : ContractId Usdc
@@ -54,7 +55,8 @@ template Musd
   where
     signatory issuer, owner
 
-    ensure amount >= 0.0
+    -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
+    ensure amount > 0.0
 
     choice Musd_Transfer : ContractId Musd
       with
@@ -314,8 +316,8 @@ template BridgeClaim
           collectedValidators = att.validator :: collectedValidators
 
     -- Finalize and Mint if threshold met
+    -- FIX C-4: Removed invalid empty 'with' block before controller
     choice Finalize_Bridge_Mint : ContractId Musd
-      with
       controller user
       do
         assertMsg "Claim: Not enough signatures" (length collectedValidators >= requiredSignatures)
@@ -394,16 +396,16 @@ setup = do
   return ()
 
 -- | Helper: Convert RelTime to Int (microseconds)
+-- FIX C-3: Previous implementation used O(microseconds) loop which is non-terminating
+-- for any real duration. Use divRelTime for O(1) conversion.
 relToInt : RelTime -> Int
 relToInt rt =
-  -- Use subtraction loop to count microseconds
-  let loop acc remaining =
-        if remaining < microseconds 1 then acc
-        else loop (acc + 1) (remaining - microseconds 1)
-  in if rt < seconds 0 then 0
-     -- Approximate via seconds for performance
-     else let secs = loop 0 (min rt (days 3650))
-          in secs
+  if rt < seconds 0 then 0
+  else
+    -- Convert to microseconds using divRelTime:
+    -- divRelTime rt (microseconds 1) gives number of microseconds in rt
+    let totalMicros = divRelTime rt (microseconds 1)
+    in totalMicros
 
 -- | Helper: Convert Int to Decimal
 intToDecimal : Int -> Decimal

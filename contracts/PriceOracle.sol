@@ -58,6 +58,8 @@ contract PriceOracle is AccessControl {
         require(token != address(0), "INVALID_TOKEN");
         require(feed != address(0), "INVALID_FEED");
         require(stalePeriod > 0, "INVALID_STALE_PERIOD");
+        // FIX H-1: Validate tokenDecimals at config time to prevent precision issues
+        require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
 
         feeds[token] = FeedConfig({
             feed: IAggregatorV3(feed),

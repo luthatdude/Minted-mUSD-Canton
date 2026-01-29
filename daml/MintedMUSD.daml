@@ -63,11 +63,13 @@ template MUSD
           newOwner
 
     -- | Redeem (burn) the asset.
-    -- Requires both issuer and owner consent (both are signatories).
+    -- This is a CONSUMING choice: Daml automatically archives the contract
+    -- when the choice completes, effectively burning the mUSD.
+    -- Both issuer and owner are signatories, so both must authorize.
     choice Redeem : ()
       controller owner
       do
-        return ()
+        return ()  -- Contract is archived implicitly by consuming choice
 
 
 -- | Proposal contract for transferring MUSD.
