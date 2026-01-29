@@ -1,0 +1,111 @@
+# Network policies for Canton deployment
+# Enforces least-privilege network access between components
+---
+# Canton participant: only accepts traffic from JSON API sidecar (localhost),
+# relay service, and Prometheus scraping
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canton-participant-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: canton-participant
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Ledger API — only from relay service pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-relay
+      ports:
+        - port: 5011
+          protocol: TCP
+    # JSON API — from ingress controller only
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 7575
+          protocol: TCP
+    # Prometheus metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+  egress:
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Canton domain connection (external)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 5018
+          protocol: TCP
+---
+# PostgreSQL: only accepts connections from Canton participant
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 5432
+          protocol: TCP
+  egress:
+    # DNS only
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+---
+# Default deny all ingress/egress in namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: musd-canton
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress

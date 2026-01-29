@@ -1,0 +1,227 @@
+# Canton Participant Node — Production Deployment
+#
+# IMPORTANT: Canton participants are stateful. This runs as a single replica
+# backed by PostgreSQL. For HA, use Canton's built-in domain sequencer with
+# multiple participants connected to the same domain, NOT replica scaling.
+apiVersion: v1
+kind: Service
+metadata:
+  name: canton-participant
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-participant
+    app.kubernetes.io/component: ledger
+spec:
+  type: ClusterIP
+  ports:
+    - name: ledger-api
+      port: 5011
+      targetPort: 5011
+      protocol: TCP
+    - name: admin-api
+      port: 5012
+      targetPort: 5012
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: canton-participant
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canton-participant
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-participant
+    app.kubernetes.io/component: ledger
+spec:
+  replicas: 1  # Stateful — do NOT scale without domain sequencer
+  strategy:
+    type: Recreate  # Avoid dual-write to same DB
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: canton-participant
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: canton-participant
+        app.kubernetes.io/component: ledger
+      annotations:
+        # Force rollout on config change
+        checksum/config: "PLACEHOLDER_REPLACE_AT_DEPLOY"
+    spec:
+      serviceAccountName: canton-participant
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Wait for postgres to be ready before starting Canton
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36.1
+          command: ['sh', '-c', 'until nc -z postgres.musd-canton.svc.cluster.local 5432; do echo "Waiting for PostgreSQL..."; sleep 2; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: canton
+          # Pin to exact version — update via controlled rollout only
+          image: digitalasset/canton-open-source:2.9.3
+          args:
+            - "-c"
+            - "/etc/canton/participant.conf"
+            - "--bootstrap"
+            - "/etc/canton/init.canton"
+          ports:
+            - name: ledger-api
+              containerPort: 5011
+              protocol: TCP
+            - name: admin-api
+              containerPort: 5012
+              protocol: TCP
+          env:
+            - name: CANTON_DB_HOST
+              value: postgres.musd-canton.svc.cluster.local
+            - name: CANTON_DB_PORT
+              value: "5432"
+            - name: CANTON_DB_NAME
+              value: canton
+            - name: CANTON_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: CANTON_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: JAVA_OPTS
+              value: "-Xmx2g -Xms1g -XX:+UseG1GC"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: canton-config
+              mountPath: /etc/canton
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/canton/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            grpc:
+              port: 5011
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            grpc:
+              port: 5011
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            grpc:
+              port: 5011
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30  # 150s max startup
+
+        - name: json-api
+          image: digitalasset/daml-sdk:2.9.3
+          command:
+            - "daml"
+            - "json-api"
+            - "--ledger-host"
+            - "localhost"
+            - "--ledger-port"
+            - "5011"
+            - "--http-port"
+            - "7575"
+            - "--allow-insecure-tokens"  # Remove in production with auth proxy
+          ports:
+            - name: json-api
+              containerPort: 7575
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 7575
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 7575
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+      volumes:
+        - name: canton-config
+          configMap:
+            name: canton-config
+        - name: tls-certs
+          secret:
+            secretName: canton-tls
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canton-participant
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-participant
+automountServiceAccountToken: false
