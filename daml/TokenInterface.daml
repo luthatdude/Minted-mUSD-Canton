@@ -1,0 +1,9 @@
+module TokenInterface where
+
+-- TokenInterface module (previously MUSD.daml draft)
+-- Defines interfaces for token contracts
+
+import Daml.Script
+
+-- Define data structures or interfaces if needed
+-- This appears to be an example/draft file

@@ -25,8 +25,12 @@
 
 module MintedProtocolV2Fixed where
 
+import Prelude hiding (sum, min, intToDecimal, all, elem, div)
+import DA.Foldable (sum, all, elem)
+import DA.Action (when, foldlA)
+import DA.Internal.Desugar (intToDecimal)
+import DA.Internal.Prelude (div)
 import DA.Time
-import DA.Action (foldlA)
 import DA.List (dedup)
 import DA.Set qualified as Set
 import DA.Foldable (mapA_)
@@ -901,13 +905,14 @@ template LeverageManager
         oracleCid : ContractId PriceOracle
         poolCid : ContractId LiquidityPool
         loops : Int
+        issuerRoleCid : ContractId IssuerRole
       controller user
       do
         assertMsg "MAX_LOOPS_EXCEEDED" (loops <= 10)
         assertMsg "LOOPS_MUST_BE_POSITIVE" (loops > 0)
 
-        -- We need to thread the poolCid through the loop because it changes every swap
-        let loopFn (currentVaultCid, currentPoolCid) loopNum = do
+        -- We need to thread the poolCid and issuerRoleCid through the loop
+        let loopFn (currentVaultCid, currentPoolCid, currentIssuerRoleCid) loopNum = do
               if loopNum == 0 then return currentVaultCid
               else do
                 vault <- fetch currentVaultCid
@@ -924,9 +929,10 @@ template LeverageManager
 
                 if borrowable < 1.0 then return currentVaultCid
                 else do
-                  (vAfterBorrow, musd) <- exercise currentVaultCid Vault_Borrow with
+                  (vAfterBorrow, musd, newIssuerRoleCid) <- exercise currentVaultCid Vault_Borrow with
                     borrowAmount = borrowable
                     oracleCid = oracleCid
+                    issuerRoleCid = currentIssuerRoleCid
 
                   -- Updated to handle new pool CID
                   (nextPoolCid, newCollateral) <- exercise currentPoolCid Pool_SwapMUSDForCollateral with
@@ -936,9 +942,9 @@ template LeverageManager
                   vFinal <- exercise vAfterBorrow Vault_Deposit with
                     depositCid = newCollateral
 
-                  loopFn (vFinal, nextPoolCid) (loopNum - 1)
+                  loopFn (vFinal, nextPoolCid, newIssuerRoleCid) (loopNum - 1)
 
-        loopFn (vaultCid, poolCid) loops
+        loopFn (vaultCid, poolCid, issuerRoleCid) loops
 
 -- ============================================================
 --                     SECTION 9: CANTON ATTESTATION BRIDGE
