@@ -1,0 +1,110 @@
+# Canton participant configuration and bootstrap script
+# Mounted as ConfigMap into the Canton container
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-participant
+    app.kubernetes.io/component: config
+data:
+  participant.conf: |
+    canton {
+      participants {
+        musd_participant {
+          storage {
+            type = postgres
+            config {
+              dataSourceClass = "org.postgresql.ds.PGSimpleDataSource"
+              properties = {
+                serverName = ${?CANTON_DB_HOST}
+                portNumber = ${?CANTON_DB_PORT}
+                databaseName = ${?CANTON_DB_NAME}
+                currentSchema = "participant"
+                user = ${?CANTON_DB_USER}
+                password = ${?CANTON_DB_PASSWORD}
+                ssl = true
+                sslmode = "require"
+              }
+            }
+            parameters {
+              max-connections = 16
+            }
+          }
+
+          ledger-api {
+            port = 5011
+            address = "0.0.0.0"
+
+            tls {
+              cert-chain-file = "/etc/canton/tls/tls.crt"
+              private-key-file = "/etc/canton/tls/tls.key"
+              trust-collection-file = "/etc/canton/tls/ca.crt"
+            }
+
+            # Rate limiting on the Ledger API level
+            rate-limit {
+              max-api-services-queue-size = 10000
+              max-api-services-index-db-queue-size = 1000
+              max-used-heap-space-percentage = 85
+            }
+          }
+
+          admin-api {
+            port = 5012
+            address = "127.0.0.1"  # Admin API is localhost-only — never expose externally
+          }
+
+          parameters {
+            # Party allocation requires admin privileges
+            manual-start = false
+          }
+
+          # Resource limits to prevent abuse
+          engine {
+            max-interpretor-stack-depth = 1000
+            max-steps = 100000
+          }
+        }
+      }
+
+      monitoring {
+        metrics {
+          reporters = [{
+            type = prometheus
+            address = "0.0.0.0"
+            port = 9090
+          }]
+        }
+        health {
+          server {
+            address = "0.0.0.0"
+            port = 8081
+          }
+        }
+      }
+    }
+
+  init.canton: |
+    // Bootstrap script: runs once on participant startup
+    // Allocates the mUSD operator party and connects to the domain
+
+    import com.digitalasset.canton.console._
+
+    // Allocate the mUSD operator party (idempotent — returns existing if already allocated)
+    val operatorParty = musd_participant.parties.enable(
+      "mUSD-Operator",
+      waitForDomain = DomainChoice.All
+    )
+
+    logger.info(s"mUSD Operator party: ${operatorParty}")
+
+    // Connect to the Canton Network domain (configured via environment)
+    // In production, replace with the actual Global Synchronizer domain URL
+    // musd_participant.domains.connect(
+    //   "canton-network",
+    //   "https://canton-network-domain.example.com:5018"
+    // )
+
+    logger.info("Canton participant bootstrap complete")

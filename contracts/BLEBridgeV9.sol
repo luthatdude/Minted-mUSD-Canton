@@ -6,8 +6,9 @@
 // V8 has 12 state variables (musdToken, totalCantonAssets, currentNonce, minSignatures,
 // dailyMintLimit, dailyMinted, dailyBurned, lastReset, navOracle, maxNavDeviationBps,
 // navOracleEnabled, usedAttestationIds) + __gap[38] = 50 slots.
-// V9 has 8 state variables (musdToken, attestedCantonAssets, collateralRatioBps, currentNonce,
-// minSignatures, lastAttestationTime, lastRatioChangeTime, usedAttestationIds) + __gap[42] = 50 slots.
+// V9 has 12 state variables (musdToken, attestedCantonAssets, collateralRatioBps, currentNonce,
+// minSignatures, lastAttestationTime, lastRatioChangeTime, dailyCapIncreaseLimit,
+// dailyCapIncreased, dailyCapDecreased, lastRateLimitReset, usedAttestationIds) + __gap[38] = 50 slots.
 // Direct UUPS upgrade from V8->V9 will corrupt storage. A migration contract is required.
 
 pragma solidity 0.8.26;
@@ -42,6 +43,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public lastAttestationTime;
     uint256 public lastRatioChangeTime;
 
+    // 24h rolling window rate limiting on supply cap increases
+    uint256 public dailyCapIncreaseLimit;  // Max supply cap increase per 24h window
+    uint256 public dailyCapIncreased;      // Cumulative cap increases in current window
+    uint256 public dailyCapDecreased;      // Cumulative cap decreases in current window (offsets increases)
+    uint256 public lastRateLimitReset;     // Timestamp of last window reset
+
     // Attestation tracking
     mapping(bytes32 => bool) public usedAttestationIds;
 
@@ -69,6 +76,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event AttestationInvalidated(bytes32 indexed attestationId, string reason);
     // FIX S-M02: Event for min signatures change
     event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
+    // Rate limiting events
+    event RateLimitReset(uint256 timestamp);
+    event DailyCapIncreaseLimitUpdated(uint256 oldLimit, uint256 newLimit);
+    event RateLimitedCapIncrease(uint256 requestedIncrease, uint256 allowedIncrease, uint256 remainingLimit);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -78,7 +89,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function initialize(
         uint256 _minSigs,
         address _musdToken,
-        uint256 _collateralRatioBps
+        uint256 _collateralRatioBps,
+        uint256 _dailyCapIncreaseLimit
     ) public initializer {
         __AccessControl_init();
         __UUPSUpgradeable_init();
@@ -88,6 +100,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(_minSigs > 0, "INVALID_MIN_SIGS");
         require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
         require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+        require(_dailyCapIncreaseLimit > 0, "INVALID_DAILY_LIMIT");
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(EMERGENCY_ROLE, msg.sender);
@@ -95,6 +108,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         minSignatures = _minSigs;
         musdToken = IMUSD(_musdToken);
         collateralRatioBps = _collateralRatioBps;
+        dailyCapIncreaseLimit = _dailyCapIncreaseLimit;
+        lastRateLimitReset = block.timestamp;
     }
 
     // ============================================================
@@ -112,6 +127,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(_minSigs > 0, "INVALID_MIN_SIGS");
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
+    }
+
+    function setDailyCapIncreaseLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_limit > 0, "INVALID_LIMIT");
+        emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
+        dailyCapIncreaseLimit = _limit;
     }
 
     // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
@@ -231,7 +252,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                    INTERNAL FUNCTIONS
     // ============================================================
 
-    /// @notice Calculate and update supply cap based on attested assets
+    /// @notice Calculate and update supply cap based on attested assets, enforcing rate limit
     /// @param _attestedAssets Total assets attested by Canton
     /// @return newCap The new supply cap
     function _updateSupplyCap(uint256 _attestedAssets) internal returns (uint256 newCap) {
@@ -243,11 +264,65 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         // Only update if cap is changing
         if (newCap != oldCap) {
+            if (newCap > oldCap) {
+                // Cap is increasing — enforce 24h rate limit
+                uint256 increase = newCap - oldCap;
+                newCap = oldCap + _handleRateLimitCapIncrease(increase);
+            } else {
+                // Cap is decreasing — always allow (decreases offset future increases)
+                _handleRateLimitCapDecrease(oldCap - newCap);
+            }
+
             // FIX M-04: Do NOT floor at currentSupply when cap drops.
             // If assets decreased, the cap should reflect reality (no new minting).
             // Existing tokens remain but the cap correctly signals undercollateralization.
             musdToken.setSupplyCap(newCap);
             emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+        }
+    }
+
+    // ============================================================
+    //                      RATE LIMITING
+    // ============================================================
+
+    /// @notice Enforce 24h rolling window on supply cap increases
+    /// @param increase The requested cap increase amount
+    /// @return allowed The actual allowed increase (clamped to remaining limit)
+    function _handleRateLimitCapIncrease(uint256 increase) internal returns (uint256 allowed) {
+        _resetDailyLimitsIfNeeded();
+
+        // Net increase = dailyCapIncreased - dailyCapDecreased (burns offset mints)
+        uint256 netIncreased = dailyCapIncreased > dailyCapDecreased
+            ? dailyCapIncreased - dailyCapDecreased
+            : 0;
+
+        require(netIncreased < dailyCapIncreaseLimit, "DAILY_CAP_INCREASE_LIMIT");
+
+        uint256 remaining = dailyCapIncreaseLimit - netIncreased;
+        allowed = increase > remaining ? remaining : increase;
+
+        dailyCapIncreased += allowed;
+
+        if (allowed < increase) {
+            emit RateLimitedCapIncrease(increase, allowed, 0);
+        }
+    }
+
+    /// @notice Track cap decreases to offset increases within the same window
+    /// @param decrease The cap decrease amount
+    function _handleRateLimitCapDecrease(uint256 decrease) internal {
+        _resetDailyLimitsIfNeeded();
+        dailyCapDecreased += decrease;
+    }
+
+    /// @notice Reset daily limits if 24h window has elapsed
+    /// FIX M-03: Use >= to prevent boundary timing attack at exact reset second
+    function _resetDailyLimitsIfNeeded() internal {
+        if (block.timestamp >= lastRateLimitReset + 1 days) {
+            dailyCapIncreased = 0;
+            dailyCapDecreased = 0;
+            lastRateLimitReset = block.timestamp;
+            emit RateLimitReset(block.timestamp);
         }
     }
 
@@ -272,6 +347,27 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         return (_assets * 10000) / collateralRatioBps;
     }
 
+    /// @notice Get the net daily cap increase used in the current window
+    function getNetDailyCapIncrease() external view returns (uint256) {
+        if (block.timestamp >= lastRateLimitReset + 1 days) {
+            return 0;
+        }
+        return dailyCapIncreased > dailyCapDecreased
+            ? dailyCapIncreased - dailyCapDecreased
+            : 0;
+    }
+
+    /// @notice Get remaining daily cap increase allowance
+    function getRemainingDailyCapLimit() external view returns (uint256) {
+        if (block.timestamp >= lastRateLimitReset + 1 days) {
+            return dailyCapIncreaseLimit;
+        }
+        uint256 netIncreased = dailyCapIncreased > dailyCapDecreased
+            ? dailyCapIncreased - dailyCapDecreased
+            : 0;
+        return netIncreased >= dailyCapIncreaseLimit ? 0 : dailyCapIncreaseLimit - netIncreased;
+    }
+
     /// @notice Get health ratio (attested assets / current supply)
     function getHealthRatio() external view returns (uint256 ratioBps) {
         uint256 supply = musdToken.totalSupply();
@@ -285,5 +381,6 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
-    uint256[42] private __gap;
+    // Storage gap for future upgrades — 12 state variables → 50 - 12 = 38
+    uint256[38] private __gap;
 }
