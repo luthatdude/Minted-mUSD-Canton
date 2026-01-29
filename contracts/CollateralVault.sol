@@ -57,6 +57,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     ) external onlyRole(VAULT_ADMIN_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
         require(!collateralConfigs[token].enabled, "ALREADY_ADDED");
+        // FIX M-08: Cap supported tokens array to prevent unbounded growth
+        require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH"); // Max 95%
         require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");    // Max 20%
@@ -89,6 +91,21 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
         collateralConfigs[token].liquidationPenaltyBps = liquidationPenaltyBps;
 
         emit CollateralUpdated(token, collateralFactorBps, liquidationThresholdBps);
+    }
+
+    /// FIX M-09: Allow disabling collateral (no new deposits, existing positions can withdraw)
+    function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
+        require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
+        collateralConfigs[token].enabled = false;
+        emit CollateralUpdated(token, 0, 0);
+    }
+
+    /// FIX S-C03: Re-enable a previously disabled collateral token
+    function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
+        require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
+        require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
+        collateralConfigs[token].enabled = true;
+        emit CollateralUpdated(token, collateralConfigs[token].collateralFactorBps, collateralConfigs[token].liquidationThresholdBps);
     }
 
     // ============================================================

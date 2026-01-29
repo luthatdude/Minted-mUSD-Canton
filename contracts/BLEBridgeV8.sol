@@ -79,6 +79,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
     event NavOracleUpdated(address indexed oracle, uint256 maxDeviationBps, bool enabled);
     event EmergencyPause(address indexed triggeredBy, string reason);
+    event AttestationInvalidated(bytes32 indexed id, string reason);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -158,7 +159,8 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Resume attestation execution
-    function unpause() external onlyRole(EMERGENCY_ROLE) {
+    /// FIX M-02: Unpause requires DEFAULT_ADMIN_ROLE (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
@@ -190,7 +192,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         usedAttestationIds[_attestationId] = true;
 
-        emit EmergencyPause(msg.sender, _reason);
+        emit AttestationInvalidated(_attestationId, _reason);
     }
 
     // ============================================================
@@ -245,18 +247,18 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             lastSigner = signer;
         }
 
-        // Mark attestation ID as used
+        // FIX C-2: Follow CEI pattern — all state changes before external calls
+        // Effects: update all state before interacting with external musdToken
         usedAttestationIds[att.id] = true;
+        totalCantonAssets = att.globalCantonAssets;
+        currentNonce++;
 
-        // Execute mint or burn
+        // Interactions: external calls after all state is committed
         if (att.isMint) {
             musdToken.mint(att.target, att.amount);
         } else {
             musdToken.burn(att.target, att.amount);
         }
-
-        totalCantonAssets = att.globalCantonAssets;
-        currentNonce++;
 
         emit AttestationExecuted(att.id, att.target, att.amount, att.isMint, att.nonce);
     }
@@ -316,8 +318,9 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         dailyBurned += amount;
     }
 
+    // FIX M-03: Use >= to prevent boundary timing attack at exact reset second
     function _resetDailyLimitsIfNeeded() internal {
-        if (block.timestamp > lastReset + 1 days) {
+        if (block.timestamp >= lastReset + 1 days) {
             dailyMinted = 0;
             dailyBurned = 0;
             lastReset = block.timestamp;

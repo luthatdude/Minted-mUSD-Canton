@@ -1,0 +1,82 @@
+module SecureAsset where
+
+template Asset
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+    observers : [Party]
+  where
+    signatory issuer, owner
+    observer observers
+
+    ensure amount > 0.0
+
+    -- Performance: Contract keys allow O(1) lookups
+    key (issuer, owner) : (Party, Party)
+    maintainer key._1
+
+    -- Security: Use Proposal pattern (Swap/Transfer) to avoid forced ownership
+    choice Transfer : ContractId TransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        assertMsg "Cannot transfer to self" (newOwner /= owner)
+        create TransferProposal with
+          asset = this
+          newOwner
+
+    -- Best Practice: Allow merging split assets to manage contract count
+    choice Merge : ContractId Asset
+      with
+        otherCid : ContractId Asset
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Issuer must match" (other.issuer == issuer)
+        assertMsg "Owner must match" (other.owner == owner)
+
+        -- Consuming the other contract to merge funds
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    choice Split : (ContractId Asset, ContractId Asset)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Split amount must be less than total" (splitAmount < amount)
+
+        asset1 <- create this with amount = splitAmount
+        asset2 <- create this with amount = amount - splitAmount
+        return (asset1, asset2)
+
+-- Security: Intermediate proposal ensures 'newOwner' consents to receiving the asset
+template TransferProposal
+  with
+    asset : Asset
+    newOwner : Party
+  where
+    signatory asset.issuer, asset.owner
+    observer newOwner
+
+    choice Accept : ContractId Asset
+      controller newOwner
+      do
+        create asset with
+          owner = newOwner
+          observers = [] -- Reset observers for privacy upon transfer
+
+    choice Reject : ContractId Asset
+      controller newOwner
+      do
+        -- Return asset to original owner
+        create asset
+
+    choice Cancel : ContractId Asset
+      controller asset.owner
+      do
+        -- Owner changed mind, reclaim asset
+        create asset

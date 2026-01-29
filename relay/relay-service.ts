@@ -16,6 +16,8 @@ import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
+// FIX T-M01: Use shared readSecret utility
+import { readSecret } from "./utils";
 
 // ============================================================
 //                     CONFIGURATION
@@ -41,17 +43,19 @@ interface RelayConfig {
 
 const DEFAULT_CONFIG: RelayConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
-  cantonToken: process.env.CANTON_TOKEN || "",
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
 
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
-  relayerPrivateKey: process.env.RELAYER_PRIVATE_KEY || "",
+  relayerPrivateKey: readSecret("relayer_private_key", "RELAYER_PRIVATE_KEY"),
 
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
-  maxRetries: parseInt(process.env.MAX_RETRIES || "3"),
-  confirmations: parseInt(process.env.CONFIRMATIONS || "2"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
+  maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
+  confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
 };
 
 // ============================================================
@@ -143,17 +147,21 @@ class RelayService {
   private provider: ethers.JsonRpcProvider;
   private wallet: ethers.Wallet;
   private bridgeContract: ethers.Contract;
+  // FIX M-18: Bounded cache with eviction
   private processedAttestations: Set<string> = new Set();
+  private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
 
   constructor(config: RelayConfig) {
     this.config = config;
 
-    // Initialize Canton connection
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonToken,
-      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
     });
 
     // Initialize Ethereum connection
@@ -207,9 +215,12 @@ class RelayService {
   private async loadProcessedAttestations(): Promise<void> {
     console.log("[Relay] Loading processed attestations from chain...");
 
-    // Query past AttestationReceived events
+    // FIX H-8: Paginate event loading to avoid RPC limits on large block ranges
     const filter = this.bridgeContract.filters.AttestationReceived();
-    const events = await this.bridgeContract.queryFilter(filter, -10000);
+    const currentBlock = await this.provider.getBlockNumber();
+    const maxRange = 10000;
+    const fromBlock = Math.max(0, currentBlock - maxRange);
+    const events = await this.bridgeContract.queryFilter(filter, fromBlock, currentBlock);
 
     for (const event of events) {
       const args = (event as ethers.EventLog).args;
@@ -346,6 +357,17 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+
+        // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
+        if (this.processedAttestations.size > this.MAX_PROCESSED_CACHE) {
+          const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
+          let evicted = 0;
+          for (const key of this.processedAttestations) {
+            if (evicted >= toEvict) break;
+            this.processedAttestations.delete(key);
+            evicted++;
+          }
+        }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
       }
@@ -367,7 +389,8 @@ class RelayService {
    * Build the message hash that validators signed
    */
   private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
-    const chainId = Number(payload.chainId);
+    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    const chainId = BigInt(payload.chainId);
 
     return ethers.solidityPackedKeccak256(
       ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
@@ -393,9 +416,16 @@ class RelayService {
 
     for (const sig of validatorSigs) {
       try {
-        // If signature is already in RSV format (0x + 130 hex chars)
+        // FIX M-19: Validate RSV format more strictly (check hex content + v value)
         if (sig.ecdsaSignature.startsWith("0x") && sig.ecdsaSignature.length === 132) {
-          formatted.push(sig.ecdsaSignature);
+          // Verify it's valid hex and has a valid v value (1b or 1c = 27 or 28)
+          const vByte = sig.ecdsaSignature.slice(130, 132).toLowerCase();
+          if (/^[0-9a-f]+$/.test(sig.ecdsaSignature.slice(2)) &&
+              (vByte === "1b" || vByte === "1c")) {
+            formatted.push(sig.ecdsaSignature);
+          } else {
+            console.warn(`[Relay] Invalid RSV signature from ${sig.validator}: bad v value`);
+          }
         }
         // If signature is DER encoded (from AWS KMS)
         else {
@@ -429,8 +459,21 @@ class RelayService {
 
 import * as http from "http";
 
+// FIX H-15: Health server with optional bearer token authentication
 function startHealthServer(port: number, relay: RelayService): http.Server {
+  const healthToken = process.env.HEALTH_AUTH_TOKEN || "";
+
   const server = http.createServer(async (req, res) => {
+    // FIX H-15: Require auth token for metrics endpoint (operational state)
+    if (healthToken && req.url === "/metrics") {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== `Bearer ${healthToken}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+    }
+
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
@@ -448,8 +491,10 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
     }
   });
 
-  server.listen(port, () => {
-    console.log(`[Health] Server listening on port ${port}`);
+  // FIX M-22: Bind to localhost by default instead of 0.0.0.0
+  const bindHost = process.env.HEALTH_BIND_HOST || "127.0.0.1";
+  server.listen(port, bindHost, () => {
+    console.log(`[Health] Server listening on ${bindHost}:${port}`);
   });
 
   return server;
@@ -469,18 +514,30 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.bridgeContractAddress) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
   }
+  // FIX M-23: Validate Ethereum address format
+  if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
+  }
   if (!DEFAULT_CONFIG.relayerPrivateKey) {
     throw new Error("RELAYER_PRIVATE_KEY not set");
   }
+  // FIX H-9: Validate private key format before wallet creation
+  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
+    throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+  }
   if (!DEFAULT_CONFIG.cantonParty) {
     throw new Error("CANTON_PARTY not set");
+  }
+  if (!DEFAULT_CONFIG.cantonToken) {
+    throw new Error("CANTON_TOKEN not set");
   }
 
   // Create relay service
   const relay = new RelayService(DEFAULT_CONFIG);
 
   // Start health server
-  const healthPort = parseInt(process.env.HEALTH_PORT || "8080");
+  // FIX H-7: Added explicit radix 10 to parseInt
+  const healthPort = parseInt(process.env.HEALTH_PORT || "8080", 10);
   const healthServer = startHealthServer(healthPort, relay);
 
   // Handle shutdown
@@ -497,6 +554,12 @@ async function main(): Promise<void> {
   // Start relay
   await relay.start();
 }
+
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
 
 main().catch((error) => {
   console.error("[Main] Fatal error:", error);

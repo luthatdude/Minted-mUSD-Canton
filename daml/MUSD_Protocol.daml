@@ -14,6 +14,7 @@ import DA.Action (foldlA)
 
 -- | Represents the external USDC asset (mock representation for the protocol).
 -- | In a real scenario, this would likely be a Daml Interface or a Holding contract.
+-- FIX H-19: Added ensure clause for positive amounts
 template Usdc
   with
     issuer : Party
@@ -22,12 +23,18 @@ template Usdc
   where
     signatory issuer, owner
 
-    choice Usdc_Transfer : ContractId Usdc
+    -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
+    ensure amount > 0.0
+
+    -- FIX D-C08: Transfer creates proposal instead of directly assigning signatory
+    choice Usdc_Transfer : ContractId UsdcTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create UsdcTransferProposal with
+          usdc = this
+          newOwner
 
     choice Usdc_Split : (ContractId Usdc, ContractId Usdc)
       with
@@ -41,6 +48,7 @@ template Usdc
         return (c1, c2)
 
 -- | Represents the mUSD Stablecoin.
+-- FIX H-19: Added ensure clause for positive amounts
 template Musd
   with
     issuer : Party
@@ -49,12 +57,18 @@ template Musd
   where
     signatory issuer, owner
 
-    choice Musd_Transfer : ContractId Musd
+    -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
+    ensure amount > 0.0
+
+    -- FIX D-C09: Transfer creates proposal instead of directly assigning signatory
+    choice Musd_Transfer : ContractId MusdTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create MusdTransferProposal with
+          musd = this
+          newOwner
 
     choice Musd_Merge : ContractId Musd
       with
@@ -67,6 +81,48 @@ template Musd
         archive otherCid
         create this with amount = amount + other.amount
 
+-- FIX D-C08: Transfer proposal for Usdc (dual-signatory safe)
+template UsdcTransferProposal
+  with
+    usdc : Usdc
+    newOwner : Party
+  where
+    signatory usdc.issuer, usdc.owner
+    observer newOwner
+
+    choice UsdcTransferProposal_Accept : ContractId Usdc
+      controller newOwner
+      do create usdc with owner = newOwner
+
+    choice UsdcTransferProposal_Reject : ContractId Usdc
+      controller newOwner
+      do create usdc
+
+    choice UsdcTransferProposal_Cancel : ContractId Usdc
+      controller usdc.owner
+      do create usdc
+
+-- FIX D-C09: Transfer proposal for Musd (dual-signatory safe)
+template MusdTransferProposal
+  with
+    musd : Musd
+    newOwner : Party
+  where
+    signatory musd.issuer, musd.owner
+    observer newOwner
+
+    choice MusdTransferProposal_Accept : ContractId Musd
+      controller newOwner
+      do create musd with owner = newOwner
+
+    choice MusdTransferProposal_Reject : ContractId Musd
+      controller newOwner
+      do create musd
+
+    choice MusdTransferProposal_Cancel : ContractId Musd
+      controller musd.owner
+      do create musd
+
 -- | Represents the Staked mUSD (sMUSD) which accrues yield.
 template Smusd
   with
@@ -77,6 +133,8 @@ template Smusd
     interestRate : Decimal   -- Annual percentage (e.g., 0.05 for 5%)
   where
     signatory issuer, owner
+    -- FIX D-H03: Ensure positive amount and non-negative interest rate
+    ensure amount > 0.0 && interestRate >= 0.0
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 2: DIRECT MINTING (USDC -> mUSD)
@@ -84,15 +142,19 @@ template Smusd
 
 -- | A service contract provided by the Issuer allowing users to swap USDC for mUSD.
 -- | Security Critical: This defines the exchange rate and custody transfer.
+-- FIX D-H03: Add supply cap tracking to prevent unbounded minting
 template MintingService
   with
     operator : Party       -- The protocol operator/issuer
     usdcIssuer : Party     -- The trusted issuer of USDC
+    supplyCap : Decimal    -- Maximum supply allowed
+    currentSupply : Decimal -- Current minted supply
   where
     signatory operator
     observer usdcIssuer
 
-    nonconsuming choice Mint_Musd : ContractId Musd
+    -- FIX D-H03: Consuming choice to track supply cap
+    choice Mint_Musd : (ContractId MintingService, ContractId Musd)
       with
         user : Party
         usdcCid : ContractId Usdc
@@ -104,36 +166,58 @@ template MintingService
         assertMsg "Mint: Currency mismatch" (usdc.issuer == usdcIssuer)
         assertMsg "Mint: Owner mismatch" (usdc.owner == user)
         assertMsg "Mint: Amount must be positive" (usdc.amount > 0.0)
+        -- FIX D-H03: Enforce supply cap
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + usdc.amount <= supplyCap)
         -- 3. Execute Atomic Swap
         -- Transfer USDC to the Operator (Reserve)
-        exercise usdcCid Usdc_Transfer with newOwner = operator
+        -- FIX D-C08: Usdc_Transfer returns proposal; accept it
+        usdcProposal <- exercise usdcCid Usdc_Transfer with newOwner = operator
+        exercise usdcProposal UsdcTransferProposal_Accept
         -- Mint equal amount of mUSD to the User (1:1 Peg)
-        create Musd with
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = usdc.amount
+        newService <- create this with currentSupply = currentSupply + usdc.amount
+        return (newService, musdCid)
 
-    nonconsuming choice Burn_Musd : ContractId Usdc
+    -- FIX C-05: Burn requires operator-provided USDC reserve CID instead of forging
+    -- FIX 5C-H03: Made consuming to decrement currentSupply on burn
+    choice Burn_Musd : (ContractId MintingService, ContractId Usdc)
       with
         user : Party
         musdCid : ContractId Musd
-      controller user
+        usdcReserveCid : ContractId Usdc
+      controller user, operator
       do
         -- 1. Fetch mUSD
         musd <- fetch musdCid
         -- 2. Validate
         assertMsg "Burn: Issuer mismatch" (musd.issuer == operator)
         assertMsg "Burn: Owner mismatch" (musd.owner == user)
-        -- 3. Execute Atomic Swap
+        -- 3. Validate USDC reserve
+        reserve <- fetch usdcReserveCid
+        assertMsg "Burn: Reserve issuer mismatch" (reserve.issuer == usdcIssuer)
+        assertMsg "Burn: Reserve owner must be operator" (reserve.owner == operator)
+        assertMsg "Burn: Insufficient reserve" (reserve.amount >= musd.amount)
+        -- 4. Execute Atomic Swap
         -- Archive the mUSD (Burn)
         archive musdCid
-        -- Note: In a real system, the operator needs a reserve of USDC to payout.
-        -- Here we assume the operator finds a USDC cert in their inventory to pay back.
-        -- For simplicity in this example, we mock the payout creation:
-        create Usdc with
-          issuer = usdcIssuer
-          owner = user
-          amount = musd.amount
+        -- FIX 5C-H03: Decrement supply tracker
+        let burnAmount = musd.amount
+        let newSupply = if currentSupply > burnAmount then currentSupply - burnAmount else 0.0
+        newService <- create this with currentSupply = newSupply
+        -- Split reserve if needed, transfer USDC to user
+        -- FIX D-C08: Usdc_Transfer returns proposal; accept it
+        usdcResult <- if reserve.amount == musd.amount
+          then do
+            usdcProp <- exercise usdcReserveCid Usdc_Transfer with newOwner = user
+            exercise usdcProp UsdcTransferProposal_Accept
+          else do
+            (payout, _) <- exercise usdcReserveCid Usdc_Split with splitAmount = musd.amount
+            usdcProp <- exercise payout Usdc_Transfer with newOwner = user
+            exercise usdcProp UsdcTransferProposal_Accept
+        return (newService, usdcResult)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 3: STAKING & YIELD (sMUSD)
@@ -182,7 +266,14 @@ template StakingService
         let microsecondsPerYear = 31536000000000.0  -- 365 * 24 * 60 * 60 * 1000000
         let durationYears = (intToDecimal (relToInt durationMicro)) / microsecondsPerYear
         let interest = smusd.amount * smusd.interestRate * durationYears
-        let totalReturn = smusd.amount + interest
+        -- FIX M-15: Cap yield to prevent excessive unbacked minting
+        let maxYieldRate = 0.50  -- 50% max annual yield
+        let maxInterest = smusd.amount * maxYieldRate * durationYears
+        let cappedInterest = if interest > maxInterest then maxInterest else interest
+        -- FIX D-M04: Cap total yield at 200% of principal regardless of duration
+        let maxTotalYield = smusd.amount * 2.0
+        let finalInterest = if cappedInterest > maxTotalYield then maxTotalYield else cappedInterest
+        let totalReturn = smusd.amount + finalInterest
         -- Mint mUSD + Yield back to user
         create Musd with
           issuer = operator
@@ -203,10 +294,27 @@ template BridgeLock
     targetAddress : Text    -- User's address/party on target
     validators : [Party]    -- List of required validators
     nonce : Int             -- Unique ID for this transaction
+    lockedAt : Time         -- FIX D-M07: Track lock time for minimum duration
   where
     signatory user, operator
     -- Validates that the lock is active
     observer validators
+
+    -- FIX D-M07: Require minimum lock duration before cancellation
+    -- FIX 5C-M01: Bridge cancellation refund does not mint new supply;
+    -- the locked mUSD was already counted in supply when originally minted.
+    -- Document: Cancel refunds existing supply, not new mint.
+    choice Cancel_BridgeLock : ContractId Musd
+      controller user, operator
+      do
+        now <- getTime
+        let minLockDuration = minutes 10
+        assertMsg "CANCEL_TOO_EARLY: minimum 10 minute lock" (subTime now lockedAt >= minLockDuration)
+        -- Refund mUSD to user (not new supply — this was already minted)
+        create Musd with
+          issuer = operator
+          owner = user
+          amount = amount
 
 -- | Service to initiate the bridge lock.
 template BridgeService
@@ -232,6 +340,7 @@ template BridgeService
         -- Alternatively, we could archive it here if the bridge mints fresh on the other side.
         -- Here we archive to remove from circulation on Source Domain.
         archive musdCid
+        now <- getTime
         create BridgeLock with
           operator = operator
           user = user
@@ -240,6 +349,7 @@ template BridgeService
           targetAddress = targetAddr
           validators = validators
           nonce = nonce
+          lockedAt = now
 
 -- | Step 2: Attestation (The Proof).
 -- | Validators observe the BridgeLock and create an attestation.
@@ -269,7 +379,7 @@ template BridgeClaim
   where
     signatory user, operator
 
-    -- Method to add a validator's signature/attestation
+    -- FIX H-11: Archive attestation after use to prevent replay across claims
     choice Add_Attestation : ContractId BridgeClaim
       with
         attestationCid : ContractId BridgeAttestation
@@ -281,19 +391,30 @@ template BridgeClaim
         assertMsg "Claim: Invalid User" (att.user == user)
         assertMsg "Claim: Amount Mismatch" (att.amount == amount)
         assertMsg "Claim: Validator already signed" (not (elem att.validator collectedValidators))
+        -- Archive to prevent reuse
+        archive attestationCid
         create this with
           collectedValidators = att.validator :: collectedValidators
 
     -- Finalize and Mint if threshold met
-    choice Finalize_Bridge_Mint : ContractId Musd
+    -- FIX C-4: Removed invalid empty 'with' block before controller
+    -- FIX 5C-H04: Bridge mint must enforce supply cap via MintingService
+    choice Finalize_Bridge_Mint : (ContractId MintingService, ContractId Musd)
       with
+        mintingServiceCid : ContractId MintingService
       controller user
       do
         assertMsg "Claim: Not enough signatures" (length collectedValidators >= requiredSignatures)
-        create Musd with
+        -- FIX 5C-H04: Enforce supply cap on bridge mint
+        svc <- fetch mintingServiceCid
+        assertMsg "BRIDGE_MINT_EXCEEDS_SUPPLY_CAP" (svc.currentSupply + amount <= svc.supplyCap)
+        archive mintingServiceCid
+        newSvc <- create svc with currentSupply = svc.currentSupply + amount
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = amount
+        return (newSvc, musdCid)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 5: INITIALIZATION / SETUP SCRIPT
@@ -310,7 +431,8 @@ setup = do
   validator2 <- allocateParty "Validator_2"
 
   -- 2. Issue USDC to Alice
-  usdcCid <- submit usdcBank do
+  -- FIX D-H05: Use submitMulti for dual-signatory contract (Usdc has signatory issuer, owner)
+  usdcCid <- submitMulti [usdcBank, alice] [] do
     createCmd Usdc with
       issuer = usdcBank
       owner = alice
@@ -321,6 +443,8 @@ setup = do
     createCmd MintingService with
       operator = operator
       usdcIssuer = usdcBank
+      supplyCap = 1000000.0
+      currentSupply = 0.0
 
   stakingSvc <- submit operator do
     createCmd StakingService with
@@ -333,7 +457,7 @@ setup = do
       validators = [validator1, validator2]
 
   -- 4. Alice Mints mUSD (Swaps USDC)
-  musdCid <- submit alice do
+  (mintingSvc2, musdCid) <- submit alice do
     exerciseCmd mintingSvc Mint_Musd with
       user = alice
       usdcCid = usdcCid
@@ -363,3 +487,19 @@ setup = do
       nonce = 101
 
   return ()
+
+-- | Helper: Convert RelTime to Int (microseconds)
+-- FIX C-3: Previous implementation used O(microseconds) loop which is non-terminating
+-- for any real duration. Use divRelTime for O(1) conversion.
+relToInt : RelTime -> Int
+relToInt rt =
+  if rt < seconds 0 then 0
+  else
+    -- Convert to microseconds using divRelTime:
+    -- divRelTime rt (microseconds 1) gives number of microseconds in rt
+    let totalMicros = divRelTime rt (microseconds 1)
+    in totalMicros
+
+-- | Helper: Convert Int to Decimal
+intToDecimal : Int -> Decimal
+intToDecimal = intToNumeric

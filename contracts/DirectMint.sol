@@ -41,8 +41,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     uint256 public redeemFeeBps;
     uint256 public constant MAX_FEE_BPS = 500; // 5% max
 
-    // Accumulated fees (in USDC decimals)
-    uint256 public accumulatedFees;
+    // Accumulated fees (in USDC decimals) - tracked separately
+    uint256 public mintFees;    // Fees from minting (held in this contract)
+    uint256 public redeemFees;  // Fees from redeeming (held in Treasury)
     address public feeRecipient;
 
     // Per-transaction limits (in USDC decimals, 6 decimals)
@@ -110,13 +111,14 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         // Transfer USDC from user to this contract
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // Send net amount to treasury
-        usdc.safeApprove(address(treasury), usdcAfterFee);
+        // FIX H-04: Reset approval to 0 first, then set to avoid safeApprove revert
+        // safeApprove reverts if current allowance is non-zero (preventing front-running)
+        usdc.forceApprove(address(treasury), usdcAfterFee);
         treasury.deposit(address(this), usdcAfterFee);
 
-        // Track fees
+        // Track mint fees (held in this contract)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            mintFees += feeUsdc;
         }
 
         // Mint mUSD to user
@@ -151,9 +153,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw from treasury to user
         treasury.withdraw(msg.sender, usdcOut);
 
-        // Track fees
+        // Track redeem fees (these remain in the Treasury, not in this contract)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            redeemFees += feeUsdc;
         }
 
         emit Redeemed(msg.sender, musdAmount, usdcOut, feeUsdc);
@@ -224,11 +226,26 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     }
 
     function withdrawFees() external onlyRole(FEE_MANAGER_ROLE) {
-        uint256 fees = accumulatedFees;
+        uint256 fees = mintFees;
         require(fees > 0, "NO_FEES");
-        accumulatedFees = 0;
+        mintFees = 0;
         usdc.safeTransfer(feeRecipient, fees);
         emit FeesWithdrawn(feeRecipient, fees);
+    }
+
+    /// @notice FIX S-H02: Withdraw accumulated redeem fees from Treasury
+    /// Redeem fees stay in Treasury during redeem(); this function extracts them.
+    function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
+        uint256 fees = redeemFees;
+        require(fees > 0, "NO_REDEEM_FEES");
+        redeemFees = 0;
+        treasury.withdraw(feeRecipient, fees);
+        emit FeesWithdrawn(feeRecipient, fees);
+    }
+
+    /// @notice View total accumulated fees (mint + redeem) for accounting
+    function totalAccumulatedFees() external view returns (uint256) {
+        return mintFees + redeemFees;
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {
@@ -239,9 +256,11 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         _unpause();
     }
 
-    /// @notice Emergency token recovery (not USDC)
+    /// @notice Emergency token recovery (not USDC or mUSD)
+    /// FIX 5C-M02: Block recovery of both USDC and mUSD to prevent fund extraction
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(usdc), "CANNOT_RECOVER_USDC");
+        require(token != address(musd), "CANNOT_RECOVER_MUSD");
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 }

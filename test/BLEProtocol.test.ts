@@ -96,7 +96,9 @@ describe("BLE Protocol Production Test", function () {
       const attId = ethers.id("att-1");
       const chainId = (await ethers.provider.getNetwork()).chainId;
 
-      // FIX B-02: Include bridge address in hash
+      // FIX M-21: Hash schema matches BLEBridgeV8's abi.encodePacked format
+      // Note: BLEBridgeV9 uses a different 6-param schema (no target/amount/isMint).
+      // Tests target BLEBridgeV8 specifically.
       const hash = ethers.solidityPackedKeccak256(
         [
           "bytes32",

@@ -5,6 +5,7 @@
 module Test where
 
 import BLEProtocol
+import MintedMUSD
 import DA.Time
 import DA.Set qualified as Set
 import Daml.Script
@@ -18,6 +19,10 @@ testAmount = 1000000.000000000000000000  -- 1M USD with 18 decimals
 
 testCollateral : Numeric 18
 testCollateral = 1100000.000000000000000000  -- 1.1M USD (110% of amount)
+
+-- Mock ECDSA signature (132 chars: "0x" + 130 hex chars) for BLEProtocol validation
+mockSignature : Text
+mockSignature = "0xaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddee1b"
 
 -- Full integration test
 fullProtocolFlowTest : Script ()
@@ -91,7 +96,7 @@ fullProtocolFlowTest = script do
   (attestationCid1, sig1Cid) <- submit validator1 do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator1
-      ecdsaSignature = "0xsig1_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 1 signed"
 
@@ -99,7 +104,7 @@ fullProtocolFlowTest = script do
   (attestationCid2, sig2Cid) <- submit validator2 do
     exerciseCmd attestationCid1 ProvideSignature with
       validator = validator2
-      ecdsaSignature = "0xsig2_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 2 signed"
 
@@ -107,7 +112,7 @@ fullProtocolFlowTest = script do
   (attestationCid3, sig3Cid) <- submit validator3 do
     exerciseCmd attestationCid2 ProvideSignature with
       validator = validator3
-      ecdsaSignature = "0xsig3_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 3 signed (threshold reached)"
 
@@ -116,7 +121,6 @@ fullProtocolFlowTest = script do
 
   finalSigs <- submit aggregator do
     exerciseCmd attestationCid3 FinalizeAttestation with
-      requiredSignatures = 3
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
 
   debug "  Attestation finalized successfully!"
@@ -167,7 +171,7 @@ insufficientCollateralTest = script do
   submitMustFail validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig_mock"
+      ecdsaSignature = mockSignature
 
   debug "Insufficient collateral test passed - signature correctly rejected"
 
@@ -215,13 +219,13 @@ duplicateSignatureTest = script do
   (attestationCid2, _) <- submit validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig1"
+      ecdsaSignature = mockSignature
 
   -- Second signature from same validator should fail
   submitMustFail validator do
     exerciseCmd attestationCid2 ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig2"
+      ecdsaSignature = mockSignature
 
   debug "Duplicate signature test passed - second signature correctly rejected"
 
@@ -236,7 +240,7 @@ expiredAttestationTest = script do
   validator <- allocateParty "Validator"
 
   now <- getTime
-  let expiresAt = subTime now (hours 1)  -- Already expired
+  let expiresAt = addRelTime now (negate (hours 1))  -- Already expired
 
   positionCid <- submit bank do
     createCmd InstitutionalEquityPosition with
@@ -269,7 +273,7 @@ expiredAttestationTest = script do
   submitMustFail validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig"
+      ecdsaSignature = mockSignature
 
   debug "Expired attestation test passed - signature on expired request correctly rejected"
 
@@ -318,7 +322,7 @@ unauthorizedValidatorTest = script do
   submitMustFail unauthorizedValidator do
     exerciseCmd attestationCid ProvideSignature with
       validator = unauthorizedValidator
-      ecdsaSignature = "0xsig"
+      ecdsaSignature = mockSignature
 
   debug "Unauthorized validator test passed - signature correctly rejected"
 
@@ -449,10 +453,13 @@ musdAssetTest = script do
 
   -- Create issuer role
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Direct mint (admin/bootstrap path)
-  musdCid <- submit issuer do
+  (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.Mint with
       owner = alice
       amount = 10000.000000000000000000
@@ -525,30 +532,33 @@ musdAttestationMintTest = script do
   (attCid1, sig1Cid) <- submit validator1 do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator1
-      ecdsaSignature = "0xsig1"
+      ecdsaSignature = mockSignature
 
   (attCid2, sig2Cid) <- submit validator2 do
     exerciseCmd attCid1 ProvideSignature with
       validator = validator2
-      ecdsaSignature = "0xsig2"
+      ecdsaSignature = mockSignature
 
   (attCid3, sig3Cid) <- submit validator3 do
     exerciseCmd attCid2 ProvideSignature with
       validator = validator3
-      ecdsaSignature = "0xsig3"
+      ecdsaSignature = mockSignature
 
   -- Create issuer role
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Mint mUSD gated by the finalized attestation
-  musdCid <- submit issuer do
+  -- FIX: MintFromAttestation now returns (ContractId IssuerRole, ContractId MUSD) as consuming choice
+  (roleCid2, musdCid) <- submitMulti [issuer, aggregator] [] do
     exerciseCmd roleCid MintFromAttestation with
       owner = alice
       mintAmount = mintAmount
       attestationCid = attCid3
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
-      requiredSignatures = 3
 
   debug "Attestation-gated mint test passed - mUSD minted after 3-of-3 validator approval"
   pure ()
@@ -563,9 +573,12 @@ musdTransferTest = script do
 
   -- Create issuer role and mint
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
-  musdCid <- submit issuer do
+  (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.Mint with
       owner = alice
       amount = 5000.000000000000000000
@@ -597,11 +610,19 @@ musdTransferTest = script do
 
 
 -- Test: User-initiated mint request (MintRequest)
+-- FIX 5C-C01: Updated to pass IssuerRole CID for supply cap enforcement
 musdMintRequestTest : Script ()
 musdMintRequestTest = script do
   issuer <- allocateParty "Issuer"
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+
+  -- Create issuer role for supply cap tracking
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Alice requests minting 1000 mUSD
   requestCid <- submit alice do
@@ -610,9 +631,10 @@ musdMintRequestTest = script do
       owner = alice
       amount = 1000.000000000000000000
 
-  -- Issuer approves
-  musdCid <- submit issuer do
-    exerciseCmd requestCid ApproveMint
+  -- Issuer approves (now requires IssuerRole for supply cap)
+  (roleCid2, musdCid) <- submit issuer do
+    exerciseCmd requestCid ApproveMint with
+      issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD by splitting
   (half1, half2) <- submit alice do
@@ -648,11 +670,19 @@ musdMintRequestTest = script do
 
 
 -- Test: Issuer-initiated mint proposal (MintProposal)
+-- FIX 5C-C02: Updated to pass IssuerRole CID for supply cap enforcement
 musdMintProposalTest : Script ()
 musdMintProposalTest = script do
   issuer <- allocateParty "Issuer"
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+
+  -- Create issuer role for supply cap tracking
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Issuer proposes minting 2000 mUSD to Alice
   proposalCid <- submit issuer do
@@ -661,9 +691,10 @@ musdMintProposalTest = script do
       owner = alice
       amount = 2000.000000000000000000
 
-  -- Alice accepts
-  musdCid <- submit alice do
-    exerciseCmd proposalCid AcceptMint
+  -- Alice accepts (now requires IssuerRole for supply cap)
+  (roleCid2, musdCid) <- submit alice do
+    exerciseCmd proposalCid AcceptMint with
+      issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD
   submit alice do

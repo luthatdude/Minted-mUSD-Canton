@@ -45,15 +45,15 @@ contract MUSD is ERC20, AccessControl {
         emit BlacklistUpdated(account, status);
     }
 
+    // Blacklist enforced in _update() override
     function mint(address to, uint256 amount) external onlyRole(BRIDGE_ROLE) {
         require(totalSupply() + amount <= supplyCap, "EXCEEDS_CAP");
-        require(!isBlacklisted[to], "RECEIVER_BLACKLISTED");
         _mint(to, amount);
         emit Mint(to, amount);
     }
 
+    // Blacklist enforced in _update() override
     function burn(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) {
-        require(!isBlacklisted[from], "SENDER_BLACKLISTED");
         if (from != msg.sender) {
             _spendAllowance(from, msg.sender, amount);
         }
