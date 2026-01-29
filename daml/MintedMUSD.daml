@@ -1,74 +1,604 @@
-module MUSD where
--- | The core stablecoin contract
-template MUSD
-  with
-    provider : Party
-    owner : Party
-    amount : Decimal
-    nonce : Int -- Used to ensure unique contract IDs and prevent collisions
-  where
-    signatory provider, owner
-    -- A. SECURITY: Ensure valid asset state
-    ensure amount > 0.0
-    -- B. LOGIC: Split asset into two
-    choice MUSD_Split : (ContractId MUSD, ContractId MUSD)
-      with
-        splitAmount : Decimal
-      controller owner
-      do
-        assertMsg "Split amount must be positive" (splitAmount > 0.0)
-        assertMsg "Insufficient funds for split" (splitAmount < amount)
-        let rest = amount - splitAmount
-        c1 <- create this with amount = splitAmount; nonce = nonce + 1
-        c2 <- create this with amount = rest; nonce = nonce + 2
-        return (c1, c2)
-    -- C. LOGIC: Merge two assets
-    choice MUSD_Merge : ContractId MUSD
-      with
-        otherCid : ContractId MUSD
-      controller owner
-      do
-        -- Ensure we aren't trying to merge the contract with itself
-        assertMsg "Cannot merge a contract with itself" (otherCid /= self)
-        other <- fetch otherCid
-        -- Ensure metadata matches
-        assertMsg "Must be same provider" (provider == other.provider)
-        assertMsg "Must be same owner" (owner == other.owner)
-        -- Archive the other contract before creating the merged one
-        archive otherCid
-        create this with 
-          amount = amount + other.amount
-          nonce = nonce + 1
-    -- D. ARCHITECTURE: Initiation of the Propose/Accept pattern
-    choice MUSD_Transfer : ContractId MUSD_TransferProposal
-      with
-        newOwner : Party
-      controller owner
-      do
-        create MUSD_TransferProposal with 
-          usd = this
-          newOwner = newOwner
--- | Proposal contract to handle the multi-party agreement required for transfer
-template MUSD_TransferProposal
-  with
-    usd : MUSD
-    newOwner : Party
-  where
-    -- Signatory must include the provider to ensure the final MUSD is valid
-    signatory usd.provider, usd.owner
-    observer newOwner
-    -- Receiver accepts: creates a new MUSD with the new owner
-    choice MUSD_AcceptTransfer : ContractId MUSD
-      controller newOwner
-      do
-        create usd with owner = newOwner, nonce = usd.nonce + 1
-    -- Receiver rejects: returns the MUSD to the original owner
-    choice MUSD_RejectTransfer : ContractId MUSD
-      controller newOwner
-      do 
-        create usd with nonce = usd.nonce + 1
-    -- Sender cancels: returns the MUSD to the original owner
-    choice MUSD_CancelTransfer : ContractId MUSD
-      controller usd.owner
-      do 
-        create usd with nonce = usd.nonce + 1
+module
+ 
+MUSD
+ 
+where
+
+-- | The core stablecoin contract.
+
+-- Signatories: Both the provider (issuer) and owner (holder) must sign.
+
+-- This ensures the issuer cannot move the holder's funds without permission, 
+
+-- and the holder cannot forge tokens without the issuer's backing.
+
+template
+ 
+MUSD
+
+  
+with
+
+    
+provider
+ 
+:
+ 
+Party
+
+    
+owner
+ 
+:
+ 
+Party
+
+    
+amount
+ 
+:
+ 
+Decimal
+
+  
+where
+
+    
+signatory
+ 
+provider
+,
+ 
+owner
+
+    
+-- A. SECURITY: Ensure no zero or negative balances exist.
+
+    
+ensure
+ 
+amount
+ 
+>
+ 
+0.0
+
+    
+-- B. LOGIC: Split a single asset into two.
+
+    
+choice
+ 
+MUSD_Split
+ 
+:
+ 
+(
+ContractId
+ 
+MUSD
+,
+ 
+ContractId
+ 
+MUSD
+)
+
+      
+with
+
+        
+splitAmount
+ 
+:
+ 
+Decimal
+
+      
+controller
+ 
+owner
+
+      
+do
+
+        
+assertMsg
+ 
+"Split amount must be positive"
+ 
+(
+splitAmount
+ 
+>
+ 
+0.0
+)
+
+        
+assertMsg
+ 
+"Insufficient funds for split"
+ 
+(
+splitAmount
+ 
+<
+ 
+amount
+)
+
+        
+c1
+ 
+<-
+ 
+create
+ 
+this
+ 
+with
+ 
+amount
+ 
+=
+ 
+splitAmount
+
+        
+c2
+ 
+<-
+ 
+create
+ 
+this
+ 
+with
+ 
+amount
+ 
+=
+ 
+amount
+ 
+-
+ 
+splitAmount
+
+        
+return
+ 
+(
+c1
+,
+ 
+c2
+)
+
+    
+-- C. LOGIC: Merge two assets.
+
+    
+choice
+ 
+MUSD_Merge
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+with
+
+        
+otherCid
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+controller
+ 
+owner
+
+      
+do
+
+        
+-- FIX: Prevent "Merge with Self" which causes a transaction failure
+
+        
+assertMsg
+ 
+"Cannot merge a contract with itself"
+ 
+(
+self
+ 
+/=
+ 
+otherCid
+)
+
+        
+other
+ 
+<-
+ 
+fetch
+ 
+otherCid
+
+        
+-- SECURITY: Ensure metadata matches exactly
+
+        
+assertMsg
+ 
+"Must be same provider"
+ 
+(
+provider
+ 
+==
+ 
+other
+.
+provider
+)
+
+        
+assertMsg
+ 
+"Must be same owner"
+ 
+(
+owner
+ 
+==
+ 
+other
+.
+owner
+)
+
+        
+-- Consuming choice archives 'self' automatically. 
+
+        
+-- We must explicitly archive the second contract.
+
+        
+archive
+ 
+otherCid
+
+        
+create
+ 
+this
+ 
+with
+ 
+amount
+ 
+=
+ 
+amount
+ 
++
+ 
+other
+.
+amount
+
+    
+-- D. LOGIC: Initiate a transfer via Proposal pattern.
+
+    
+choice
+ 
+MUSD_Transfer
+ 
+:
+ 
+ContractId
+ 
+MUSD_TransferProposal
+
+      
+with
+
+        
+newOwner
+ 
+:
+ 
+Party
+
+      
+controller
+ 
+owner
+
+      
+do
+
+        
+create
+ 
+MUSD_TransferProposal
+ 
+with
+ 
+usd
+ 
+=
+ 
+this
+,
+ 
+newOwner
+
+-- | Proposal contract for transfers to resolve the "Signatory Bottleneck".
+
+template
+ 
+MUSD_TransferProposal
+
+  
+with
+
+    
+usd
+ 
+:
+ 
+MUSD
+
+    
+newOwner
+ 
+:
+ 
+Party
+
+  
+where
+
+    
+signatory
+ 
+usd
+.
+provider
+,
+ 
+usd
+.
+owner
+
+    
+observer
+ 
+newOwner
+
+    
+-- FIX: Bob accepts, the token owner changes.
+
+    
+choice
+ 
+MUSD_AcceptTransfer
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+controller
+ 
+newOwner
+
+      
+do
+
+        
+create
+ 
+usd
+ 
+with
+ 
+owner
+ 
+=
+ 
+newOwner
+
+    
+-- FIX: Bob rejects, the original MUSD is returned to Alice (no tokens lost).
+
+    
+choice
+ 
+MUSD_RejectTransfer
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+controller
+ 
+newOwner
+
+      
+do
+ 
+create
+ 
+usd
+
+    
+-- FIX: Alice cancels, the original MUSD is returned to her (no tokens lost).
+
+    
+choice
+ 
+MUSD_CancelTransfer
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+controller
+ 
+usd
+.
+owner
+
+      
+do
+ 
+create
+ 
+usd
+
+-- | Proposal contract for initial Issuance (Minting).
+
+-- Required because a user cannot be forced to sign a contract (MUSD) they didn't agree to.
+
+template
+ 
+MUSD_MintProposal
+
+  
+with
+
+    
+provider
+ 
+:
+ 
+Party
+
+    
+owner
+ 
+:
+ 
+Party
+
+    
+amount
+ 
+:
+ 
+Decimal
+
+  
+where
+
+    
+signatory
+ 
+provider
+
+    
+observer
+ 
+owner
+
+    
+choice
+ 
+MUSD_MintProposal_Accept
+ 
+:
+ 
+ContractId
+ 
+MUSD
+
+      
+controller
+ 
+owner
+
+      
+do
+
+        
+create
+ 
+MUSD
+ 
+with
+ 
+provider
+,
+ 
+owner
+,
+ 
+amount
+
+    
+choice
+ 
+MUSD_MintProposal_Reject
+ 
+:
+ 
+(
+)
+
+      
+controller
+ 
+owner
+
+      
+do
+ 
+return
+ 
+(
+)
+
+    
+choice
+ 
+MUSD_MintProposal_Cancel
+ 
+:
+ 
+(
+)
+
+      
+controller
+ 
+provider
+
+      
+do
+ 
+return
+ 
+(
+)
