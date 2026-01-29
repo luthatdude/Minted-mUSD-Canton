@@ -1,23 +1,64 @@
-module LeveragedVault where
-import Daml.Script
+module Minted.Protocol.V3 where
 import DA.Time
 import DA.Optional (fromOptional)
--- 1. DATA MODELS
--- Represents the global configuration for a specific collateral type
-template CollateralConfig
+import DA.Action (foldlA)
+import DA.Math (round)
+-- 1. ASSET LAYER (UTXO)
+template Asset
+  with
+    issuer : Party
+    owner : Party
+    symbol : Text
+    amount : Decimal
+  where
+    signatory issuer, owner
+    choice Asset_Transfer : ContractId Asset
+      with newOwner : Party
+      controller owner
+      do create this with owner = newOwner
+    choice Asset_Split : (ContractId Asset, ContractId Asset)
+      with splitAmount : Decimal
+      controller owner
+      do
+        assert (amount >= splitAmount)
+        remaining <- create this with amount = amount - splitAmount
+        split <- create this with amount = splitAmount
+        return (remaining, split)
+-- 2. ORACLE LAYER
+template PriceOracle
   with
     provider : Party
-    token : Text
+    symbol : Text
     priceInUsd : Decimal
-    collateralFactor : Decimal      -- e.g., 0.80 (LTV)
-    liquidationThreshold : Decimal -- e.g., 0.85
-    interestRateBps : Decimal      -- e.g., 500.0 (5% APR)
+    lastUpdated : Time
   where
     signatory provider
-    key (provider, token) : (Party, Text)
+    key (provider, symbol) : (Party, Text)
     maintainer key._1
--- Represents a user's specific position (Collateral + Debt)
-template VaultPosition
+-- 3. LIQUIDITY LAYER (DEX)
+template LiquidityPool
+  with
+    operator : Party
+    collateralSymbol : Text
+    musdSymbol : Text
+    pricePerCollateral : Decimal -- Simple price for demo
+  where
+    signatory operator
+    -- Swaps mUSD (Debt Asset) for Collateral (Vault Asset)
+    choice Swap_mUSD_For_Collateral : ContractId Asset
+      with
+        musdCid : ContractId Asset
+        user : Party
+      controller user
+      do
+        musd <- fetch musdCid
+        assert (musd.symbol == musdSymbol)
+        let collateralAmount = musd.amount / pricePerCollateral
+        archive musdCid
+        -- Mint/Transfer collateral to user (Simplified for logic)
+        create Asset with issuer = operator, owner = user, symbol = collateralSymbol, amount = collateralAmount
+-- 4. VAULT LAYER (The CDP)
+template Vault
   with
     provider : Party
     owner : Party
@@ -26,108 +67,89 @@ template VaultPosition
     principalDebt : Decimal
     accruedInterest : Decimal
     lastAccrualTime : Time
+    config : VaultConfig
   where
-    signatory provider, owner
-    -- HELPERS: Equivalent to Solidity's Internal View Functions
+    signatory provider
+    observer owner
     let 
-      -- Calculate interest since last interaction
-      getPendingInterest (currentTime : Time) (rateBps : Decimal) =
+      -- Precision-safe Interest Math
+      calcInterest (currentTime : Time) =
         let 
           elapsedSeconds = intToDecimal (round (convertTimeToMicroseconds (subTime currentTime lastAccrualTime) / 1000000))
           yearInSeconds = 31536000.0
-          interest = (principalDebt * rateBps * elapsedSeconds) / (10000.0 * yearInSeconds)
+          interest = (principalDebt * config.interestRateBps * elapsedSeconds) / (10000.0 * yearInSeconds)
         in interest
-      -- Total amount the user owes
-      getTotalDebt (currentTime : Time) (rateBps : Decimal) =
-        principalDebt + accruedInterest + getPendingInterest currentTime rateBps
-      -- Health Factor logic
-      getHealthFactor (currentTime : Time) (config : CollateralConfig) =
-        let 
-          totalDebt = getTotalDebt currentTime config.interestRateBps
-          collateralValueUsd = collateralAmount * config.priceInUsd
-          weightedCollateral = collateralValueUsd * config.liquidationThreshold
-        in if totalDebt == 0.0 then 100.0 else weightedCollateral / totalDebt
-    -- CHOICE: Deposit & Borrow (The Looping Logic)
-    -- This atomizes the "Loop": Deposit -> Borrow -> Buy more -> Deposit
-    choice AdjustLeverage : ContractId VaultPosition
+      getTotalDebt (currentTime : Time) = 
+        principalDebt + accruedInterest + calcInterest currentTime
+    -- ATOMIC LEVERAGE CHOICE
+    choice AdjustLeverage : (ContractId Vault, Optional (ContractId Asset))
       with
-        newCollateral : Decimal
-        newBorrow : Decimal
+        initialCollateralCid : Optional (ContractId Asset) -- New funds from user
+        extraBorrowAmount : Decimal                       -- How much to loop
+        poolCid : ContractId LiquidityPool                -- DEX to use
         currentTime : Time
+        oracleCid : ContractId PriceOracle                -- Price source
       controller owner
       do
-        config <- fetchByKey @CollateralConfig (provider, token)
+        oracle <- fetch oracleCid
+        assert (oracle.symbol == token && oracle.provider == provider)
+        -- A. Accrue existing interest
+        let totalDebtBefore = getTotalDebt currentTime
+        -- B. Handle incoming collateral (if any)
+        addedAmt <- case initialCollateralCid of
+          Some cid -> do
+            asset <- fetch cid
+            assert (asset.symbol == token && asset.owner == owner)
+            archive cid
+            return asset.amount
+          None -> return 0.0
+        -- C. Execute Leverage Loop (Borrow -> Swap -> Re-deposit)
+        (finalCollateral, finalDebt) <- if extraBorrowAmount > 0.0 
+          then do
+            -- 1. Create mUSD Debt Asset
+            mUSDCid <- create Asset with 
+                issuer = provider, owner = owner, symbol = "mUSD", amount = extraBorrowAmount
+            -- 2. Swap mUSD for Collateral via Pool
+            newCollateralCid <- exercise poolCid Swap_mUSD_For_Collateral with 
+                musdCid = mUSDCid, user = owner
+            newCol <- fetch newCollateralCid
+            archive newCollateralCid
+            return (collateralAmount + addedAmt + newCol.amount, principalDebt + extraBorrowAmount)
+          else 
+            return (collateralAmount + addedAmt, principalDebt)
+        -- D. Final Health Check
         let 
-          updatedInterest = accruedInterest + getPendingInterest currentTime config._2.interestRateBps
-          newTotalCollateral = collateralAmount + newCollateral
-          newTotalPrincipal = principalDebt + newBorrow
-          -- Temporary state to check health
-          tempPos = this with 
-            collateralAmount = newTotalCollateral
-            principalDebt = newTotalPrincipal
-            accruedInterest = updatedInterest
-            lastAccrualTime = currentTime
-        -- Health Check (Must be >= 1.0)
-        assertMsg "Position Unhealthy" (getHealthFactor currentTime config._2 >= 1.0)
-        create tempPos
-    -- CHOICE: Repay debt
-    choice Repay : ContractId VaultPosition
-      with
-        amount : Decimal
-        currentTime : Time
-      controller owner
-      do
-        config <- fetchByKey @CollateralConfig (provider, token)
-        let 
-          totalDebt = getTotalDebt currentTime config._2.interestRateBps
-          newDebt = totalDebt - amount
-        create this with
-          principalDebt = if newDebt < 0.0 then 0.0 else newDebt
-          accruedInterest = 0.0
+          totalValue = finalCollateral * oracle.priceInUsd
+          minRequiredValue = (finalDebt + totalDebtBefore - principalDebt) / config.liquidationThreshold
+        assertMsg "Insolvent: Leverage too high" (totalValue >= minRequiredValue)
+        newVault <- create this with
+          collateralAmount = finalCollateral
+          principalDebt = finalDebt
+          accruedInterest = totalDebtBefore - principalDebt -- Save accrued
           lastAccrualTime = currentTime
-    -- CHOICE: Liquidation (Provider seizes collateral if HF < 1.0)
-    choice Liquidate : ()
+        return (newVault, None)
+-- DATA RECORD for Config
+data VaultConfig = VaultConfig with
+  liquidationThreshold : Decimal
+  interestRateBps : Decimal
+    deriving (Eq, Show)
+-- 5. FACTORY (The Rule Pattern)
+-- The Provider signs this once, allowing Alice to create her own Vault.
+template VaultManager
+  with
+    provider : Party
+  where
+    signatory provider
+    nonconsuming choice OpenVault : ContractId Vault
       with
-        liquidator : Party
-        currentTime : Time
-      controller provider
+        owner : Party
+        token : Text
+        config : VaultConfig
+      controller owner
       do
-        config <- fetchByKey @CollateralConfig (provider, token)
-        assert (getHealthFactor currentTime config._2 < 1.0)
-        -- In a real app, you'd transfer an Asset contract to the liquidator here
-        return ()
--- 2. TEST SCRIPT (Simulation)
-setup : Script ()
-setup = script do
-  bank <- allocateParty "Bank"
-  alice <- allocateParty "Alice"
-  now <- getTime
-  -- 1. Bank sets up the WETH Vault configuration
-  configCid <- submit bank do
-    createCmd CollateralConfig with
-      provider = bank
-      token = "WETH"
-      priceInUsd = 3000.0
-      collateralFactor = 0.8
-      liquidationThreshold = 0.85
-      interestRateBps = 1000.0 -- 10% APR
-  -- 2. Alice opens a position with a "Leveraged Loop"
-  -- She deposits 1 WETH and borrows enough to buy 2 more WETH (Total 3 WETH)
-  alicePos <- submitMulti [bank, alice] [] do
-    createCmd VaultPosition with
-      provider = bank
-      owner = alice
-      token = "WETH"
-      collateralAmount = 3.0   -- 1 original + 2 looped
-      principalDebt = 6000.0   -- The 6000 USD borrowed to buy the extra 2 WETH
-      accruedInterest = 0.0
-      lastAccrualTime = now
-  -- 3. Fast forward time (1 month) to see interest accrual
-  let oneMonthLater = addRelTime now (days 30)
-  -- 4. Alice checks her debt or adjusts leverage
-  submit alice do
-    exerciseCmd alicePos AdjustLeverage with
-      newCollateral = 0.0
-      newBorrow = 0.0 -- Just a ping to update interest
-      currentTime = oneMonthLater
-  return ()
+        create Vault with
+          provider; owner; token; config
+          collateralAmount = 0.0
+          principalDebt = 0.0
+          accruedInterest = 0.0
+          lastAccrualTime = currentTime -- Note: In real life, use getTime
