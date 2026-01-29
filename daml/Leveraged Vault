@@ -1,0 +1,133 @@
+module LeveragedVault where
+import Daml.Script
+import DA.Time
+import DA.Optional (fromOptional)
+-- 1. DATA MODELS
+-- Represents the global configuration for a specific collateral type
+template CollateralConfig
+  with
+    provider : Party
+    token : Text
+    priceInUsd : Decimal
+    collateralFactor : Decimal      -- e.g., 0.80 (LTV)
+    liquidationThreshold : Decimal -- e.g., 0.85
+    interestRateBps : Decimal      -- e.g., 500.0 (5% APR)
+  where
+    signatory provider
+    key (provider, token) : (Party, Text)
+    maintainer key._1
+-- Represents a user's specific position (Collateral + Debt)
+template VaultPosition
+  with
+    provider : Party
+    owner : Party
+    token : Text
+    collateralAmount : Decimal
+    principalDebt : Decimal
+    accruedInterest : Decimal
+    lastAccrualTime : Time
+  where
+    signatory provider, owner
+    -- HELPERS: Equivalent to Solidity's Internal View Functions
+    let 
+      -- Calculate interest since last interaction
+      getPendingInterest (currentTime : Time) (rateBps : Decimal) =
+        let 
+          elapsedSeconds = intToDecimal (round (convertTimeToMicroseconds (subTime currentTime lastAccrualTime) / 1000000))
+          yearInSeconds = 31536000.0
+          interest = (principalDebt * rateBps * elapsedSeconds) / (10000.0 * yearInSeconds)
+        in interest
+      -- Total amount the user owes
+      getTotalDebt (currentTime : Time) (rateBps : Decimal) =
+        principalDebt + accruedInterest + getPendingInterest currentTime rateBps
+      -- Health Factor logic
+      getHealthFactor (currentTime : Time) (config : CollateralConfig) =
+        let 
+          totalDebt = getTotalDebt currentTime config.interestRateBps
+          collateralValueUsd = collateralAmount * config.priceInUsd
+          weightedCollateral = collateralValueUsd * config.liquidationThreshold
+        in if totalDebt == 0.0 then 100.0 else weightedCollateral / totalDebt
+    -- CHOICE: Deposit & Borrow (The Looping Logic)
+    -- This atomizes the "Loop": Deposit -> Borrow -> Buy more -> Deposit
+    choice AdjustLeverage : ContractId VaultPosition
+      with
+        newCollateral : Decimal
+        newBorrow : Decimal
+        currentTime : Time
+      controller owner
+      do
+        config <- fetchByKey @CollateralConfig (provider, token)
+        let 
+          updatedInterest = accruedInterest + getPendingInterest currentTime config._2.interestRateBps
+          newTotalCollateral = collateralAmount + newCollateral
+          newTotalPrincipal = principalDebt + newBorrow
+          -- Temporary state to check health
+          tempPos = this with 
+            collateralAmount = newTotalCollateral
+            principalDebt = newTotalPrincipal
+            accruedInterest = updatedInterest
+            lastAccrualTime = currentTime
+        -- Health Check (Must be >= 1.0)
+        assertMsg "Position Unhealthy" (getHealthFactor currentTime config._2 >= 1.0)
+        create tempPos
+    -- CHOICE: Repay debt
+    choice Repay : ContractId VaultPosition
+      with
+        amount : Decimal
+        currentTime : Time
+      controller owner
+      do
+        config <- fetchByKey @CollateralConfig (provider, token)
+        let 
+          totalDebt = getTotalDebt currentTime config._2.interestRateBps
+          newDebt = totalDebt - amount
+        create this with
+          principalDebt = if newDebt < 0.0 then 0.0 else newDebt
+          accruedInterest = 0.0
+          lastAccrualTime = currentTime
+    -- CHOICE: Liquidation (Provider seizes collateral if HF < 1.0)
+    choice Liquidate : ()
+      with
+        liquidator : Party
+        currentTime : Time
+      controller provider
+      do
+        config <- fetchByKey @CollateralConfig (provider, token)
+        assert (getHealthFactor currentTime config._2 < 1.0)
+        -- In a real app, you'd transfer an Asset contract to the liquidator here
+        return ()
+-- 2. TEST SCRIPT (Simulation)
+setup : Script ()
+setup = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  now <- getTime
+  -- 1. Bank sets up the WETH Vault configuration
+  configCid <- submit bank do
+    createCmd CollateralConfig with
+      provider = bank
+      token = "WETH"
+      priceInUsd = 3000.0
+      collateralFactor = 0.8
+      liquidationThreshold = 0.85
+      interestRateBps = 1000.0 -- 10% APR
+  -- 2. Alice opens a position with a "Leveraged Loop"
+  -- She deposits 1 WETH and borrows enough to buy 2 more WETH (Total 3 WETH)
+  alicePos <- submitMulti [bank, alice] [] do
+    createCmd VaultPosition with
+      provider = bank
+      owner = alice
+      token = "WETH"
+      collateralAmount = 3.0   -- 1 original + 2 looped
+      principalDebt = 6000.0   -- The 6000 USD borrowed to buy the extra 2 WETH
+      accruedInterest = 0.0
+      lastAccrualTime = now
+  -- 3. Fast forward time (1 month) to see interest accrual
+  let oneMonthLater = addRelTime now (days 30)
+  -- 4. Alice checks her debt or adjusts leverage
+  submit alice do
+    exerciseCmd alicePos AdjustLeverage with
+      newCollateral = 0.0
+      newBorrow = 0.0 -- Just a ping to update interest
+      currentTime = oneMonthLater
+  return ()
