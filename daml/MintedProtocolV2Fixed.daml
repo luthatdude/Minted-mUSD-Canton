@@ -29,7 +29,7 @@ import DA.Time
 import DA.Action (foldlA)
 import DA.List (dedup)
 import DA.Set qualified as Set
-import DA.Foldable (sum)
+import DA.Foldable hiding (sum)
 import DA.Optional (fromOptional)
 import DA.Text qualified as T
 
@@ -760,9 +760,6 @@ accrueInterest principal currentInterest lastTime currentTime rateBps =
       newInterest = principal * intToDecimal rateBps / 10000.0 * durationYears
   in (principal, currentInterest + newInterest)
 
-min : Money -> Money -> Money
-min a b = if a < b then a else b
-
 -- ============================================================
 --                     SECTION 6: LIQUIDATION ENGINE
 -- ============================================================
@@ -1176,14 +1173,9 @@ template IssuerRole
 --                     HELPER FUNCTIONS
 -- ============================================================
 
--- | Convert Int to Decimal safely
-intToDecimal : Int -> Decimal
-intToDecimal n = intToNumeric n
-
--- FIX C-3: Use O(1) divRelTime from DA.Time instead of O(n) subtraction loop
+-- FIX C-3: Convert RelTime to microseconds
+-- Uses convertRelTimeToMicroseconds which is available in SDK 2.8.0
 relToInt : RelTime -> Int
 relToInt rt =
   if rt < seconds 0 then 0
-  else DA.Time.divRelTime rt (microseconds 1)
-
--- FIX D-M02: Removed dead code `convertRelTimeToMicroseconds` (duplicate of `relToInt`)
+  else convertRelTimeToMicroseconds rt

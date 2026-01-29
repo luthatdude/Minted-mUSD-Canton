@@ -7,6 +7,7 @@ module MUSD_Protocol where
 import DA.Time
 import DA.Date
 import DA.Action (foldlA)
+import Daml.Script
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 1: ASSET DEFINITIONS
@@ -489,17 +490,8 @@ setup = do
   return ()
 
 -- | Helper: Convert RelTime to Int (microseconds)
--- FIX C-3: Previous implementation used O(microseconds) loop which is non-terminating
--- for any real duration. Use divRelTime for O(1) conversion.
+-- FIX C-3: Use convertRelTimeToMicroseconds (SDK 2.8.0 compatible)
 relToInt : RelTime -> Int
 relToInt rt =
   if rt < seconds 0 then 0
-  else
-    -- Convert to microseconds using divRelTime:
-    -- divRelTime rt (microseconds 1) gives number of microseconds in rt
-    let totalMicros = divRelTime rt (microseconds 1)
-    in totalMicros
-
--- | Helper: Convert Int to Decimal
-intToDecimal : Int -> Decimal
-intToDecimal = intToNumeric
+  else convertRelTimeToMicroseconds rt

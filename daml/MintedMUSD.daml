@@ -1,6 +1,5 @@
-module MUSD where
+module MintedMUSD where
 import Daml.Script
-import Daml.Control.Monad (replicateM)
 -- | Constants to prevent "Dust" and precision issues.
 MINIMUM_AMOUNT : Decimal = 0.01
 -- =============================================================================

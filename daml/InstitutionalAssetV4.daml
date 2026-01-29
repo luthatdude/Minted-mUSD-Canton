@@ -1,4 +1,4 @@
-module Institutional.Asset.V4 where
+module InstitutionalAssetV4 where
 -- FIX IA-L02: Use DA.Optional.fromSome instead of custom fromSome'
 import DA.Optional (isSome, isNone, fromSome)
 import DA.List (dedup, sort)
