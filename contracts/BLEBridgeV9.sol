@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: MIT
 // BLE Protocol - V9
 // Refactored: Canton attestations update supply cap, not mint directly
+//
+// WARNING (S-C01): V9 has INCOMPATIBLE storage layout with V8.
+// V8 has 12 state variables (musdToken, totalCantonAssets, currentNonce, minSignatures,
+// dailyMintLimit, dailyMinted, dailyBurned, lastReset, navOracle, maxNavDeviationBps,
+// navOracleEnabled, usedAttestationIds) + __gap[38] = 50 slots.
+// V9 has 8 state variables (musdToken, attestedCantonAssets, collateralRatioBps, currentNonce,
+// minSignatures, lastAttestationTime, lastRatioChangeTime, usedAttestationIds) + __gap[42] = 50 slots.
+// Direct UUPS upgrade from V8->V9 will corrupt storage. A migration contract is required.
 
 pragma solidity ^0.8.20;
 
@@ -32,6 +40,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public currentNonce;
     uint256 public minSignatures;
     uint256 public lastAttestationTime;
+    uint256 public lastRatioChangeTime;
 
     // Attestation tracking
     mapping(bytes32 => bool) public usedAttestationIds;
@@ -54,6 +63,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets);
     event CollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
     event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
+    event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
+    event MUSDTokenUpdated(address indexed oldToken, address indexed newToken);
+    // FIX S-H03: Event for attestation invalidation audit trail
+    event AttestationInvalidated(bytes32 indexed attestationId, string reason);
+    // FIX S-M02: Event for min signatures change
+    event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -88,17 +103,28 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_musdToken != address(0), "INVALID_ADDRESS");
+        emit MUSDTokenUpdated(address(musdToken), _musdToken);
         musdToken = IMUSD(_musdToken);
     }
 
+    // FIX S-M02: Emit event for admin parameter change
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minSigs > 0, "INVALID_MIN_SIGS");
+        emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
 
+    // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
+    // For production, this should be behind a timelock contract.
     function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        // FIX S-M02: Rate-limit ratio changes to once per day
+        require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
         require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+        // FIX M-05: Prevent drastic ratio changes (max 10% change at a time)
         uint256 oldRatio = collateralRatioBps;
+        uint256 diff = _ratioBps > oldRatio ? _ratioBps - oldRatio : oldRatio - _ratioBps;
+        require(diff <= 1000, "RATIO_CHANGE_TOO_LARGE"); // Max 10% change per call
+
         collateralRatioBps = _ratioBps;
         emit CollateralRatioUpdated(oldRatio, _ratioBps);
 
@@ -106,6 +132,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         if (attestedCantonAssets > 0) {
             _updateSupplyCap(attestedCantonAssets);
         }
+
+        lastRatioChangeTime = block.timestamp;
     }
 
     // ============================================================
@@ -135,13 +163,17 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function forceUpdateNonce(uint256 _newNonce, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(bytes(_reason).length > 0, "REASON_REQUIRED");
         require(_newNonce > currentNonce, "NONCE_MUST_INCREASE");
+        emit NonceForceUpdated(currentNonce, _newNonce, _reason);
         currentNonce = _newNonce;
     }
 
     /// @notice Invalidate an attestation ID
-    function invalidateAttestationId(bytes32 _attestationId) external onlyRole(EMERGENCY_ROLE) {
+    /// FIX S-H03: Added reason parameter and event emission for audit trail
+    function invalidateAttestationId(bytes32 _attestationId, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(!usedAttestationIds[_attestationId], "ALREADY_USED");
+        require(bytes(_reason).length > 0, "REASON_REQUIRED");
         usedAttestationIds[_attestationId] = true;
+        emit AttestationInvalidated(_attestationId, _reason);
     }
 
     // ============================================================
@@ -210,12 +242,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         // Only update if cap is changing
         if (newCap != oldCap) {
-            // Safety: never set cap below current supply
-            uint256 currentSupply = musdToken.totalSupply();
-            if (newCap < currentSupply) {
-                newCap = currentSupply;
-            }
-
+            // FIX M-04: Do NOT floor at currentSupply when cap drops.
+            // If assets decreased, the cap should reflect reality (no new minting).
+            // Existing tokens remain but the cap correctly signals undercollateralization.
             musdToken.setSupplyCap(newCap);
             emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
         }
@@ -255,5 +284,5 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
-    uint256[40] private __gap;
+    uint256[42] private __gap;
 }

@@ -15,6 +15,11 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
+// FIX M-20: Use static import instead of dynamic require
+import { formatKMSSignature } from "./signer";
+// FIX T-M01: Use shared readSecret utility
+import { readSecret } from "./utils";
+import * as fs from "fs";
 
 // ============================================================
 //                     CONFIGURATION
@@ -41,8 +46,10 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865"),
-  cantonToken: process.env.CANTON_TOKEN || "",
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
   awsRegion: process.env.AWS_REGION || "us-east-1",
@@ -50,8 +57,8 @@ const DEFAULT_CONFIG: ValidatorConfig = {
 
   ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
 
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000"),
-  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
+  minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
 };
 
 // ============================================================
@@ -94,17 +101,21 @@ class ValidatorNode {
   private config: ValidatorConfig;
   private ledger: Ledger;
   private kmsClient: KMSClient;
+  // FIX M-18: Use a bounded cache with eviction instead of unbounded Set
   private signedAttestations: Set<string> = new Set();
+  private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // Initialize Canton connection
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonToken,
-      httpBaseUrl: `http://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `ws://${config.cantonHost}:${config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
     });
 
     // Initialize AWS KMS
@@ -127,6 +138,8 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
+        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
+        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }
@@ -195,31 +208,36 @@ class ValidatorNode {
   /**
    * Verify the attestation has sufficient collateral backing
    */
+  // FIX C-09: Fetch positions ONCE and deduplicate to prevent inflated collateral
+  // FIX H-13: Use ethers.parseUnits instead of parseFloat for financial precision
   private async verifyCollateral(request: AttestationRequest): Promise<boolean> {
     const payload = request.payload;
 
-    // Fetch all linked equity positions
+    // FIX C-09: Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
-    for (const positionCid of request.positionCids) {
-      try {
-        const positions = await this.ledger.query<InstitutionalEquityPosition>(
-          "MintedProtocolV2:InstitutionalEquityPosition" as any,
-          {}
-        );
+    try {
+      const positions = await this.ledger.query<InstitutionalEquityPosition>(
+        "MintedProtocolV2:InstitutionalEquityPosition" as any,
+        {}
+      );
 
-        // Find matching position
-        for (const pos of positions) {
-          // ContractId comparison is tricky - match by reference
-          totalValue += BigInt(Math.floor(parseFloat(pos.payload.totalValue) * 1e18));
-        }
-      } catch (error) {
-        console.warn(`[Validator] Failed to fetch position:`, error);
+      // Deduplicate by referenceId to prevent double-counting
+      const seen = new Set<string>();
+      for (const pos of positions) {
+        const refId = pos.payload.referenceId;
+        if (seen.has(refId)) continue;
+        seen.add(refId);
+        // FIX H-13: Use ethers.parseUnits for precision
+        totalValue += ethers.parseUnits(pos.payload.totalValue, 18);
       }
+    } catch (error) {
+      console.warn(`[Validator] Failed to fetch positions:`, error);
+      return false;
     }
 
-    // Verify collateral ratio
-    const requestedAmount = BigInt(Math.floor(parseFloat(payload.amount) * 1e18));
-    const reportedAssets = BigInt(Math.floor(parseFloat(payload.globalCantonAssets) * 1e18));
+    // FIX H-13: Use ethers.parseUnits instead of parseFloat
+    const requestedAmount = ethers.parseUnits(payload.amount, 18);
+    const reportedAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
 
     // Check reported assets match fetched total
     // Allow small rounding difference
@@ -253,6 +271,9 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
+    // FIX H-14: Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    this.signedAttestations.add(attestationId);
+
     try {
       // Build message hash (same as Solidity contract expects)
       const messageHash = this.buildMessageHash(payload);
@@ -271,16 +292,28 @@ class ValidatorNode {
         }
       );
 
-      // Mark as signed
-      this.signedAttestations.add(attestationId);
       console.log(`[Validator] Signed attestation ${attestationId}`);
+
+      // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
+      if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
+        const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
+        let evicted = 0;
+        for (const key of this.signedAttestations) {
+          if (evicted >= toEvict) break;
+          this.signedAttestations.delete(key);
+          evicted++;
+        }
+      }
 
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // If it's "already signed", mark it to prevent retries
+      // FIX H-14: Remove from set on failure so it can be retried
+      // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED")) {
-        this.signedAttestations.add(attestationId);
+        // Already signed on ledger - keep in set
+      } else {
+        this.signedAttestations.delete(attestationId);
       }
     }
   }
@@ -290,7 +323,8 @@ class ValidatorNode {
    */
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    const chainId = Number(payload.chainId);
+    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    const chainId = BigInt(payload.chainId);
     const timestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
 
     // This must match what BLEBridgeV9 expects
@@ -302,7 +336,8 @@ class ValidatorNode {
         BigInt(payload.nonce),
         BigInt(timestamp),
         chainId,
-        process.env.BRIDGE_CONTRACT_ADDRESS || ethers.ZeroAddress,
+        // FIX C-7: Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
+        process.env.BRIDGE_CONTRACT_ADDRESS || (() => { throw new Error("BRIDGE_CONTRACT_ADDRESS not set"); })(),
       ]
     );
   }
@@ -340,9 +375,8 @@ class ValidatorNode {
    * Convert DER-encoded signature to RSV format
    * Uses the logic from signer.ts
    */
+  // FIX M-20: Use static import (declared at top of file) instead of dynamic require
   private derToRsv(derSig: Buffer, messageHash: string): string {
-    // Import the formatting function
-    const { formatKMSSignature } = require("./signer");
     return formatKMSSignature(derSig, messageHash, this.config.ethereumAddress);
   }
 
@@ -374,6 +408,20 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.ethereumAddress) {
     throw new Error("VALIDATOR_ETH_ADDRESS not set");
   }
+  // FIX M-23: Validate Ethereum address format
+  if (!ethers.isAddress(DEFAULT_CONFIG.ethereumAddress)) {
+    throw new Error("VALIDATOR_ETH_ADDRESS is not a valid Ethereum address");
+  }
+  // FIX C-7: Validate bridge contract address at startup
+  if (!process.env.BRIDGE_CONTRACT_ADDRESS) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
+  }
+  if (!ethers.isAddress(process.env.BRIDGE_CONTRACT_ADDRESS)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
+  }
+  if (!DEFAULT_CONFIG.cantonToken) {
+    throw new Error("CANTON_TOKEN not set");
+  }
 
   // Create validator node
   const validator = new ValidatorNode(DEFAULT_CONFIG);
@@ -391,6 +439,12 @@ async function main(): Promise<void> {
   // Start validator
   await validator.start();
 }
+
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
 
 main().catch((error) => {
   console.error("[Main] Fatal error:", error);

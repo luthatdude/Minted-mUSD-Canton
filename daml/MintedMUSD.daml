@@ -140,6 +140,134 @@ template MUSD_MintProposal
       controller owner
       do return ()
 -- =============================================================================
+-- 3b. ADVANCED ISSUER & MINT WORKFLOWS (from validator-ledger)
+-- =============================================================================
+-- | Issuer role contract for minting mUSD.
+-- FIX D-C01: supplyCap and currentSupply stored in contract state (not caller-supplied).
+-- FIX D-C02: requiredSignatures derived from validatorGroup length (not caller-supplied).
+-- Supports two minting paths:
+--   1. MintFromAttestation: Collateral-backed minting gated by finalized attestation
+--   2. Mint: Direct minting (consuming — updates supply tracking)
+template IssuerRole
+  with
+    issuer : Party
+    supplyCap : Decimal
+    currentSupply : Decimal
+  where
+    signatory issuer
+
+    -- | Direct mint (for bootstrapping/admin use).
+    -- FIX D-C01: Consuming choice — supply tracked in contract state.
+    choice IssuerRole_Mint : (ContractId IssuerRole, ContractId MUSD)
+      with
+        mintOwner : Party
+        mintAmount : Decimal
+        mintCurrency : Text
+        mintObservers : [Party]
+      controller issuer
+      do
+        assertMsg "Mint amount must be positive." (mintAmount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + mintAmount <= supplyCap)
+        musdCid <- create MUSD with
+          provider = issuer
+          owner = mintOwner
+          amount = mintAmount
+          currency = mintCurrency
+          observers = mintObservers
+        newRole <- create this with currentSupply = currentSupply + mintAmount
+        return (newRole, musdCid)
+
+    -- | Update the supply cap (admin only).
+    choice IssuerRole_UpdateSupplyCap : ContractId IssuerRole
+      with
+        newCap : Decimal
+      controller issuer
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
+
+-- | User-initiated mint request.
+-- Separation of duties: the user requests minting, the issuer approves
+-- after verifying collateral or off-ledger conditions.
+-- FIX 5C-C01: ApproveMint now requires IssuerRole to enforce supply cap.
+template MintRequest
+  with
+    issuer : Party
+    owner : Party
+    requestAmount : Decimal
+    requestCurrency : Text
+    requestObservers : [Party]
+  where
+    signatory owner
+    observer issuer
+
+    ensure requestAmount > 0.0
+
+    -- | Issuer approves the request via IssuerRole (enforces supply cap).
+    choice MintRequest_Approve : (ContractId IssuerRole, ContractId MUSD)
+      with
+        issuerRoleCid : ContractId IssuerRole
+      controller issuer
+      do
+        exercise issuerRoleCid IssuerRole_Mint with
+          mintOwner = owner
+          mintAmount = requestAmount
+          mintCurrency = requestCurrency
+          mintObservers = requestObservers
+
+    -- | Issuer rejects the request.
+    choice MintRequest_Reject : ()
+      controller issuer
+      do
+        return ()
+
+    -- | Owner cancels their own request.
+    choice MintRequest_Cancel : ()
+      controller owner
+      do
+        return ()
+
+-- | Issuer-initiated mint proposal (airdrop-safe).
+-- The issuer proposes minting to a user, but the user must explicitly
+-- accept because they become a signatory on the resulting MUSD contract.
+-- FIX 5C-C02: AcceptMint now requires IssuerRole to enforce supply cap.
+template MintProposal
+  with
+    issuer : Party
+    owner : Party
+    proposalAmount : Decimal
+    proposalCurrency : Text
+    proposalObservers : [Party]
+  where
+    signatory issuer
+    observer owner
+
+    ensure proposalAmount > 0.0
+
+    -- | Owner accepts the mint proposal via IssuerRole (enforces supply cap).
+    choice MintProposal_Accept : (ContractId IssuerRole, ContractId MUSD)
+      with
+        issuerRoleCid : ContractId IssuerRole
+      controller owner
+      do
+        exercise issuerRoleCid IssuerRole_Mint with
+          mintOwner = owner
+          mintAmount = proposalAmount
+          mintCurrency = proposalCurrency
+          mintObservers = proposalObservers
+
+    -- | Owner declines the mint proposal.
+    choice MintProposal_Decline : ()
+      controller owner
+      do
+        return ()
+
+    -- | Issuer withdraws the proposal.
+    choice MintProposal_Withdraw : ()
+      controller issuer
+      do
+        return ()
+-- =============================================================================
 -- 4. HARDENED AUDIT TEST
 -- =============================================================================
 test_stablecoin_audit : Script ()

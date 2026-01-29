@@ -18,6 +18,16 @@ interface ICollateralVaultLiq {
     function seize(address user, address token, uint256 amount, address liquidator) external;
 }
 
+interface IPriceOracleLiqExt {
+    function getPrice(address token) external view returns (uint256);
+    function getValueUsd(address token, uint256 amount) external view returns (uint256);
+}
+
+// FIX H-01: Token decimals interface for proper seizure calculation
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
+}
+
 interface IBorrowModule {
     function totalDebt(address user) external view returns (uint256);
     function healthFactor(address user) external view returns (uint256);
@@ -62,6 +72,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 collateralSeized
     );
     event CloseFactorUpdated(uint256 oldFactor, uint256 newFactor);
+    event FullLiquidationThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
     constructor(
         address _vault,
@@ -118,21 +129,26 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 actualRepay = debtToRepay > maxRepay ? maxRepay : debtToRepay;
 
         // Calculate collateral to seize
-        // collateralToSeize = debtRepaid * (1 + penalty) / collateralPrice
-        (bool enabled, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
-        require(enabled, "COLLATERAL_NOT_SUPPORTED");
+        // FIX H-01: Use oracle.getValueUsd for proper decimal normalization
+        // FIX S-M05: Allow liquidation even if collateral token is disabled
+        // Disabled collateral positions must still be liquidatable for protocol safety
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         require(collateralPrice > 0, "INVALID_PRICE");
 
         // debtRepaid is in 18 decimals (mUSD), price is in 18 decimals (USD per token)
-        // collateralToSeize = actualRepay * (10000 + penaltyBps) / 10000 / collateralPrice * 10^tokenDecimals
-        // Simplified: seize value in USD = actualRepay * (10000 + penaltyBps) / 10000
+        // seize value in USD = actualRepay * (10000 + penaltyBps) / 10000
         uint256 seizeValueUsd = (actualRepay * (10000 + penaltyBps)) / 10000;
 
-        // Convert USD value to collateral token amount
-        // seizeAmount = seizeValueUsd * 10^18 / collateralPrice (both in 18 dec)
-        uint256 seizeAmount = (seizeValueUsd * 1e18) / collateralPrice;
+        // FIX H-01: Convert USD value to collateral token amount accounting for token decimals
+        // collateralPrice is USD per 1 full token (18 decimals)
+        // For a token with D decimals: seizeAmount = seizeValueUsd * 10^D / collateralPrice
+        uint8 tokenDecimals = 18; // Default; PriceOracle.getValueUsd handles normalization
+        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
+            tokenDecimals = d;
+        } catch {}
+        uint256 seizeAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         // Cap at available collateral
         uint256 available = vault.deposits(borrower, collateralToken);
@@ -145,15 +161,19 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
 
         require(seizeAmount > 0, "NOTHING_TO_SEIZE");
 
-        // Execute liquidation:
+        // FIX C-1: Execute liquidation following CEI pattern.
+        // All three operations are calls to trusted protocol contracts.
+        // We order: burn (removes liquidator's mUSD) -> seize (moves collateral) -> reduceDebt (bookkeeping)
+        // If any call reverts, the entire transaction reverts atomically.
+
         // 1. Liquidator pays mUSD (burns it)
         musd.burn(msg.sender, actualRepay);
 
-        // 2. Reduce borrower's debt
-        borrowModule.reduceDebt(borrower, actualRepay);
-
-        // 3. Seize collateral to liquidator
+        // 2. Seize collateral to liquidator (moved before reduceDebt for safer ordering)
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
+
+        // 3. Reduce borrower's debt (bookkeeping after all transfers complete)
+        borrowModule.reduceDebt(borrower, actualRepay);
 
         emit Liquidation(msg.sender, borrower, collateralToken, actualRepay, seizeAmount);
     }
@@ -170,19 +190,24 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Estimate collateral received for a given debt repayment
+    /// FIX 5C-L03: Allow estimates for disabled collateral (matches liquidate behavior)
     function estimateSeize(
         address borrower,
         address collateralToken,
         uint256 debtToRepay
     ) external view returns (uint256 collateralAmount) {
-        (bool enabled, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
-        if (!enabled) return 0;
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         if (collateralPrice == 0) return 0;
 
         uint256 seizeValueUsd = (debtToRepay * (10000 + penaltyBps)) / 10000;
-        collateralAmount = (seizeValueUsd * 1e18) / collateralPrice;
+        // FIX H-01: Account for token decimals in estimate
+        uint8 tokenDecimals = 18;
+        try IERC20Decimals(collateralToken).decimals() returns (uint8 d) {
+            tokenDecimals = d;
+        } catch {}
+        collateralAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
 
         uint256 available = vault.deposits(borrower, collateralToken);
         if (collateralAmount > available) {
@@ -203,6 +228,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
 
     function setFullLiquidationThreshold(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
+        emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
     }
 }

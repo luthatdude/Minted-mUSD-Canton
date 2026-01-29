@@ -65,6 +65,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     event CollateralWithdrawn(address indexed user, address indexed token, uint256 amount);
     event InterestRateUpdated(uint256 oldRate, uint256 newRate);
     event DebtAdjusted(address indexed user, uint256 newDebt, string reason);
+    event MinDebtUpdated(uint256 oldMinDebt, uint256 newMinDebt);
 
     constructor(
         address _vault,
@@ -105,9 +106,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
         pos.principal += amount;
 
-        // Verify health factor after borrowing
-        uint256 hf = _healthFactor(msg.sender);
-        require(hf >= 10000, "UNHEALTHY_POSITION"); // Health factor must be >= 1.0 (10000 bps)
+        // FIX H-20: Use borrow capacity (collateral factor) not liquidation threshold
+        // _healthFactor uses liquidation threshold, which allows borrowing at the liquidation edge
+        uint256 capacity = _borrowCapacity(msg.sender);
+        uint256 newTotalDebt = totalDebt(msg.sender);
+        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
 
         // Mint mUSD to borrower
         musd.mint(msg.sender, amount);
@@ -129,13 +132,20 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
+        // FIX S-M03: Prevent dust positions after partial repayment
+        uint256 remaining = total - repayAmount;
+        if (remaining > 0) {
+            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+        }
+
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
         } else {
-            uint256 remaining = repayAmount - pos.accruedInterest;
+            // FIX S-C02: Renamed to 'principalPayment' to avoid shadowing outer 'remaining'
+            uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
-            pos.principal -= remaining;
+            pos.principal -= principalPayment;
         }
 
         // Burn the repaid mUSD
@@ -147,20 +157,37 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     /// @notice Withdraw collateral (only if position stays healthy)
     /// @param token The collateral token
     /// @param amount Amount to withdraw
+    /// FIX H-05: Checks health BEFORE withdrawal (CEI pattern)
     function withdrawCollateral(address token, uint256 amount) external nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
 
         _accrueInterest(msg.sender);
 
-        // Temporarily reduce deposit to check health
-        // The vault will actually do the transfer
-        vault.withdraw(token, amount, msg.sender);
-
-        // If user has debt, verify health factor is still good
+        // FIX H-05: Check health factor BEFORE transfer to follow CEI pattern.
+        // The vault.withdraw call below transfers tokens, so we must verify first.
         if (totalDebt(msg.sender) > 0) {
-            uint256 hf = _healthFactor(msg.sender);
-            require(hf >= 10000, "WITHDRAWAL_WOULD_LIQUIDATE");
+            // Verify the user has enough deposit
+            uint256 currentDeposit = vault.deposits(msg.sender, token);
+            require(currentDeposit >= amount, "INSUFFICIENT_DEPOSIT");
+
+            // Compute post-withdrawal health by subtracting the withdrawn amount's value
+            (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(token);
+            require(enabled, "TOKEN_NOT_SUPPORTED");
+            uint256 withdrawnValue = oracle.getValueUsd(token, amount);
+            uint256 weightedReduction = (withdrawnValue * liqThreshold) / 10000;
+
+            uint256 currentWeighted = _weightedCollateralValue(msg.sender);
+            uint256 postWeighted = currentWeighted > weightedReduction
+                ? currentWeighted - weightedReduction
+                : 0;
+
+            uint256 debt = totalDebt(msg.sender);
+            uint256 postHf = debt > 0 ? (postWeighted * 10000) / debt : type(uint256).max;
+            require(postHf >= 10000, "WITHDRAWAL_WOULD_LIQUIDATE");
         }
+
+        // Now perform the transfer (Interaction)
+        vault.withdraw(token, amount, msg.sender);
 
         emit CollateralWithdrawn(msg.sender, token, amount);
     }
@@ -304,6 +331,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     //                  ADMIN
     // ============================================================
 
+    /// @notice Update the global interest rate
+    /// @dev FIX 5C-M05: Rate changes apply prospectively at each user's next accrual.
+    /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
+    /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
     function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
         require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
         uint256 old = interestRateBps;
@@ -312,6 +343,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     }
 
     function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
+        emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
     }
 }
