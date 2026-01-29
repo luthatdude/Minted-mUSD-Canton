@@ -7,4 +7,5 @@ dependencies:
   - daml-stdlib
   - daml-script
 build-options:
-  - "--warn-unused-imports=no"
+  - --ghc-option=-Wno-unused-imports
+  - --ghc-option=-Wno-redundant-imports
