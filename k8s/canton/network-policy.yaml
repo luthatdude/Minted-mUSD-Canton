@@ -24,11 +24,11 @@ spec:
       ports:
         - port: 5011
           protocol: TCP
-    # JSON API — from ingress controller only
+    # JSON API — from NGINX proxy only (not external ingress controller)
     - from:
-        - namespaceSelector:
+        - podSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
+              app.kubernetes.io/name: nginx-proxy
       ports:
         - port: 7575
           protocol: TCP
@@ -97,6 +97,52 @@ spec:
       ports:
         - port: 53
           protocol: UDP
+---
+# NGINX proxy: accepts external traffic, proxies to JSON API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nginx-proxy-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # External HTTPS traffic (from LoadBalancer)
+    - ports:
+        - port: 8443
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    # Prometheus metrics scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8443
+          protocol: TCP
+  egress:
+    # JSON API on Canton participant (port 7575)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 7575
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 ---
 # Default deny all ingress/egress in namespace
 apiVersion: networking.k8s.io/v1

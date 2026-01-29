@@ -1,0 +1,165 @@
+# NGINX API Gateway Deployment
+# Reverse proxy for the Daml JSON API with TLS termination and rate limiting.
+# This is the ONLY component exposed to external traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-proxy
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: nginx-proxy
+    app.kubernetes.io/component: api-gateway
+  annotations:
+    # For AWS ALB or NLB integration
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+    - name: http-redirect
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nginx-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-proxy
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: nginx-proxy
+    app.kubernetes.io/component: api-gateway
+spec:
+  replicas: 2  # Stateless — safe to scale horizontally
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nginx-proxy
+        app.kubernetes.io/component: api-gateway
+    spec:
+      serviceAccountName: nginx-proxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101   # nginx user in official image
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          image: nginx:1.27.2-alpine
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/nginx/tls
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: log
+              mountPath: /var/log/nginx
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+          livenessProbe:
+            httpGet:
+              path: /nginx_status
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /nginx_status
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+        - name: tls-certs
+          secret:
+            secretName: nginx-tls
+        - name: tmp
+          emptyDir:
+            sizeLimit: 50Mi
+        - name: log
+          emptyDir:
+            sizeLimit: 100Mi
+        - name: cache
+          emptyDir:
+            sizeLimit: 50Mi
+        - name: run
+          emptyDir:
+            sizeLimit: 10Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: nginx-proxy
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-proxy
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: nginx-proxy
+automountServiceAccountToken: false
+---
+# PodDisruptionBudget — always keep at least 1 proxy running
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nginx-proxy-pdb
+  namespace: musd-canton
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nginx-proxy
