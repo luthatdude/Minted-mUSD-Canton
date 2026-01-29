@@ -4,11 +4,13 @@
 
 module Test where
 
-import BLEProtocol
-import MintedMUSD
+import Daml.Script
+import BLEProtocol qualified as BLE
+import MintedMUSD qualified as MUSD
+import MintedMUSD (MintedMUSD(..), Mint(..), Split(..), Merge(..), Redeem(..), Transfer(..), Accept(..), Cancel(..))
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..))
 import DA.Time
 import DA.Set qualified as Set
-import Daml.Script
 
 -- Test configuration
 testCollateralRatio : Numeric 18

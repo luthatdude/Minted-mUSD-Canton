@@ -17,7 +17,7 @@
 module CantonSMUSD where
 
 import DA.Time
-import CantonDirectMint (CantonMUSD(..), Money)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
