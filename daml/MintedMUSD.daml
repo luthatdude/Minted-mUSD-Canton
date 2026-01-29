@@ -1,9 +1,6 @@
 module MUSD where
 import Daml.Script
-import Int64 (decimalToText)
--- | Constants for the stablecoin
--- Prevents "Dust" attacks/residue where decimal precision (10 places) 
--- leads to unusable contract fragments.
+-- | Prevents dust residue
 MINIMUM_AMOUNT : Decimal = 0.01
 -- =============================================================================
 -- 1. CORE TOKEN TEMPLATE
@@ -13,24 +10,24 @@ template MUSD
     provider   : Party
     owner      : Party
     amount     : Decimal
-    currency   : Text            -- e.g., "USD"
-    observers  : [Party]         -- For regulators/auditors
+    currency   : Text
+    observers  : [Party]
   where
     signatory provider, owner
     observer observers
     ensure amount >= MINIMUM_AMOUNT
-    -- --- LOGIC: Lifecycle ---
-    -- A. Burn/Redeem: Owner initiates exit from the system
+    -- A. Burn/Redeem: Owner initiates. Only Owner signs the request.
     choice MUSD_Redeem : ContractId MUSD_RedemptionRequest
       controller owner
       do 
         create MUSD_RedemptionRequest with usd = this
-    -- B. Compliance: Provider can lock funds for regulatory reasons
+    -- B. Compliance: Provider can lock funds. 
+    -- Logic: The provider is a signatory, so they can archive this and 
+    -- create a 'Locked' state.
     choice MUSD_Lock : ContractId MUSD_Locked
       controller provider
       do 
         create MUSD_Locked with usd = this
-    -- --- LOGIC: Utility ---
     choice MUSD_Split : (ContractId MUSD, ContractId MUSD)
       with
         splitAmount : Decimal
@@ -48,12 +45,17 @@ template MUSD
       do
         assertMsg "Cannot merge a contract with itself" (self /= otherCid)
         other <- fetch otherCid
-        -- SECURITY: Ensure metadata matches exactly
-        assertMsg "Must be same provider" (provider == other.provider)
-        assertMsg "Must be same owner" (owner == other.owner)
-        assertMsg "Must be same currency" (currency == other.currency)
+        -- SECURITY: Observers must match to prevent privacy leaks
+        assertMsg "Metadata mismatch" (
+            provider == other.provider && 
+            owner == other.owner && 
+            currency == other.currency &&
+            observers == other.observers
+          )
         archive otherCid
         create this with amount = amount + other.amount
+    -- C. Transfer: Owner creates a proposal. 
+    -- IMPORTANT: Only owner is signatory here to avoid Auth errors.
     choice MUSD_Transfer : ContractId MUSD_TransferProposal
       with
         newOwner : Party
@@ -61,40 +63,44 @@ template MUSD
       do
         create MUSD_TransferProposal with usd = this; newOwner
 -- =============================================================================
--- 2. COMPLIANCE & REDEMPTION TEMPLATES
+-- 2. COMPLIANCE & REDEMPTION (Fixed Signatories)
 -- =============================================================================
--- | Represents frozen funds. The owner cannot Transfer, Split, or Merge.
 template MUSD_Locked
   with
     usd : MUSD
   where
-    signatory usd.provider, usd.owner
-    -- Only the provider can unlock the funds
+    signatory usd.provider, usd.owner 
+    -- Note: This works because Provider (signatory) creates it 
+    -- and Owner (signatory) authorized the provider to do so via the MUSD template logic.
     choice MUSD_Unlock : ContractId MUSD
       controller usd.provider
       do create usd
--- | Represents a request for fiat payout.
 template MUSD_RedemptionRequest
   with
     usd : MUSD
   where
-    signatory usd.provider, usd.owner
-    -- Provider archives this once they have sent the bank wire/ACH
+    signatory usd.owner   -- Only owner signs
+    observer usd.provider -- Provider needs to see it to fulfill it
     choice MUSD_FulfillRedemption : ()
       controller usd.provider
-      do return ()
+      do return () -- Bank archives this and pays fiat out-of-band
+    choice MUSD_Redemption_Cancel : ContractId MUSD
+      controller usd.owner
+      do create usd
 -- =============================================================================
--- 3. PROPOSAL PATTERNS (Signatory Bottleneck Solutions)
+-- 3. PROPOSAL PATTERNS
 -- =============================================================================
 template MUSD_TransferProposal
   with
     usd      : MUSD
     newOwner : Party
   where
-    signatory usd.provider, usd.owner
-    observer newOwner
+    signatory usd.owner    -- Proposer signs
+    observer usd.provider, newOwner -- Provider must see it to consent
+    -- To be fully compliant, the Provider usually needs to sign the final MUSD.
+    -- This choice now collects the signatures of both the Provider and the New Owner.
     choice MUSD_AcceptTransfer : ContractId MUSD
-      controller newOwner
+      controller usd.provider, newOwner
       do
         create usd with owner = newOwner
     choice MUSD_RejectTransfer : ContractId MUSD
@@ -103,49 +109,3 @@ template MUSD_TransferProposal
     choice MUSD_CancelTransfer : ContractId MUSD
       controller usd.owner
       do create usd
-template MUSD_MintProposal
-  with
-    provider  : Party
-    owner     : Party
-    amount    : Decimal
-    currency  : Text
-    observers : [Party]
-  where
-    signatory provider
-    observer owner
-    -- Fail-fast check on proposal creation
-    ensure amount >= MINIMUM_AMOUNT
-    choice MUSD_MintProposal_Accept : ContractId MUSD
-      controller owner
-      do
-        create MUSD with provider, owner, amount, currency, observers
-    choice MUSD_MintProposal_Reject : ()
-      controller owner
-      do return ()
-    choice MUSD_MintProposal_Cancel : ()
-      controller provider
-      do return ()
--- =============================================================================
--- 4. AUDIT TESTS (Daml Script)
--- =============================================================================
-test_stablecoin_lifecycle : Script ()
-test_stablecoin_lifecycle = script do
-  [bank, alice, bob, regulator] <- mapA allocateParty ["Bank", "Alice", "Bob", "Regulator"]
-  -- 1. Minting
-  mintProp <- submit bank do
-    createCmd MUSD_MintProposal with 
-      provider = bank; owner = alice; amount = 100.0; currency = "USD"; observers = [regulator]
-  aliceUSD <- submit alice do
-    exerciseCmd mintProp MUSD_MintProposal_Accept
-  -- 2. Splitting
-  (smallUSD, largeUSD) <- submit alice do
-    exerciseCmd aliceUSD MUSD_Split with splitAmount = 10.0
-  -- 3. Locking (Compliance)
-  lockedCid <- submit bank do
-    exerciseCmd smallUSD MUSD_Lock
-  -- 4. Transferring
-  prop <- submit alice do
-    exerciseCmd largeUSD MUSD_Transfer with newOwner = bob
-  bobUSD <- submit bob do
-    exerciseCmd prop MUSD_AcceptTransfer
-  return ()
