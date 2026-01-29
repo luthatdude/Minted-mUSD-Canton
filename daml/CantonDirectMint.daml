@@ -18,6 +18,7 @@ module CantonDirectMint where
 
 import DA.Time
 import DA.Set qualified as Set
+import DA.Text qualified as DA.Text
 import DA.Optional (whenSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
 
@@ -70,10 +71,20 @@ template CantonMUSD
     issuer : Party
     owner : Party
     amount : Money
+    agreementHash : Text  -- SHA-256 hash of the Master Participation Agreement PDF
+    agreementUri : Text   -- URI to the legal terms document
   where
     signatory issuer, owner
 
     ensure amount > 0.0
+      && DA.Text.length agreementHash == 64
+      && DA.Text.length agreementUri > 0
+
+    agreement
+      "By holding or transferring this Canton mUSD token, the owner acknowledges "
+      <> "they are bound by the Master Participation Agreement. "
+      <> "Agreement hash: " <> agreementHash
+      <> " | URI: " <> agreementUri
 
     choice CantonMUSD_Transfer : ContractId CantonMUSD
       with
@@ -251,6 +262,9 @@ template CantonDirectMintService
     lastRateLimitReset : Time    -- Timestamp of last window reset
     -- Compliance hook (optional — None disables compliance checks)
     complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    -- Master Participation Agreement reference (embedded in every minted token)
+    mpaHash : Text               -- SHA-256 hash of the MPA PDF
+    mpaUri : Text                -- URI to the MPA document
   where
     signatory operator
     observer usdcIssuer
@@ -300,6 +314,8 @@ template CantonDirectMintService
           issuer = operator
           owner = user
           amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
 
         -- Emit bridge-out request — pipe the backing stables to Ethereum
         bridgeReq <- create BridgeOutRequest with
