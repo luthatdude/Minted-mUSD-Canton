@@ -1,0 +1,244 @@
+module BleProtocol where
+
+import DA.Date
+import DA.Time
+import Daml.Script
+
+-- | Helper to replace the missing datetime function referenced in your tests
+datetime : Int -> Month -> Int -> Int -> Int -> Int -> Time
+datetime y m d h min s = time (date y m d) h min s
+
+-- =============================================================================
+-- Module: InstitutionalAssetV4 (Reconstructed)
+-- =============================================================================
+
+template InstitutionalEquityPosition
+  with
+    issuer : Party
+    owner : Party
+    quantity : Decimal
+    symbol : Text
+  where
+    signatory issuer, owner
+
+    ensure quantity >= 0.0
+
+-- =============================================================================
+-- Module: MintedMUSD (Reconstructed & Fixed)
+-- =============================================================================
+
+-- FIX: signatory issuer only (not issuer+owner). The issuer mints unilaterally;
+-- owner is an observer and controller of lifecycle choices. This matches the
+-- standard Daml asset pattern and allows MintFromAttestation to work without
+-- requiring the beneficiary's authority at mint time.
+template MintedMUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+  where
+    signatory issuer
+    observer owner
+
+    ensure amount > 0.0
+
+    choice Split : (ContractId MintedMUSD, ContractId MintedMUSD)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Split amount must be less than total" (splitAmount < amount)
+        cid1 <- create this with amount = splitAmount
+        cid2 <- create this with amount = amount - splitAmount
+        return (cid1, cid2)
+
+    choice Merge : ContractId MintedMUSD
+      with
+        otherCid : ContractId MintedMUSD
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Issuers must match" (other.issuer == issuer)
+        assertMsg "Owners must match" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    choice Transfer : ContractId MUSDTransferRequest
+      with
+        newOwner : Party
+      controller owner
+      do
+        create MUSDTransferRequest with
+          issuer = issuer
+          sender = owner
+          receiver = newOwner
+          assetCid = self
+
+    choice Cancel : ()
+      controller issuer
+      do
+        return ()
+
+template MUSDTransferRequest
+  with
+    issuer : Party
+    sender : Party
+    receiver : Party
+    assetCid : ContractId MintedMUSD
+  where
+    -- FIX: issuer carried through from MintedMUSD so Accept can archive
+    -- the original asset (needs issuer authority). Only sender signs at
+    -- creation — receiver is observer until they exercise Accept.
+    signatory issuer, sender
+    observer receiver
+
+    choice Accept : ContractId MintedMUSD
+      controller receiver
+      do
+        asset <- fetch assetCid
+        archive assetCid
+        create asset with owner = receiver
+
+    choice Reject : ContractId MintedMUSD
+      controller receiver
+      do
+        return assetCid
+
+    choice Withdraw : ()
+      controller sender
+      do
+        return ()
+
+-- =============================================================================
+-- Module: CantonDirectMint (Reconstructed & Fixed)
+-- =============================================================================
+
+data AttestationPayload = AttestationPayload
+  with
+    requestId : Text
+    amount : Decimal
+    beneficiary : Party
+    approvers : [Party]
+  deriving (Eq, Show)
+
+template AttestationRequest
+  with
+    operator : Party
+    requester : Party
+    requiredSigners : [Party]
+    signedBy : [Party]
+    payload : AttestationPayload
+  where
+    signatory requester
+    observer operator, requiredSigners
+
+    choice ProvideSignature : ContractId AttestationRequest
+      with
+        signer : Party
+      controller signer
+      do
+        assertMsg "Signer not required" (signer `elem` requiredSigners)
+        assertMsg "Already signed" (not (signer `elem` signedBy))
+        create this with signedBy = signer :: signedBy
+
+    -- FIX: Creates MintAuthorization with requester as signatory (authority
+    -- flows from this contract's signatory). Operator is observer/controller.
+    choice FinalizeAttestation : ContractId MintAuthorization
+      controller requester
+      do
+        let allSigned = all (`elem` signedBy) requiredSigners
+        assertMsg "Missing signatures" allSigned
+        create MintAuthorization with
+          requester = requester
+          operator = operator
+          payload = payload
+
+-- FIX: signatory requester (not operator). Requester's authority flows from
+-- FinalizeAttestation. Operator is a controller on MintFromAttestation,
+-- giving them authority to create the resulting MintedMUSD.
+template MintAuthorization
+  with
+    requester : Party
+    operator : Party
+    payload : AttestationPayload
+  where
+    signatory requester
+    observer operator
+
+    choice MintFromAttestation : ContractId MintedMUSD
+      controller operator
+      do
+        create MintedMUSD with
+          issuer = operator
+          owner = payload.beneficiary
+          amount = payload.amount
+
+    choice ApproveMint : ContractId MintedMUSD
+      controller operator
+      do
+        create MintedMUSD with
+          issuer = operator
+          owner = payload.beneficiary
+          amount = payload.amount
+
+-- =============================================================================
+-- Module: Test (Reconstructed based on logs)
+-- =============================================================================
+
+test_protocol : Script ()
+test_protocol = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  bank <- allocateParty "Bank"
+  operator <- allocateParty "Operator"
+
+  let t1 = datetime 2024 Jan 01 12 0 0
+
+  -- 1. Test Institutional Asset
+  equityCid <- submitMulti [bank, alice] [] do
+    createCmd InstitutionalEquityPosition with
+      issuer = bank
+      owner = alice
+      quantity = 1000.0
+      symbol = "TSLA"
+
+  -- 2. Test Direct Mint Flow
+  let payload = AttestationPayload with
+        requestId = "REQ-001"
+        amount = 500.0
+        beneficiary = alice
+        approvers = [bank]
+
+  reqCid <- submit alice do
+    createCmd AttestationRequest with
+      operator = operator
+      requester = alice
+      requiredSigners = [bank]
+      signedBy = []
+      payload = payload
+
+  reqSignedCid <- submit bank do
+    exerciseCmd reqCid ProvideSignature with signer = bank
+
+  authCid <- submit alice do
+    exerciseCmd reqSignedCid FinalizeAttestation
+
+  musdCid <- submit operator do
+    exerciseCmd authCid MintFromAttestation
+
+  -- 3. Test MUSD Logic (Split, Transfer, Merge)
+  (split1, split2) <- submit alice do
+    exerciseCmd musdCid Split with splitAmount = 200.0
+
+  transferReq <- submit alice do
+    exerciseCmd split1 Transfer with newOwner = bob
+
+  bobMusd <- submit bob do
+    exerciseCmd transferReq Accept
+
+  -- Cleanup
+  submit operator do
+    exerciseCmd split2 Cancel
+
+  pure ()
