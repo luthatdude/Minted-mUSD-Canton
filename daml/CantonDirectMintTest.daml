@@ -13,6 +13,7 @@ module CantonDirectMintTest where
 import CantonDirectMint
 import BLEBridgeProtocol
 import CantonSMUSD
+import Compliance
 import DA.Time
 import DA.Set qualified as Set
 import Daml.Script
@@ -58,6 +59,11 @@ directMintFlowTest = script do
       targetChainId = 1
       targetTreasury = "0xTreasuryContractAddress"
       nextNonce = 1
+      dailyMintLimit = 5000000.000000000000000000
+      dailyMinted = 0.000000000000000000
+      dailyBurned = 0.000000000000000000
+      lastRateLimitReset = datetime 2024 Jan 1 0 0 0
+      complianceRegistryCid = None
 
   -- Alice mints mUSD
   (newServiceCid, musdCid, bridgeReqCid) <- submit alice do
@@ -113,6 +119,11 @@ redeemFlowTest = script do
       targetChainId = 1
       targetTreasury = "0xTreasury"
       nextNonce = 1
+      dailyMintLimit = 5000000.000000000000000000
+      dailyMinted = 0.000000000000000000
+      dailyBurned = 0.000000000000000000
+      lastRateLimitReset = datetime 2024 Jan 1 0 0 0
+      complianceRegistryCid = None
 
   -- Issue USDC and mint mUSD
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
@@ -438,6 +449,11 @@ endToEndFlowTest = script do
       targetChainId = 1
       targetTreasury = "0xTreasury"
       nextNonce = 1
+      dailyMintLimit = 5000000.000000000000000000
+      dailyMinted = 0.000000000000000000
+      dailyBurned = 0.000000000000000000
+      lastRateLimitReset = datetime 2024 Jan 1 0 0 0
+      complianceRegistryCid = None
 
   -- Mint mUSD (fee = 10000 * 0.003 = 30, net = 9970)
   (mintServiceCid2, musdCid, bridgeReqCid) <- submit alice do
@@ -563,6 +579,11 @@ pausedServiceTest = script do
       targetChainId = 1
       targetTreasury = "0xTreasury"
       nextNonce = 1
+      dailyMintLimit = 5000000.000000000000000000
+      dailyMinted = 0.000000000000000000
+      dailyBurned = 0.000000000000000000
+      lastRateLimitReset = datetime 2024 Jan 1 0 0 0
+      complianceRegistryCid = None
 
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
     createCmd CantonUSDC with

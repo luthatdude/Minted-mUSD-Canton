@@ -18,6 +18,8 @@ module CantonDirectMint where
 
 import DA.Time
 import DA.Set qualified as Set
+import DA.Optional (whenSome)
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
 type Money = Numeric 18
@@ -247,6 +249,8 @@ template CantonDirectMintService
     dailyMinted : Money          -- Cumulative mints in current window
     dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
     lastRateLimitReset : Time    -- Timestamp of last window reset
+    -- Compliance hook (optional — None disables compliance checks)
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
   where
     signatory operator
     observer usdcIssuer
@@ -260,6 +264,10 @@ template CantonDirectMintService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check: verify minter is not blacklisted
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateMint with minter = user
 
         usdc <- fetch usdcCid
         assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
@@ -328,6 +336,10 @@ template CantonDirectMintService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
+        -- Compliance check: verify redeemer is not blacklisted or frozen
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateRedemption with redeemer = user
+
         musd <- fetch musdCid
         assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == user)
@@ -391,6 +403,13 @@ template CantonDirectMintService
       do
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         create this with dailyMintLimit = newLimit
+
+    choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
+      with
+        newRegistryCid : Optional (ContractId ComplianceRegistry)
+      controller operator
+      do
+        create this with complianceRegistryCid = newRegistryCid
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
       controller operator
