@@ -1,4 +1,4 @@
-sdk-version: 2.8.0
+sdk-version: 2.10.3
 name: ble-protocol
 source: .
 version: 1.0.0
@@ -7,4 +7,4 @@ dependencies:
   - daml-stdlib
   - daml-script
 build-options:
-  - "--warn-unused-imports=no"
+  - "--ghc-option=-Wno-unused-imports"
