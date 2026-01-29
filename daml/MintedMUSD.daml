@@ -3,15 +3,14 @@ import Daml.Script
 -- | The core stablecoin contract
 template MUSD
   with
-    provider : party
-    owner : party
+    provider : Party
+    owner : Party
     amount : Decimal
-    nonce : Int -- Used to ensure unique contract IDs for identical amounts
+    nonce : Int 
   where
     signatory provider, owner
-    -- A. SECURITY: Prevents negative or zero-value contracts
     ensure amount > 0.0
-    -- B. LOGIC: Allows the owner to split their asset
+    -- A. LOGIC: Allows the owner to split their asset into two
     choice MUSD_Split : (ContractId MUSD, ContractId MUSD)
       with
         splitAmount : Decimal
@@ -23,43 +22,84 @@ template MUSD
         c1 <- create this with amount = splitAmount; nonce = nonce + 1
         c2 <- create this with amount = rest; nonce = nonce + 2
         return (c1, c2)
-    -- C. LOGIC: Merges two assets (Owner must own both)
+    -- B. LOGIC: Merges two assets into one
     choice MUSD_Merge : ContractId MUSD
       with
         otherCid : ContractId MUSD
       controller owner
       do
         other <- fetch otherCid
+        -- Security & Logic checks
+        assertMsg "Cannot merge a contract with itself" (otherCid /= self)
         assertMsg "Must be same provider" (provider == other.provider)
         assertMsg "Must be same owner" (owner == other.owner)
+        -- Archive the other contract
         archive otherCid
-        create this with amount = amount + other.amount; nonce = nonce + 1
-    -- D. ARCHITECTURE: Transfer Proposal Pattern
-    -- Solves the "Signatory Bottleneck" by allowing the receiver to accept
+        -- 'self' is archived automatically because this choice is consuming
+        create this with 
+          amount = amount + other.amount
+          nonce = nonce + 1
+    -- C. ARCHITECTURE: Initiates the Transfer Proposal Pattern
     choice MUSD_Transfer : ContractId MUSD_TransferProposal
       with
-        newOwner : party
+        newOwner : Party
       controller owner
       do
         create MUSD_TransferProposal with 
-          usd = this, 
-          newOwner
--- | Proposal contract created when Alice wants to send to Bob
+          usd = this
+          newOwner = newOwner
+-- | Proposal contract to handle the 2-step transfer process
 template MUSD_TransferProposal
   with
     usd : MUSD
-    newOwner : party
+    newOwner : Party
   where
     signatory usd.provider, usd.owner
     observer newOwner
+    -- Receiver accepts: they become the new owner
     choice MUSD_AcceptTransfer : ContractId MUSD
       controller newOwner
       do
-        -- Creates a new MUSD with the same provider but a new owner
         create usd with owner = newOwner, nonce = usd.nonce + 1
-    choice MUSD_RejectTransfer : ()
+    -- Receiver rejects: asset is returned to the original owner
+    choice MUSD_RejectTransfer : ContractId MUSD
       controller newOwner
-      do return ()
-    choice MUSD_CancelTransfer : ()
+      do
+        create usd
+    -- Sender cancels: asset is returned to the original owner
+    choice MUSD_CancelTransfer : ContractId MUSD
       controller usd.owner
-      do return ()
+      do
+        create usd
+---
+-- TEST SCRIPT
+---
+test_musd_flow : Script ()
+test_musd_flow = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  -- 1. Mint initial MUSD
+  aliceMUSD <- submit bank do
+    submit alice do
+      createCmd MUSD with 
+        provider = bank
+        owner = alice
+        amount = 100.0
+        nonce = 0
+  -- 2. Alice splits her 100 into 40 and 60
+  (musd40, musd60) <- submit alice do
+    exerciseCmd aliceMUSD MUSD_Split with splitAmount = 40.0
+  -- 3. Alice proposes transferring the 40 to Bob
+  proposal <- submit alice do
+    exerciseCmd musd40 MUSD_Transfer with newOwner = bob
+  -- 4. Alice changes her mind and cancels the transfer
+  cancelledMUSD <- submit alice do
+    exerciseCmd proposal MUSD_CancelTransfer
+  -- 5. Alice merges the cancelled 40 back with her 60
+  finalMUSD <- submit alice do
+    exerciseCmd cancelledMUSD MUSD_Merge with otherCid = musd60
+  -- Final check: Alice should have one contract with 100.0 again
+  musdData <- submit alice do fetch finalMUSD
+  assert (musdData.amount == 100.0)
+  pure ()
