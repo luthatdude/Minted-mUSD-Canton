@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -325,6 +325,9 @@ contract TreasuryV2 is
             allocations = new uint256[](strategies.length);
         }
 
+        // FIX H-04: Update lastRecordedValue AFTER deposit
+        lastRecordedValue = totalValue();
+
         emit Deposited(msg.sender, amount, allocations);
         return allocations;
     }
@@ -405,6 +408,10 @@ contract TreasuryV2 is
             _autoAllocate(amount);
         }
 
+        // FIX H-04: Update lastRecordedValue AFTER deposit so the new deposit
+        // is not mistaken for yield on the next _accrueFees() call.
+        lastRecordedValue = totalValue();
+
         uint256[] memory allocs = new uint256[](0);
         emit Deposited(from, amount, allocs);
     }
@@ -459,8 +466,10 @@ contract TreasuryV2 is
 
         if (totalTargetBps == 0) return allocations;
 
-        // Allocate proportionally
-        uint256 allocated = 0;
+        // FIX C-01: Track shares approved (not deposited) for remainder calculation.
+        // This prevents the last strategy from receiving an incorrect amount when
+        // prior strategies deposit less than approved due to slippage.
+        uint256 sharesApproved = 0;
         uint256 lastActiveIdx = type(uint256).max;
 
         // Find last active auto-allocate strategy for remainder handling
@@ -477,19 +486,20 @@ contract TreasuryV2 is
             uint256 share;
             if (i == lastActiveIdx) {
                 // Last active strategy gets remainder to avoid rounding dust
-                share = toAllocate - allocated;
+                share = toAllocate - sharesApproved;
             } else {
                 share = (toAllocate * strategies[i].targetBps) / totalTargetBps;
             }
 
             if (share > 0) {
+                sharesApproved += share;
+
                 // Approve and deposit
                 address strat = strategies[i].strategy;
                 asset.forceApprove(strat, share);
 
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
-                    allocated += deposited;
                 } catch {
                     // Strategy deposit failed, keep in reserve
                     allocations[i] = 0;
@@ -509,15 +519,18 @@ contract TreasuryV2 is
 
         // Calculate total strategy value
         uint256 totalStratValue = 0;
+        uint256 lastActiveIdx = type(uint256).max;
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
                 totalStratValue += IStrategy(strategies[i].strategy).totalValue();
+                lastActiveIdx = i;
             }
         }
 
         if (totalStratValue == 0) return 0;
 
-        // Withdraw proportionally from each strategy
+        // FIX M-07: Withdraw proportionally, give last strategy the remainder
+        // to avoid rounding dust leaving funds stranded across strategies.
         for (uint256 i = 0; i < strategies.length && remaining > 0; i++) {
             if (!strategies[i].active) continue;
 
@@ -526,8 +539,13 @@ contract TreasuryV2 is
 
             if (stratValue == 0) continue;
 
-            // Calculate proportional withdrawal
-            uint256 toWithdraw = (amount * stratValue) / totalStratValue;
+            // Last active strategy gets whatever remains to handle rounding
+            uint256 toWithdraw;
+            if (i == lastActiveIdx) {
+                toWithdraw = remaining;
+            } else {
+                toWithdraw = (amount * stratValue) / totalStratValue;
+            }
             if (toWithdraw > remaining) toWithdraw = remaining;
             if (toWithdraw > stratValue) toWithdraw = stratValue;
 
@@ -583,7 +601,8 @@ contract TreasuryV2 is
         uint256 toClaim = fees.accruedFees;
         if (toClaim == 0) return;
 
-        fees.accruedFees = 0;
+        // FIX I-05: Only deduct what is actually sent, not the full claim amount.
+        // This prevents loss if reserve + strategies can't cover the full amount.
 
         // Withdraw from strategies if needed
         uint256 reserve = reserveBalance();
@@ -593,6 +612,9 @@ contract TreasuryV2 is
 
         uint256 available = reserveBalance();
         uint256 toSend = available < toClaim ? available : toClaim;
+
+        // Only deduct what we actually send; remainder stays as accruedFees
+        fees.accruedFees = toClaim - toSend;
 
         asset.safeTransfer(fees.feeRecipient, toSend);
 
@@ -642,8 +664,8 @@ contract TreasuryV2 is
         strategyIndex[strategy] = strategies.length - 1;
         isStrategy[strategy] = true;
 
-        // Approve strategy for max (revoked on removal)
-        asset.forceApprove(strategy, type(uint256).max);
+        // FIX H-03: Do NOT grant unlimited approval at add-time.
+        // Approvals are granted per-operation in _autoAllocate and rebalance.
 
         emit StrategyAdded(strategy, targetBps);
     }
@@ -665,6 +687,8 @@ contract TreasuryV2 is
         strategies[idx].active = false;
         strategies[idx].targetBps = 0;
         isStrategy[strategy] = false;
+        // FIX M-09: Clean up stale strategyIndex mapping
+        delete strategyIndex[strategy];
 
         // Revoke approval
         asset.forceApprove(strategy, 0);

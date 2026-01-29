@@ -2,7 +2,7 @@
 // BLE Protocol - Price Oracle Aggregator
 // Wraps Chainlink feeds for ETH/BTC price data used by CollateralVault and LiquidationEngine
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 

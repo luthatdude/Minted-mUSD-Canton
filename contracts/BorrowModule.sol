@@ -2,7 +2,7 @@
 // BLE Protocol - Borrow Module
 // Tracks debt positions with per-second interest accrual
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";

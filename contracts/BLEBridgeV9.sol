@@ -10,7 +10,7 @@
 // minSignatures, lastAttestationTime, lastRatioChangeTime, usedAttestationIds) + __gap[42] = 50 slots.
 // Direct UUPS upgrade from V8->V9 will corrupt storage. A migration contract is required.
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -144,7 +144,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         _pause();
     }
 
-    function unpause() external onlyRole(EMERGENCY_ROLE) {
+    /// FIX H-05: Unpause requires DEFAULT_ADMIN_ROLE (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 

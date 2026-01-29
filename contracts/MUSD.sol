@@ -2,7 +2,7 @@
 // BLE Protocol - Fixed Version V2
 // Added: CAP_MANAGER_ROLE for BLEBridgeV9 supply cap updates
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
