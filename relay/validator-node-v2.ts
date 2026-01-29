@@ -18,9 +18,23 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
+import * as fs from "fs";
 // FIX M-17: Removed unused crypto import
 // FIX M-20: Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
+
+// FIX I-C01: Read Docker secrets from /run/secrets/ with env var fallback
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch {
+    // Fall through to env var
+  }
+  return process.env[envVar] || "";
+}
 
 // ============================================================
 //                     CONFIGURATION
@@ -54,11 +68,12 @@ const DEFAULT_CONFIG: ValidatorConfig = {
   cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
   // FIX H-7: Added explicit radix 10 to all parseInt calls
   cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865", 10),
-  cantonLedgerToken: process.env.CANTON_LEDGER_TOKEN || "",
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  cantonLedgerToken: readSecret("canton_token", "CANTON_LEDGER_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
   cantonAssetApiUrl: process.env.CANTON_ASSET_API_URL || "https://api.canton.network",
-  cantonAssetApiKey: process.env.CANTON_ASSET_API_KEY || "",
+  cantonAssetApiKey: readSecret("canton_asset_api_key", "CANTON_ASSET_API_KEY"),
 
   awsRegion: process.env.AWS_REGION || "us-east-1",
   kmsKeyId: process.env.KMS_KEY_ID || "",
@@ -545,18 +560,32 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiUrl) {
     throw new Error("CANTON_ASSET_API_URL not set");
   }
-  // FIX M-23: Validate required addresses at startup
+  // FIX M-23 + T-C02: Validate required addresses at startup
   if (!DEFAULT_CONFIG.ethereumAddress) {
     throw new Error("VALIDATOR_ETH_ADDRESS not set");
   }
+  if (!ethers.isAddress(DEFAULT_CONFIG.ethereumAddress)) {
+    throw new Error("VALIDATOR_ETH_ADDRESS is not a valid Ethereum address");
+  }
   if (!DEFAULT_CONFIG.bridgeContractAddress) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
+  }
+  if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
   }
   if (!DEFAULT_CONFIG.cantonLedgerToken) {
     throw new Error("CANTON_LEDGER_TOKEN not set");
   }
   if (!DEFAULT_CONFIG.cantonAssetApiKey) {
     throw new Error("CANTON_ASSET_API_KEY not set");
+  }
+  // FIX T-H01: Validate Canton Asset API URL uses HTTPS in production
+  if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
+    throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
+  }
+  // FIX T-H05: Validate targetBridgeAddress format
+  if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
+    throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
   }
 
   const validator = new ValidatorNode(DEFAULT_CONFIG);
@@ -572,6 +601,12 @@ async function main(): Promise<void> {
 
   await validator.start();
 }
+
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
 
 main().catch((error) => {
   console.error("[Main] Fatal error:", error);

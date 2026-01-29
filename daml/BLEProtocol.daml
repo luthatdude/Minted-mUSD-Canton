@@ -27,7 +27,8 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    ensure totalValue >= 0.0
+    -- FIX D-M03: Require strictly positive totalValue
+    ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
     maintainer key._1
@@ -96,7 +97,11 @@ template AttestationRequest
 
         -- VERIFICATION: Enforce 110% Collateral Ratio
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
-        assertMsg "PAYLOAD_VALUE_MISMATCH" (totalGlobalValue == payload.globalCantonAssets)
+        -- FIX D-H08: Use tolerance-based comparison for Numeric 18 (1 USD tolerance)
+        let valueDiff = if totalGlobalValue > payload.globalCantonAssets
+                        then totalGlobalValue - payload.globalCantonAssets
+                        else payload.globalCantonAssets - totalGlobalValue
+        assertMsg "PAYLOAD_VALUE_MISMATCH" (valueDiff < 1.0)
 
         -- FIX D-02: Update signature tracking
         let newSignatures = Set.insert validator collectedSignatures
@@ -149,6 +154,9 @@ template AttestationRequest
 
         -- Final verification before attestation is considered valid
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+
+        -- FIX D-M05: Archive signature contracts after finalization to prevent reuse
+        mapA archive signatureCids
 
         return signatureCids
 

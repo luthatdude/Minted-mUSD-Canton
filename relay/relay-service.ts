@@ -16,6 +16,20 @@ import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
+import * as fs from "fs";
+
+// FIX I-C01: Read Docker secrets from /run/secrets/ with env var fallback
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch {
+    // Fall through to env var
+  }
+  return process.env[envVar] || "";
+}
 
 // ============================================================
 //                     CONFIGURATION
@@ -43,12 +57,13 @@ const DEFAULT_CONFIG: RelayConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
   // FIX H-7: Added explicit radix 10 to all parseInt calls
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
-  cantonToken: process.env.CANTON_TOKEN || "",
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
 
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
-  relayerPrivateKey: process.env.RELAYER_PRIVATE_KEY || "",
+  relayerPrivateKey: readSecret("relayer_private_key", "RELAYER_PRIVATE_KEY"),
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
@@ -386,7 +401,8 @@ class RelayService {
    * Build the message hash that validators signed
    */
   private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
-    const chainId = Number(payload.chainId);
+    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    const chainId = BigInt(payload.chainId);
 
     return ethers.solidityPackedKeccak256(
       ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
@@ -550,6 +566,12 @@ async function main(): Promise<void> {
   // Start relay
   await relay.start();
 }
+
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
 
 main().catch((error) => {
   console.error("[Main] Fatal error:", error);

@@ -100,6 +100,14 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
         emit CollateralUpdated(token, 0, 0);
     }
 
+    /// FIX S-C03: Re-enable a previously disabled collateral token
+    function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
+        require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
+        require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
+        collateralConfigs[token].enabled = true;
+        emit CollateralUpdated(token, collateralConfigs[token].collateralFactorBps, collateralConfigs[token].liquidationThresholdBps);
+    }
+
     // ============================================================
     //                  USER OPERATIONS
     // ============================================================

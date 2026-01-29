@@ -41,8 +41,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     uint256 public redeemFeeBps;
     uint256 public constant MAX_FEE_BPS = 500; // 5% max
 
-    // Accumulated fees (in USDC decimals)
-    uint256 public accumulatedFees;
+    // Accumulated fees (in USDC decimals) - tracked separately
+    uint256 public mintFees;    // Fees from minting (held in this contract)
+    uint256 public redeemFees;  // Fees from redeeming (held in Treasury)
     address public feeRecipient;
 
     // Per-transaction limits (in USDC decimals, 6 decimals)
@@ -115,9 +116,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         usdc.forceApprove(address(treasury), usdcAfterFee);
         treasury.deposit(address(this), usdcAfterFee);
 
-        // Track fees
+        // Track mint fees (held in this contract)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            mintFees += feeUsdc;
         }
 
         // Mint mUSD to user
@@ -152,9 +153,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw from treasury to user
         treasury.withdraw(msg.sender, usdcOut);
 
-        // Track fees
+        // Track redeem fees (these remain in the Treasury, not in this contract)
         if (feeUsdc > 0) {
-            accumulatedFees += feeUsdc;
+            redeemFees += feeUsdc;
         }
 
         emit Redeemed(msg.sender, musdAmount, usdcOut, feeUsdc);
@@ -225,11 +226,16 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     }
 
     function withdrawFees() external onlyRole(FEE_MANAGER_ROLE) {
-        uint256 fees = accumulatedFees;
+        uint256 fees = mintFees;
         require(fees > 0, "NO_FEES");
-        accumulatedFees = 0;
+        mintFees = 0;
         usdc.safeTransfer(feeRecipient, fees);
         emit FeesWithdrawn(feeRecipient, fees);
+    }
+
+    /// @notice View total accumulated fees (mint + redeem) for accounting
+    function totalAccumulatedFees() external view returns (uint256) {
+        return mintFees + redeemFees;
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {

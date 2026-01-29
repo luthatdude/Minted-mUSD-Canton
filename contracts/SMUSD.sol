@@ -25,13 +25,12 @@ contract SMUSD is ERC4626, AccessControl {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    // FIX M-01: Only update cooldown when depositing for yourself.
-    // Prevents griefing where attacker deposits 1 wei to reset victim's cooldown.
+    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party deposit.
+    // A depositor can always set their own cooldown, and depositing on behalf of someone
+    // correctly locks the receiver's withdrawal window.
     function deposit(uint256 assets, address receiver) public override returns (uint256) {
-        if (msg.sender == receiver) {
-            lastDeposit[receiver] = block.timestamp;
-            emit CooldownUpdated(receiver, block.timestamp);
-        }
+        lastDeposit[receiver] = block.timestamp;
+        emit CooldownUpdated(receiver, block.timestamp);
         return super.deposit(assets, receiver);
     }
 

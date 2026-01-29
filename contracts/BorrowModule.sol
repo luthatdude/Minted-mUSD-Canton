@@ -65,6 +65,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     event CollateralWithdrawn(address indexed user, address indexed token, uint256 amount);
     event InterestRateUpdated(uint256 oldRate, uint256 newRate);
     event DebtAdjusted(address indexed user, uint256 newDebt, string reason);
+    event MinDebtUpdated(uint256 oldMinDebt, uint256 newMinDebt);
 
     constructor(
         address _vault,
@@ -130,6 +131,12 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
+
+        // FIX S-M03: Prevent dust positions after partial repayment
+        uint256 remaining = total - repayAmount;
+        if (remaining > 0) {
+            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+        }
 
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
@@ -331,6 +338,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     }
 
     function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
+        emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
     }
 }

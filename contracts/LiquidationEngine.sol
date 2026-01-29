@@ -72,6 +72,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 collateralSeized
     );
     event CloseFactorUpdated(uint256 oldFactor, uint256 newFactor);
+    event FullLiquidationThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
     constructor(
         address _vault,
@@ -226,6 +227,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
 
     function setFullLiquidationThreshold(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
+        emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
     }
 }

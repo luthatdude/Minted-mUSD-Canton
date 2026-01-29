@@ -32,6 +32,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public currentNonce;
     uint256 public minSignatures;
     uint256 public lastAttestationTime;
+    uint256 public lastRatioChangeTime;
 
     // Attestation tracking
     mapping(bytes32 => bool) public usedAttestationIds;
@@ -54,6 +55,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets);
     event CollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
     event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
+    event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
+    event MUSDTokenUpdated(address indexed oldToken, address indexed newToken);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -88,6 +91,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_musdToken != address(0), "INVALID_ADDRESS");
+        emit MUSDTokenUpdated(address(musdToken), _musdToken);
         musdToken = IMUSD(_musdToken);
     }
 
@@ -99,6 +103,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
     // For production, this should be behind a timelock contract.
     function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        // FIX S-M02: Rate-limit ratio changes to once per day
+        require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
         require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
         // FIX M-05: Prevent drastic ratio changes (max 10% change at a time)
         uint256 oldRatio = collateralRatioBps;
@@ -112,6 +118,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         if (attestedCantonAssets > 0) {
             _updateSupplyCap(attestedCantonAssets);
         }
+
+        lastRatioChangeTime = block.timestamp;
     }
 
     // ============================================================
@@ -141,6 +149,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function forceUpdateNonce(uint256 _newNonce, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(bytes(_reason).length > 0, "REASON_REQUIRED");
         require(_newNonce > currentNonce, "NONCE_MUST_INCREASE");
+        emit NonceForceUpdated(currentNonce, _newNonce, _reason);
         currentNonce = _newNonce;
     }
 
@@ -258,5 +267,5 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
-    uint256[40] private __gap;
+    uint256[42] private __gap;
 }

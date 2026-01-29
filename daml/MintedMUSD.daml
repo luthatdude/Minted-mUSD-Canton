@@ -99,30 +99,36 @@ template TransferProposal
 
 
 -- | Issuer role contract for minting mUSD.
+-- FIX D-C01: supplyCap and currentSupply stored in contract state (not caller-supplied).
+-- FIX D-C02: requiredSignatures derived from validatorGroup length (not caller-supplied).
 -- Supports two minting paths:
 --   1. MintFromAttestation: Collateral-backed minting gated by finalized attestation
---   2. Mint: Direct minting (for bootstrapping/testing, should be restricted in production)
+--   2. Mint: Direct minting (consuming — updates supply tracking)
 template IssuerRole
   with
     issuer : Party
+    supplyCap : Money
+    currentSupply : Money
   where
     signatory issuer
 
     -- | Mint mUSD backed by a finalized attestation from the validator network.
-    -- FIX C-03: Made consuming choice to prevent replay attacks.
-    -- The attestation is archived after minting, preventing reuse.
+    -- FIX D-C02: requiredSignatures derived from attestation's validatorGroup.
+    -- Archives attestation to prevent replay.
     nonconsuming choice MintFromAttestation : ContractId MUSD
       with
         owner : Party
         mintAmount : Money
         attestationCid : ContractId AttestationRequest
         signatureCids : [ContractId ValidatorSignature]
-        requiredSignatures : Int
       controller issuer
       do
         assertMsg "Mint amount must be positive." (mintAmount > 0.0)
 
-        -- Verify the attestation has enough valid signatures
+        -- Fetch the attestation to derive quorum and verify mint details
+        attestation <- fetch attestationCid
+        -- FIX D-C02: Derive requiredSignatures from validatorGroup (supermajority)
+        let requiredSignatures = (length attestation.validatorGroup + 1) `div` 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         -- Fetch and verify all signatures are from distinct validators
@@ -131,12 +137,10 @@ template IssuerRole
         let uniqueValidators = dedup sigValidators
         assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (length uniqueValidators == length sigValidators)
 
-        -- Fetch the attestation to verify the mint details match
-        attestation <- fetch attestationCid
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
         assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
 
-        -- FIX C-03: Archive the attestation to prevent replay
+        -- Archive the attestation to prevent replay
         archive attestationCid
 
         -- All checks passed — create the mUSD
@@ -146,22 +150,30 @@ template IssuerRole
           amount = mintAmount
 
     -- | Direct mint (for bootstrapping/admin use).
-    -- FIX C-04: Added supply cap to prevent unlimited minting.
-    -- In production, use MintFromAttestation only.
-    nonconsuming choice Mint : ContractId MUSD
+    -- FIX D-C01: Consuming choice — supply tracked in contract state.
+    choice Mint : (ContractId IssuerRole, ContractId MUSD)
       with
         owner : Party
         amount : Money
-        supplyCap : Money
-        currentSupply : Money
       controller issuer
       do
         assertMsg "Mint amount must be positive." (amount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + amount <= supplyCap)
-        create MUSD with
+        musdCid <- create MUSD with
           issuer
           owner
           amount
+        newRole <- create this with currentSupply = currentSupply + amount
+        return (newRole, musdCid)
+
+    -- | Update the supply cap (admin only).
+    choice UpdateSupplyCap : ContractId IssuerRole
+      with
+        newCap : Money
+      controller issuer
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
 
 
 -- =========================================

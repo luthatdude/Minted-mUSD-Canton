@@ -5,6 +5,7 @@
 module Test where
 
 import BLEProtocol
+import MintedMUSD
 import DA.Time
 import DA.Set qualified as Set
 import Daml.Script
@@ -18,6 +19,10 @@ testAmount = 1000000.000000000000000000  -- 1M USD with 18 decimals
 
 testCollateral : Numeric 18
 testCollateral = 1100000.000000000000000000  -- 1.1M USD (110% of amount)
+
+-- Mock ECDSA signature (132 chars: "0x" + 130 hex chars) for BLEProtocol validation
+mockSignature : Text
+mockSignature = "0xaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddeeaabbccddee1b"
 
 -- Full integration test
 fullProtocolFlowTest : Script ()
@@ -91,7 +96,7 @@ fullProtocolFlowTest = script do
   (attestationCid1, sig1Cid) <- submit validator1 do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator1
-      ecdsaSignature = "0xsig1_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 1 signed"
 
@@ -99,7 +104,7 @@ fullProtocolFlowTest = script do
   (attestationCid2, sig2Cid) <- submit validator2 do
     exerciseCmd attestationCid1 ProvideSignature with
       validator = validator2
-      ecdsaSignature = "0xsig2_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 2 signed"
 
@@ -107,7 +112,7 @@ fullProtocolFlowTest = script do
   (attestationCid3, sig3Cid) <- submit validator3 do
     exerciseCmd attestationCid2 ProvideSignature with
       validator = validator3
-      ecdsaSignature = "0xsig3_mock_ecdsa_signature_from_aws_kms"
+      ecdsaSignature = mockSignature
 
   debug "  Validator 3 signed (threshold reached)"
 
@@ -116,7 +121,6 @@ fullProtocolFlowTest = script do
 
   finalSigs <- submit aggregator do
     exerciseCmd attestationCid3 FinalizeAttestation with
-      requiredSignatures = 3
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
 
   debug "  Attestation finalized successfully!"
@@ -167,7 +171,7 @@ insufficientCollateralTest = script do
   submitMustFail validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig_mock"
+      ecdsaSignature = mockSignature
 
   debug "Insufficient collateral test passed - signature correctly rejected"
 
@@ -215,13 +219,13 @@ duplicateSignatureTest = script do
   (attestationCid2, _) <- submit validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig1"
+      ecdsaSignature = mockSignature
 
   -- Second signature from same validator should fail
   submitMustFail validator do
     exerciseCmd attestationCid2 ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig2"
+      ecdsaSignature = mockSignature
 
   debug "Duplicate signature test passed - second signature correctly rejected"
 
@@ -236,7 +240,7 @@ expiredAttestationTest = script do
   validator <- allocateParty "Validator"
 
   now <- getTime
-  let expiresAt = subTime now (hours 1)  -- Already expired
+  let expiresAt = addRelTime now (negate (hours 1))  -- Already expired
 
   positionCid <- submit bank do
     createCmd InstitutionalEquityPosition with
@@ -269,7 +273,7 @@ expiredAttestationTest = script do
   submitMustFail validator do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator
-      ecdsaSignature = "0xsig"
+      ecdsaSignature = mockSignature
 
   debug "Expired attestation test passed - signature on expired request correctly rejected"
 
@@ -318,7 +322,7 @@ unauthorizedValidatorTest = script do
   submitMustFail unauthorizedValidator do
     exerciseCmd attestationCid ProvideSignature with
       validator = unauthorizedValidator
-      ecdsaSignature = "0xsig"
+      ecdsaSignature = mockSignature
 
   debug "Unauthorized validator test passed - signature correctly rejected"
 
@@ -449,10 +453,13 @@ musdAssetTest = script do
 
   -- Create issuer role
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Direct mint (admin/bootstrap path)
-  musdCid <- submit issuer do
+  (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.Mint with
       owner = alice
       amount = 10000.000000000000000000
@@ -525,30 +532,32 @@ musdAttestationMintTest = script do
   (attCid1, sig1Cid) <- submit validator1 do
     exerciseCmd attestationCid ProvideSignature with
       validator = validator1
-      ecdsaSignature = "0xsig1"
+      ecdsaSignature = mockSignature
 
   (attCid2, sig2Cid) <- submit validator2 do
     exerciseCmd attCid1 ProvideSignature with
       validator = validator2
-      ecdsaSignature = "0xsig2"
+      ecdsaSignature = mockSignature
 
   (attCid3, sig3Cid) <- submit validator3 do
     exerciseCmd attCid2 ProvideSignature with
       validator = validator3
-      ecdsaSignature = "0xsig3"
+      ecdsaSignature = mockSignature
 
   -- Create issuer role
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Mint mUSD gated by the finalized attestation
-  musdCid <- submit issuer do
+  musdCid <- submitMulti [issuer, aggregator] [] do
     exerciseCmd roleCid MintFromAttestation with
       owner = alice
       mintAmount = mintAmount
       attestationCid = attCid3
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
-      requiredSignatures = 3
 
   debug "Attestation-gated mint test passed - mUSD minted after 3-of-3 validator approval"
   pure ()
@@ -563,9 +572,12 @@ musdTransferTest = script do
 
   -- Create issuer role and mint
   roleCid <- submit issuer do
-    createCmd MintedMUSD.IssuerRole with issuer
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
-  musdCid <- submit issuer do
+  (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.Mint with
       owner = alice
       amount = 5000.000000000000000000

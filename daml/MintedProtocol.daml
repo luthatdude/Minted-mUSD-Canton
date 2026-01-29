@@ -12,7 +12,8 @@
 module Minted.Protocol where
 
 import DA.Action (foldlA)
-import DA.List (head)
+-- FIX D-L01/L02: Removed unused DA.List (head) import; use DA.Optional.fromOptional
+import DA.Optional (fromOptional)
 
 -- | TYPE DEFINITIONS
 type AssetId = ContractId Asset
@@ -30,7 +31,8 @@ template Asset
     signatory issuer, owner
     observer observers
 
-    ensure amount >= 0.0
+    -- FIX D-C11: Require strictly positive amounts
+    ensure amount > 0.0
 
     choice Asset_Transfer : AssetId
       with
@@ -155,10 +157,10 @@ template Vault
       do
         -- Check Collateral Value
         colData <- fetch collateral
-        oracle <- fetch oracleCid
-        -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
-        -- FIX H-4: Removed duplicate `let price = price` and redundant assertion
-        let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+        -- FIX D-C12: Use exercise GetPrice instead of direct fetch + manual lookup
+        -- This ensures oracle staleness checks are enforced
+        priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
+        let price = fromOptional 0.0 priceOpt
         assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
         let colValue = colData.amount * price
         let newDebt = debtAmount + mintAmount
@@ -202,47 +204,37 @@ template LeverageManager
       do
         assertMsg "Max loops exceeded" $ loops <= 10
         assertMsg "Loops must be positive" $ loops > 0
-        -- Recursive function defined locally to handle the state passing
-        let loopFn (currentVaultCid, currentLoop) _ = do
-              if currentLoop == 0 then return (currentVaultCid, 0)
+        -- FIX D-C06: Thread poolCid through fold state to prevent stale CID after swap
+        -- FIX D-C13: Use exercise GetPrice instead of direct fetch + manual lookup
+        let loopFn (currentVaultCid, currentPoolCid, currentLoop) _ = do
+              if currentLoop == 0 then return (currentVaultCid, currentPoolCid, 0)
               else do
                 vault <- fetch currentVaultCid
                 colData <- fetch vault.collateral
-                oracle <- fetch oracleCid
-                pool <- fetch poolCid
-                -- 1. Calculate Max Borrowable
-                -- Value = Amt * Price
-                -- MaxDebt = Value / Ratio
-                -- Available = MaxDebt - CurrentDebt
-                -- FIX M-13: Abort instead of using 0.0 fallback which breaks math
-                -- FIX H-4: Removed duplicate `let price = price`
-                let price = fromOptional 0.0 $ head [ p | (s, p) <- oracle.prices, s == colData.symbol ]
+                -- FIX D-C13: Use GetPrice choice for staleness enforcement
+                priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
+                let price = fromOptional 0.0 priceOpt
                 assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
                 let colValue = colData.amount * price
                 let maxDebt = colValue / vault.minCollateralRatio
                 let borrowable = maxDebt - vault.debtAmount
                 -- Threshold check to stop looping if diminishing returns are too small
-                if borrowable < 1.0 then return (currentVaultCid, 0)
+                if borrowable < 1.0 then return (currentVaultCid, currentPoolCid, 0)
                 else do
                   -- 2. Borrow
                   (vAfterBorrow, mUSD) <- exercise currentVaultCid Vault_Borrow with
                       mintAmount = borrowable
                       oracleCid = oracleCid
-                  -- 3. Swap mUSD -> Collateral (FIX C-07: handle new pool CID)
-                  (newPoolCid, newCollateral) <- exercise poolCid Swap_mUSD_For_Collateral with
+                  -- 3. Swap mUSD -> Collateral (use threaded poolCid)
+                  (newPoolCid, newCollateral) <- exercise currentPoolCid Swap_mUSD_For_Collateral with
                       musdCid = mUSD
                       receiver = user
                   -- 4. Deposit
                   vFinal <- exercise vAfterBorrow Vault_Deposit with
                       depositCid = newCollateral
-                  return (vFinal, currentLoop - 1)
-        -- Execute the fold
-        -- We create a dummy list of length `loops` to iterate over
-        (finalVault, _) <- foldlA loopFn (vaultCid, loops) [1..loops]
+                  return (vFinal, newPoolCid, currentLoop - 1)
+        -- Execute the fold with threaded pool CID
+        (finalVault, _, _) <- foldlA loopFn (vaultCid, poolCid, loops) [1..loops]
         return finalVault
 
--- | Helper for Optional unwrapping
-fromOptional : a -> Optional a -> a
-fromOptional defaultVal opt = case opt of
-  None -> defaultVal
-  Some v -> v
+-- FIX D-L01: Removed duplicate fromOptional — now imported from DA.Optional

@@ -26,13 +26,15 @@ template Usdc
     -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
     ensure amount > 0.0
 
-    -- FIX C-06: Transfer creates proposal instead of directly assigning signatory
-    choice Usdc_Transfer : ContractId Usdc
+    -- FIX D-C08: Transfer creates proposal instead of directly assigning signatory
+    choice Usdc_Transfer : ContractId UsdcTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create UsdcTransferProposal with
+          usdc = this
+          newOwner
 
     choice Usdc_Split : (ContractId Usdc, ContractId Usdc)
       with
@@ -58,12 +60,15 @@ template Musd
     -- FIX H-5: Require strictly positive amounts to prevent zero-value contract spam
     ensure amount > 0.0
 
-    choice Musd_Transfer : ContractId Musd
+    -- FIX D-C09: Transfer creates proposal instead of directly assigning signatory
+    choice Musd_Transfer : ContractId MusdTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create MusdTransferProposal with
+          musd = this
+          newOwner
 
     choice Musd_Merge : ContractId Musd
       with
@@ -76,6 +81,48 @@ template Musd
         archive otherCid
         create this with amount = amount + other.amount
 
+-- FIX D-C08: Transfer proposal for Usdc (dual-signatory safe)
+template UsdcTransferProposal
+  with
+    usdc : Usdc
+    newOwner : Party
+  where
+    signatory usdc.issuer, usdc.owner
+    observer newOwner
+
+    choice UsdcTransferProposal_Accept : ContractId Usdc
+      controller newOwner
+      do create usdc with owner = newOwner
+
+    choice UsdcTransferProposal_Reject : ContractId Usdc
+      controller newOwner
+      do create usdc
+
+    choice UsdcTransferProposal_Cancel : ContractId Usdc
+      controller usdc.owner
+      do create usdc
+
+-- FIX D-C09: Transfer proposal for Musd (dual-signatory safe)
+template MusdTransferProposal
+  with
+    musd : Musd
+    newOwner : Party
+  where
+    signatory musd.issuer, musd.owner
+    observer newOwner
+
+    choice MusdTransferProposal_Accept : ContractId Musd
+      controller newOwner
+      do create musd with owner = newOwner
+
+    choice MusdTransferProposal_Reject : ContractId Musd
+      controller newOwner
+      do create musd
+
+    choice MusdTransferProposal_Cancel : ContractId Musd
+      controller musd.owner
+      do create musd
+
 -- | Represents the Staked mUSD (sMUSD) which accrues yield.
 template Smusd
   with
@@ -86,6 +133,8 @@ template Smusd
     interestRate : Decimal   -- Annual percentage (e.g., 0.05 for 5%)
   where
     signatory issuer, owner
+    -- FIX D-H03: Ensure positive amount and non-negative interest rate
+    ensure amount > 0.0 && interestRate >= 0.0
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 2: DIRECT MINTING (USDC -> mUSD)
@@ -201,7 +250,10 @@ template StakingService
         let maxYieldRate = 0.50  -- 50% max annual yield
         let maxInterest = smusd.amount * maxYieldRate * durationYears
         let cappedInterest = if interest > maxInterest then maxInterest else interest
-        let totalReturn = smusd.amount + cappedInterest
+        -- FIX D-M04: Cap total yield at 200% of principal regardless of duration
+        let maxTotalYield = smusd.amount * 2.0
+        let finalInterest = if cappedInterest > maxTotalYield then maxTotalYield else cappedInterest
+        let totalReturn = smusd.amount + finalInterest
         -- Mint mUSD + Yield back to user
         create Musd with
           issuer = operator
@@ -222,15 +274,19 @@ template BridgeLock
     targetAddress : Text    -- User's address/party on target
     validators : [Party]    -- List of required validators
     nonce : Int             -- Unique ID for this transaction
+    lockedAt : Time         -- FIX D-M07: Track lock time for minimum duration
   where
     signatory user, operator
     -- Validates that the lock is active
     observer validators
 
-    -- FIX M-14: Allow user+operator to cancel a stuck bridge lock
+    -- FIX D-M07: Require minimum lock duration before cancellation
     choice Cancel_BridgeLock : ContractId Musd
       controller user, operator
       do
+        now <- getTime
+        let minLockDuration = minutes 10
+        assertMsg "CANCEL_TOO_EARLY: minimum 10 minute lock" (subTime now lockedAt >= minLockDuration)
         -- Refund mUSD to user since bridge failed
         create Musd with
           issuer = operator
@@ -261,6 +317,7 @@ template BridgeService
         -- Alternatively, we could archive it here if the bridge mints fresh on the other side.
         -- Here we archive to remove from circulation on Source Domain.
         archive musdCid
+        now <- getTime
         create BridgeLock with
           operator = operator
           user = user
@@ -269,6 +326,7 @@ template BridgeService
           targetAddress = targetAddr
           validators = validators
           nonce = nonce
+          lockedAt = now
 
 -- | Step 2: Attestation (The Proof).
 -- | Validators observe the BridgeLock and create an attestation.
@@ -341,7 +399,8 @@ setup = do
   validator2 <- allocateParty "Validator_2"
 
   -- 2. Issue USDC to Alice
-  usdcCid <- submit usdcBank do
+  -- FIX D-H05: Use submitMulti for dual-signatory contract (Usdc has signatory issuer, owner)
+  usdcCid <- submitMulti [usdcBank, alice] [] do
     createCmd Usdc with
       issuer = usdcBank
       owner = alice

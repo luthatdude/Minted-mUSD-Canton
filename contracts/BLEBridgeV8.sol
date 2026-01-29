@@ -79,6 +79,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
     event NavOracleUpdated(address indexed oracle, uint256 maxDeviationBps, bool enabled);
     event EmergencyPause(address indexed triggeredBy, string reason);
+    event AttestationInvalidated(bytes32 indexed id, string reason);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -191,7 +192,7 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         usedAttestationIds[_attestationId] = true;
 
-        emit EmergencyPause(msg.sender, _reason);
+        emit AttestationInvalidated(_attestationId, _reason);
     }
 
     // ============================================================

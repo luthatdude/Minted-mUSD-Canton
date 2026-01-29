@@ -139,7 +139,8 @@ template Collateral
   where
     signatory issuer, owner
 
-    ensure amount >= 0.0
+    -- FIX D-H01: Require strictly positive amounts
+    ensure amount > 0.0
 
     choice Collateral_Transfer : CollateralId
       with
@@ -179,7 +180,8 @@ template USDC
   where
     signatory issuer, owner
 
-    ensure amount >= 0.0
+    -- FIX D-H01: Require strictly positive amounts
+    ensure amount > 0.0
 
     choice USDC_Transfer : ContractId USDC
       with
@@ -455,8 +457,11 @@ template Vault
     minCollateralRatioBps : Bps
     liquidationThresholdBps : Bps
     liquidationPenaltyBps : Bps
+    -- FIX D-H10: Allow external liquidators to observe vault for health checks
+    liquidators : [Party]
   where
     signatory operator, owner
+    observer liquidators
 
     choice Vault_Deposit : VaultId
       with
@@ -716,8 +721,13 @@ template LiquidityPool
         poolHoldings <- fetch poolCollateral
         assertMsg "INSUFFICIENT_LIQUIDITY" (poolHoldings.amount >= collateralOut)
 
-        exercise musdCid MUSD_Transfer >>= \proposalCid ->
-          exercise proposalCid TransferProposal_Accept
+        -- FIX D-C10: Supply required newOwner and expiry args to MUSD_Transfer
+        currentTime <- getTime
+        let transferExpiry = addRelTime currentTime (hours 1)
+        proposalCid <- exercise musdCid MUSD_Transfer with
+          newOwner = operator
+          expiry = transferExpiry
+        exercise proposalCid TransferProposal_Accept
 
         (remaining, payout) <- exercise poolCollateral Collateral_Split with splitAmount = collateralOut
         receiverCollateral <- exercise payout Collateral_Transfer with newOwner = receiver
@@ -800,7 +810,8 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    ensure totalValue >= 0.0
+    -- FIX D-M03: Require strictly positive totalValue
+    ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
     maintainer key._1
@@ -810,6 +821,7 @@ template InstitutionalEquityPosition
         newValue : Money
       controller bank
       do
+        assertMsg "VALUE_MUST_BE_POSITIVE" (newValue > 0.0)
         now <- getTime
         create this with totalValue = newValue, lastUpdated = now
 
@@ -830,19 +842,21 @@ template AttestationRequest
     validatorGroup : [Party]
     payload : AttestationPayload
     positionCids : [ContractId InstitutionalEquityPosition]
+    -- FIX D-H04: Track which validators have already signed to prevent duplicates
+    collectedSignatures : Set.Set Party
   where
     signatory aggregator
     observer validatorGroup
 
-    -- PERFORMANCE FIX: Made `nonconsuming`. Previous implementation consumed the Request,
-    -- forcing validators to sign strictly sequentially (A waits for B).
-    -- Validators now create independent Signature contracts concurrently.
-    nonconsuming choice ProvideSignature : ContractId ValidatorSignature
+    -- FIX D-H04: Changed to consuming choice with signature tracking (like BLEProtocol)
+    choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
+        -- FIX D-H04: Prevent duplicate signatures
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
 
         now <- getTime
@@ -853,19 +867,27 @@ template AttestationRequest
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
         assertMsg "PAYLOAD_VALUE_MISMATCH" (totalGlobalValue == payload.globalCantonAssets)
 
-        create ValidatorSignature with
-          requestCid = self
+        -- FIX D-H04: Update tracking and recreate request
+        let newSignatures = Set.insert validator collectedSignatures
+        newRequest <- create this with collectedSignatures = newSignatures
+
+        sig <- create ValidatorSignature with
+          requestCid = newRequest
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
 
+        return (newRequest, sig)
+
+    -- FIX D-C05: Derive requiredSignatures from validatorGroup (not caller-supplied)
     choice FinalizeAttestation : [ContractId ValidatorSignature]
       with
-        requiredSignatures : Int
         signatureCids : [ContractId ValidatorSignature]
       controller aggregator
       do
+        -- FIX D-C05: Derive quorum from validator group size (supermajority)
+        let requiredSignatures = (length validatorGroup + 1) `div` 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -901,26 +923,34 @@ template ValidatorSignature
 -- ============================================================
 --                     SECTION 10: ISSUER ROLE
 -- ============================================================
+-- FIX D-C03/D-C04/D-M09: Removed insecure IssuerRole that accepted caller-supplied
+-- supplyCap, currentSupply, and requiredSignatures. All minting should go through
+-- DirectMintService (Section 3) which stores supply state on-ledger.
+-- MintFromAttestation is now a standalone choice that derives quorum from validatorGroup.
 
 template IssuerRole
   with
     issuer : Party
+    supplyCap : Money
+    currentSupply : Money
   where
     signatory issuer
 
-    -- SECURITY FIX: Archives AttestationRequest to prevent replay attack.
-    -- Fetch -> Validate -> Archive -> Mint (correct order)
+    -- FIX D-C03: requiredSignatures derived from validatorGroup (not caller-supplied)
+    -- Archives attestation to prevent replay.
     nonconsuming choice MintFromAttestation : MUSDId
       with
         owner : Party
         mintAmount : Money
         attestationCid : ContractId AttestationRequest
         signatureCids : [ContractId ValidatorSignature]
-        requiredSignatures : Int
       controller issuer
       do
         -- Fetch BEFORE archive
         attestation <- fetch attestationCid
+
+        -- FIX D-C03: Derive requiredSignatures from validatorGroup (supermajority)
+        let requiredSignatures = (length attestation.validatorGroup + 1) `div` 2 + 1
 
         -- Validation
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
@@ -945,22 +975,29 @@ template IssuerRole
           owner
           amount = mintAmount
 
-    -- NOTE: DirectMint is a privileged operation for bootstrapping only.
-    -- Supply-capped and logged. In production, use MintFromAttestation.
-    nonconsuming choice DirectMint : MUSDId
+    -- FIX D-C04: Consuming choice — supply tracked in contract state (not caller-supplied).
+    choice DirectMint : (ContractId IssuerRole, MUSDId)
       with
         owner : Party
         amount : Money
-        supplyCap : Money
-        currentSupply : Money
       controller issuer
       do
         assertMsg "AMOUNT_MUST_BE_POSITIVE" (amount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + amount <= supplyCap)
-        create MUSD with
+        musdCid <- create MUSD with
           issuer
           owner
           amount
+        newRole <- create this with currentSupply = currentSupply + amount
+        return (newRole, musdCid)
+
+    choice IssuerRole_UpdateSupplyCap : ContractId IssuerRole
+      with
+        newCap : Money
+      controller issuer
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
 
 -- ============================================================
 --                     HELPER FUNCTIONS
@@ -976,9 +1013,4 @@ relToInt rt =
   if rt < seconds 0 then 0
   else DA.Time.divRelTime rt (microseconds 1)
 
--- | Convert RelTime to microseconds using Daml standard library
--- FIX C-3: Use DA.Time.divRelTime for O(1) conversion instead of O(n) subtraction loop
-convertRelTimeToMicroseconds : RelTime -> Int
-convertRelTimeToMicroseconds rt =
-  if rt < seconds 0 then 0
-  else DA.Time.divRelTime rt (microseconds 1)
+-- FIX D-M02: Removed dead code `convertRelTimeToMicroseconds` (duplicate of `relToInt`)

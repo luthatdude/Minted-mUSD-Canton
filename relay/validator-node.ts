@@ -15,8 +15,22 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
+import * as fs from "fs";
 // FIX M-20: Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
+
+// FIX I-C01: Read Docker secrets from /run/secrets/ with env var fallback
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch {
+    // Fall through to env var
+  }
+  return process.env[envVar] || "";
+}
 
 // ============================================================
 //                     CONFIGURATION
@@ -45,7 +59,8 @@ const DEFAULT_CONFIG: ValidatorConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
   // FIX H-7: Added explicit radix 10 to all parseInt calls
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
-  cantonToken: process.env.CANTON_TOKEN || "",
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
   awsRegion: process.env.AWS_REGION || "us-east-1",
@@ -317,7 +332,8 @@ class ValidatorNode {
    */
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    const chainId = Number(payload.chainId);
+    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    const chainId = BigInt(payload.chainId);
     const timestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
 
     // This must match what BLEBridgeV9 expects
@@ -432,6 +448,12 @@ async function main(): Promise<void> {
   // Start validator
   await validator.start();
 }
+
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
 
 main().catch((error) => {
   console.error("[Main] Fatal error:", error);
