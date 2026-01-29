@@ -13,14 +13,14 @@
     "test": "jest"
   },
   "dependencies": {
-    "@aws-sdk/client-kms": "3.400.0",
+    "@aws-sdk/client-kms": "3.398.0",
     "@daml/ledger": "2.8.0",
     "@daml/types": "2.8.0",
     "ethers": "6.9.0"
   },
   "devDependencies": {
     "@types/node": "20.10.0",
-    "typescript": "5.3.0",
+    "typescript": "5.3.3",
     "ts-node": "10.9.0",
     "eslint": "8.55.0",
     "@typescript-eslint/eslint-plugin": "6.0.0",
