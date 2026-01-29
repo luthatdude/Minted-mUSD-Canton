@@ -4,13 +4,18 @@ MUSD
  
 where
 
+import
+ Daml
+.
+Script
+
 -- | The core stablecoin contract.
 
--- Signatories: Both the provider (issuer) and owner (holder) must sign.
+-- Signatories: Both the provider (issuer) and owner (holder).
 
--- This ensures the issuer cannot move the holder's funds without permission, 
+-- This ensures the issuer cannot move funds without permission, 
 
--- and the holder cannot forge tokens without the issuer's backing.
+-- and the holder cannot forge tokens without issuer backing.
 
 template
  
@@ -28,14 +33,14 @@ Party
 
     
 owner
- 
+    
 :
  
 Party
 
     
 amount
- 
+   
 :
  
 Decimal
@@ -118,7 +123,7 @@ splitAmount
         
 assertMsg
  
-"Insufficient funds for split"
+"Insufficient funds for split (must leave a remainder)"
  
 (
 splitAmount
@@ -211,9 +216,6 @@ owner
 do
 
         
--- FIX: Prevent "Merge with Self" which causes a transaction failure
-
-        
 assertMsg
  
 "Cannot merge a contract with itself"
@@ -269,10 +271,7 @@ owner
 )
 
         
--- Consuming choice archives 'self' automatically. 
-
-        
--- We must explicitly archive the second contract.
+-- Archive the other contract; 'self' is archived automatically as this is a consuming choice.
 
         
 archive
@@ -346,7 +345,45 @@ this
  
 newOwner
 
--- | Proposal contract for transfers to resolve the "Signatory Bottleneck".
+    
+-- E. LOGIC: Redemption (Burn). 
+
+    
+-- The owner chooses to destroy the token, usually in exchange for fiat USD.
+
+    
+choice
+ 
+MUSD_Redeem
+ 
+:
+ 
+(
+)
+
+      
+controller
+ 
+owner
+
+      
+do
+
+        
+-- In a production system, this might create a 'RedemptionRequest' 
+
+        
+-- to notify the provider's off-ledger systems to wire real cash.
+
+        
+return
+ 
+(
+)
+
+-- | Proposal contract for transfers.
+
+-- Solves the "Signatory Bottleneck": newOwner must consent to become a signatory.
 
 template
  
@@ -357,7 +394,7 @@ with
 
     
 usd
- 
+      
 :
  
 MUSD
@@ -390,7 +427,7 @@ observer
 newOwner
 
     
--- FIX: Bob accepts, the token owner changes.
+-- Receiver accepts: the token owner changes.
 
     
 choice
@@ -425,7 +462,7 @@ owner
 newOwner
 
     
--- FIX: Bob rejects, the original MUSD is returned to Alice (no tokens lost).
+-- Receiver rejects: the original MUSD is returned to the sender.
 
     
 choice
@@ -451,7 +488,7 @@ create
 usd
 
     
--- FIX: Alice cancels, the original MUSD is returned to her (no tokens lost).
+-- Sender cancels: the original MUSD is returned to the sender.
 
     
 choice
@@ -498,14 +535,14 @@ Party
 
     
 owner
- 
+    
 :
  
 Party
 
     
 amount
- 
+   
 :
  
 Decimal
