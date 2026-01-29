@@ -475,5 +475,3 @@ template RedemptionRequest
 --                     HELPER
 -- ============================================================
 
-intToDecimal : Int -> Decimal
-intToDecimal = intToDecimal

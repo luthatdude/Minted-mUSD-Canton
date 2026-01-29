@@ -9,7 +9,7 @@
 -- - Precision: Uses Daml's Decimal (10^-10 precision).
 -- - Isolation: The Vault logic is separated from the Swapping logic.
 
-module Minted.Protocol where
+module MintedProtocol where
 
 import DA.Action (foldlA)
 -- FIX D-L01/L02: Removed unused DA.List (head) import; use DA.Optional.fromOptional

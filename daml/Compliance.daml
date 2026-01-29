@@ -16,8 +16,6 @@
 module Compliance where
 
 import DA.Set qualified as Set
-import DA.Time
-import DA.Optional (fromOptional)
 
 -- | The ComplianceRegistry manages which parties are allowed to hold/transfer mUSD.
 -- A regulator creates one instance and uses it as a shared reference for all
