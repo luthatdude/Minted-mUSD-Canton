@@ -64,6 +64,8 @@ directMintFlowTest = script do
       dailyBurned = 0.000000000000000000
       lastRateLimitReset = datetime 2024 Jan 1 0 0 0
       complianceRegistryCid = None
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
 
   -- Alice mints mUSD
   (newServiceCid, musdCid, bridgeReqCid) <- submit alice do
@@ -124,6 +126,8 @@ redeemFlowTest = script do
       dailyBurned = 0.000000000000000000
       lastRateLimitReset = datetime 2024 Jan 1 0 0 0
       complianceRegistryCid = None
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
 
   -- Issue USDC and mint mUSD
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
@@ -454,6 +458,8 @@ endToEndFlowTest = script do
       dailyBurned = 0.000000000000000000
       lastRateLimitReset = datetime 2024 Jan 1 0 0 0
       complianceRegistryCid = None
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
 
   -- Mint mUSD (fee = 10000 * 0.003 = 30, net = 9970)
   (mintServiceCid2, musdCid, bridgeReqCid) <- submit alice do
@@ -473,6 +479,8 @@ endToEndFlowTest = script do
       cooldownSeconds = 0  -- No cooldown for test
       minDeposit = 1.000000000000000000
       paused = False
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
 
   (stakingServiceCid2, smusdCid) <- submit alice do
     exerciseCmd stakingServiceCid Stake with
@@ -584,6 +592,8 @@ pausedServiceTest = script do
       dailyBurned = 0.000000000000000000
       lastRateLimitReset = datetime 2024 Jan 1 0 0 0
       complianceRegistryCid = None
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
 
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
     createCmd CantonUSDC with

@@ -53,10 +53,20 @@ template MUSD
     issuer : Party
     owner : Party
     amount : Money
+    agreementHash : Text  -- SHA-256 hash of the Master Participation Agreement PDF
+    agreementUri : Text   -- URI to the legal terms document
   where
     signatory issuer, owner
 
     ensure amount > 0.0
+      && T.length agreementHash == 64  -- SHA-256 hex digest is 64 chars
+      && T.length agreementUri > 0
+
+    agreement
+      "By holding or transferring this mUSD token, the owner acknowledges "
+      <> "they are bound by the Master Participation Agreement. "
+      <> "Agreement hash: " <> agreementHash
+      <> " | URI: " <> agreementUri
 
     choice MUSD_Split : (MUSDId, MUSDId)
       with
@@ -320,6 +330,9 @@ template DirectMintService
     dailyMinted : Money          -- Cumulative mints in current window
     dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
     lastRateLimitReset : Time    -- Timestamp of last window reset
+    -- Master Participation Agreement reference (embedded in every minted token)
+    mpaHash : Text               -- SHA-256 hash of the MPA PDF
+    mpaUri : Text                -- URI to the MPA document
   where
     signatory operator
     observer usdcIssuer
@@ -362,6 +375,8 @@ template DirectMintService
           issuer = operator
           owner = user
           amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
 
         newService <- create this with
           currentSupply = currentSupply + netAmount
@@ -491,6 +506,8 @@ template StakingService
     operator : Party
     baseRateBps : Bps
     cooldownSeconds : Int
+    mpaHash : Text
+    mpaUri : Text
   where
     signatory operator
 
@@ -548,6 +565,8 @@ template StakingService
           issuer = operator
           owner = user
           amount = totalReturn
+          agreementHash = mpaHash
+          agreementUri = mpaUri
         return (musdCid, newIssuerRole)
 
 -- ============================================================
@@ -569,6 +588,9 @@ template Vault
     liquidationPenaltyBps : Bps
     -- FIX D-H10: Allow external liquidators to observe vault for health checks
     liquidators : [Party]
+    -- Master Participation Agreement (passed through to borrowed MUSD)
+    mpaHash : Text
+    mpaUri : Text
   where
     signatory operator, owner
     observer liquidators
@@ -628,6 +650,8 @@ template Vault
           issuer = operator
           owner = owner
           amount = borrowAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
 
         return (newVault, musd, newIssuerRole)
 
@@ -1071,6 +1095,8 @@ template IssuerRole
     issuer : Party
     supplyCap : Money
     currentSupply : Money
+    mpaHash : Text
+    mpaUri : Text
   where
     signatory issuer
 
@@ -1115,6 +1141,8 @@ template IssuerRole
           issuer
           owner
           amount = mintAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
         newRole <- create this with currentSupply = currentSupply + mintAmount
         return (newRole, musdCid)
 
@@ -1131,6 +1159,8 @@ template IssuerRole
           issuer
           owner
           amount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
         newRole <- create this with currentSupply = currentSupply + amount
         return (newRole, musdCid)
 
