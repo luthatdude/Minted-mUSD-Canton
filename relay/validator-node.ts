@@ -19,6 +19,7 @@ import { ethers } from "ethers";
 import { formatKMSSignature } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 import { readSecret } from "./utils";
+import * as fs from "fs";
 
 // ============================================================
 //                     CONFIGURATION
@@ -137,6 +138,8 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
+        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
+        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }

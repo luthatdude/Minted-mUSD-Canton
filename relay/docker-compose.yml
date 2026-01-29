@@ -8,7 +8,7 @@
 #   docker-compose up validator1    # Start validator 1
 #   docker-compose up               # Start everything
 
-version: '3.8'
+# FIX 5C-L01: Removed deprecated 'version' field (docker compose v2+ ignores it)
 
 # FIX C-11: Define secrets (files must be created on host)
 secrets:
@@ -59,6 +59,7 @@ services:
       - HEALTH_PORT=8080
       # FIX M-22: Bind health server to localhost
       - HEALTH_BIND_HOST=127.0.0.1
+      - NODE_ENV=production
     # FIX C-11: Mount secrets instead of env vars for sensitive values
     secrets:
       - canton_token
@@ -115,6 +116,8 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
+      # FIX 5C-L04: Set NODE_ENV for HTTPS enforcement in validator-node-v2
+      - NODE_ENV=production
     # FIX C-11: Use secrets for AWS credentials
     secrets:
       - canton_token
@@ -137,7 +140,7 @@ services:
       - bridge_internal
     # FIX I-M01: Healthcheck for validator (process-level since no HTTP endpoint)
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,7 +187,7 @@ services:
       - bridge_internal
     # FIX I-M01: Healthcheck for validator (process-level)
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -231,7 +234,7 @@ services:
       - bridge_internal
     # FIX I-M01: Healthcheck for validator (process-level)
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
       timeout: 10s
       retries: 3

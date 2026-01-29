@@ -474,10 +474,12 @@ template StakingService
           entryTime = currentTime
           interestRateBps = baseRateBps
 
-    nonconsuming choice Unstake : MUSDId
+    -- FIX 5C-H02: Unstake now tracks yield minting against supply cap
+    nonconsuming choice Unstake : (MUSDId, ContractId IssuerRole)
       with
         user : Party
         stakedCid : ContractId StakedMUSD
+        issuerRoleCid : ContractId IssuerRole
       controller user
       do
         staked <- fetch stakedCid
@@ -494,12 +496,20 @@ template StakingService
         let interest = staked.principal * intToDecimal staked.interestRateBps / 10000.0 * durationYears
         let totalReturn = staked.principal + interest
 
+        -- FIX 5C-H02: Only the interest (yield) portion is new supply; principal was already minted
+        issuerRole <- fetch issuerRoleCid
+        assertMsg "ISSUER_ROLE_MISMATCH" (issuerRole.issuer == operator)
+        assertMsg "YIELD_EXCEEDS_SUPPLY_CAP" (issuerRole.currentSupply + interest <= issuerRole.supplyCap)
+        archive issuerRoleCid
+        newIssuerRole <- create issuerRole with currentSupply = issuerRole.currentSupply + interest
+
         archive stakedCid
 
-        create MUSD with
+        musdCid <- create MUSD with
           issuer = operator
           owner = user
           amount = totalReturn
+        return (musdCid, newIssuerRole)
 
 -- ============================================================
 --                     SECTION 5: VAULT (CDP) WITH INTEREST
@@ -535,10 +545,12 @@ template Vault
         create this with collateral = newCollateral
 
     -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
-    choice Vault_Borrow : (VaultId, MUSDId)
+    -- FIX 5C-H01: Returns IssuerRole to track supply cap
+    choice Vault_Borrow : (VaultId, MUSDId, ContractId IssuerRole)
       with
         borrowAmount : Money
         oracleCid : ContractId PriceOracle
+        issuerRoleCid : ContractId IssuerRole
       controller owner
       do
         currentTime <- getTime
@@ -566,12 +578,19 @@ template Vault
           accruedInterest = newInterest
           lastAccrualTime = currentTime
 
+        -- FIX 5C-H01: Vault borrows must track supply. Require and update IssuerRole.
+        issuerRole <- fetch issuerRoleCid
+        assertMsg "ISSUER_ROLE_MISMATCH" (issuerRole.issuer == operator)
+        assertMsg "BORROW_EXCEEDS_SUPPLY_CAP" (issuerRole.currentSupply + borrowAmount <= issuerRole.supplyCap)
+        archive issuerRoleCid
+        newIssuerRole <- create issuerRole with currentSupply = issuerRole.currentSupply + borrowAmount
+
         musd <- create MUSD with
           issuer = operator
           owner = owner
           amount = borrowAmount
 
-        return (newVault, musd)
+        return (newVault, musd, newIssuerRole)
 
     -- SECURITY FIX: Removed user-supplied `currentTime`
     choice Vault_Repay : VaultId

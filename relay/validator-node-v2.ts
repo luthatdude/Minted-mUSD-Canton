@@ -23,6 +23,7 @@ import { ethers } from "ethers";
 import { formatKMSSignature } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 import { readSecret } from "./utils";
+import * as fs from "fs";
 
 // ============================================================
 //                     CONFIGURATION
@@ -140,12 +141,21 @@ class CantonAssetClient {
    * Fetch current snapshot of all tokenized assets from Canton Network
    */
   async getAssetSnapshot(): Promise<CantonAssetSnapshot> {
-    const response = await fetch(`${this.apiUrl}/v1/assets/snapshot`, {
-      headers: {
-        "Authorization": `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-    });
+    // FIX 5C-M03: Add request timeout to prevent indefinite hangs
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiUrl}/v1/assets/snapshot`, {
+        headers: {
+          "Authorization": `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       throw new Error(`Canton API error: ${response.status} ${response.statusText}`);
@@ -172,14 +182,23 @@ class CantonAssetClient {
    * Fetch specific assets by ID
    */
   async getAssetsByIds(assetIds: string[]): Promise<CantonAsset[]> {
-    const response = await fetch(`${this.apiUrl}/v1/assets/batch`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ assetIds }),
-    });
+    // FIX 5C-M03: Add request timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiUrl}/v1/assets/batch`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ assetIds }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       throw new Error(`Canton API error: ${response.status} ${response.statusText}`);
@@ -199,14 +218,23 @@ class CantonAssetClient {
    * Verify a state hash matches Canton's current state
    */
   async verifyStateHash(stateHash: string): Promise<boolean> {
-    const response = await fetch(`${this.apiUrl}/v1/state/verify`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ stateHash }),
-    });
+    // FIX 5C-M03: Add request timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiUrl}/v1/state/verify`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ stateHash }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       return false;
@@ -265,6 +293,8 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
+        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
+        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }

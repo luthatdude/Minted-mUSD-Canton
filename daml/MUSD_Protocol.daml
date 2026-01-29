@@ -182,7 +182,8 @@ template MintingService
         return (newService, musdCid)
 
     -- FIX C-05: Burn requires operator-provided USDC reserve CID instead of forging
-    nonconsuming choice Burn_Musd : ContractId Usdc
+    -- FIX 5C-H03: Made consuming to decrement currentSupply on burn
+    choice Burn_Musd : (ContractId MintingService, ContractId Usdc)
       with
         user : Party
         musdCid : ContractId Musd
@@ -202,16 +203,21 @@ template MintingService
         -- 4. Execute Atomic Swap
         -- Archive the mUSD (Burn)
         archive musdCid
+        -- FIX 5C-H03: Decrement supply tracker
+        let burnAmount = musd.amount
+        let newSupply = if currentSupply > burnAmount then currentSupply - burnAmount else 0.0
+        newService <- create this with currentSupply = newSupply
         -- Split reserve if needed, transfer USDC to user
         -- FIX D-C08: Usdc_Transfer returns proposal; accept it
-        if reserve.amount == musd.amount
-        then do
-          usdcProp <- exercise usdcReserveCid Usdc_Transfer with newOwner = user
-          exercise usdcProp UsdcTransferProposal_Accept
-        else do
-          (payout, _) <- exercise usdcReserveCid Usdc_Split with splitAmount = musd.amount
-          usdcProp <- exercise payout Usdc_Transfer with newOwner = user
-          exercise usdcProp UsdcTransferProposal_Accept
+        usdcResult <- if reserve.amount == musd.amount
+          then do
+            usdcProp <- exercise usdcReserveCid Usdc_Transfer with newOwner = user
+            exercise usdcProp UsdcTransferProposal_Accept
+          else do
+            (payout, _) <- exercise usdcReserveCid Usdc_Split with splitAmount = musd.amount
+            usdcProp <- exercise payout Usdc_Transfer with newOwner = user
+            exercise usdcProp UsdcTransferProposal_Accept
+        return (newService, usdcResult)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 3: STAKING & YIELD (sMUSD)
@@ -295,13 +301,16 @@ template BridgeLock
     observer validators
 
     -- FIX D-M07: Require minimum lock duration before cancellation
+    -- FIX 5C-M01: Bridge cancellation refund does not mint new supply;
+    -- the locked mUSD was already counted in supply when originally minted.
+    -- Document: Cancel refunds existing supply, not new mint.
     choice Cancel_BridgeLock : ContractId Musd
       controller user, operator
       do
         now <- getTime
         let minLockDuration = minutes 10
         assertMsg "CANCEL_TOO_EARLY: minimum 10 minute lock" (subTime now lockedAt >= minLockDuration)
-        -- Refund mUSD to user since bridge failed
+        -- Refund mUSD to user (not new supply — this was already minted)
         create Musd with
           issuer = operator
           owner = user
@@ -389,14 +398,23 @@ template BridgeClaim
 
     -- Finalize and Mint if threshold met
     -- FIX C-4: Removed invalid empty 'with' block before controller
-    choice Finalize_Bridge_Mint : ContractId Musd
+    -- FIX 5C-H04: Bridge mint must enforce supply cap via MintingService
+    choice Finalize_Bridge_Mint : (ContractId MintingService, ContractId Musd)
+      with
+        mintingServiceCid : ContractId MintingService
       controller user
       do
         assertMsg "Claim: Not enough signatures" (length collectedValidators >= requiredSignatures)
-        create Musd with
+        -- FIX 5C-H04: Enforce supply cap on bridge mint
+        svc <- fetch mintingServiceCid
+        assertMsg "BRIDGE_MINT_EXCEEDS_SUPPLY_CAP" (svc.currentSupply + amount <= svc.supplyCap)
+        archive mintingServiceCid
+        newSvc <- create svc with currentSupply = svc.currentSupply + amount
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = amount
+        return (newSvc, musdCid)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 5: INITIALIZATION / SETUP SCRIPT

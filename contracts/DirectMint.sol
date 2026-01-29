@@ -256,9 +256,11 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         _unpause();
     }
 
-    /// @notice Emergency token recovery (not USDC)
+    /// @notice Emergency token recovery (not USDC or mUSD)
+    /// FIX 5C-M02: Block recovery of both USDC and mUSD to prevent fund extraction
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(usdc), "CANNOT_RECOVER_USDC");
+        require(token != address(musd), "CANNOT_RECOVER_MUSD");
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 }

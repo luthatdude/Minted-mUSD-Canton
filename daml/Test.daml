@@ -610,11 +610,19 @@ musdTransferTest = script do
 
 
 -- Test: User-initiated mint request (MintRequest)
+-- FIX 5C-C01: Updated to pass IssuerRole CID for supply cap enforcement
 musdMintRequestTest : Script ()
 musdMintRequestTest = script do
   issuer <- allocateParty "Issuer"
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+
+  -- Create issuer role for supply cap tracking
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Alice requests minting 1000 mUSD
   requestCid <- submit alice do
@@ -623,9 +631,10 @@ musdMintRequestTest = script do
       owner = alice
       amount = 1000.000000000000000000
 
-  -- Issuer approves
-  musdCid <- submit issuer do
-    exerciseCmd requestCid ApproveMint
+  -- Issuer approves (now requires IssuerRole for supply cap)
+  (roleCid2, musdCid) <- submit issuer do
+    exerciseCmd requestCid ApproveMint with
+      issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD by splitting
   (half1, half2) <- submit alice do
@@ -661,11 +670,19 @@ musdMintRequestTest = script do
 
 
 -- Test: Issuer-initiated mint proposal (MintProposal)
+-- FIX 5C-C02: Updated to pass IssuerRole CID for supply cap enforcement
 musdMintProposalTest : Script ()
 musdMintProposalTest = script do
   issuer <- allocateParty "Issuer"
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+
+  -- Create issuer role for supply cap tracking
+  roleCid <- submit issuer do
+    createCmd MintedMUSD.IssuerRole with
+      issuer
+      supplyCap = 10000000.0
+      currentSupply = 0.0
 
   -- Issuer proposes minting 2000 mUSD to Alice
   proposalCid <- submit issuer do
@@ -674,9 +691,10 @@ musdMintProposalTest = script do
       owner = alice
       amount = 2000.000000000000000000
 
-  -- Alice accepts
-  musdCid <- submit alice do
-    exerciseCmd proposalCid AcceptMint
+  -- Alice accepts (now requires IssuerRole for supply cap)
+  (roleCid2, musdCid) <- submit alice do
+    exerciseCmd proposalCid AcceptMint with
+      issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD
   submit alice do

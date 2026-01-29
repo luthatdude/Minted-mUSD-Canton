@@ -187,6 +187,7 @@ template IssuerRole
 -- | User-initiated mint request.
 -- Separation of duties: the user requests minting, the issuer approves
 -- after verifying collateral or off-ledger conditions.
+-- FIX 5C-C01: ApproveMint now requires IssuerRole to enforce supply cap.
 template MintRequest
   with
     issuer : Party
@@ -198,14 +199,16 @@ template MintRequest
 
     ensure amount > 0.0
 
-    -- | Issuer approves the request and mints mUSD.
-    choice ApproveMint : ContractId MUSD
+    -- | Issuer approves the request via IssuerRole (enforces supply cap).
+    -- FIX 5C-C01: Route through IssuerRole.Mint to prevent supply cap bypass.
+    choice ApproveMint : (ContractId IssuerRole, ContractId MUSD)
+      with
+        issuerRoleCid : ContractId IssuerRole
       controller issuer
       do
-        create MUSD with
-          issuer
-          owner
-          amount
+        exercise issuerRoleCid Mint with
+          owner = owner
+          amount = amount
 
     -- | Issuer rejects the request.
     choice RejectMint : ()
@@ -223,6 +226,7 @@ template MintRequest
 -- | Issuer-initiated mint proposal (airdrop-safe).
 -- The issuer proposes minting to a user, but the user must explicitly
 -- accept because they become a signatory on the resulting MUSD contract.
+-- FIX 5C-C02: AcceptMint now requires IssuerRole to enforce supply cap.
 template MintProposal
   with
     issuer : Party
@@ -234,14 +238,16 @@ template MintProposal
 
     ensure amount > 0.0
 
-    -- | Owner accepts the mint proposal.
-    choice AcceptMint : ContractId MUSD
+    -- | Owner accepts the mint proposal via IssuerRole (enforces supply cap).
+    -- FIX 5C-C02: Route through IssuerRole.Mint to prevent supply cap bypass.
+    choice AcceptMint : (ContractId IssuerRole, ContractId MUSD)
+      with
+        issuerRoleCid : ContractId IssuerRole
       controller owner
       do
-        create MUSD with
-          issuer
-          owner
-          amount
+        exercise issuerRoleCid Mint with
+          owner = owner
+          amount = amount
 
     -- | Owner declines the mint proposal.
     choice DeclineMint : ()

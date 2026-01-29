@@ -190,13 +190,13 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Estimate collateral received for a given debt repayment
+    /// FIX 5C-L03: Allow estimates for disabled collateral (matches liquidate behavior)
     function estimateSeize(
         address borrower,
         address collateralToken,
         uint256 debtToRepay
     ) external view returns (uint256 collateralAmount) {
-        (bool enabled, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
-        if (!enabled) return 0;
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         if (collateralPrice == 0) return 0;

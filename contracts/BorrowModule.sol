@@ -331,6 +331,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     //                  ADMIN
     // ============================================================
 
+    /// @notice Update the global interest rate
+    /// @dev FIX 5C-M05: Rate changes apply prospectively at each user's next accrual.
+    /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
+    /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
     function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
         require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
         uint256 old = interestRateBps;
