@@ -1,4 +1,4 @@
-sdk-version: 2.8.0
+sdk-version: 2.10.3
 name: ble-protocol
 source: .
 version: 1.0.0
