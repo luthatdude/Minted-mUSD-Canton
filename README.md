@@ -1,4 +1,4 @@
-# Minted mUSD Protocol
+# Minted mUSD Protocol For Canton
 
 A cross-chain stablecoin protocol with full feature parity on Canton Network and Ethereum. mUSD operates natively on both chains with identical utility—mint, burn, stake, earn yield—connected by a trustless bidirectional bridge.
 
