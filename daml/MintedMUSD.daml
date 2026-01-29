@@ -1,20 +1,17 @@
 module MUSD where
-import Daml.List (dedup)
--- Define Money as a type synonym for clarity if desired, or just use Decimal
-type Money = Decimal
--- =========================================
--- CORE TOKEN
--- =========================================
+import Daml.Script
+-- | The core stablecoin contract
 template MUSD
   with
-    issuer : Party
-    owner : Party
-    amount : Money
-    nonce : Int 
+    provider : party
+    owner : party
+    amount : Decimal
+    nonce : Int -- Used to ensure unique contract IDs for identical amounts
   where
-    signatory issuer, owner
+    signatory provider, owner
+    -- A. SECURITY: Prevents negative or zero-value contracts
     ensure amount > 0.0
-    -- Allows the owner to split their asset
+    -- B. LOGIC: Allows the owner to split their asset
     choice MUSD_Split : (ContractId MUSD, ContractId MUSD)
       with
         splitAmount : Decimal
@@ -26,117 +23,43 @@ template MUSD
         c1 <- create this with amount = splitAmount; nonce = nonce + 1
         c2 <- create this with amount = rest; nonce = nonce + 2
         return (c1, c2)
-    -- Merges two assets
+    -- C. LOGIC: Merges two assets (Owner must own both)
     choice MUSD_Merge : ContractId MUSD
       with
         otherCid : ContractId MUSD
       controller owner
       do
         other <- fetch otherCid
-        assertMsg "Must be same issuer" (issuer == other.issuer)
+        assertMsg "Must be same provider" (provider == other.provider)
         assertMsg "Must be same owner" (owner == other.owner)
         archive otherCid
         create this with amount = amount + other.amount; nonce = nonce + 1
-    -- Transfer Proposal Pattern (Solves the Signatory Bottleneck)
+    -- D. ARCHITECTURE: Transfer Proposal Pattern
+    -- Solves the "Signatory Bottleneck" by allowing the receiver to accept
     choice MUSD_Transfer : ContractId MUSD_TransferProposal
       with
-        newOwner : Party
+        newOwner : party
       controller owner
       do
         create MUSD_TransferProposal with 
           usd = this, 
           newOwner
--- =========================================
--- TRANSFER WORKFLOW
--- =========================================
+-- | Proposal contract created when Alice wants to send to Bob
 template MUSD_TransferProposal
   with
     usd : MUSD
-    newOwner : Party
+    newOwner : party
   where
-    signatory usd.issuer, usd.owner
+    signatory usd.provider, usd.owner
     observer newOwner
     choice MUSD_AcceptTransfer : ContractId MUSD
       controller newOwner
       do
+        -- Creates a new MUSD with the same provider but a new owner
         create usd with owner = newOwner, nonce = usd.nonce + 1
     choice MUSD_RejectTransfer : ()
       controller newOwner
       do return ()
--- =========================================
--- MINTING WORKFLOWS
--- =========================================
--- Helper for Validator Signatures
-template ValidatorSignature
-  with
-    validator : Party
-    payload : MintAttestation
-  where
-    signatory validator
-data MintAttestation = MintAttestation with
-  amount : Decimal
-  isMint : Bool
-  owner : Party
--- This template acts as the "Minting Master" logic
-template MUSD_IssuerAuthority
-  with
-    issuer : Party
-    requiredSignatures : Int
-  where
-    signatory issuer
-    -- Logic for Oracle/Validator-based minting
-    nonconsuming choice MintFromAttestation : ContractId MUSD
-      with
-        owner : Party
-        mintAmount : Money
-        signatureCids : [ContractId ValidatorSignature]
-        attestationCid : ContractId ValidatorSignature -- Assuming one signature acts as the primary attestation
-      controller issuer
-      do
-        assertMsg "Mint amount must be positive." (mintAmount > 0.0)
-        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
-        sigs <- mapA fetch signatureCids
-        let sigValidators = map (.validator) sigs
-        let uniqueValidators = dedup sigValidators
-        assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (length uniqueValidators == length sigValidators)
-        attestation <- fetch attestationCid
-        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)
-        assertMsg "ATTESTATION_NOT_MINT" (attestation.payload.isMint)
-        -- Since issuer is controller and owner is passed in, 
-        -- technically we still need the owner's signature to create MUSD.
-        -- In a real app, this would create a MintProposal for the owner to accept.
-        create MintProposal with issuer; owner; amount = mintAmount
--- | User-initiated mint request.
-template MintRequest
-  with
-    issuer : Party
-    owner : Party
-    amount : Money
-  where
-    signatory owner
-    observer issuer
-    ensure amount > 0.0
-    choice ApproveMint : ContractId MintProposal
-      controller issuer
-      do
-        -- Note: Issuer cannot create MUSD directly here because they don't have
-        -- the owner's authority to sign the NEW MUSD contract in this specific context.
-        -- We create a Proposal instead.
-        create MintProposal with issuer; owner; amount
--- | Issuer-initiated mint proposal.
-template MintProposal
-  with
-    issuer : Party
-    owner : Party
-    amount : Money
-  where
-    signatory issuer
-    observer owner
-    ensure amount > 0.0
-    choice AcceptMint : ContractId MUSD
-      controller owner
-      do
-        create MUSD with issuer; owner; amount; nonce = 0
-    choice DeclineMint : ()
-      controller owner
+    choice MUSD_CancelTransfer : ()
+      controller usd.owner
       do return ()
