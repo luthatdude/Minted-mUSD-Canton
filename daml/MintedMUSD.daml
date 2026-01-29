@@ -1,7 +1,7 @@
 module MintedMUSD where
 import Daml.Script
 -- | Constants to prevent "Dust" and precision issues.
-MINIMUM_AMOUNT : Decimal = 0.01
+minimumAmount : Decimal = 0.01
 -- =============================================================================
 -- 1. CORE TOKEN TEMPLATE
 -- =============================================================================
@@ -15,7 +15,7 @@ template MUSD
   where
     signatory provider
     observer owner, observers
-    ensure amount >= MINIMUM_AMOUNT
+    ensure amount >= minimumAmount
     -- --- LOGIC: Lifecycle ---
     -- IMPROVED: Added a 'reason' to the redemption for audit trails.
     choice MUSD_Redeem : ContractId MUSD_RedemptionRequest
@@ -40,8 +40,8 @@ template MUSD
         splitAmount : Decimal
       controller owner
       do
-        assertMsg "Split amount must be >= MINIMUM_AMOUNT" (splitAmount >= MINIMUM_AMOUNT)
-        assertMsg "Remainder must be >= MINIMUM_AMOUNT" (amount - splitAmount >= MINIMUM_AMOUNT)
+        assertMsg "Split amount must be >= minimumAmount" (splitAmount >= minimumAmount)
+        assertMsg "Remainder must be >= minimumAmount" (amount - splitAmount >= minimumAmount)
         c1 <- create this with amount = splitAmount
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
@@ -131,7 +131,7 @@ template MUSD_MintProposal
   where
     signatory provider
     observer owner
-    ensure amount >= MINIMUM_AMOUNT
+    ensure amount >= minimumAmount
     choice MUSD_MintProposal_Accept : ContractId MUSD
       controller owner
       do create MUSD with ..

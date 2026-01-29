@@ -7,7 +7,6 @@ import DA.Numeric
 import DA.Time
 import DA.List
 import DA.Text qualified as T
-import DA.Foldable hiding (sum)
 import DA.Set qualified as Set
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei

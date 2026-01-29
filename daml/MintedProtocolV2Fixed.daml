@@ -29,7 +29,7 @@ import DA.Time
 import DA.Action (foldlA)
 import DA.List (dedup)
 import DA.Set qualified as Set
-import DA.Foldable hiding (sum)
+import DA.Foldable (mapA_)
 import DA.Optional (fromOptional)
 import DA.Text qualified as T
 
@@ -351,7 +351,7 @@ template DirectMintService
         assertMsg "BELOW_MIN_AMOUNT" (usdc.amount >= minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (usdc.amount <= maxAmount)
 
-        let feeAmount = usdc.amount * intToDecimal mintFeeBps / 10000.0
+        let feeAmount = usdc.amount * intToNumeric mintFeeBps / 10000.0
         let netAmount = usdc.amount - feeAmount
 
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
@@ -402,7 +402,7 @@ template DirectMintService
         assertMsg "BELOW_MIN_AMOUNT" (musd.amount >= minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (musd.amount <= maxAmount)
 
-        let feeAmount = musd.amount * intToDecimal redeemFeeBps / 10000.0
+        let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
         let netAmount = musd.amount - feeAmount
 
         reserve <- fetch usdcReserveCid
@@ -548,8 +548,8 @@ template StakingService
 
         let elapsedMicros = relToInt elapsed
         let microsPerYear = 365 * 24 * 60 * 60 * 1000000
-        let durationYears = intToDecimal elapsedMicros / intToDecimal microsPerYear
-        let interest = staked.principal * intToDecimal staked.interestRateBps / 10000.0 * durationYears
+        let durationYears = intToNumeric elapsedMicros / intToNumeric microsPerYear
+        let interest = staked.principal * intToNumeric staked.interestRateBps / 10000.0 * durationYears
         let totalReturn = staked.principal + interest
 
         -- FIX 5C-H02: Only the interest (yield) portion is new supply; principal was already minted
@@ -630,7 +630,7 @@ template Vault
 
         let colValue = colData.amount * price
         let totalDebt = newPrincipal + newInterest + borrowAmount
-        let requiredCollateral = totalDebt * intToDecimal minCollateralRatioBps / 10000.0
+        let requiredCollateral = totalDebt * intToNumeric minCollateralRatioBps / 10000.0
 
         assertMsg "INSUFFICIENT_COLLATERAL" (colValue >= requiredCollateral)
 
@@ -710,7 +710,7 @@ template Vault
             symbol = collateralSymbol
           let price = fromOptional 0.0 priceOpt
           let remainingColValue = (colData.amount - withdrawAmount) * price
-          let requiredCollateral = totalDebt * intToDecimal minCollateralRatioBps / 10000.0
+          let requiredCollateral = totalDebt * intToNumeric minCollateralRatioBps / 10000.0
           assertMsg "WITHDRAWAL_WOULD_LIQUIDATE" (remainingColValue >= requiredCollateral)
 
         (remaining, withdrawn) <- exercise collateral Collateral_Split with splitAmount = withdrawAmount
@@ -746,7 +746,7 @@ template Vault
             symbol = collateralSymbol
           let price = fromOptional 0.0 priceOpt
           let colValue = colData.amount * price
-          let weightedCol = colValue * 10000.0 / intToDecimal liquidationThresholdBps
+          let weightedCol = colValue * 10000.0 / intToNumeric liquidationThresholdBps
           return $ weightedCol / totalDebt
 
 accrueInterest : Money -> Money -> Time -> Time -> Bps -> (Money, Money)
@@ -756,8 +756,8 @@ accrueInterest principal currentInterest lastTime currentTime rateBps =
       elapsedSafe = if elapsed < days 0 then days 0 else elapsed
       elapsedMicros = relToInt elapsedSafe
       microsPerYear = 365 * 24 * 60 * 60 * 1000000
-      durationYears = intToDecimal elapsedMicros / intToDecimal microsPerYear
-      newInterest = principal * intToDecimal rateBps / 10000.0 * durationYears
+      durationYears = intToNumeric elapsedMicros / intToNumeric microsPerYear
+      newInterest = principal * intToNumeric rateBps / 10000.0 * durationYears
   in (principal, currentInterest + newInterest)
 
 -- ============================================================
@@ -798,7 +798,7 @@ template LiquidationEngine
         let maxRepay =
               if healthFactor < fullLiquidationThreshold
               then totalDebt
-              else totalDebt * intToDecimal closeFactorBps / 10000.0
+              else totalDebt * intToNumeric closeFactorBps / 10000.0
 
         musd <- fetch musdCid
         let actualRepay = min musd.amount maxRepay
@@ -809,7 +809,7 @@ template LiquidationEngine
         let price = fromOptional 0.0 priceOpt
         assertMsg "PRICE_NOT_AVAILABLE" (price > 0.0)
 
-        let seizeValueUsd = actualRepay * (10000.0 + intToDecimal vault.liquidationPenaltyBps) / 10000.0
+        let seizeValueUsd = actualRepay * (10000.0 + intToNumeric vault.liquidationPenaltyBps) / 10000.0
         let seizeAmount = seizeValueUsd / price
         let actualSeize = min seizeAmount colData.amount
 
@@ -918,7 +918,7 @@ template LeverageManager
                 let price = fromOptional 0.0 priceOpt
 
                 let colValue = colData.amount * price
-                let maxDebt = colValue * 10000.0 / intToDecimal vault.minCollateralRatioBps
+                let maxDebt = colValue * 10000.0 / intToNumeric vault.minCollateralRatioBps
                 let totalDebt = vault.debtPrincipal + vault.accruedInterest
                 let borrowable = maxDebt - totalDebt
 

@@ -17,7 +17,6 @@ module BLEBridgeProtocol where
 import DA.Time
 import DA.List (dedup)
 import DA.Set qualified as Set
-import DA.Foldable hiding (sum)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
 type Money = Numeric 18
