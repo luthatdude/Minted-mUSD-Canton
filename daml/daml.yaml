@@ -7,4 +7,4 @@ dependencies:
   - daml-stdlib
   - daml-script
 build-options:
-  - --target=2.1
+  - --target=1.15
