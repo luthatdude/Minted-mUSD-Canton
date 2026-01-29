@@ -170,15 +170,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install kubeval
+      - name: Install kubeconform
         run: |
-          wget -q https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
-          tar xf kubeval-linux-amd64.tar.gz
-          sudo mv kubeval /usr/local/bin/
+          wget -q https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
 
       - name: Validate K8s manifests
         run: |
-          find k8s/ -name '*.yaml' -exec kubeval --strict {} +
+          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary {} +
 
   # ============================================================
   #  DEPENDENCY AUDIT
