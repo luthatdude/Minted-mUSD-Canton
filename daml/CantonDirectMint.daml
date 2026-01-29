@@ -289,7 +289,7 @@ template CantonDirectMintService
         assertMsg "BELOW_MIN_AMOUNT" (usdc.amount >= minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (usdc.amount <= maxAmount)
 
-        let feeAmount = usdc.amount * intToDecimal mintFeeBps / 10000.0
+        let feeAmount = usdc.amount * intToNumeric mintFeeBps / 10000.0
         let netAmount = usdc.amount - feeAmount
 
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
@@ -362,7 +362,7 @@ template CantonDirectMintService
         assertMsg "BELOW_MIN_AMOUNT" (musd.amount >= minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (musd.amount <= maxAmount)
 
-        let feeAmount = musd.amount * intToDecimal redeemFeeBps / 10000.0
+        let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
         let netAmount = musd.amount - feeAmount
 
         -- Burn the mUSD
