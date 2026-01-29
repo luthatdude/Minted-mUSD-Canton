@@ -1,0 +1,16 @@
+export const TREASURY_ABI = [
+  "function usdc() view returns (address)",
+  "function deployedToStrategies() view returns (uint256)",
+  "function maxDeploymentBps() view returns (uint256)",
+  "function totalBacking() view returns (uint256)",
+  "function availableReserves() view returns (uint256)",
+  "function deposit(address from, uint256 amount)",
+  "function withdraw(address to, uint256 amount)",
+  "function deployToStrategy(address strategy, uint256 amount)",
+  "function recordStrategyReturn(uint256 amount)",
+  "function setMaxDeploymentBps(uint256 _bps)",
+  "event Deposited(address indexed from, uint256 amount)",
+  "event Withdrawn(address indexed to, uint256 amount)",
+  "event DeployedToStrategy(address indexed strategy, uint256 amount)",
+  "event MaxDeploymentUpdated(uint256 oldBps, uint256 newBps)",
+] as const;
