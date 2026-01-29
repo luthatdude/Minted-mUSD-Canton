@@ -1,5 +1,7 @@
 import React from "react";
 import { shortenAddress } from "@/lib/format";
+import { ChainToggle } from "./ChainToggle";
+import type { ActiveChain } from "@/hooks/useChain";
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard" },
@@ -8,7 +10,6 @@ const NAV_ITEMS = [
   { key: "borrow", label: "Borrow" },
   { key: "liquidate", label: "Liquidations" },
   { key: "bridge", label: "Bridge" },
-  { key: "canton", label: "Canton" },
   { key: "admin", label: "Admin" },
 ];
 
@@ -18,9 +19,21 @@ interface NavbarProps {
   onDisconnect: () => void;
   activePage: string;
   onNavigate: (page: string) => void;
+  chain: ActiveChain;
+  onToggleChain: () => void;
+  cantonParty: string | null;
 }
 
-export function Navbar({ address, onConnect, onDisconnect, activePage, onNavigate }: NavbarProps) {
+export function Navbar({
+  address,
+  onConnect,
+  onDisconnect,
+  activePage,
+  onNavigate,
+  chain,
+  onToggleChain,
+  cantonParty,
+}: NavbarProps) {
   return (
     <nav className="border-b border-gray-800 bg-gray-900/80 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
@@ -35,7 +48,9 @@ export function Navbar({ address, onConnect, onDisconnect, activePage, onNavigat
                 onClick={() => onNavigate(item.key)}
                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
                   activePage === item.key
-                    ? "bg-brand-600/20 text-brand-400"
+                    ? chain === "ethereum"
+                      ? "bg-brand-600/20 text-brand-400"
+                      : "bg-emerald-600/20 text-emerald-400"
                     : "text-gray-400 hover:text-white"
                 }`}
               >
@@ -44,15 +59,26 @@ export function Navbar({ address, onConnect, onDisconnect, activePage, onNavigat
             ))}
           </div>
         </div>
-        <div>
-          {address ? (
-            <button onClick={onDisconnect} className="btn-secondary text-sm">
-              {shortenAddress(address)}
-            </button>
+        <div className="flex items-center gap-3">
+          <ChainToggle chain={chain} onToggle={onToggleChain} />
+          {chain === "ethereum" ? (
+            address ? (
+              <button onClick={onDisconnect} className="btn-secondary text-sm">
+                {shortenAddress(address)}
+              </button>
+            ) : (
+              <button onClick={onConnect} className="btn-primary text-sm">
+                Connect Wallet
+              </button>
+            )
           ) : (
-            <button onClick={onConnect} className="btn-primary text-sm">
-              Connect Wallet
-            </button>
+            cantonParty ? (
+              <span className="rounded-full border border-emerald-700 bg-emerald-900/30 px-3 py-1.5 text-xs font-medium text-emerald-400">
+                {cantonParty.length > 16 ? cantonParty.slice(0, 16) + "..." : cantonParty}
+              </span>
+            ) : (
+              <span className="text-xs text-gray-500">Canton not connected</span>
+            )
           )}
         </div>
       </div>
