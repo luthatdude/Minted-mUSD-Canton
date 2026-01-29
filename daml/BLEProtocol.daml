@@ -3,9 +3,8 @@
 
 module BLEProtocol where
 
-import DA.Numeric
 import DA.Time
-import DA.List
+import DA.List (dedup)
 import DA.Text qualified as T
 import DA.Set qualified as Set
 
