@@ -1,6 +1,8 @@
 import type { AppProps } from "next/app";
 import "@/styles/globals.css";
 import { WalletConnectProvider } from "@/hooks/useWalletConnect";
+import { MetaMaskProvider } from "@/hooks/useMetaMask";
+import { UnifiedWalletProvider } from "@/hooks/useUnifiedWallet";
 import { LoopWalletProvider } from "@/hooks/useLoopWallet";
 
 // App configuration
@@ -10,9 +12,13 @@ const LOOP_NETWORK = (process.env.NEXT_PUBLIC_CANTON_NETWORK as 'devnet' | 'test
 export default function App({ Component, pageProps }: AppProps) {
   return (
     <WalletConnectProvider autoConnect={true}>
-      <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
-        <Component {...pageProps} />
-      </LoopWalletProvider>
+      <MetaMaskProvider>
+        <UnifiedWalletProvider>
+          <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
+            <Component {...pageProps} />
+          </LoopWalletProvider>
+        </UnifiedWalletProvider>
+      </MetaMaskProvider>
     </WalletConnectProvider>
   );
 }

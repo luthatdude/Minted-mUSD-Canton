@@ -1,5 +1,7 @@
 // Wallet Hooks
 export { WalletConnectProvider, useWalletConnect } from './useWalletConnect';
+export { MetaMaskProvider, useMetaMask } from './useMetaMask';
+export { UnifiedWalletProvider, useUnifiedWallet } from './useUnifiedWallet';
 export { LoopWalletProvider, useLoopWallet } from './useLoopWallet';
 export { EthWalletProvider, useEthWallet } from './useEthWallet';
 
