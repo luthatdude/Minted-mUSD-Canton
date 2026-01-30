@@ -1,31 +1,42 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  Vault: `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`,
+  LiquidationEngine: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidationEngine`,
+};
 
-export function CantonLiquidations({ canton }: Props) {
-  const [vaults, setVaults] = useState<any[]>([]);
-  const [engines, setEngines] = useState<any[]>([]);
+export function CantonLiquidations() {
+  const loopWallet = useLoopWallet();
+  
+  const [vaults, setVaults] = useState<LoopContract[]>([]);
+  const [engines, setEngines] = useState<LoopContract[]>([]);
   const [selectedVault, setSelectedVault] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [v, e] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:Vault"),
-        canton.query("MintedProtocolV2Fixed:LiquidationEngine").catch(() => []),
+        loopWallet.queryContracts(templates.Vault).catch(() => []),
+        loopWallet.queryContracts(templates.LiquidationEngine).catch(() => []),
       ]);
       setVaults(v);
       setEngines(e);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   async function handleLiquidate() {
     if (!engines.length || !selectedVault) return;
@@ -33,13 +44,14 @@ export function CantonLiquidations({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      await canton.exercise(
-        "MintedProtocolV2Fixed:LiquidationEngine",
+      await loopWallet.exerciseChoice(
+        templates.LiquidationEngine,
         engines[0].contractId,
         "Liquidate",
         { vaultCid: selectedVault }
       );
       setResult("Liquidation executed on Canton");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -47,8 +59,18 @@ export function CantonLiquidations({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
-    return <div className="text-center text-gray-400 py-20">Connect to Canton Ledger for liquidations</div>;
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-6">
+          <div className="text-center">
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to view and execute liquidations.</p>
+          </div>
+          <WalletConnector mode="canton" />
+        </div>
+      </div>
+    );
   }
 
   return (
