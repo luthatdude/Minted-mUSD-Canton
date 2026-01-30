@@ -729,7 +729,7 @@ template Vault
         return (newVault, withdrawnToOwner)
 
     -- FIX H-07: Allow any observer (including liquidators) to check health factor
-    nonconsuming choice Vault_GetHealthFactor : Decimal
+    nonconsuming choice Vault_GetHealthFactor : Money
       with
         oracleCid : ContractId PriceOracle
         caller : Party
