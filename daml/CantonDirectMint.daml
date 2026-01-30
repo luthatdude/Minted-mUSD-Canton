@@ -19,7 +19,7 @@ module CantonDirectMint where
 import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
-import DA.Optional (whenSome)
+import DA.Optional (whenSome, fromSome, isSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -78,6 +78,68 @@ template CantonUSDCTransferProposal
     choice CantonUSDCTransferProposal_Reject : ContractId CantonUSDC
       controller newOwner
       do create usdc
+
+-- ============================================================
+--                     SECTION 1B: USDCx (xReserve Bridged USDC)
+-- ============================================================
+
+-- | USDCx: Dollar-denominated stablecoin created by xReserve on Canton.
+-- When a user deposits USDC into xReserve on Ethereum, a mint of USDCx is 
+-- initiated on Canton through the protocol. xReserve works in tandem with 
+-- Circle Gateway and Circle CCTP to make USDCx on Canton interoperable with 
+-- USDC across supported blockchains, without reliance on third-party bridges.
+template USDCx
+  with
+    issuer : Party            -- xReserve protocol operator
+    owner : Party
+    amount : Money
+    sourceChain : Text        -- Original chain (e.g., "ethereum", "base", "arbitrum")
+    cctpNonce : Int           -- Circle CCTP attestation nonce for provenance
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    choice USDCx_Transfer : ContractId USDCxTransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create USDCxTransferProposal with
+          usdcx = this
+          newOwner
+
+    choice USDCx_Split : (ContractId USDCx, ContractId USDCx)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    choice USDCx_Burn : ()
+      controller issuer
+      do return ()
+
+-- | Transfer proposal for USDCx (dual-signatory safe)
+template USDCxTransferProposal
+  with
+    usdcx : USDCx
+    newOwner : Party
+  where
+    signatory usdcx.issuer, usdcx.owner
+    observer newOwner
+
+    choice USDCxTransferProposal_Accept : ContractId USDCx
+      controller newOwner
+      do create usdcx with owner = newOwner
+
+    choice USDCxTransferProposal_Reject : ContractId USDCx
+      controller newOwner
+      do create usdcx
 
 -- ============================================================
 --                     SECTION 2: CANTON mUSD
@@ -283,10 +345,14 @@ template ReserveTracker
 -- | The CantonDirectMint service.
 -- Mints Canton mUSD and emits a bridge request for the backing stables.
 -- Does NOT hold stables locally — they get piped to Ethereum Treasury.
+-- Supports both:
+--   1. CantonUSDC - Direct USDC deposits on Canton
+--   2. USDCx - Bridged USDC from xReserve via Circle CCTP
 template CantonDirectMintService
   with
     operator : Party
     usdcIssuer : Party
+    usdcxIssuer : Optional Party  -- xReserve USDCx issuer (None = USDCx minting disabled)
     mintFeeBps : Bps             -- Fee in basis points (e.g., 30 = 0.30%)
     redeemFeeBps : Bps
     minAmount : Money            -- Minimum mint/redeem amount
@@ -386,6 +452,68 @@ template CantonDirectMintService
           lastRateLimitReset = resetTime
 
         return (newService, musdCid, bridgeReq)
+
+    -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
+    -- USDCx is already backed 1:1 by USDC in xReserve on Ethereum, so no additional
+    -- bridge-out is needed. The USDCx is simply transferred to the protocol operator.
+    choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD)
+      with
+        user : Party
+        usdcxCid : ContractId USDCx
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "USDCX_MINTING_DISABLED" (isSome usdcxIssuer)
+
+        -- Compliance check: verify minter is not blacklisted
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateMint with minter = user
+
+        usdcx <- fetch usdcxCid
+        let expectedIssuer = fromSome usdcxIssuer
+        assertMsg "USDCX_ISSUER_MISMATCH" (usdcx.issuer == expectedIssuer)
+        assertMsg "USDCX_OWNER_MISMATCH" (usdcx.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (usdcx.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (usdcx.amount <= maxAmount)
+
+        let feeAmount = usdcx.amount * intToNumeric mintFeeBps / 10000.0
+        let netAmount = usdcx.amount - feeAmount
+
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- 24h rolling window rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
+        -- Transfer USDCx to operator (protocol holds the backing)
+        -- No bridge-out needed - USDCx is already backed in xReserve on Ethereum
+        usdcxProposal <- exercise usdcxCid USDCx_Transfer with newOwner = operator
+        exercise usdcxProposal USDCxTransferProposal_Accept
+
+        -- Mint Canton mUSD to user (1:1 minus fee)
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Update service state (no bridge request needed for USDCx)
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
+
+        return (newService, musdCid)
 
     -- | Redeem: User burns Canton mUSD → needs USDC bridged back from Ethereum
     -- This is a two-phase process:
