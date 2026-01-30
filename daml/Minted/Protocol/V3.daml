@@ -157,7 +157,7 @@ template PriceOracle
     signatory provider
     observer observers
 
-    key (provider, symbol) : (Party, Party, Text)
+    key (provider, symbol) : (Party, Text)
     maintainer key._1
 
     ensure price > 0.0
