@@ -151,8 +151,7 @@ jobs:
           push: false
           tags: musd-relay:ci
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy
