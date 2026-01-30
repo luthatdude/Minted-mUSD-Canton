@@ -259,9 +259,9 @@ template CantonCoinPriceOracle
         let isFresh = ageSeconds <= intToInt64 maxStalenessSeconds
         return (priceUsd, intToInt64 maxStalenessSeconds >= ageSeconds)
 
--- Helper to convert Int to Int64
-intToInt64 : Int -> Int64
-intToInt64 = fromIntegral
+-- Helper to convert Int to Int (identity for compatibility)
+intToInt64 : Int -> Int
+intToInt64 x = x
 
 -- ============================================================
 --                     SECTION 2: CANTON mUSD
