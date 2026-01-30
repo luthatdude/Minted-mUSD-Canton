@@ -10,7 +10,6 @@ import { DashboardPage } from "./DashboardPage";
 import { MintPage } from "./MintPage";
 import { StakePage } from "./StakePage";
 import { BorrowPage } from "./BorrowPage";
-import { LiquidationsPage } from "./LiquidationsPage";
 import { BridgePage } from "./BridgePage";
 import { AdminPage } from "./AdminPage";
 
@@ -19,7 +18,6 @@ import { CantonDashboard } from "@/components/canton/CantonDashboard";
 import { CantonMint } from "@/components/canton/CantonMint";
 import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
-import { CantonLiquidations } from "@/components/canton/CantonLiquidations";
 import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
 
@@ -41,8 +39,6 @@ export default function Home() {
           return <CantonStake />;
         case "borrow":
           return <CantonBorrow />;
-        case "liquidate":
-          return <CantonLiquidations />;
         case "bridge":
           return <CantonBridge />;
         case "admin":
@@ -62,8 +58,6 @@ export default function Home() {
         return <StakePage />;
       case "borrow":
         return <BorrowPage />;
-      case "liquidate":
-        return <LiquidationsPage />;
       case "bridge":
         return <BridgePage />;
       case "admin":
