@@ -470,8 +470,7 @@ template RedemptionRequest
     createdAt : Time
     fulfilled : Bool
   where
-    signatory operator
-    observer user
+    signatory operator, user  -- User is signatory since they initiated redemption
 
     -- Operator fulfills after bridge-in from Ethereum delivers USDC
     choice Redemption_Fulfill : (ContractId RedemptionRequest, ContractId CantonUSDC)

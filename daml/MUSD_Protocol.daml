@@ -325,9 +325,10 @@ template BridgeService
   with
     operator : Party
     validators : [Party]
+    observers : [Party]   -- Users who can exercise Lock_Musd_For_Bridge
   where
     signatory operator
-    observer validators
+    observer validators, observers
 
     nonconsuming choice Lock_Musd_For_Bridge : ContractId BridgeLock
       with
@@ -461,6 +462,7 @@ setup = do
     createCmd BridgeService with
       operator = operator
       validators = [validator1, validator2]
+      observers = [alice]  -- Alice needs visibility to exercise Lock_Musd_For_Bridge
 
   -- 4. Alice Mints mUSD (Swaps USDC)
   (mintingSvc2, musdCid) <- submit alice do

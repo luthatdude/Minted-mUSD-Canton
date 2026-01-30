@@ -485,6 +485,7 @@ endToEndFlowTest = script do
       paused = False
       mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      observers = [alice]  -- Alice needs visibility to exercise Stake
 
   (stakingServiceCid2, smusdCid) <- submit alice do
     exerciseCmd stakingServiceCid Stake with

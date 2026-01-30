@@ -84,8 +84,10 @@ template CantonStakingService
     -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
     mpaHash : Text
     mpaUri : Text
+    observers : [Party]         -- Users who can exercise Stake/Unstake
   where
     signatory operator
+    observer observers
 
     ensure totalShares >= 0.0 && totalAssets >= 0.0
 
