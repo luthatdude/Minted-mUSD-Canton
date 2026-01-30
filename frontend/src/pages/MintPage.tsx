@@ -6,16 +6,23 @@ import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps } from "@/lib/format";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
+import ChainSelector from "@/components/ChainSelector";
+import { useMultiChainDeposit, DepositQuote } from "@/hooks/useMultiChainDeposit";
+import { ChainConfig, requiresBridging, estimateBridgeTime, getUSDCDecimals, USDC_DECIMALS_BY_CHAIN } from "@/lib/chains";
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
-
-export function MintPage({ contracts, address }: Props) {
+export function MintPage() {
+  const { address, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
+  const multiChain = useMultiChainDeposit();
+  
   const [tab, setTab] = useState<"mint" | "redeem">("mint");
   const [amount, setAmount] = useState("");
   const [preview, setPreview] = useState<{ output: bigint; fee: bigint } | null>(null);
+  const [depositQuote, setDepositQuote] = useState<DepositQuote | null>(null);
+  const [showCrossChain, setShowCrossChain] = useState(false);
   const [stats, setStats] = useState({
     mintFee: 0n,
     redeemFee: 0n,
@@ -57,6 +64,7 @@ export function MintPage({ contracts, address }: Props) {
     async function loadPreview() {
       if (!directMint || !amount || parseFloat(amount) <= 0) {
         setPreview(null);
+        setDepositQuote(null);
         return;
       }
       try {
@@ -64,23 +72,41 @@ export function MintPage({ contracts, address }: Props) {
           const parsed = ethers.parseUnits(amount, USDC_DECIMALS);
           const [output, fee] = await directMint.previewMint(parsed);
           setPreview({ output, fee });
+          
+          // Also get cross-chain quote if on non-treasury chain
+          if (showCrossChain && multiChain.selectedChain) {
+            const quote = await multiChain.getDepositQuote(parsed);
+            setDepositQuote(quote);
+          }
         } else {
           const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
           const [output, fee] = await directMint.previewRedeem(parsed);
           setPreview({ output, fee });
+          setDepositQuote(null);
         }
       } catch {
         setPreview(null);
+        setDepositQuote(null);
       }
     }
     const timer = setTimeout(loadPreview, 300);
     return () => clearTimeout(timer);
-  }, [directMint, amount, tab]);
+  }, [directMint, amount, tab, showCrossChain, multiChain]);
 
   async function handleMint() {
-    if (!directMint || !usdc) return;
     const parsed = ethers.parseUnits(amount, USDC_DECIMALS);
-    // Approve USDC first
+    
+    // Cross-chain deposit
+    if (showCrossChain && multiChain.selectedChain && requiresBridging(multiChain.selectedChain)) {
+      const txHash = await multiChain.deposit(parsed);
+      if (txHash) {
+        setAmount("");
+      }
+      return;
+    }
+    
+    // Direct mint on treasury chain
+    if (!directMint || !usdc) return;
     await tx.send(async () => {
       const allowance = await usdc.allowance(address, CONTRACTS.DirectMint);
       if (allowance < parsed) {
@@ -90,6 +116,16 @@ export function MintPage({ contracts, address }: Props) {
       return directMint.mint(parsed);
     });
     setAmount("");
+  }
+
+  async function handleCrossChainMint() {
+    if (!multiChain.selectedChain || !amount) return;
+    const decimals = getUSDCDecimals(multiChain.selectedChain.id);
+    const parsed = ethers.parseUnits(amount, decimals);
+    const txHash = await multiChain.deposit(parsed);
+    if (txHash) {
+      setAmount("");
+    }
   }
 
   async function handleRedeem() {
@@ -106,20 +142,8 @@ export function MintPage({ contracts, address }: Props) {
     setAmount("");
   }
 
-  if (!address) {
-    return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <div className="card-gradient-border max-w-md p-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-500/10">
-            <svg className="h-8 w-8 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h3 className="mb-2 text-xl font-semibold text-white">Connect Your Wallet</h3>
-          <p className="text-gray-400">Connect your wallet to mint or redeem mUSD.</p>
-        </div>
-      </div>
-    );
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (
@@ -127,9 +151,63 @@ export function MintPage({ contracts, address }: Props) {
       <PageHeader
         title="Mint & Redeem"
         subtitle="Convert between USDC and mUSD at 1:1 ratio (minus protocol fees)"
-        badge="Ethereum"
+        badge={showCrossChain ? (multiChain.selectedChain?.name || "Select Chain") : "Ethereum"}
         badgeColor="brand"
       />
+
+      {/* Cross-Chain Toggle */}
+      <div className="flex items-center justify-between rounded-xl bg-surface-800/50 p-4 border border-white/10">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-500">
+            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="font-medium text-white">Multi-Chain Deposits</h3>
+            <p className="text-sm text-gray-400">Deposit from Base, Arbitrum, or Solana</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowCrossChain(!showCrossChain)}
+          className={`relative h-6 w-11 rounded-full transition-colors ${
+            showCrossChain ? 'bg-brand-500' : 'bg-surface-600'
+          }`}
+        >
+          <span
+            className={`absolute top-1 left-1 h-4 w-4 rounded-full bg-white transition-transform ${
+              showCrossChain ? 'translate-x-5' : ''
+            }`}
+          />
+        </button>
+      </div>
+
+      {/* Chain Selector (when cross-chain is enabled) */}
+      {showCrossChain && tab === "mint" && (
+        <div className="space-y-3">
+          <label className="text-sm font-medium text-gray-400">Deposit Chain</label>
+          <ChainSelector showTestnets={false} />
+          
+          {/* Bridge Info */}
+          {multiChain.selectedChain && requiresBridging(multiChain.selectedChain) && (
+            <div className="flex items-center gap-2 rounded-lg bg-blue-500/10 px-4 py-3 text-sm">
+              <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-blue-300">
+                Deposits from {multiChain.selectedChain.name} are bridged to Ethereum (~{estimateBridgeTime(multiChain.selectedChain)}s)
+              </span>
+            </div>
+          )}
+          
+          {/* Cross-chain USDC Balance */}
+          {multiChain.isConnected && (
+            <div className="text-sm text-gray-400">
+              Your USDC on {multiChain.selectedChain?.name}: {formatToken(multiChain.usdcBalance, 6)}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Balance Cards */}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -287,6 +365,22 @@ export function MintPage({ contracts, address }: Props) {
                   {formatToken(preview.fee, 6)} USDC
                 </span>
               </div>
+              {showCrossChain && depositQuote && (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-400">Bridge Fee</span>
+                    <span className="text-gray-300">
+                      ~{depositQuote.feePercentage.toFixed(2)}%
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-400">Est. Time</span>
+                    <span className="text-gray-300">
+                      ~{Math.round(depositQuote.bridgeTime / 60)} min
+                    </span>
+                  </div>
+                </>
+              )}
               <div className="divider my-2" />
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-400">Exchange Rate</span>
@@ -297,8 +391,10 @@ export function MintPage({ contracts, address }: Props) {
 
           {/* Action Button */}
           <TxButton
-            onClick={tab === "mint" ? handleMint : handleRedeem}
-            loading={tx.loading}
+            onClick={showCrossChain && multiChain.selectedChain && requiresBridging(multiChain.selectedChain) 
+              ? handleCrossChainMint 
+              : (tab === "mint" ? handleMint : handleRedeem)}
+            loading={tx.loading || multiChain.isLoading}
             disabled={!amount || parseFloat(amount) <= 0}
             className="w-full"
           >
@@ -308,7 +404,9 @@ export function MintPage({ contracts, address }: Props) {
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
                   </svg>
-                  Mint mUSD
+                  {showCrossChain && multiChain.selectedChain && requiresBridging(multiChain.selectedChain)
+                    ? `Deposit from ${multiChain.selectedChain.name}`
+                    : 'Mint mUSD'}
                 </>
               ) : (
                 <>
@@ -322,12 +420,12 @@ export function MintPage({ contracts, address }: Props) {
           </TxButton>
 
           {/* Transaction Status */}
-          {tx.error && (
+          {(tx.error || multiChain.error) && (
             <div className="alert-error flex items-center gap-3">
               <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <span className="text-sm">{tx.error}</span>
+              <span className="text-sm">{tx.error || multiChain.error}</span>
             </div>
           )}
           {tx.success && (

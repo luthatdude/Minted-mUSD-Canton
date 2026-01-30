@@ -1,13 +1,21 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  BridgeService: `${PACKAGE_ID}:MUSD_Protocol:BridgeService`,
+  AttestationRequest: `${PACKAGE_ID}:MintedProtocolV2Fixed:AttestationRequest`,
+  BridgeClaim: `${PACKAGE_ID}:MUSD_Protocol:BridgeClaim`,
+  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+};
 
-export function CantonBridge({ canton }: Props) {
-  const [tab, setTab] = useState<"lock" | "attest" | "claim">("lock");
+export function CantonBridge() {
+  const loopWallet = useLoopWallet();
+  
+  const [tab, setTab] = useState<"lock" | "attest" | "claim" | "usdc">("lock");
   const [amount, setAmount] = useState("");
   const [musdCid, setMusdCid] = useState("");
   const [targetChain, setTargetChain] = useState("1"); // Ethereum mainnet
@@ -16,28 +24,33 @@ export function CantonBridge({ canton }: Props) {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [bridgeServices, setBridgeServices] = useState<any[]>([]);
-  const [attestations, setAttestations] = useState<any[]>([]);
-  const [claims, setClaims] = useState<any[]>([]);
-  const [musdContracts, setMusdContracts] = useState<any[]>([]);
+  const [bridgeServices, setBridgeServices] = useState<LoopContract[]>([]);
+  const [attestations, setAttestations] = useState<LoopContract[]>([]);
+  const [claims, setClaims] = useState<LoopContract[]>([]);
+  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [svc, att, cl, musd] = await Promise.all([
-        canton.query("MUSD_Protocol:BridgeService").catch(() => []),
-        canton.query("MintedProtocolV2Fixed:AttestationRequest").catch(() => []),
-        canton.query("MUSD_Protocol:BridgeClaim").catch(() => []),
-        canton.query("MintedProtocolV2Fixed:MUSD"),
+        loopWallet.queryContracts(templates.BridgeService).catch(() => []),
+        loopWallet.queryContracts(templates.AttestationRequest).catch(() => []),
+        loopWallet.queryContracts(templates.BridgeClaim).catch(() => []),
+        loopWallet.queryContracts(templates.MUSD).catch(() => []),
       ]);
       setBridgeServices(svc);
       setAttestations(att);
       setClaims(cl);
       setMusdContracts(musd);
       if (musd.length > 0) setMusdCid(musd[0].contractId);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   async function handleLock() {
     if (!bridgeServices.length || !musdCid) return;
@@ -45,8 +58,8 @@ export function CantonBridge({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      await canton.exercise(
-        "MUSD_Protocol:BridgeService",
+      await loopWallet.exerciseChoice(
+        templates.BridgeService,
         bridgeServices[0].contractId,
         "Lock_Musd_For_Bridge",
         {
@@ -58,6 +71,7 @@ export function CantonBridge({ canton }: Props) {
       );
       setResult(`Locked ${amount} mUSD for bridge to chain ${targetChain}`);
       setAmount("");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -69,13 +83,14 @@ export function CantonBridge({ canton }: Props) {
     setLoading(true);
     setError(null);
     try {
-      await canton.exercise(
-        "MUSD_Protocol:BridgeClaim",
+      await loopWallet.exerciseChoice(
+        templates.BridgeClaim,
         claimCid,
         "Finalize_Bridge_Mint",
         {}
       );
       setResult("Bridge claim finalized - mUSD minted on Canton");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -83,8 +98,40 @@ export function CantonBridge({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
-    return <div className="text-center text-gray-400 py-20">Connect to Canton Ledger for bridge operations</div>;
+  // USDC Bridge via Loop Wallet extension
+  async function handleUsdcBridge() {
+    if (!loopWallet.provider) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      // Access Loop Wallet's USDC bridge extension
+      const { loop } = await import('@fivenorth/loop-sdk');
+      await loop.wallet.extension.usdcBridge.withdrawalUSDCxToEthereum({
+        amount,
+        message: `Bridge ${amount} USDC to Ethereum`,
+      });
+      setResult(`Initiated USDC bridge to Ethereum for ${amount} USDC`);
+      setAmount("");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-6">
+          <div className="text-center">
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet for bridge operations.</p>
+          </div>
+          <WalletConnector mode="canton" />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -104,6 +151,9 @@ export function CantonBridge({ canton }: Props) {
           <button className={`tab ${tab === "lock" ? "tab-active" : ""}`} onClick={() => setTab("lock")}>
             Lock for Bridge
           </button>
+          <button className={`tab ${tab === "usdc" ? "tab-active" : ""}`} onClick={() => setTab("usdc")}>
+            USDC Bridge
+          </button>
           <button className={`tab ${tab === "attest" ? "tab-active" : ""}`} onClick={() => setTab("attest")}>
             Attestations
           </button>
@@ -111,6 +161,56 @@ export function CantonBridge({ canton }: Props) {
             Claim
           </button>
         </div>
+
+        {/* USDC Bridge Tab - Loop Wallet Extension */}
+        {tab === "usdc" && (
+          <div className="space-y-4">
+            <div className="rounded-lg bg-purple-900/20 border border-purple-500/30 p-4">
+              <div className="flex items-center gap-3 mb-2">
+                <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span className="font-semibold text-purple-300">Loop Wallet USDC Bridge</span>
+              </div>
+              <p className="text-sm text-gray-400">
+                Bridge USDC directly to Ethereum using Loop Wallet's native bridge extension.
+                Fast and secure cross-chain transfers.
+              </p>
+            </div>
+            <div>
+              <label className="label">USDC Amount</label>
+              <input 
+                type="number" 
+                className="input" 
+                placeholder="0.00" 
+                value={amount} 
+                onChange={(e) => setAmount(e.target.value)} 
+              />
+            </div>
+            <button
+              onClick={handleUsdcBridge}
+              disabled={loading || !amount || parseFloat(amount) <= 0}
+              className="btn-primary w-full flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <>
+                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Bridging...
+                </>
+              ) : (
+                <>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  Bridge USDC to Ethereum
+                </>
+              )}
+            </button>
+          </div>
+        )}
 
         {/* Lock Tab */}
         {tab === "lock" && (

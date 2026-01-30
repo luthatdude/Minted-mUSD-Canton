@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { CANTON_CONFIG } from "@/lib/config";
 
 interface CantonContract {
@@ -16,6 +16,9 @@ interface CantonState {
 /**
  * Hook for interacting with Canton Network Daml ledger.
  * Supports querying contracts, exercising choices, and creating contracts.
+ * 
+ * FIX FE-C1: Uses configurable protocol (http/https)
+ * FIX FE-C2: Token stored securely in ref, not exposed in config
  */
 export function useCanton() {
   const [state, setState] = useState<CantonState>({
@@ -23,8 +26,10 @@ export function useCanton() {
     party: null,
     error: null,
   });
-  const tokenRef = useRef<string>(CANTON_CONFIG.token);
-  const baseUrl = `http://${CANTON_CONFIG.ledgerHost}:${CANTON_CONFIG.ledgerPort}`;
+  // FIX FE-C2: Token is now set via setToken, not from public config
+  const tokenRef = useRef<string>("");
+  // FIX FE-C1: Use configurable protocol (https in production)
+  const baseUrl = `${CANTON_CONFIG.protocol}://${CANTON_CONFIG.ledgerHost}:${CANTON_CONFIG.ledgerPort}`;
 
   const setToken = useCallback((token: string, party: string) => {
     tokenRef.current = token;

@@ -241,7 +241,6 @@ bridgeOutAttestationTest = script do
   -- Aggregator finalizes with 3-of-5
   finalSigs <- submit aggregator do
     exerciseCmd attCid BridgeOut_Finalize with
-      requiredSignatures = 3
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
 
   debug "Bridge-out attestation test passed - 3-of-5 validators signed"
@@ -299,7 +298,6 @@ bridgeInAttestationTest = script do
 
   finalSigs <- submit aggregator do
     exerciseCmd attCid BridgeIn_Finalize with
-      requiredSignatures = 3
       signatureCids = [sig1, sig2, sig3]
 
   debug "Bridge-in attestation test passed - 3-of-3 validators signed"
@@ -353,7 +351,6 @@ supplyCapSyncTest = script do
 
   verifiedPayload <- submit aggregator do
     exerciseCmd attCid SupplyCap_Finalize with
-      requiredSignatures = 3
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Supply cap sync verified: total=" <> show verifiedPayload.totalGlobalSupply
@@ -408,7 +405,6 @@ yieldAttestationTest = script do
 
   verifiedYield <- submit aggregator do
     exerciseCmd attCid Yield_Finalize with
-      requiredSignatures = 3
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Yield attestation verified: accrued=" <> show verifiedYield.yieldAccrued

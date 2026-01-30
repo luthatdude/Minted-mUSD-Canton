@@ -13,18 +13,18 @@
     "test": "jest"
   },
   "dependencies": {
-    "@aws-sdk/client-kms": "3.398.0",
+    "@aws-sdk/client-kms": "^3.722.0",
     "@daml/ledger": "2.8.0",
     "@daml/types": "2.8.0",
-    "ethers": "6.9.0"
+    "ethers": "^6.13.0"
   },
   "devDependencies": {
     "@types/node": "20.10.0",
     "typescript": "5.3.3",
     "ts-node": "10.9.0",
-    "eslint": "8.55.0",
-    "@typescript-eslint/eslint-plugin": "6.0.0",
-    "@typescript-eslint/parser": "6.0.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
     "jest": "29.7.0",
     "@types/jest": "29.5.0",
     "ts-jest": "29.1.0"

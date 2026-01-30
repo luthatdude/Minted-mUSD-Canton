@@ -1,12 +1,18 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  StakingService: `${PACKAGE_ID}:MintedProtocolV2Fixed:StakingService`,
+  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+};
 
-export function CantonStake({ canton }: Props) {
+export function CantonStake() {
+  const loopWallet = useLoopWallet();
+  
   const [tab, setTab] = useState<"stake" | "unstake">("stake");
   const [amount, setAmount] = useState("");
   const [musdContractId, setMusdContractId] = useState("");
@@ -15,16 +21,16 @@ export function CantonStake({ canton }: Props) {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [services, setServices] = useState<any[]>([]);
-  const [musdContracts, setMusdContracts] = useState<any[]>([]);
+  const [services, setServices] = useState<LoopContract[]>([]);
+  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
   const [stakingInfo, setStakingInfo] = useState<any>(null);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [svc, musd] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:StakingService"),
-        canton.query("MintedProtocolV2Fixed:MUSD"),
+        loopWallet.queryContracts(templates.StakingService).catch(() => []),
+        loopWallet.queryContracts(templates.MUSD).catch(() => []),
       ]);
       setServices(svc);
       setMusdContracts(musd);
@@ -33,9 +39,14 @@ export function CantonStake({ canton }: Props) {
         setStakingInfo(svc[0].payload);
       }
       if (musd.length > 0) setMusdContractId(musd[0].contractId);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   const totalMusd = musdContracts.reduce(
     (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
@@ -47,14 +58,15 @@ export function CantonStake({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      await canton.exercise(
-        "MintedProtocolV2Fixed:StakingService",
+      await loopWallet.exerciseChoice(
+        templates.StakingService,
         serviceId,
         "Stake",
         { musdCid: musdContractId, amount }
       );
       setResult(`Staked ${amount} mUSD for smUSD on Canton`);
       setAmount("");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -68,14 +80,15 @@ export function CantonStake({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      await canton.exercise(
-        "MintedProtocolV2Fixed:StakingService",
+      await loopWallet.exerciseChoice(
+        templates.StakingService,
         serviceId,
         "Unstake",
         { amount }
       );
       setResult(`Unstaked ${amount} smUSD on Canton`);
       setAmount("");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -83,8 +96,18 @@ export function CantonStake({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
-    return <div className="text-center text-gray-400 py-20">Connect to Canton Ledger to stake</div>;
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-6">
+          <div className="text-center">
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to stake mUSD on Canton.</p>
+          </div>
+          <WalletConnector mode="canton" />
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, audit-fixes]
   pull_request:
     branches: [main]
 
@@ -138,6 +138,8 @@ jobs:
     name: Docker Build & Scan
     runs-on: ubuntu-latest
     needs: [relay]
+    # Skip on PRs - Dockerfile changes need to be on main first
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -151,8 +153,7 @@ jobs:
           push: false
           tags: musd-relay:ci
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy

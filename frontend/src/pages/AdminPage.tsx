@@ -5,15 +5,15 @@ import { StatCard } from "@/components/StatCard";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatBps, formatToken } from "@/lib/format";
 import { USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
-
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
 type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
 
-export function AdminPage({ contracts, address }: Props) {
+export function AdminPage() {
+  const { address, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [section, setSection] = useState<AdminSection>("musd");
   const tx = useTx();
 
@@ -88,8 +88,8 @@ export function AdminPage({ contracts, address }: Props) {
     loadCurrentValues();
   }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
 
-  if (!address) {
-    return <div className="text-center text-gray-400 py-20">Connect wallet to access admin functions</div>;
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
   }
 
   const sections: { key: AdminSection; label: string }[] = [

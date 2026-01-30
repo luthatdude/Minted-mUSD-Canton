@@ -80,6 +80,190 @@ template CantonUSDCTransferProposal
       do create usdc
 
 -- ============================================================
+--                     SECTION 1B: USDCX (Canton-Native USDC)
+-- ============================================================
+
+-- | USDCX: Canton-native USDC equivalent.
+-- This is the canonical stablecoin on Canton, 1:1 with USD.
+-- Can be minted by bridging USDC from Ethereum or issued by authorized parties.
+template USDCX
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    choice USDCX_Transfer : ContractId USDCXTransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create USDCXTransferProposal with
+          usdcx = this
+          newOwner
+
+    choice USDCX_Split : (ContractId USDCX, ContractId USDCX)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    choice USDCX_Merge : ContractId USDCX
+      with
+        otherCid : ContractId USDCX
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+-- | Transfer proposal for USDCX (dual-signatory safe)
+template USDCXTransferProposal
+  with
+    usdcx : USDCX
+    newOwner : Party
+  where
+    signatory usdcx.issuer, usdcx.owner
+    observer newOwner
+
+    choice USDCXTransferProposal_Accept : ContractId USDCX
+      controller newOwner
+      do create usdcx with owner = newOwner
+
+    choice USDCXTransferProposal_Reject : ContractId USDCX
+      controller newOwner
+      do create usdcx
+
+    choice USDCXTransferProposal_Cancel : ContractId USDCX
+      controller usdcx.owner
+      do create usdcx
+
+-- ============================================================
+--                     SECTION 1C: CANTON COIN (Native Token)
+-- ============================================================
+
+-- | CantonCoin: Native Canton blockchain token.
+-- Must be priced via oracle to determine mUSD mint amount.
+-- Used for leverage loop collateral.
+template CantonCoin
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    choice CantonCoin_Transfer : ContractId CantonCoinTransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create CantonCoinTransferProposal with
+          coin = this
+          newOwner
+
+    choice CantonCoin_Split : (ContractId CantonCoin, ContractId CantonCoin)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    choice CantonCoin_Merge : ContractId CantonCoin
+      with
+        otherCid : ContractId CantonCoin
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+-- | Transfer proposal for CantonCoin (dual-signatory safe)
+template CantonCoinTransferProposal
+  with
+    coin : CantonCoin
+    newOwner : Party
+  where
+    signatory coin.issuer, coin.owner
+    observer newOwner
+
+    choice CantonCoinTransferProposal_Accept : ContractId CantonCoin
+      controller newOwner
+      do create coin with owner = newOwner
+
+    choice CantonCoinTransferProposal_Reject : ContractId CantonCoin
+      controller newOwner
+      do create coin
+
+    choice CantonCoinTransferProposal_Cancel : ContractId CantonCoin
+      controller coin.owner
+      do create coin
+
+-- ============================================================
+--                     SECTION 1D: PRICE ORACLE
+-- ============================================================
+
+-- | Price oracle for CantonCoin → USD conversion.
+-- Validators attest to the current price.
+template CantonCoinPriceOracle
+  with
+    operator : Party
+    validators : [Party]
+    priceUsd : Money             -- Current price in USD (18 decimals)
+    lastUpdated : Time
+    maxStalenessSeconds : Int    -- Max age before price is stale
+  where
+    signatory operator
+    observer validators
+
+    ensure priceUsd > 0.0
+
+    -- Validators update price (simple model — extend with multi-sig if needed)
+    choice Oracle_UpdatePrice : ContractId CantonCoinPriceOracle
+      with
+        newPrice : Money
+        validator : Party
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validators)
+        assertMsg "PRICE_MUST_BE_POSITIVE" (newPrice > 0.0)
+        now <- getTime
+        create this with
+          priceUsd = newPrice
+          lastUpdated = now
+
+    -- Check if price is fresh
+    nonconsuming choice Oracle_GetPrice : (Money, Bool)
+      controller operator
+      do
+        now <- getTime
+        let ageSeconds = convertRelTimeToMicroseconds (subTime now lastUpdated) / 1000000
+        let isFresh = ageSeconds <= intToInt64 maxStalenessSeconds
+        return (priceUsd, intToInt64 maxStalenessSeconds >= ageSeconds)
+
+-- Helper to convert Int to Int (identity for compatibility)
+intToInt64 : Int -> Int
+intToInt64 x = x
+
+-- ============================================================
 --                     SECTION 2: CANTON mUSD
 -- ============================================================
 
@@ -105,12 +289,15 @@ template CantonMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    choice CantonMUSD_Transfer : ContractId CantonMUSD
+    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
+    choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create CantonMUSDTransferProposal with
+          musd = this
+          newOwner
 
     choice CantonMUSD_Split : (ContractId CantonMUSD, ContractId CantonMUSD)
       with
@@ -138,6 +325,28 @@ template CantonMUSD
       controller issuer
       do
         return ()
+
+-- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
+-- Prevents forced signatory obligations on unwitting recipients
+template CantonMUSDTransferProposal
+  with
+    musd : CantonMUSD
+    newOwner : Party
+  where
+    signatory musd.issuer, musd.owner
+    observer newOwner
+
+    choice CantonMUSDTransferProposal_Accept : ContractId CantonMUSD
+      controller newOwner
+      do create musd with owner = newOwner
+
+    choice CantonMUSDTransferProposal_Reject : ContractId CantonMUSD
+      controller newOwner
+      do create musd
+
+    choice CantonMUSDTransferProposal_Cancel : ContractId CantonMUSD
+      controller musd.owner
+      do create musd
 
 -- ============================================================
 --                     SECTION 3: BRIDGE OUT REQUEST
@@ -258,10 +467,13 @@ template ReserveTracker
 -- | The CantonDirectMint service.
 -- Mints Canton mUSD and emits a bridge request for the backing stables.
 -- Does NOT hold stables locally — they get piped to Ethereum Treasury.
+-- Supports multiple collateral types: CantonUSDC, USDCX, CantonCoin
 template CantonDirectMintService
   with
     operator : Party
     usdcIssuer : Party
+    usdcxIssuer : Party           -- USDCX (Canton-native USD) issuer
+    cantonCoinIssuer : Party      -- CantonCoin issuer
     mintFeeBps : Bps             -- Fee in basis points (e.g., 30 = 0.30%)
     redeemFeeBps : Bps
     minAmount : Money            -- Minimum mint/redeem amount
@@ -287,7 +499,7 @@ template CantonDirectMintService
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
   where
     signatory operator
-    observer usdcIssuer, authorizedMinters
+    observer usdcIssuer, usdcxIssuer, cantonCoinIssuer, authorizedMinters
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -361,6 +573,157 @@ template CantonDirectMintService
           lastRateLimitReset = resetTime
 
         return (newService, musdCid, bridgeReq)
+
+    -- | Mint with USDCX: User deposits USDCX on Canton → gets Canton mUSD
+    -- USDCX is the Canton-native stablecoin (1:1 with USD)
+    choice DirectMint_MintWithUSDCX : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
+      with
+        user : Party
+        usdcxCid : ContractId USDCX
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateMint with minter = user
+
+        usdcx <- fetch usdcxCid
+        assertMsg "USDCX_OWNER_MISMATCH" (usdcx.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (usdcx.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (usdcx.amount <= maxAmount)
+
+        let feeAmount = usdcx.amount * intToNumeric mintFeeBps / 10000.0
+        let netAmount = usdcx.amount - feeAmount
+
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- Rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
+        -- Transfer USDCX to operator
+        usdcxProposal <- exercise usdcxCid USDCX_Transfer with newOwner = operator
+        exercise usdcxProposal USDCXTransferProposal_Accept
+
+        -- Mint Canton mUSD to user (1:1 minus fee)
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Emit bridge-out request
+        bridgeReq <- create BridgeOutRequest with
+          operator = operator
+          user = user
+          amount = usdcx.amount
+          targetChainId = targetChainId
+          targetTreasury = targetTreasury
+          nonce = nextNonce
+          createdAt = now
+          status = "pending"
+          validators = validators
+
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
+
+        return (newService, musdCid, bridgeReq)
+
+    -- | Mint with CantonCoin: User deposits CantonCoin → gets mUSD based on oracle price
+    -- Requires price oracle for conversion. Collateral ratio enforced.
+    choice DirectMint_MintWithCantonCoin : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId CantonCoinCollateral)
+      with
+        user : Party
+        coinCid : ContractId CantonCoin
+        oracleCid : ContractId CantonCoinPriceOracle
+        collateralRatioBps : Bps  -- e.g., 15000 = 150% collateralization
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "COLLATERAL_RATIO_TOO_LOW" (collateralRatioBps >= 11000)  -- Min 110%
+
+        -- Compliance check
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateMint with minter = user
+
+        coin <- fetch coinCid
+        assertMsg "COIN_OWNER_MISMATCH" (coin.owner == user)
+
+        -- Get oracle price and check freshness
+        (priceUsd, isFresh) <- exercise oracleCid Oracle_GetPrice
+        assertMsg "ORACLE_PRICE_STALE" isFresh
+        assertMsg "ORACLE_PRICE_INVALID" (priceUsd > 0.0)
+
+        -- Calculate USD value of collateral
+        let collateralValueUsd = coin.amount * priceUsd
+
+        -- Calculate max mUSD that can be minted at this collateral ratio
+        -- collateralRatioBps / 10000 = collateralValue / musdMinted
+        -- musdMinted = collateralValue * 10000 / collateralRatioBps
+        let maxMusd = collateralValueUsd * 10000.0 / intToNumeric collateralRatioBps
+        let feeAmount = maxMusd * intToNumeric mintFeeBps / 10000.0
+        let netAmount = maxMusd - feeAmount
+
+        assertMsg "BELOW_MIN_AMOUNT" (netAmount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (netAmount <= maxAmount)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- Rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
+        -- Transfer CantonCoin to operator as collateral
+        coinProposal <- exercise coinCid CantonCoin_Transfer with newOwner = operator
+        exercise coinProposal CantonCoinTransferProposal_Accept
+
+        -- Create collateral record (for liquidation tracking)
+        collateralCid <- create CantonCoinCollateral with
+          operator = operator
+          user = user
+          coinAmount = coin.amount
+          priceAtMint = priceUsd
+          musdMinted = netAmount
+          collateralRatioBps = collateralRatioBps
+          createdAt = now
+
+        -- Mint Canton mUSD to user
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
+
+        return (newService, musdCid, collateralCid)
 
     -- | Redeem: User burns Canton mUSD → needs USDC bridged back from Ethereum
     -- This is a two-phase process:
@@ -494,6 +857,159 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
+
+-- ============================================================
+--                     SECTION 7: CANTON COIN COLLATERAL
+-- ============================================================
+
+-- | Tracks CantonCoin collateral positions for leverage loop / CDP.
+-- Enables liquidation if collateral value falls below threshold.
+template CantonCoinCollateral
+  with
+    operator : Party
+    user : Party
+    coinAmount : Money          -- Amount of CantonCoin locked
+    priceAtMint : Money         -- Price when position was opened (for reference)
+    musdMinted : Money          -- Amount of mUSD minted against this collateral
+    collateralRatioBps : Bps    -- Required collateral ratio (e.g., 15000 = 150%)
+    createdAt : Time
+  where
+    signatory operator, user
+
+    ensure coinAmount > 0.0 && musdMinted > 0.0
+
+    -- | Check if position is healthy at current price
+    nonconsuming choice Collateral_CheckHealth : (Money, Bool)
+      with
+        oracleCid : ContractId CantonCoinPriceOracle
+      controller operator
+      do
+        (currentPrice, isFresh) <- exercise oracleCid Oracle_GetPrice
+        assertMsg "ORACLE_STALE" isFresh
+        
+        let currentValue = coinAmount * currentPrice
+        let requiredValue = musdMinted * intToNumeric collateralRatioBps / 10000.0
+        let isHealthy = currentValue >= requiredValue
+        return (currentValue, isHealthy)
+
+    -- | Close position: User repays mUSD → gets CantonCoin back
+    choice Collateral_Close : ContractId CantonCoin
+      with
+        musdCid : ContractId CantonMUSD
+        coinIssuer : Party
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "INSUFFICIENT_REPAYMENT" (musd.amount >= musdMinted)
+        
+        -- Burn the mUSD
+        exercise musdCid CantonMUSD_Burn
+        
+        -- Return CantonCoin to user
+        create CantonCoin with
+          issuer = coinIssuer
+          owner = user
+          amount = coinAmount
+
+    -- | Liquidate: Position is unhealthy, operator can seize collateral
+    choice Collateral_Liquidate : ContractId CantonCoin
+      with
+        oracleCid : ContractId CantonCoinPriceOracle
+        coinIssuer : Party
+        liquidator : Party
+      controller operator
+      do
+        (currentValue, isHealthy) <- exercise self Collateral_CheckHealth with oracleCid
+        assertMsg "POSITION_IS_HEALTHY" (not isHealthy)
+        
+        -- Collateral goes to liquidator (who must repay the debt off-chain)
+        create CantonCoin with
+          issuer = coinIssuer
+          owner = liquidator
+          amount = coinAmount
+
+    -- | Add more collateral to improve health factor
+    choice Collateral_AddCollateral : ContractId CantonCoinCollateral
+      with
+        additionalCoinCid : ContractId CantonCoin
+      controller user
+      do
+        additionalCoin <- fetch additionalCoinCid
+        assertMsg "COIN_OWNER_MISMATCH" (additionalCoin.owner == user)
+        
+        -- Transfer additional coin to operator
+        coinProposal <- exercise additionalCoinCid CantonCoin_Transfer with newOwner = operator
+        exercise coinProposal CantonCoinTransferProposal_Accept
+        
+        create this with coinAmount = coinAmount + additionalCoin.amount
+
+-- ============================================================
+--                     SECTION 8: LEVERAGE LOOP SERVICE
+-- ============================================================
+
+-- | Leverage loop: Mint mUSD → Swap for CantonCoin → Deposit as collateral → Repeat
+-- This template tracks a leverage loop position.
+template LeverageLoopPosition
+  with
+    operator : Party
+    user : Party
+    initialDeposit : Money        -- Initial CantonCoin deposited
+    totalCollateral : Money       -- Total CantonCoin in loop (initial + borrowed)
+    totalMusdDebt : Money         -- Total mUSD debt across all loops
+    loopCount : Int               -- Number of loops executed
+    targetLeverageX : Int         -- Target leverage (e.g., 3 = 3x)
+    collateralRatioBps : Bps      -- Per-loop collateral ratio
+    createdAt : Time
+    lastUpdated : Time
+  where
+    signatory operator, user
+
+    ensure totalCollateral >= initialDeposit
+        && loopCount >= 0
+        && targetLeverageX >= 1
+
+    -- | Execute one loop iteration
+    -- Takes existing mUSD, swaps for CantonCoin (off-chain DEX), deposits as collateral
+    choice Loop_ExecuteIteration : ContractId LeverageLoopPosition
+      with
+        additionalCoinCid : ContractId CantonCoin  -- From DEX swap (done off-chain)
+        newMusdDebt : Money                        -- Additional mUSD minted this loop
+      controller operator
+      do
+        assertMsg "MAX_LOOPS_REACHED" (loopCount < targetLeverageX)
+        
+        additionalCoin <- fetch additionalCoinCid
+        
+        -- Transfer new coin to operator (part of collateral pool)
+        coinProposal <- exercise additionalCoinCid CantonCoin_Transfer with newOwner = operator
+        exercise coinProposal CantonCoinTransferProposal_Accept
+        
+        now <- getTime
+        create this with
+          totalCollateral = totalCollateral + additionalCoin.amount
+          totalMusdDebt = totalMusdDebt + newMusdDebt
+          loopCount = loopCount + 1
+          lastUpdated = now
+
+    -- | Unwind loop: Repay debt, return collateral
+    choice Loop_Unwind : ContractId CantonCoin
+      with
+        musdCid : ContractId CantonMUSD
+        coinIssuer : Party
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "INSUFFICIENT_REPAYMENT" (musd.amount >= totalMusdDebt)
+        
+        -- Burn the mUSD
+        exercise musdCid CantonMUSD_Burn
+        
+        -- Return all collateral to user
+        create CantonCoin with
+          issuer = coinIssuer
+          owner = user
+          amount = totalCollateral
 
 -- ============================================================
 --                     HELPER
