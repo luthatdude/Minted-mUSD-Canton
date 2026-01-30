@@ -1,0 +1,97 @@
+-- | SafeAsset - A secure Asset template demonstrating Daml security best practices.
+-- Fixes common vulnerabilities such as:
+-- 1. Unwanted state (Negative amounts) -> Fixed via 'ensure'.
+-- 2. Forced ownership (Spamming) -> Fixed via 'Proposal-Accept' pattern.
+-- 3. Authorization leaks -> Fixed via strict signatory/controller logic.
+
+module SafeAsset where
+
+template Asset
+  with
+    issuer : Party
+    owner : Party
+    amount : Decimal
+  where
+    -- Good Practice: Multi-party signatories ensure neither party can
+    -- modify the contract without the other's consent (or prior agreement).
+    signatory issuer, owner
+
+    -- Security Fix: Prevent integer overflow/underflow or invalid logic
+    -- by strictly enforcing positive amounts.
+    ensure amount > 0.0
+
+    -- Good Practice: Allow splitting for fungibility.
+    choice Split : (ContractId Asset, ContractId Asset)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        -- Security Fix: Explicit assertions to prevent logic errors.
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Split amount must be less than total" (splitAmount < amount)
+
+        asset1 <- create this with amount = splitAmount
+        asset2 <- create this with amount = amount - splitAmount
+        return (asset1, asset2)
+
+    -- Good Practice: Merge pattern for consolidating assets.
+    choice Merge : ContractId Asset
+      with
+        otherAssetCid : ContractId Asset
+      controller owner
+      do
+        otherAsset <- fetch otherAssetCid
+
+        -- Security Fix: Validate the other asset is compatible (same issuer/owner).
+        -- Daml's strong typing handles the template type, but we must check fields.
+        assertMsg "Issuer must match" (otherAsset.issuer == issuer)
+        assertMsg "Owner must match" (otherAsset.owner == owner)
+
+        -- Archive the other asset to prevent double spending.
+        -- 'this' asset is archived automatically as the choice is consuming.
+        exercise otherAssetCid Archive
+
+        create this with amount = amount + otherAsset.amount
+
+    -- Security Fix: Do not create an Asset for a new owner directly.
+    -- This prevents "Air-dropping" spam or forcing liabilities onto a party.
+    -- Instead, initiate a Proposal.
+    choice ProposeTransfer : ContractId AssetTransferProposal
+      with
+        newOwner : Party
+      controller owner
+      do
+        create AssetTransferProposal with
+          asset = this
+          newOwner
+
+template AssetTransferProposal
+  with
+    asset : Asset
+    newOwner : Party
+  where
+    -- The proposal is authorized by the current owner (and issuer via the asset payload).
+    signatory asset.issuer, asset.owner
+    -- The new owner is an observer so they can see the proposal.
+    observer newOwner
+
+    -- Good Practice: The Atomic Swap / Handshake.
+    choice AcceptTransfer : ContractId Asset
+      controller newOwner
+      do
+        -- Create the asset with the new owner.
+        create asset with owner = newOwner
+
+    -- Allow the new owner to reject the proposal.
+    choice RejectTransfer : ContractId Asset
+      controller newOwner
+      do
+        -- Re-create the asset for the original owner.
+        create asset
+
+    -- Allow the original owner to cancel the proposal.
+    choice CancelTransfer : ContractId Asset
+      controller asset.owner
+      do
+        -- Re-create the asset for the original owner.
+        create asset

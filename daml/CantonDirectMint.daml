@@ -1,0 +1,477 @@
+-- | CantonDirectMint
+-- Canton-side thin accounting layer for mUSD minting
+--
+-- Architecture:
+--   User deposits stables (USDC) on Canton via CantonDirectMint
+--   → Canton mUSD minted to user (1:1 minus fee)
+--   → BridgeOutRequest emitted to pipe backing stables to Ethereum Treasury
+--   → No Canton Treasury needed — backing lives on Ethereum where yield is generated
+--   → Reserve tracking number maintained for audit/sync
+--
+-- The Canton side is a thin accounting layer:
+--   - Tracks who holds mUSD
+--   - Tracks who's staking in smUSD (separate module)
+--   - Tracks what collateral is in vaults (existing Vault templates)
+--   - Actual USDC backing lives on Ethereum
+
+module CantonDirectMint where
+
+import DA.Time
+import DA.Set qualified as Set
+import DA.Text qualified as DA.Text
+import DA.Optional (whenSome)
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
+
+-- 18-decimal precision for 1:1 mapping with Ethereum Wei
+type Money = Numeric 18
+type Bps = Int
+
+-- ============================================================
+--                     SECTION 1: CANTON USDC (Deposit Asset)
+-- ============================================================
+
+-- | Represents USDC deposited on Canton side.
+-- In production this would be a Canton-native USDC holding or tokenized deposit.
+template CantonUSDC
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+
+    choice CantonUSDC_Transfer : ContractId CantonUSDC
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice CantonUSDC_Split : (ContractId CantonUSDC, ContractId CantonUSDC)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+-- ============================================================
+--                     SECTION 2: CANTON mUSD
+-- ============================================================
+
+-- | Canton-side mUSD token. Thin wrapper — the real backing
+-- lives on Ethereum Treasury.
+template CantonMUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+    agreementHash : Text  -- SHA-256 hash of the Master Participation Agreement PDF
+    agreementUri : Text   -- URI to the legal terms document
+  where
+    signatory issuer, owner
+
+    ensure amount > 0.0
+      && DA.Text.length agreementHash == 64
+      && DA.Text.length agreementUri > 0
+
+    agreement
+      "By holding or transferring this Canton mUSD token, the owner acknowledges "
+      <> "they are bound by the Master Participation Agreement. "
+      <> "Agreement hash: " <> agreementHash
+      <> " | URI: " <> agreementUri
+
+    choice CantonMUSD_Transfer : ContractId CantonMUSD
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice CantonMUSD_Split : (ContractId CantonMUSD, ContractId CantonMUSD)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    choice CantonMUSD_Merge : ContractId CantonMUSD
+      with
+        otherCid : ContractId CantonMUSD
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    choice CantonMUSD_Burn : ()
+      controller issuer
+      do
+        return ()
+
+-- ============================================================
+--                     SECTION 3: BRIDGE OUT REQUEST
+-- ============================================================
+
+-- | Emitted when backing stables need to be piped to Ethereum Treasury.
+-- The relay picks this up and executes the cross-chain transfer.
+-- This is the critical piece — it's the pipe that moves backing
+-- assets to where yield exists.
+template BridgeOutRequest
+  with
+    operator : Party          -- Protocol operator
+    user : Party              -- Who deposited
+    amount : Money            -- Amount of stables to bridge
+    targetChainId : Int       -- Destination chain (1 = Ethereum mainnet)
+    targetTreasury : Text     -- Ethereum Treasury contract address
+    nonce : Int               -- Unique request ID
+    createdAt : Time          -- When request was created
+    status : Text             -- "pending" | "bridged" | "failed"
+    validators : [Party]      -- Validators who will attest to the bridge
+  where
+    signatory operator
+    observer user, validators
+
+    -- Relay marks bridge as completed after Ethereum confirmation
+    choice BridgeOut_Complete : ContractId BridgeOutRequest
+      with
+        relayParty : Party
+      controller operator
+      do
+        assertMsg "MUST_BE_PENDING" (status == "pending")
+        create this with status = "bridged"
+
+    -- Mark as failed for retry
+    choice BridgeOut_Fail : ContractId BridgeOutRequest
+      controller operator
+      do
+        assertMsg "MUST_BE_PENDING" (status == "pending")
+        create this with status = "failed"
+
+-- ============================================================
+--                     SECTION 4: RESERVE TRACKER
+-- ============================================================
+
+-- | Tracks total stables deposited on Canton side.
+-- This is the reserve tracking number — how much was deposited
+-- via Canton that should be backed on Ethereum.
+-- No actual USDC held here — just accounting.
+template ReserveTracker
+  with
+    operator : Party
+    totalDeposited : Money      -- Total USDC ever deposited via Canton mint
+    totalRedeemed : Money       -- Total USDC ever redeemed back
+    totalBridgedOut : Money     -- Total successfully bridged to Ethereum
+    totalBridgedIn : Money      -- Total bridged back from Ethereum (for redemptions)
+    cantonMUSDSupply : Money    -- Current outstanding Canton mUSD
+    lastUpdated : Time
+  where
+    signatory operator
+
+    ensure totalDeposited >= 0.0
+        && totalRedeemed >= 0.0
+        && totalBridgedOut >= 0.0
+        && totalBridgedIn >= 0.0
+        && cantonMUSDSupply >= 0.0
+
+    -- Record a new deposit (mint)
+    choice Reserve_RecordDeposit : ContractId ReserveTracker
+      with
+        depositAmount : Money
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalDeposited = totalDeposited + depositAmount
+          cantonMUSDSupply = cantonMUSDSupply + depositAmount
+          lastUpdated = now
+
+    -- Record a redemption (burn)
+    choice Reserve_RecordRedemption : ContractId ReserveTracker
+      with
+        redeemAmount : Money
+      controller operator
+      do
+        assertMsg "INSUFFICIENT_SUPPLY" (cantonMUSDSupply >= redeemAmount)
+        now <- getTime
+        create this with
+          totalRedeemed = totalRedeemed + redeemAmount
+          cantonMUSDSupply = cantonMUSDSupply - redeemAmount
+          lastUpdated = now
+
+    -- Record successful bridge-out to Ethereum
+    choice Reserve_RecordBridgeOut : ContractId ReserveTracker
+      with
+        bridgeAmount : Money
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalBridgedOut = totalBridgedOut + bridgeAmount
+          lastUpdated = now
+
+    -- Record bridge-in from Ethereum (for redemptions)
+    choice Reserve_RecordBridgeIn : ContractId ReserveTracker
+      with
+        bridgeAmount : Money
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalBridgedIn = totalBridgedIn + bridgeAmount
+          lastUpdated = now
+
+-- ============================================================
+--                     SECTION 5: DIRECT MINT SERVICE
+-- ============================================================
+
+-- | The CantonDirectMint service.
+-- Mints Canton mUSD and emits a bridge request for the backing stables.
+-- Does NOT hold stables locally — they get piped to Ethereum Treasury.
+template CantonDirectMintService
+  with
+    operator : Party
+    usdcIssuer : Party
+    mintFeeBps : Bps             -- Fee in basis points (e.g., 30 = 0.30%)
+    redeemFeeBps : Bps
+    minAmount : Money            -- Minimum mint/redeem amount
+    maxAmount : Money            -- Maximum per-transaction
+    supplyCap : Money            -- Max outstanding Canton mUSD
+    currentSupply : Money        -- Current outstanding Canton mUSD
+    accumulatedFees : Money      -- Protocol fees collected
+    paused : Bool                -- Emergency halt
+    validators : [Party]         -- Bridge validators
+    targetChainId : Int          -- Default: 1 (Ethereum mainnet)
+    targetTreasury : Text        -- Ethereum Treasury address
+    nextNonce : Int              -- Auto-incrementing nonce for bridge requests
+    -- 24h rolling window rate limiting
+    dailyMintLimit : Money       -- Max net mint volume per 24h window
+    dailyMinted : Money          -- Cumulative mints in current window
+    dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
+    lastRateLimitReset : Time    -- Timestamp of last window reset
+    -- Compliance hook (optional — None disables compliance checks)
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    -- Master Participation Agreement reference (embedded in every minted token)
+    mpaHash : Text               -- SHA-256 hash of the MPA PDF
+    mpaUri : Text                -- URI to the MPA document
+  where
+    signatory operator
+    observer usdcIssuer
+
+    -- | Mint: User deposits USDC on Canton → gets Canton mUSD
+    -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
+    choice DirectMint_Mint : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
+      with
+        user : Party
+        usdcCid : ContractId CantonUSDC
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check: verify minter is not blacklisted
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateMint with minter = user
+
+        usdc <- fetch usdcCid
+        assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
+        assertMsg "USDC_OWNER_MISMATCH" (usdc.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (usdc.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (usdc.amount <= maxAmount)
+
+        let feeAmount = usdc.amount * intToNumeric mintFeeBps / 10000.0
+        let netAmount = usdc.amount - feeAmount
+
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- 24h rolling window rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
+        -- Transfer USDC to operator (staging for bridge-out)
+        -- The operator holds it temporarily until bridge confirms
+        exercise usdcCid CantonUSDC_Transfer with newOwner = operator
+
+        -- Mint Canton mUSD to user (1:1 minus fee)
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Emit bridge-out request — pipe the backing stables to Ethereum
+        bridgeReq <- create BridgeOutRequest with
+          operator = operator
+          user = user
+          amount = usdc.amount  -- Bridge the full USDC amount (including fee portion)
+          targetChainId = targetChainId
+          targetTreasury = targetTreasury
+          nonce = nextNonce
+          createdAt = now
+          status = "pending"
+          validators = validators
+
+        -- Update service state including rate limit tracking
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
+
+        return (newService, musdCid, bridgeReq)
+
+    -- | Redeem: User burns Canton mUSD → needs USDC bridged back from Ethereum
+    -- This is a two-phase process:
+    --   Phase 1: Burn mUSD, create redemption request
+    --   Phase 2: Bridge-in from Ethereum fulfills the redemption (handled by BLEProtocol)
+    choice DirectMint_Redeem : (ContractId CantonDirectMintService, ContractId RedemptionRequest)
+      with
+        user : Party
+        musdCid : ContractId CantonMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check: verify redeemer is not blacklisted or frozen
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateRedemption with redeemer = user
+
+        musd <- fetch musdCid
+        assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (musd.amount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (musd.amount <= maxAmount)
+
+        let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
+        let netAmount = musd.amount - feeAmount
+
+        -- Burn the mUSD
+        exercise musdCid CantonMUSD_Burn
+
+        -- Create redemption request (bridge-in needed from Ethereum)
+        now <- getTime
+        redemptionCid <- create RedemptionRequest with
+          operator = operator
+          user = user
+          musdBurned = musd.amount
+          usdcOwed = netAmount
+          feeAmount = feeAmount
+          createdAt = now
+          fulfilled = False
+
+        -- Track burn in rate limit window (burns offset mints)
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+
+        newService <- create this with
+          currentSupply = currentSupply - musd.amount
+          accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted
+          dailyBurned = resetBurned + musd.amount
+          lastRateLimitReset = resetTime
+
+        return (newService, redemptionCid)
+
+    -- Admin controls
+    choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
+      with
+        newCap : Money
+      controller operator
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
+
+    choice DirectMint_SetPaused : ContractId CantonDirectMintService
+      with
+        newPaused : Bool
+      controller operator
+      do
+        create this with paused = newPaused
+
+    choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
+      with
+        newLimit : Money
+      controller operator
+      do
+        assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
+        create this with dailyMintLimit = newLimit
+
+    choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
+      with
+        newRegistryCid : Optional (ContractId ComplianceRegistry)
+      controller operator
+      do
+        create this with complianceRegistryCid = newRegistryCid
+
+    choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
+      controller operator
+      do
+        assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
+        create this with accumulatedFees = 0.0
+
+-- ============================================================
+--                     SECTION 6: REDEMPTION REQUEST
+-- ============================================================
+
+-- | Pending redemption — user burned mUSD, awaiting USDC bridge-in from Ethereum.
+template RedemptionRequest
+  with
+    operator : Party
+    user : Party
+    musdBurned : Money        -- How much mUSD was burned
+    usdcOwed : Money          -- Net USDC owed to user (after fee)
+    feeAmount : Money         -- Fee deducted
+    createdAt : Time
+    fulfilled : Bool
+  where
+    signatory operator
+    observer user
+
+    -- Operator fulfills after bridge-in from Ethereum delivers USDC
+    choice Redemption_Fulfill : (ContractId RedemptionRequest, ContractId CantonUSDC)
+      with
+        usdcCid : ContractId CantonUSDC
+      controller operator
+      do
+        assertMsg "ALREADY_FULFILLED" (not fulfilled)
+        usdc <- fetch usdcCid
+        assertMsg "INSUFFICIENT_USDC" (usdc.amount >= usdcOwed)
+
+        -- Split exact amount if needed
+        payoutCid <- if usdc.amount == usdcOwed
+          then exercise usdcCid CantonUSDC_Transfer with newOwner = user
+          else do
+            (exact, _remainder) <- exercise usdcCid CantonUSDC_Split with splitAmount = usdcOwed
+            exercise exact CantonUSDC_Transfer with newOwner = user
+
+        fulfilledReq <- create this with fulfilled = True
+        return (fulfilledReq, payoutCid)
+
+-- ============================================================
+--                     HELPER
+-- ============================================================
+

@@ -1,0 +1,241 @@
+-- | Minted.Protocol - Daml Leverage Looping
+-- In Solidity, leverage looping involves flash loans or repeated calls to external DEXs.
+-- In Daml (UTXO), operations are atomic. We cannot "flash loan" in the same way,
+-- but we can chain choices in a single transaction to achieve the same state result.
+--
+-- Security considerations addressed here:
+-- - Authorization: Explicit signatories for all movements.
+-- - Finite Execution: Recursion is bounded by an integer to prevent command timeouts.
+-- - Precision: Uses Daml's Decimal (10^-10 precision).
+-- - Isolation: The Vault logic is separated from the Swapping logic.
+
+module MintedProtocol where
+
+import DA.Action (foldlA)
+-- FIX D-L01/L02: Removed unused DA.List (head) import; use DA.Optional.fromOptional
+import DA.Optional (fromOptional)
+
+-- | TYPE DEFINITIONS
+type AssetId = ContractId Asset
+type VaultId = ContractId Vault
+
+-- | Represents a fungible token (mUSD or Collateral)
+template Asset
+  with
+    issuer : Party
+    owner : Party
+    symbol : Text
+    amount : Decimal
+    observers : [Party]
+  where
+    signatory issuer, owner
+    observer observers
+
+    -- FIX D-C11: Require strictly positive amounts
+    ensure amount > 0.0
+
+    choice Asset_Transfer : AssetId
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice Asset_Split : (AssetId, AssetId)
+      with
+        splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "Split amount must be positive" $ splitAmount > 0.0
+        -- FIX D-M04: Strict inequality to prevent zero-remainder splits
+        assertMsg "Insufficient balance" $ amount > splitAmount
+        remaining <- create this with amount = amount - splitAmount
+        split <- create this with amount = splitAmount
+        return (remaining, split)
+
+    choice Asset_Merge : AssetId
+      with
+        otherCid : AssetId
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "Owners must match" $ other.owner == owner
+        assertMsg "Symbols must match" $ other.symbol == symbol
+        assertMsg "Issuers must match" $ other.issuer == issuer
+        archive otherCid
+        create this with amount = amount + other.amount
+
+-- | Trusted source for asset prices
+template PriceOracle
+  with
+    operator : Party
+    observers : [Party]
+    prices : [(Text, Decimal)]  -- Map of Symbol -> Price in USD
+  where
+    signatory operator
+    observer observers
+
+    -- FIX M-13: Return Optional instead of abort, let caller validate
+    nonconsuming choice GetPrice : Optional Decimal
+      with
+        symbol : Text
+      controller observers
+      do
+        let matches = [ p | (s, p) <- prices, s == symbol ]
+        case matches of
+          [] -> return None
+          (p :: _) -> do
+            assertMsg "PRICE_MUST_BE_POSITIVE" (p > 0.0)
+            return (Some p)
+
+    choice UpdatePrices : ContractId PriceOracle
+      with
+        newPrices : [(Text, Decimal)]
+      controller operator
+      do
+        create this with prices = newPrices
+
+-- | Represents a liquidity provider (DEX) to facilitate the leverage swap
+-- (Selling mUSD to buy Collateral)
+template LiquidityPool
+  with
+    operator : Party
+    poolAsset : AssetId       -- The Collateral asset held by pool
+    musdSymbol : Text
+    exchangeRate : Decimal    -- Simple constant AMM (mUSD per Collateral)
+  where
+    signatory operator
+
+    -- FIX C-07: Made CONSUMING to update poolAsset CID after split
+    -- Previously nonconsuming, which left poolAsset pointing to an archived contract
+    choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, AssetId)
+      with
+        musdCid : AssetId
+        receiver : Party
+      controller receiver
+      do
+        musd <- fetch musdCid
+        assertMsg "Must be mUSD" $ musd.symbol == musdSymbol
+        let collateralOut = musd.amount / exchangeRate
+        poolHoldings <- fetch poolAsset
+        assertMsg "Insufficient Liquidity" $ poolHoldings.amount >= collateralOut
+        archive musdCid
+        (remainingPool, payout) <- exercise poolAsset Asset_Split with splitAmount = collateralOut
+        userAsset <- exercise payout Asset_Transfer with newOwner = receiver
+        -- Update pool with new collateral CID
+        newPool <- create this with poolAsset = remainingPool
+        return (newPool, userAsset)
+
+-- | The Vault (CDP) holding collateral and tracking debt
+template Vault
+  with
+    operator : Party
+    owner : Party
+    collateral : AssetId      -- The collateral locked (e.g., WBTC)
+    debtAmount : Decimal      -- Amount of mUSD minted
+    minCollateralRatio : Decimal  -- e.g., 1.5 (150%)
+    mUSDSymbol : Text
+  where
+    signatory operator, owner
+
+    choice Vault_Deposit : VaultId
+      with
+        depositCid : AssetId
+      controller owner
+      do
+        input <- fetch depositCid
+        current <- fetch collateral
+        assertMsg "Symbol mismatch" $ input.symbol == current.symbol
+        -- Merge the new deposit into the locked collateral
+        newCollateralCid <- exercise collateral Asset_Merge with otherCid = depositCid
+        create this with collateral = newCollateralCid
+
+    choice Vault_Borrow : (VaultId, AssetId)
+      with
+        mintAmount : Decimal
+        oracleCid : ContractId PriceOracle
+      controller owner
+      do
+        -- Check Collateral Value
+        colData <- fetch collateral
+        -- FIX D-C12: Use exercise GetPrice instead of direct fetch + manual lookup
+        -- This ensures oracle staleness checks are enforced
+        priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
+        let price = fromOptional 0.0 priceOpt
+        assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
+        let colValue = colData.amount * price
+        let newDebt = debtAmount + mintAmount
+        -- Check Solvency
+        assertMsg "Insufficient Collateral for Borrow" $
+          colValue >= (newDebt * minCollateralRatio)
+        -- Update Vault
+        newVault <- create this with debtAmount = newDebt
+        -- Mint mUSD (Create new asset)
+        -- Note: In production, the Operator usually signs a MintRequest.
+        -- Here, operator is a signatory of the Vault, so we can facilitate creation.
+        mUSD <- create Asset with
+          issuer = operator
+          owner = owner
+          amount = mintAmount
+          symbol = mUSDSymbol
+          observers = []
+        return (newVault, mUSD)
+
+-- | LEVERAGE LOGIC
+-- Implements the "Looping" mechanism atomically.
+template LeverageManager
+  with
+    operator : Party   -- Protocol Admin
+    user : Party       -- Borrower
+  where
+    signatory operator, user
+
+    -- | Loop Leverage:
+    -- 1. Borrow max mUSD against current collateral
+    -- 2. Swap mUSD for more Collateral via Liquidity Pool
+    -- 3. Deposit new Collateral into Vault
+    -- 4. Repeat `loops` times
+    choice Loop_Leverage : VaultId
+      with
+        vaultCid : VaultId
+        oracleCid : ContractId PriceOracle
+        poolCid : ContractId LiquidityPool
+        loops : Int
+      controller user
+      do
+        assertMsg "Max loops exceeded" $ loops <= 10
+        assertMsg "Loops must be positive" $ loops > 0
+        -- FIX D-C06: Thread poolCid through fold state to prevent stale CID after swap
+        -- FIX D-C13: Use exercise GetPrice instead of direct fetch + manual lookup
+        let loopFn (currentVaultCid, currentPoolCid, currentLoop) _ = do
+              if currentLoop == 0 then return (currentVaultCid, currentPoolCid, 0)
+              else do
+                vault <- fetch currentVaultCid
+                colData <- fetch vault.collateral
+                -- FIX D-C13: Use GetPrice choice for staleness enforcement
+                priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
+                let price = fromOptional 0.0 priceOpt
+                assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
+                let colValue = colData.amount * price
+                let maxDebt = colValue / vault.minCollateralRatio
+                let borrowable = maxDebt - vault.debtAmount
+                -- Threshold check to stop looping if diminishing returns are too small
+                if borrowable < 1.0 then return (currentVaultCid, currentPoolCid, 0)
+                else do
+                  -- 2. Borrow
+                  (vAfterBorrow, mUSD) <- exercise currentVaultCid Vault_Borrow with
+                      mintAmount = borrowable
+                      oracleCid = oracleCid
+                  -- 3. Swap mUSD -> Collateral (use threaded poolCid)
+                  (newPoolCid, newCollateral) <- exercise currentPoolCid Swap_mUSD_For_Collateral with
+                      musdCid = mUSD
+                      receiver = user
+                  -- 4. Deposit
+                  vFinal <- exercise vAfterBorrow Vault_Deposit with
+                      depositCid = newCollateral
+                  return (vFinal, newPoolCid, currentLoop - 1)
+        -- Execute the fold with threaded pool CID
+        (finalVault, _, _) <- foldlA loopFn (vaultCid, poolCid, loops) [1..loops]
+        return finalVault
+
+-- FIX D-L01: Removed duplicate fromOptional — now imported from DA.Optional

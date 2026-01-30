@@ -1,0 +1,147 @@
+// SPDX-License-Identifier: MIT
+// BLE Protocol - Price Oracle Aggregator
+// Wraps Chainlink feeds for ETH/BTC price data used by CollateralVault and LiquidationEngine
+
+pragma solidity 0.8.26;
+
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
+interface IAggregatorV3 {
+    function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        );
+    function decimals() external view returns (uint8);
+}
+
+/// @title PriceOracle
+/// @notice Aggregates Chainlink price feeds for collateral assets (ETH, BTC, etc.)
+/// @dev All prices are normalized to 18 decimals (USD value per 1 full token unit)
+contract PriceOracle is AccessControl {
+    bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
+
+    struct FeedConfig {
+        IAggregatorV3 feed;
+        uint256 stalePeriod;  // Max age in seconds before data is considered stale
+        uint8 tokenDecimals;  // Decimals of the collateral token (e.g., 18 for ETH, 8 for WBTC)
+        bool enabled;
+    }
+
+    // collateral token address => feed config
+    mapping(address => FeedConfig) public feeds;
+
+    event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
+    event FeedRemoved(address indexed token);
+
+    constructor() {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
+    }
+
+    /// @notice Register or update a Chainlink price feed for a collateral token
+    /// @param token The collateral token address
+    /// @param feed The Chainlink aggregator address
+    /// @param stalePeriod Maximum acceptable age of price data in seconds
+    /// @param tokenDecimals The number of decimals the collateral token uses
+    function setFeed(
+        address token,
+        address feed,
+        uint256 stalePeriod,
+        uint8 tokenDecimals
+    ) external onlyRole(ORACLE_ADMIN_ROLE) {
+        require(token != address(0), "INVALID_TOKEN");
+        require(feed != address(0), "INVALID_FEED");
+        require(stalePeriod > 0, "INVALID_STALE_PERIOD");
+        // FIX H-1: Validate tokenDecimals at config time to prevent precision issues
+        require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
+
+        feeds[token] = FeedConfig({
+            feed: IAggregatorV3(feed),
+            stalePeriod: stalePeriod,
+            tokenDecimals: tokenDecimals,
+            enabled: true
+        });
+
+        emit FeedUpdated(token, feed, stalePeriod, tokenDecimals);
+    }
+
+    /// @notice Remove a price feed
+    function removeFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+        require(feeds[token].enabled, "FEED_NOT_FOUND");
+        delete feeds[token];
+        emit FeedRemoved(token);
+    }
+
+    /// @notice Get the USD price of a collateral token, normalized to 18 decimals
+    /// @param token The collateral token address
+    /// @return price USD value of 1 full token unit, scaled to 18 decimals
+    function getPrice(address token) external view returns (uint256 price) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (
+            ,
+            int256 answer,
+            ,
+            uint256 updatedAt,
+        ) = config.feed.latestRoundData();
+
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+
+        uint8 feedDecimals = config.feed.decimals();
+        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+
+        // Chainlink answer is price per 1 token unit in USD, scaled to feedDecimals
+        // Normalize to 18 decimals
+        price = uint256(answer) * (10 ** (18 - feedDecimals));
+    }
+
+    /// @notice Get the USD value of a specific amount of collateral
+    /// @param token The collateral token address
+    /// @param amount The amount of collateral (in token's native decimals)
+    /// @return valueUsd USD value scaled to 18 decimals
+    function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (
+            ,
+            int256 answer,
+            ,
+            uint256 updatedAt,
+        ) = config.feed.latestRoundData();
+
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+
+        uint8 feedDecimals = config.feed.decimals();
+        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+
+        // price per token in 18 decimals
+        uint256 priceNormalized = uint256(answer) * (10 ** (18 - feedDecimals));
+
+        // value = amount * price / 10^tokenDecimals
+        valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
+    }
+
+    /// @notice Check if a feed is active and returning fresh data
+    function isFeedHealthy(address token) external view returns (bool) {
+        FeedConfig storage config = feeds[token];
+        if (!config.enabled) return false;
+
+        try config.feed.latestRoundData() returns (
+            uint80, int256 answer, uint256, uint256 updatedAt, uint80
+        ) {
+            return answer > 0 && (block.timestamp - updatedAt <= config.stalePeriod);
+        } catch {
+            return false;
+        }
+    }
+}

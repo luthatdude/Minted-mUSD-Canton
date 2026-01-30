@@ -1,0 +1,203 @@
+-- | CantonSMUSD
+-- Canton-side staked mUSD (smUSD) with yield synchronized from Ethereum
+--
+-- Architecture:
+--   smUSD yield on Canton is synchronized from Ethereum via attestations.
+--   The bridge reports total yield, Canton smUSD applies it.
+--
+--   ERC-4626 equivalent share price model:
+--     sharePrice = totalAssets / totalShares
+--
+--   When Ethereum Treasury generates yield:
+--     1. Yield attestation arrives via BLEBridgeProtocol.YieldAttestation
+--     2. Operator calls SyncYield with verified payload
+--     3. totalAssets increases → sharePrice increases
+--     4. Users unstake at new share price → receive more mUSD than deposited
+
+module CantonSMUSD where
+
+import DA.Time
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
+
+-- ============================================================
+--                     SECTION 1: STAKED mUSD POSITION
+-- ============================================================
+
+-- | Individual smUSD position.
+-- Represents a user's share in the yield vault.
+-- Amount is in "shares" — redeemable for mUSD at current share price.
+template CantonSMUSD
+  with
+    issuer : Party
+    owner : Party
+    shares : Money          -- Number of shares (not mUSD amount)
+    entrySharePrice : Money -- Share price when staked (for tracking)
+  where
+    signatory issuer, owner
+
+    ensure shares > 0.0
+
+    choice SMUSD_Transfer : ContractId CantonSMUSD
+      with
+        newOwner : Party
+      controller owner
+      do
+        create this with owner = newOwner
+
+    choice SMUSD_Split : (ContractId CantonSMUSD, ContractId CantonSMUSD)
+      with
+        splitShares : Money
+      controller owner
+      do
+        assertMsg "SPLIT_SHARES_POSITIVE" (splitShares > 0.0)
+        assertMsg "SPLIT_SHARES_LESS_THAN_TOTAL" (splitShares < shares)
+        c1 <- create this with shares = splitShares
+        c2 <- create this with shares = shares - splitShares
+        return (c1, c2)
+
+    choice SMUSD_Merge : ContractId CantonSMUSD
+      with
+        otherCid : ContractId CantonSMUSD
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        archive otherCid
+        create this with shares = shares + other.shares
+
+-- ============================================================
+--                     SECTION 2: STAKING SERVICE
+-- ============================================================
+
+-- | Canton smUSD staking service.
+-- Manages the share price model and yield sync from Ethereum.
+template CantonStakingService
+  with
+    operator : Party
+    totalShares : Money         -- Total smUSD shares outstanding
+    totalAssets : Money         -- Total mUSD value backing all shares
+    lastYieldEpoch : Int        -- Last synced yield epoch from Ethereum
+    cooldownSeconds : Int       -- Minimum stake duration before unstake
+    minDeposit : Money          -- Minimum mUSD deposit
+    paused : Bool
+    -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
+    mpaHash : Text
+    mpaUri : Text
+  where
+    signatory operator
+
+    ensure totalShares >= 0.0 && totalAssets >= 0.0
+
+    -- | Current share price: totalAssets / totalShares
+    -- Returns 1.0 if no shares exist (initial price)
+    nonconsuming choice GetSharePrice : Money
+      controller operator
+      do
+        if totalShares == 0.0
+          then return 1.000000000000000000
+          else return (totalAssets / totalShares)
+
+    -- | Stake: mUSD → smUSD shares
+    -- User deposits mUSD, receives shares at current share price
+    choice Stake : (ContractId CantonStakingService, ContractId CantonSMUSD)
+      with
+        user : Party
+        musdCid : ContractId CantonMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "BELOW_MIN_DEPOSIT" (musd.amount >= minDeposit)
+
+        -- Calculate shares: amount / sharePrice
+        let sharePrice = if totalShares == 0.0
+              then 1.000000000000000000
+              else totalAssets / totalShares
+        let newShares = musd.amount / sharePrice
+
+        -- Lock the mUSD (burn from user, add to pool)
+        exercise musdCid CantonMUSD_Burn
+
+        -- Issue smUSD shares
+        smusdCid <- create CantonSMUSD with
+          issuer = operator
+          owner = user
+          shares = newShares
+          entrySharePrice = sharePrice
+
+        -- Update pool state
+        newService <- create this with
+          totalShares = totalShares + newShares
+          totalAssets = totalAssets + musd.amount
+
+        return (newService, smusdCid)
+
+    -- | Unstake: smUSD shares → mUSD
+    -- User redeems shares at current share price (which includes yield)
+    choice Unstake : (ContractId CantonStakingService, ContractId CantonMUSD)
+      with
+        user : Party
+        smusdCid : ContractId CantonSMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        smusd <- fetch smusdCid
+        assertMsg "OWNER_MISMATCH" (smusd.owner == user)
+
+        -- Calculate mUSD value: shares × sharePrice
+        let sharePrice = if totalShares == 0.0
+              then 1.000000000000000000
+              else totalAssets / totalShares
+        let musdAmount = smusd.shares * sharePrice
+
+        assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
+
+        -- Burn smUSD shares
+        archive smusdCid
+
+        -- Mint mUSD to user (at current share price — includes yield)
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = musdAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Update pool state
+        newService <- create this with
+          totalShares = totalShares - smusd.shares
+          totalAssets = totalAssets - musdAmount
+
+        return (newService, musdCid)
+
+    -- | Sync yield from Ethereum via attestation.
+    -- Called by operator after a YieldAttestation is finalized.
+    -- Increases totalAssets → increases share price → smUSD holders profit.
+    choice SyncYield : ContractId CantonStakingService
+      with
+        newTotalTreasuryAssets : Money  -- Verified total from YieldAttestation
+        yieldAccrued : Money            -- New yield since last sync
+        epochNumber : Int               -- Must be sequential
+      controller operator
+      do
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
+        assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+
+        -- Increase total assets by the yield amount
+        -- This raises the share price for all smUSD holders
+        create this with
+          totalAssets = totalAssets + yieldAccrued
+          lastYieldEpoch = epochNumber
+
+    -- | Admin: Pause/unpause
+    choice Staking_SetPaused : ContractId CantonStakingService
+      with
+        newPaused : Bool
+      controller operator
+      do
+        create this with paused = newPaused

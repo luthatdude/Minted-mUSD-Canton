@@ -1,0 +1,382 @@
+-- | BLEBridgeProtocol
+-- The critical bridge pipe between Canton and Ethereum
+--
+-- Architecture:
+--   This is the pipe that moves backing assets to where yield exists.
+--   Canton stables → Ethereum Treasury (via bridge-out)
+--   Ethereum USDC → Canton (via bridge-in, for redemptions)
+--   Yield attestations flow from Ethereum → Canton (for smUSD sync)
+--   Supply cap attestations keep bridge supply in sync
+--
+-- Inherits the validator multi-sig and attestation security from the
+-- original BLEProtocol (D-01 TOCTOU fix, D-02 signature uniqueness,
+-- D-03 timestamp validation).
+
+module BLEBridgeProtocol where
+
+import DA.Time
+import DA.List (dedup)
+import DA.Set qualified as Set
+
+-- 18-decimal precision for 1:1 mapping with Ethereum Wei
+type Money = Numeric 18
+type Bps = Int
+
+-- ============================================================
+--                     SECTION 1: VALIDATOR INFRASTRUCTURE
+-- ============================================================
+
+-- | Institutional equity position maintained by participating banks.
+-- Validator Group observes the aggregate value.
+-- (Preserved from original BLEProtocol — this backs the bridge supply cap.)
+template InstitutionalEquityPosition
+  with
+    bank : Party
+    validatorGroup : [Party]
+    aggregator : Party
+    totalValue : Money
+    referenceId : Text
+    lastUpdated : Time
+  where
+    signatory bank
+    observer aggregator, validatorGroup
+
+    ensure totalValue >= 0.0
+
+    key (bank, aggregator) : (Party, Party)
+    maintainer key._1
+
+    choice UpdateEquity : ContractId InstitutionalEquityPosition
+      with
+        newValue : Money
+      controller bank
+      do
+        now <- getTime
+        create this with totalValue = newValue, lastUpdated = now
+
+-- ============================================================
+--                     SECTION 2: BRIDGE-OUT ATTESTATION
+-- ============================================================
+
+-- | Payload for bridge-out: Canton stables → Ethereum Treasury.
+-- This is what validators sign to authorize the cross-chain transfer.
+data BridgeOutPayload = BridgeOutPayload with
+    attestationId : Text
+    cantonReserveTotal : Money    -- Total Canton reserve at time of attestation
+    ethereumTreasuryAddr : Text   -- Ethereum Treasury contract address
+    amount : Money                -- Amount being bridged out
+    nonce : Int                   -- Unique per bridge request
+    chainId : Int                 -- Target chain (1 = Ethereum mainnet)
+    expiresAt : Time              -- D-03: Expiration timestamp
+  deriving (Eq, Show)
+
+-- | Bridge-out attestation request.
+-- Created when backing stables need to move from Canton to Ethereum Treasury.
+-- Validators verify the Canton reserve matches, then sign.
+template BridgeOutAttestation
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : BridgeOutPayload
+    positionCids : [ContractId InstitutionalEquityPosition]
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    -- Validators sign concurrently (nonconsuming — performance fix from V2)
+    nonconsuming choice BridgeOut_Sign : ContractId BridgeOutSignature
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+
+        -- D-03: Check expiration
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        -- Verify linked positions still support the bridge amount
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+
+        create BridgeOutSignature with
+          requestCid = self
+          validator
+          aggregator
+          ecdsaSignature
+          nonce = payload.nonce
+
+    -- Aggregator finalizes — archives the attestation (replay prevention)
+    choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
+      with
+        requiredSignatures : Int
+        signatureCids : [ContractId BridgeOutSignature]
+      controller aggregator
+      do
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let reqIds = map (.requestCid) sigs
+
+        -- Enforce all sigs belong to this attestation
+        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+        assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        -- Final collateral check
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+
+        return signatureCids
+
+template BridgeOutSignature
+  with
+    requestCid : ContractId BridgeOutAttestation
+    validator : Party
+    aggregator : Party
+    ecdsaSignature : Text
+    nonce : Int
+  where
+    signatory validator
+    observer aggregator
+
+-- ============================================================
+--                     SECTION 3: BRIDGE-IN ATTESTATION
+-- ============================================================
+
+-- | Payload for bridge-in: Ethereum USDC → Canton (for redemptions).
+-- When a user redeems Canton mUSD, the protocol bridges USDC back.
+data BridgeInPayload = BridgeInPayload with
+    attestationId : Text
+    sourceChainId : Int           -- Source chain (1 = Ethereum)
+    sourceTxHash : Text           -- Ethereum transaction hash proving the send
+    amount : Money                -- Amount bridged in
+    recipient : Party             -- Canton party receiving the USDC
+    nonce : Int
+    expiresAt : Time
+  deriving (Eq, Show)
+
+-- | Bridge-in attestation.
+-- Created when Ethereum Treasury sends USDC back to Canton for redemptions.
+template BridgeInAttestation
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : BridgeInPayload
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    nonconsuming choice BridgeIn_Sign : ContractId BridgeInSignature
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        create BridgeInSignature with
+          requestCid = self
+          validator
+          aggregator
+          ecdsaSignature
+          nonce = payload.nonce
+
+    -- Finalize and archive — USDC can now be minted on Canton
+    choice BridgeIn_Finalize : [ContractId BridgeInSignature]
+      with
+        requiredSignatures : Int
+        signatureCids : [ContractId BridgeInSignature]
+      controller aggregator
+      do
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let reqIds = map (.requestCid) sigs
+
+        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+        assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        return signatureCids
+
+template BridgeInSignature
+  with
+    requestCid : ContractId BridgeInAttestation
+    validator : Party
+    aggregator : Party
+    ecdsaSignature : Text
+    nonce : Int
+  where
+    signatory validator
+    observer aggregator
+
+-- ============================================================
+--                     SECTION 4: SUPPLY CAP SYNC
+-- ============================================================
+
+-- | Supply cap attestation.
+-- Keeps the bridge supply cap in sync between Canton and Ethereum.
+-- Validators attest to the total mUSD supply across both chains.
+data SupplyCapPayload = SupplyCapPayload with
+    attestationId : Text
+    cantonMUSDSupply : Money      -- Current Canton mUSD outstanding
+    ethereumMUSDSupply : Money    -- Current Ethereum mUSD outstanding
+    totalGlobalSupply : Money     -- Must equal canton + ethereum
+    globalBackingUSDC : Money     -- Total USDC backing in Ethereum Treasury
+    nonce : Int
+    timestamp : Time
+  deriving (Eq, Show)
+
+template SupplyCapAttestation
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : SupplyCapPayload
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
+
+    nonconsuming choice SupplyCap_Sign : ContractId SupplyCapSignature
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+
+        create SupplyCapSignature with
+          requestCid = self
+          validator
+          aggregator
+          ecdsaSignature
+          nonce = payload.nonce
+
+    -- Finalize: archives attestation, returns the verified global state
+    choice SupplyCap_Finalize : SupplyCapPayload
+      with
+        requiredSignatures : Int
+        signatureCids : [ContractId SupplyCapSignature]
+      controller aggregator
+      do
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let reqIds = map (.requestCid) sigs
+
+        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+        assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        -- Supply invariant: backing must cover total supply
+        assertMsg "UNDERCOLLATERALIZED_GLOBAL_SUPPLY"
+          (payload.globalBackingUSDC >= payload.totalGlobalSupply)
+
+        return payload
+
+template SupplyCapSignature
+  with
+    requestCid : ContractId SupplyCapAttestation
+    validator : Party
+    aggregator : Party
+    ecdsaSignature : Text
+    nonce : Int
+  where
+    signatory validator
+    observer aggregator
+
+-- ============================================================
+--                     SECTION 5: YIELD ATTESTATION
+-- ============================================================
+
+-- | Yield attestation from Ethereum → Canton.
+-- The bridge reports total yield generated by Ethereum Treasury strategies.
+-- Canton smUSD applies this yield to compute share price.
+data YieldPayload = YieldPayload with
+    attestationId : Text
+    totalTreasuryAssets : Money   -- Total assets in Ethereum Treasury (USDC + yield)
+    totalMUSDSupply : Money       -- Total mUSD backed by this treasury
+    yieldAccrued : Money          -- New yield since last attestation
+    epochNumber : Int             -- Sequential epoch for ordering
+    timestamp : Time              -- When yield was measured on Ethereum
+    nonce : Int
+  deriving (Eq, Show)
+
+template YieldAttestation
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : YieldPayload
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    -- Treasury assets must be >= mUSD supply (no undercollateralization)
+    ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
+
+    nonconsuming choice Yield_Sign : ContractId YieldSignature
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+
+        create YieldSignature with
+          requestCid = self
+          validator
+          aggregator
+          ecdsaSignature
+          nonce = payload.nonce
+
+    -- Finalize: returns verified yield data for smUSD sync
+    choice Yield_Finalize : YieldPayload
+      with
+        requiredSignatures : Int
+        signatureCids : [ContractId YieldSignature]
+      controller aggregator
+      do
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+        let reqIds = map (.requestCid) sigs
+
+        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+        assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        return payload
+
+template YieldSignature
+  with
+    requestCid : ContractId YieldAttestation
+    validator : Party
+    aggregator : Party
+    ecdsaSignature : Text
+    nonce : Int
+  where
+    signatory validator
+    observer aggregator
+
+-- ============================================================
+--                     HELPER FUNCTIONS
+-- ============================================================
+

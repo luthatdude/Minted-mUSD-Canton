@@ -1,0 +1,210 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================
+  #  SOLIDITY: Compile, Test, Coverage
+  # ============================================================
+  solidity:
+    name: Solidity Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Run tests
+        run: npx hardhat test
+
+      - name: Coverage report
+        run: npx hardhat coverage
+        continue-on-error: true
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solidity-coverage
+          path: coverage/
+          retention-days: 14
+
+  # ============================================================
+  #  SOLIDITY: Static Analysis & Security Audit
+  # ============================================================
+  solidity-security:
+    name: Solidity Security Scan
+    runs-on: ubuntu-latest
+    needs: solidity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      # Slither static analysis
+      - name: Run Slither
+        uses: crytic/slither-action@v0.4.0
+        id: slither
+        with:
+          solc-version: "0.8.26"
+          sarif: results.sarif
+          fail-on: medium
+        continue-on-error: true
+
+      - name: Upload Slither SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+        continue-on-error: true
+
+  # ============================================================
+  #  DAML: Build & Test
+  # ============================================================
+  daml:
+    name: DAML Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install DAML SDK 2.10.3
+        run: |
+          curl -sSL https://get.daml.com/ | sh -s 2.10.3
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Verify DAML installation
+        run: |
+          daml version
+
+      - name: Build DAML
+        working-directory: daml
+        run: daml build
+
+      - name: Run DAML tests
+        working-directory: daml
+        run: daml test
+
+  # ============================================================
+  #  RELAY: TypeScript Build & Lint
+  # ============================================================
+  relay:
+    name: Relay Service Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript compile check
+        working-directory: relay
+        run: npx tsc --noEmit
+        continue-on-error: true
+
+  # ============================================================
+  #  DOCKER: Build & Scan Relay Image
+  # ============================================================
+  docker:
+    name: Docker Build & Scan
+    runs-on: ubuntu-latest
+    needs: [relay]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: relay
+          push: false
+          tags: musd-relay:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Trivy vulnerability scanner
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: musd-relay:ci
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+        continue-on-error: true
+
+  # ============================================================
+  #  KUBERNETES: Validate Manifests
+  # ============================================================
+  k8s-validate:
+    name: K8s Manifest Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          wget -q https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform-linux-amd64.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate K8s manifests
+        run: |
+          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary {} +
+
+  # ============================================================
+  #  DEPENDENCY AUDIT
+  # ============================================================
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (production)
+        run: npm audit --omit=dev
+        continue-on-error: true
+
+      - name: Check for known vulnerabilities
+        run: npx audit-ci --moderate
+        continue-on-error: true

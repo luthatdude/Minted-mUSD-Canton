@@ -1,0 +1,190 @@
+module InstitutionalAssetV4 where
+-- FIX IA-L02: Use DA.Optional.fromSome instead of custom fromSome'
+import DA.Optional (isSome, isNone, fromSome)
+import DA.List (dedup, sort)
+-- intToDecimal replaced by intToNumeric (DA.Internal.Desugar is not importable)
+
+-- | 1. INSTRUMENT DEFINITION
+-- The "Gold Source" of truth for an asset's properties.
+template Instrument with
+    depository : Party          -- The CSD, Central Bank, or Custodian
+    issuer : Party              -- The Legal Entity issuing the liability
+    id : Text                   -- Unique Identifier (e.g., "ISIN-123" or "USD")
+    decimalScale : Int          -- Precision (e.g., 2 for Fiat, 8 for BTC)
+    registryAuthority : Party   -- The entity allowed to maintain the Whitelist
+  where
+    signatory depository, issuer
+    -- FIX IA-L01: Bound decimalScale to valid range
+    ensure decimalScale >= 0 && decimalScale <= 18
+    -- Key allows lookups by ID without needing the contract CID
+    key (depository, id) : (Party, Text)
+    maintainer key._1
+
+-- | 2. COMPLIANCE / REGISTRY
+-- Manages the Whitelist of parties authorized to hold this specific instrument class.
+template AssetRegistry with
+    authority : Party           -- Must match Instrument.registryAuthority
+    instrumentId : Text         -- Scope this registry to a specific asset
+    authorizedParties : [Party]
+  where
+    signatory authority
+    observer authorizedParties
+    -- FIX IA-M02: Bound authorized parties list to prevent O(n) DoS
+    ensure length authorizedParties > 0 && length authorizedParties <= 10000
+    key (authority, instrumentId) : (Party, Text)
+    maintainer key._1
+
+    nonconsuming choice EnsureAuthorized : ()
+      with party : Party
+      controller authority
+      do
+        assertMsg ("Party " <> show party <> " is not whitelisted for " <> instrumentId)
+          (party `elem` authorizedParties)
+
+-- | 3. DATA STRUCTURES
+data Lock = Lock with
+    delegate : Party            -- The Exchange/CCP/Agent controlling the lock
+    reason : Text               -- e.g., "Pending Settlement", "Collateralized"
+  deriving (Eq, Show)
+
+-- | 4. THE HOLDING
+template Asset with
+    issuer : Party
+    owner : Party
+    instrumentId : Text
+    depository : Party
+    amount : Decimal
+    lock : Optional Lock
+    observers : [Party]
+    metadata : [(Text, Text)]   -- Audit trail / Regulatory tags
+  where
+    signatory issuer, owner
+    observer observers, depository
+    -- FIX IA-M04: Bound metadata list to prevent unbounded growth
+    ensure amount > 0.0 && length metadata <= 100
+
+    -- --- SECURE COMPLIANT TRANSFER ---
+    choice Asset_Transfer : ContractId TransferProposal
+      with
+        newOwner : Party
+        registryCid : ContractId AssetRegistry
+      controller owner
+      do
+        -- 1. State Check
+        assertMsg "Asset is locked and cannot be transferred" (isNone lock)
+        -- 2. Anti-Spoofing: Verify the Registry is the official one for this Instrument
+        (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
+        registry <- fetch registryCid
+        assertMsg "Registry Authority mismatch" (registry.authority == instrument.registryAuthority)
+        assertMsg "Registry Instrument mismatch" (registry.instrumentId == instrumentId)
+        -- 3. Compliance Check
+        exercise registryCid EnsureAuthorized with party = newOwner
+        -- 4. Create Proposal
+        create TransferProposal with asset = this; newOwner
+
+    -- --- LOCKING MECHANICS ---
+    choice Asset_Lock : ContractId Asset
+      with
+        delegate : Party
+        reason : Text
+      controller owner
+      do
+        assertMsg "Asset is already locked" (isNone lock)
+        create this with lock = Some (Lock with delegate; reason)
+
+    choice Asset_Unlock : ContractId Asset
+      -- FIX IA-H03: Use fromSome from DA.Optional (safe here because of guard in body)
+      controller (if isSome lock then (fromSome lock).delegate else owner)
+      do
+        -- Prevent "CID Churn". Unlock cannot be called if no lock exists.
+        assertMsg "Asset is not locked" (isSome lock)
+        create this with lock = None
+
+    -- --- UTXO / POSITION MANAGEMENT ---
+    choice Asset_Split : (ContractId Asset, ContractId Asset)
+      with splitAmount : Decimal
+      controller owner
+      do
+        assertMsg "Cannot split a locked asset" (isNone lock)
+        -- FIX IA-H02: Validate split amount is strictly positive
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
+        -- Numerical Stability: Uses decimal exponentiation to validate precision.
+        let decimalScale = getField @"decimalScale" instrument
+        let factor = 10.0 ** (intToNumeric decimalScale)
+        assertMsg "Split amount violates instrument precision scale"
+          (floor (splitAmount * factor + 0.1) == floor (splitAmount * factor))
+        assertMsg "Split amount must be less than total amount" (splitAmount < amount)
+        a1 <- create this with amount = splitAmount
+        a2 <- create this with amount = amount - splitAmount
+        return (a1, a2)
+
+    choice Asset_Merge : ContractId Asset
+      with otherCid : ContractId Asset
+      controller owner
+      do
+        assertMsg "Base asset is locked" (isNone lock)
+        other <- fetch otherCid
+        -- CRITICAL IDENTITY CHECKS (Prevents Credit Laundering)
+        -- Ensures user isn't merging two different "USD" tokens from different issuers.
+        assertMsg "Merge Fail: Instrument mismatch" (other.instrumentId == instrumentId)
+        assertMsg "Merge Fail: Issuer mismatch" (other.issuer == issuer)
+        assertMsg "Merge Fail: Depository mismatch" (other.depository == depository)
+        assertMsg "Merge Fail: Owner mismatch" (other.owner == owner)
+        assertMsg "Merge Fail: Other asset is locked" (isNone other.lock)
+        archive otherCid
+        create this with
+            amount = amount + other.amount
+            observers = dedup (sort (observers ++ other.observers))
+
+    -- --- REGULATORY / EMERGENCY ---
+    -- Allows the issuer (the debtor) to move the asset under court order or regulatory requirement.
+    -- FIX IA-C01: Emergency transfer now requires compliance check via registry
+    choice Asset_EmergencyTransfer : ContractId Asset
+      with
+        targetOwner : Party
+        reason : Text
+        registryCid : ContractId AssetRegistry
+      controller issuer
+      do
+        -- FIX IA-M03: Require non-empty reason for audit trail
+        assertMsg "REASON_REQUIRED" (reason /= "")
+        -- FIX IA-C01: Verify target is authorized per compliance whitelist
+        (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
+        registry <- fetch registryCid
+        assertMsg "Registry Authority mismatch" (registry.authority == instrument.registryAuthority)
+        assertMsg "Registry Instrument mismatch" (registry.instrumentId == instrumentId)
+        exercise registryCid EnsureAuthorized with party = targetOwner
+        create this with
+            owner = targetOwner
+            lock = None
+            observers = []
+            metadata = ("emergency_transfer_reason", reason) :: metadata
+
+-- | 5. SETTLEMENT PROPOSAL
+template TransferProposal with
+    asset : Asset
+    newOwner : Party
+  where
+    signatory asset.issuer, asset.owner
+    observer newOwner
+
+    choice TransferProposal_Accept : ContractId Asset
+      controller newOwner
+      do
+        -- Cleanse locks and observers to ensure the new owner starts with a "clean" holding.
+        create asset with
+            owner = newOwner
+            lock = None
+            observers = []
+
+    choice TransferProposal_Reject : ContractId Asset
+      controller newOwner
+      do
+        create asset -- Reverts to original owner
+
+    -- FIX IA-H01: Allow original owner to cancel pending proposals (prevents liveness lockup)
+    choice TransferProposal_Cancel : ContractId Asset
+      controller asset.owner
+      do
+        create asset -- Returns asset to original owner

@@ -1,0 +1,11 @@
+sdk-version: 2.10.3
+name: ble-protocol
+source: .
+version: 1.0.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options:
+  - --ghc-option=-Wno-unused-imports
+  - --ghc-option=-Wno-redundant-imports
