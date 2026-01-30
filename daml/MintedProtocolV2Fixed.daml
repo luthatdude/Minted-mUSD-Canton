@@ -897,6 +897,7 @@ template LeverageManager
     signatory operator, user
 
     -- Fix: Loop logic updated to handle new pool contract ID return type
+    -- FIX: Use foldlA instead of local recursion (Daml-LF doesn't support local recursive definitions)
     choice Loop_Leverage : VaultId
       with
         vaultCid : VaultId
@@ -909,9 +910,9 @@ template LeverageManager
         assertMsg "MAX_LOOPS_EXCEEDED" (loops <= 10)
         assertMsg "LOOPS_MUST_BE_POSITIVE" (loops > 0)
 
-        -- We need to thread the poolCid and issuerRoleCid through the loop
-        let loopFn (currentVaultCid, currentPoolCid, currentIssuerRoleCid) loopNum = do
-              if loopNum == 0 then return currentVaultCid
+        -- Thread state through foldlA to avoid local recursion
+        let loopStep (currentVaultCid, currentPoolCid, currentIssuerRoleCid, shouldContinue) _ = do
+              if not shouldContinue then return (currentVaultCid, currentPoolCid, currentIssuerRoleCid, False)
               else do
                 vault <- fetch currentVaultCid
                 colData <- fetch vault.collateral
@@ -925,7 +926,7 @@ template LeverageManager
                 let totalDebt = vault.debtPrincipal + vault.accruedInterest
                 let borrowable = maxDebt - totalDebt
 
-                if borrowable < 1.0 then return currentVaultCid
+                if borrowable < 1.0 then return (currentVaultCid, currentPoolCid, currentIssuerRoleCid, False)
                 else do
                   (vAfterBorrow, musd, newIssuerRoleCid) <- exercise currentVaultCid Vault_Borrow with
                     borrowAmount = borrowable
@@ -940,9 +941,10 @@ template LeverageManager
                   vFinal <- exercise vAfterBorrow Vault_Deposit with
                     depositCid = newCollateral
 
-                  loopFn (vFinal, nextPoolCid, newIssuerRoleCid) (loopNum - 1)
+                  return (vFinal, nextPoolCid, newIssuerRoleCid, True)
 
-        loopFn (vaultCid, poolCid, issuerRoleCid) loops
+        (finalVault, _, _, _) <- foldlA loopStep (vaultCid, poolCid, issuerRoleCid, True) [1..loops]
+        return finalVault
 
 -- ============================================================
 --                     SECTION 9: CANTON ATTESTATION BRIDGE
