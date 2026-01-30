@@ -117,7 +117,7 @@ template BridgeOutAttestation
       controller aggregator
       do
         -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup `div` 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -203,7 +203,7 @@ template BridgeInAttestation
       controller aggregator
       do
         -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup `div` 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -281,7 +281,7 @@ template SupplyCapAttestation
       controller aggregator
       do
         -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup `div` 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
@@ -361,7 +361,7 @@ template YieldAttestation
       controller aggregator
       do
         -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup `div` 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
