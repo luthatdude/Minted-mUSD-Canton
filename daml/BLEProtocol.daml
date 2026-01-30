@@ -163,6 +163,8 @@ template AttestationRequest
 
 
 -- 4. THE SIGNATURE RECORD
+-- Note: Only aggregator is signatory to allow archiving in FinalizeAttestation.
+-- Validator is observer since they provided the signature via ProvideSignature choice.
 template ValidatorSignature
   with
     requestId: ContractId AttestationRequest
@@ -171,8 +173,8 @@ template ValidatorSignature
     ecdsaSignature: Text
     nonce: Int
   where
-    signatory validator, aggregator
-    -- aggregator is signatory to allow archiving in FinalizeAttestation
+    signatory aggregator
+    observer validator
 
 
 -- 5. HELPER: Create new attestation request
