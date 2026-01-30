@@ -105,12 +105,15 @@ template CantonMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    choice CantonMUSD_Transfer : ContractId CantonMUSD
+    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
+    choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create CantonMUSDTransferProposal with
+          musd = this
+          newOwner
 
     choice CantonMUSD_Split : (ContractId CantonMUSD, ContractId CantonMUSD)
       with
@@ -138,6 +141,28 @@ template CantonMUSD
       controller issuer
       do
         return ()
+
+-- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
+-- Prevents forced signatory obligations on unwitting recipients
+template CantonMUSDTransferProposal
+  with
+    musd : CantonMUSD
+    newOwner : Party
+  where
+    signatory musd.issuer, musd.owner
+    observer newOwner
+
+    choice CantonMUSDTransferProposal_Accept : ContractId CantonMUSD
+      controller newOwner
+      do create musd with owner = newOwner
+
+    choice CantonMUSDTransferProposal_Reject : ContractId CantonMUSD
+      controller newOwner
+      do create musd
+
+    choice CantonMUSDTransferProposal_Cancel : ContractId CantonMUSD
+      controller musd.owner
+      do create musd
 
 -- ============================================================
 --                     SECTION 3: BRIDGE OUT REQUEST

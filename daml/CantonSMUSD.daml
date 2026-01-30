@@ -37,12 +37,15 @@ template CantonSMUSD
 
     ensure shares > 0.0
 
-    choice SMUSD_Transfer : ContractId CantonSMUSD
+    -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
+    choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create CantonSMUSDTransferProposal with
+          smusd = this
+          newOwner
 
     choice SMUSD_Split : (ContractId CantonSMUSD, ContractId CantonSMUSD)
       with
@@ -65,6 +68,28 @@ template CantonSMUSD
         assertMsg "OWNER_MISMATCH" (other.owner == owner)
         archive otherCid
         create this with shares = shares + other.shares
+
+-- | FIX DL-C2: Transfer proposal for CantonSMUSD (dual-signatory safe)
+-- Prevents forced signatory obligations on unwitting recipients
+template CantonSMUSDTransferProposal
+  with
+    smusd : CantonSMUSD
+    newOwner : Party
+  where
+    signatory smusd.issuer, smusd.owner
+    observer newOwner
+
+    choice CantonSMUSDTransferProposal_Accept : ContractId CantonSMUSD
+      controller newOwner
+      do create smusd with owner = newOwner
+
+    choice CantonSMUSDTransferProposal_Reject : ContractId CantonSMUSD
+      controller newOwner
+      do create smusd
+
+    choice CantonSMUSDTransferProposal_Cancel : ContractId CantonSMUSD
+      controller smusd.owner
+      do create smusd
 
 -- ============================================================
 --                     SECTION 2: STAKING SERVICE
