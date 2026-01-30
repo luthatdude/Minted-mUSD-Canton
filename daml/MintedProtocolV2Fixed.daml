@@ -770,7 +770,7 @@ template LiquidationEngine
   with
     operator : Party
     closeFactorBps : Bps
-    fullLiquidationThreshold : Decimal
+    fullLiquidationThreshold : Money
   where
     signatory operator
 
