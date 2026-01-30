@@ -48,6 +48,7 @@ directMintFlowTest = script do
     createCmd CantonDirectMintService with
       operator
       usdcIssuer
+      usdcxIssuer = None  -- USDCx minting disabled for this test
       mintFeeBps = 30  -- 0.30%
       redeemFeeBps = 30
       minAmount = 1.000000000000000000
@@ -111,6 +112,7 @@ redeemFlowTest = script do
     createCmd CantonDirectMintService with
       operator
       usdcIssuer
+      usdcxIssuer = None  -- USDCx minting disabled for this test
       mintFeeBps = 30
       redeemFeeBps = 30
       minAmount = 1.000000000000000000
@@ -440,6 +442,7 @@ endToEndFlowTest = script do
     createCmd CantonDirectMintService with
       operator
       usdcIssuer
+      usdcxIssuer = None  -- USDCx minting disabled for this test
       mintFeeBps = 30
       redeemFeeBps = 30
       minAmount = 1.000000000000000000
@@ -576,6 +579,7 @@ pausedServiceTest = script do
     createCmd CantonDirectMintService with
       operator
       usdcIssuer
+      usdcxIssuer = None  -- USDCx minting disabled for this test
       mintFeeBps = 30
       redeemFeeBps = 30
       minAmount = 1.000000000000000000
@@ -610,6 +614,74 @@ pausedServiceTest = script do
       usdcCid = usdcCid
 
   debug "Paused service test passed - mint correctly rejected"
+  pure ()
+
+
+-- ============================================================
+--                     TEST 10: USDCx MINT FLOW
+-- ============================================================
+
+-- | Test: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
+-- USDCx is USDC bridged via Circle CCTP through xReserve protocol.
+-- No additional bridge-out is needed since USDCx is already backed.
+usdcxMintFlowTest : Script ()
+usdcxMintFlowTest = script do
+  -- Setup parties
+  operator <- allocateParty "Operator"
+  usdcIssuer <- allocateParty "USDCIssuer"
+  xReserve <- allocateParty "xReserve"  -- xReserve protocol operator (USDCx issuer)
+  alice <- allocateParty "Alice"
+
+  let validators : [Party] = []
+
+  -- Issue USDCx to Alice on Canton (representing bridged USDC from Ethereum)
+  usdcxCid <- submitMulti [xReserve, alice] [] do
+    createCmd USDCx with
+      issuer = xReserve
+      owner = alice
+      amount = 5000.000000000000000000
+      sourceChain = "ethereum"
+      cctpNonce = 12345
+
+  -- Deploy CantonDirectMint service with USDCx support enabled
+  serviceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      usdcxIssuer = Some xReserve  -- Enable USDCx minting
+      mintFeeBps = 30  -- 0.30%
+      redeemFeeBps = 30
+      minAmount = 1.000000000000000000
+      maxAmount = 1000000.000000000000000000
+      supplyCap = 10000000.000000000000000000
+      currentSupply = 0.000000000000000000
+      accumulatedFees = 0.000000000000000000
+      paused = False
+      validators
+      targetChainId = 1
+      targetTreasury = "0xTreasuryContractAddress"
+      nextNonce = 1
+      dailyMintLimit = 5000000.000000000000000000
+      dailyMinted = 0.000000000000000000
+      dailyBurned = 0.000000000000000000
+      lastRateLimitReset = time (date 2024 Jan 1) 0 0 0
+      complianceRegistryCid = None
+      mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      authorizedMinters = [alice]
+
+  -- Alice mints mUSD with USDCx (no bridge-out needed)
+  (newServiceCid, musdCid) <- submit alice do
+    exerciseCmd serviceCid DirectMint_MintWithUSDCx with
+      user = alice
+      usdcxCid = usdcxCid
+
+  -- Verify: mUSD was minted (split to prove ownership)
+  (half1, half2) <- submit alice do
+    exerciseCmd musdCid CantonMUSD_Split with
+      splitAmount = 1000.000000000000000000
+
+  debug "USDCx mint flow test passed - mUSD minted from xReserve bridged USDC, no bridge-out needed"
   pure ()
 
 
@@ -658,6 +730,10 @@ main = script do
 
   debug "Test 9: Paused Service"
   pausedServiceTest
+  debug ""
+
+  debug "Test 10: USDCx Mint Flow (xReserve + Circle CCTP)"
+  usdcxMintFlowTest
   debug ""
 
   debug "========================================="
