@@ -6,6 +6,9 @@ import { useTx } from "@/hooks/useTx";
 import { formatToken, formatUSD, formatBps, formatHealthFactor } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
 interface CollateralInfo {
   token: string;
@@ -19,13 +22,9 @@ interface CollateralInfo {
   liqPenalty: bigint;
 }
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-  signer: ethers.Signer | null;
-}
-
-export function BorrowPage({ contracts, address, signer }: Props) {
+export function BorrowPage() {
+  const { address, signer, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [action, setAction] = useState<"deposit" | "borrow" | "repay" | "withdraw">("deposit");
   const [selectedToken, setSelectedToken] = useState("");
   const [amount, setAmount] = useState("");

@@ -4,7 +4,7 @@ import LeverageSlider from '../components/LeverageSlider';
 import { TxButton } from '../components/TxButton';
 import { StatCard } from '../components/StatCard';
 import WalletConnector from '../components/WalletConnector';
-import { useEthWallet } from '../hooks/useEthWallet';
+import { useWalletConnect } from '../hooks/useWalletConnect';
 import { LeverageVaultABI } from '../abis/LeverageVault';
 import { ERC20_ABI } from '../abis/ERC20';
 import { formatUSD, formatToken } from '../lib/format';
@@ -24,7 +24,7 @@ interface Position {
 }
 
 export default function LeveragePage() {
-  const { address, isConnected, signer, provider, getContract } = useEthWallet();
+  const { address, isConnected, signer, provider, getContract } = useWalletConnect();
   
   // Contracts
   const [leverageVault, setLeverageVault] = useState<Contract | null>(null);

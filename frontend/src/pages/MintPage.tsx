@@ -6,13 +6,13 @@ import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps } from "@/lib/format";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
-
-export function MintPage({ contracts, address }: Props) {
+export function MintPage() {
+  const { address, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [tab, setTab] = useState<"mint" | "redeem">("mint");
   const [amount, setAmount] = useState("");
   const [preview, setPreview] = useState<{ output: bigint; fee: bigint } | null>(null);
@@ -106,20 +106,8 @@ export function MintPage({ contracts, address }: Props) {
     setAmount("");
   }
 
-  if (!address) {
-    return (
-      <div className="flex min-h-[400px] items-center justify-center">
-        <div className="card-gradient-border max-w-md p-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-500/10">
-            <svg className="h-8 w-8 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h3 className="mb-2 text-xl font-semibold text-white">Connect Your Wallet</h3>
-          <p className="text-gray-400">Connect your wallet to mint or redeem mUSD.</p>
-        </div>
-      </div>
-    );
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (

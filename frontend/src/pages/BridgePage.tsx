@@ -2,13 +2,13 @@ import React, { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { formatUSD, formatBps, formatHealthFactor, formatTimestamp } from "@/lib/format";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
-
-export function BridgePage({ contracts, address }: Props) {
+export function BridgePage() {
+  const { isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [data, setData] = useState({
     attestedAssets: 0n,
     supplyCap: 0n,
@@ -87,6 +87,10 @@ export function BridgePage({ contracts, address }: Props) {
     }
     loadEvents();
   }, [bridge]);
+
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
+  }
 
   return (
     <div className="space-y-6">

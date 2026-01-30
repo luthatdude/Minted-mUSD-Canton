@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useEthWallet } from '@/hooks/useEthWallet';
+import { useWalletConnect } from '@/hooks/useWalletConnect';
 import { useLoopWallet } from '@/hooks/useLoopWallet';
 
 interface WalletConnectorProps {
@@ -15,7 +15,7 @@ export default function WalletConnector({
 }: WalletConnectorProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   
-  const ethWallet = useEthWallet();
+  const ethWallet = useWalletConnect();
   const loopWallet = useLoopWallet();
 
   // Format address for display

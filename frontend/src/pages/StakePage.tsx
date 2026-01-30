@@ -5,13 +5,13 @@ import { StatCard } from "@/components/StatCard";
 import { useTx } from "@/hooks/useTx";
 import { formatToken } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
-
-export function StakePage({ contracts, address }: Props) {
+export function StakePage() {
+  const { address, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [tab, setTab] = useState<"stake" | "unstake">("stake");
   const [amount, setAmount] = useState("");
   const [stats, setStats] = useState({
@@ -89,8 +89,8 @@ export function StakePage({ contracts, address }: Props) {
 
   const cooldownHours = Number(stats.cooldownRemaining) / 3600;
 
-  if (!address) {
-    return <div className="text-center text-gray-400 py-20">Connect wallet to stake mUSD</div>;
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (

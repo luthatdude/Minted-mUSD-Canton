@@ -16,6 +16,9 @@
     "@daml/ledger": "^2.8.0",
     "@daml/types": "^2.8.0",
     "@fivenorth/loop-sdk": "^0.7.6",
+    "@reown/appkit": "^1.6.0",
+    "@reown/appkit-universal-connector": "^1.6.0",
+    "@reown/appkit-common": "^1.6.0",
     "recharts": "^2.10.0",
     "lucide-react": "^0.312.0"
   },

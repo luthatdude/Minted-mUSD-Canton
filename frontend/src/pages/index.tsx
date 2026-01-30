@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { Layout } from "@/components/Layout";
-import { useWallet } from "@/hooks/useWallet";
-import { useContracts } from "@/hooks/useContract";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 // Ethereum pages
 import { DashboardPage } from "./DashboardPage";
@@ -24,52 +24,52 @@ import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
 
 export default function Home() {
-  const wallet = useWallet();
-  const contracts = useContracts(wallet.signer);
+  const wallet = useWalletConnect();
+  const contracts = useWCContracts();
   const chainState = useChainState();
-  const canton = useCanton();
+  const loopWallet = useLoopWallet();
   const [page, setPage] = useState("dashboard");
 
   function renderPage() {
     if (chainState.chain === "canton") {
       switch (page) {
         case "dashboard":
-          return <CantonDashboard canton={canton} />;
+          return <CantonDashboard />;
         case "mint":
-          return <CantonMint canton={canton} />;
+          return <CantonMint />;
         case "stake":
-          return <CantonStake canton={canton} />;
+          return <CantonStake />;
         case "borrow":
-          return <CantonBorrow canton={canton} />;
+          return <CantonBorrow />;
         case "liquidate":
-          return <CantonLiquidations canton={canton} />;
+          return <CantonLiquidations />;
         case "bridge":
-          return <CantonBridge canton={canton} />;
+          return <CantonBridge />;
         case "admin":
-          return <CantonAdmin canton={canton} />;
+          return <CantonAdmin />;
         default:
-          return <CantonDashboard canton={canton} />;
+          return <CantonDashboard />;
       }
     }
 
-    // Ethereum
+    // Ethereum - pages will use hooks internally
     switch (page) {
       case "dashboard":
-        return <DashboardPage contracts={contracts} />;
+        return <DashboardPage />;
       case "mint":
-        return <MintPage contracts={contracts} address={wallet.address} />;
+        return <MintPage />;
       case "stake":
-        return <StakePage contracts={contracts} address={wallet.address} />;
+        return <StakePage />;
       case "borrow":
-        return <BorrowPage contracts={contracts} address={wallet.address} signer={wallet.signer} />;
+        return <BorrowPage />;
       case "liquidate":
-        return <LiquidationsPage contracts={contracts} address={wallet.address} />;
+        return <LiquidationsPage />;
       case "bridge":
-        return <BridgePage contracts={contracts} address={wallet.address} />;
+        return <BridgePage />;
       case "admin":
-        return <AdminPage contracts={contracts} address={wallet.address} />;
+        return <AdminPage />;
       default:
-        return <DashboardPage contracts={contracts} />;
+        return <DashboardPage />;
     }
   }
 
@@ -82,16 +82,16 @@ export default function Home() {
       onNavigate={setPage}
       chain={chainState.chain}
       onToggleChain={chainState.toggle}
-      cantonParty={canton.party}
+      cantonParty={loopWallet.partyId}
     >
       {wallet.error && chainState.chain === "ethereum" && (
         <div className="mb-6 rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400">
           {wallet.error}
         </div>
       )}
-      {canton.error && chainState.chain === "canton" && (
+      {loopWallet.error && chainState.chain === "canton" && (
         <div className="mb-6 rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400">
-          Canton: {canton.error}
+          Canton: {loopWallet.error}
         </div>
       )}
       {renderPage()}

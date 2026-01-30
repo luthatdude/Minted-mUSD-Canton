@@ -4,6 +4,9 @@ import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
 import { formatUSD, formatToken, formatBps, formatHealthFactor } from "@/lib/format";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
 interface DashboardData {
   musdSupply: bigint;
@@ -22,11 +25,9 @@ interface DashboardData {
   interestRateBps: bigint;
 }
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-}
-
-export function DashboardPage({ contracts }: Props) {
+export function DashboardPage() {
+  const { isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -78,7 +79,11 @@ export function DashboardPage({ contracts }: Props) {
       }
     }
     load();
-  }, [contracts]);
+  }, [contracts, isConnected]);
+
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
+  }
 
   if (loading) {
     return (
@@ -97,11 +102,11 @@ export function DashboardPage({ contracts }: Props) {
         <div className="card-gradient-border max-w-md p-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-500/10">
             <svg className="h-8 w-8 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
           </div>
-          <h3 className="mb-2 text-xl font-semibold text-white">Connect Your Wallet</h3>
-          <p className="text-gray-400">Connect your wallet to view protocol dashboard and interact with Minted Protocol.</p>
+          <h3 className="mb-2 text-xl font-semibold text-white">No Data Available</h3>
+          <p className="text-gray-400">Unable to load protocol data. Please check your network connection.</p>
         </div>
       </div>
     );
