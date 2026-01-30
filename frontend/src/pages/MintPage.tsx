@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
+import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps } from "@/lib/format";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
@@ -106,110 +107,258 @@ export function MintPage({ contracts, address }: Props) {
   }
 
   if (!address) {
-    return <div className="text-center text-gray-400 py-20">Connect wallet to mint or redeem mUSD</div>;
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="card-gradient-border max-w-md p-8 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-500/10">
+            <svg className="h-8 w-8 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h3 className="mb-2 text-xl font-semibold text-white">Connect Your Wallet</h3>
+          <p className="text-gray-400">Connect your wallet to mint or redeem mUSD.</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
-      <h1 className="text-3xl font-bold text-white">Mint / Redeem mUSD</h1>
-      <p className="text-gray-400">Convert between USDC and mUSD at 1:1 ratio (minus fees)</p>
+    <div className="mx-auto max-w-3xl space-y-8">
+      <PageHeader
+        title="Mint & Redeem"
+        subtitle="Convert between USDC and mUSD at 1:1 ratio (minus protocol fees)"
+        badge="Ethereum"
+        badgeColor="brand"
+      />
 
+      {/* Balance Cards */}
       <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard label="Your USDC" value={formatToken(stats.usdcBal, 6)} />
-        <StatCard label="Your mUSD" value={formatToken(stats.musdBal)} />
+        <StatCard 
+          label="Your USDC Balance" 
+          value={formatToken(stats.usdcBal, 6)} 
+          color="blue"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
+        <StatCard 
+          label="Your mUSD Balance" 
+          value={formatToken(stats.musdBal)}
+          color="purple"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+            </svg>
+          }
+        />
       </div>
 
-      {/* Tabs */}
-      <div className="card">
-        <div className="mb-6 flex border-b border-gray-700">
+      {/* Main Card */}
+      <div className="card-gradient-border overflow-hidden">
+        {/* Tabs */}
+        <div className="flex border-b border-white/10">
           <button
-            className={`tab ${tab === "mint" ? "tab-active" : ""}`}
+            className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${
+              tab === "mint" 
+                ? "text-white" 
+                : "text-gray-400 hover:text-white"
+            }`}
             onClick={() => { setTab("mint"); setAmount(""); }}
           >
-            Mint mUSD
+            <span className="relative z-10 flex items-center justify-center gap-2">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+              </svg>
+              Mint mUSD
+            </span>
+            {tab === "mint" && (
+              <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-500 to-purple-500" />
+            )}
           </button>
           <button
-            className={`tab ${tab === "redeem" ? "tab-active" : ""}`}
+            className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${
+              tab === "redeem" 
+                ? "text-white" 
+                : "text-gray-400 hover:text-white"
+            }`}
             onClick={() => { setTab("redeem"); setAmount(""); }}
           >
-            Redeem USDC
+            <span className="relative z-10 flex items-center justify-center gap-2">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Redeem USDC
+            </span>
+            {tab === "redeem" && (
+              <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-500 to-purple-500" />
+            )}
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="label">{tab === "mint" ? "USDC Amount" : "mUSD Amount"}</label>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                className="input"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-              />
-              <button
-                className="btn-secondary text-sm whitespace-nowrap"
-                onClick={() =>
-                  setAmount(
-                    ethers.formatUnits(
-                      tab === "mint" ? stats.usdcBal : stats.musdBal,
-                      tab === "mint" ? USDC_DECIMALS : MUSD_DECIMALS
-                    )
-                  )
+        {/* Form Content */}
+        <div className="space-y-6 p-6">
+          {/* Input Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-400">
+                {tab === "mint" ? "You Pay" : "You Redeem"}
+              </label>
+              <span className="text-xs text-gray-500">
+                Balance: {tab === "mint" 
+                  ? formatToken(stats.usdcBal, 6) 
+                  : formatToken(stats.musdBal)
                 }
-              >
-                MAX
-              </button>
+              </span>
+            </div>
+            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
+              <div className="flex items-center gap-4">
+                <input
+                  type="number"
+                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                    onClick={() =>
+                      setAmount(
+                        ethers.formatUnits(
+                          tab === "mint" ? stats.usdcBal : stats.musdBal,
+                          tab === "mint" ? USDC_DECIMALS : MUSD_DECIMALS
+                        )
+                      )
+                    }
+                  >
+                    MAX
+                  </button>
+                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                    <div className={`h-6 w-6 rounded-full ${tab === "mint" ? "bg-blue-500" : "bg-gradient-to-br from-brand-500 to-purple-500"}`} />
+                    <span className="font-semibold text-white">{tab === "mint" ? "USDC" : "mUSD"}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* Arrow */}
+          <div className="flex justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
+              <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Output Section */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-gray-400">You Receive</label>
+            <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-semibold text-white">
+                  {preview ? (tab === "mint" 
+                    ? formatToken(preview.output) 
+                    : formatToken(preview.output, 6)
+                  ) : "0.00"}
+                </span>
+                <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                  <div className={`h-6 w-6 rounded-full ${tab === "mint" ? "bg-gradient-to-br from-brand-500 to-purple-500" : "bg-blue-500"}`} />
+                  <span className="font-semibold text-white">{tab === "mint" ? "mUSD" : "USDC"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Fee Details */}
           {preview && (
-            <div className="rounded-lg bg-gray-800 p-4 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-400">You receive</span>
-                <span className="font-medium text-white">
-                  {tab === "mint"
-                    ? `${formatToken(preview.output)} mUSD`
-                    : `${formatToken(preview.output, 6)} USDC`}
-                </span>
-              </div>
-              <div className="mt-2 flex justify-between">
-                <span className="text-gray-400">Fee</span>
-                <span className="text-yellow-400">
-                  {tab === "mint"
-                    ? `${formatToken(preview.fee, 6)} USDC`
-                    : `${formatToken(preview.fee, 6)} USDC`}
-                </span>
-              </div>
-              <div className="mt-2 flex justify-between">
-                <span className="text-gray-400">Fee rate</span>
-                <span className="text-gray-300">
+            <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-400">Protocol Fee</span>
+                <span className="font-medium text-yellow-400">
                   {formatBps(tab === "mint" ? stats.mintFee : stats.redeemFee)}
                 </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-400">Fee Amount</span>
+                <span className="text-gray-300">
+                  {formatToken(preview.fee, 6)} USDC
+                </span>
+              </div>
+              <div className="divider my-2" />
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-400">Exchange Rate</span>
+                <span className="text-gray-300">1 USDC = 1 mUSD</span>
               </div>
             </div>
           )}
 
+          {/* Action Button */}
           <TxButton
             onClick={tab === "mint" ? handleMint : handleRedeem}
             loading={tx.loading}
             disabled={!amount || parseFloat(amount) <= 0}
+            className="w-full"
           >
-            {tab === "mint" ? "Mint mUSD" : "Redeem USDC"}
+            <span className="flex items-center justify-center gap-2">
+              {tab === "mint" ? (
+                <>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Mint mUSD
+                </>
+              ) : (
+                <>
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Redeem USDC
+                </>
+              )}
+            </span>
           </TxButton>
 
-          {tx.error && <p className="text-sm text-red-400">{tx.error}</p>}
+          {/* Transaction Status */}
+          {tx.error && (
+            <div className="alert-error flex items-center gap-3">
+              <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm">{tx.error}</span>
+            </div>
+          )}
           {tx.success && (
-            <p className="text-sm text-green-400">
-              Transaction confirmed! {tx.hash && `Hash: ${tx.hash.slice(0, 10)}...`}
-            </p>
+            <div className="alert-success flex items-center gap-3">
+              <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-sm">
+                Transaction confirmed! {tx.hash && (
+                  <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                    View on Etherscan
+                  </a>
+                )}
+              </span>
+            </div>
           )}
         </div>
       </div>
 
+      {/* Info Cards */}
       <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard label="Remaining Mintable" value={formatUSD(stats.remaining)} />
-        <StatCard label="Available for Redemption" value={formatUSD(stats.available, 6)} />
+        <StatCard 
+          label="Remaining Mintable" 
+          value={formatUSD(stats.remaining)}
+          subValue={`Max: ${formatToken(stats.maxMint, 6)} per tx`}
+        />
+        <StatCard 
+          label="Available for Redemption" 
+          value={formatUSD(stats.available, 6)}
+          subValue={`Max: ${formatToken(stats.maxRedeem)} per tx`}
+        />
       </div>
     </div>
   );
