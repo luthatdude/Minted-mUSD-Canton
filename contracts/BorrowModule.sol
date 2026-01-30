@@ -36,6 +36,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
     bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
+    bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
 
     ICollateralVault public immutable vault;
     IPriceOracle public immutable oracle;
@@ -116,6 +117,32 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         musd.mint(msg.sender, amount);
 
         emit Borrowed(msg.sender, amount, totalDebt(msg.sender));
+    }
+
+    /// @notice Borrow mUSD on behalf of a user (for LeverageVault integration)
+    /// @param user The user to borrow for
+    /// @param amount Amount of mUSD to borrow (18 decimals)
+    function borrowFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
+        require(amount > 0, "INVALID_AMOUNT");
+        require(user != address(0), "INVALID_USER");
+
+        // Accrue interest first
+        _accrueInterest(user);
+
+        DebtPosition storage pos = positions[user];
+        uint256 newDebt = pos.principal + pos.accruedInterest + amount;
+        require(newDebt >= minDebt, "BELOW_MIN_DEBT");
+
+        pos.principal += amount;
+
+        uint256 capacity = _borrowCapacity(user);
+        uint256 newTotalDebt = totalDebt(user);
+        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
+
+        // Mint mUSD to the LeverageVault (msg.sender) for swapping
+        musd.mint(msg.sender, amount);
+
+        emit Borrowed(user, amount, totalDebt(user));
     }
 
     /// @notice Repay mUSD debt
@@ -325,6 +352,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         uint256 capacity = _borrowCapacity(user);
         uint256 debt = totalDebt(user);
         return capacity > debt ? capacity - debt : 0;
+    }
+
+    /// @notice Get total borrow capacity for a user (public wrapper)
+    function borrowCapacity(address user) external view returns (uint256) {
+        return _borrowCapacity(user);
     }
 
     // ============================================================
