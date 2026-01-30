@@ -1047,7 +1047,7 @@ template AttestationRequest
       controller aggregator
       do
         -- FIX D-C05: Derive quorum from validator group size (supermajority)
-        let requiredSignatures = (length validatorGroup + 1) `div` 2 + 1
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -1119,7 +1119,7 @@ template IssuerRole
         attestation <- fetch attestationCid
 
         -- FIX D-C03: Derive requiredSignatures from validatorGroup (supermajority)
-        let requiredSignatures = (length attestation.validatorGroup + 1) `div` 2 + 1
+        let requiredSignatures = (length attestation.validatorGroup + 1) / 2 + 1
 
         -- Validation
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == mintAmount)

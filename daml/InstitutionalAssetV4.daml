@@ -2,7 +2,7 @@ module InstitutionalAssetV4 where
 -- FIX IA-L02: Use DA.Optional.fromSome instead of custom fromSome'
 import DA.Optional (isSome, isNone, fromSome)
 import DA.List (dedup, sort)
--- intToDecimal is available in Prelude, no special import needed
+import DA.Math ()
 
 -- | 1. INSTRUMENT DEFINITION
 -- The "Gold Source" of truth for an asset's properties.
@@ -111,7 +111,7 @@ template Asset with
         (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
         -- Numerical Stability: Uses decimal exponentiation to validate precision.
         let decimalScale = getField @"decimalScale" instrument
-        let factor = 10.0 ** (intToNumeric decimalScale)
+        let factor = intToDecimal (10 ^ decimalScale)
         assertMsg "Split amount violates instrument precision scale"
           (floor (splitAmount * factor + 0.1) == floor (splitAmount * factor))
         assertMsg "Split amount must be less than total amount" (splitAmount < amount)
