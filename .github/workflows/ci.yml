@@ -138,6 +138,8 @@ jobs:
     name: Docker Build & Scan
     runs-on: ubuntu-latest
     needs: [relay]
+    # Skip on PRs - Dockerfile changes need to be on main first
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
