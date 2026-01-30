@@ -13,10 +13,13 @@ export const CONTRACTS: Record<string, string> = {
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
 };
 
+// FIX FE-01: REMOVED NEXT_PUBLIC_CANTON_TOKEN from client-side config.
+// Canton tokens are sensitive credentials and MUST NOT be exposed via NEXT_PUBLIC_ prefix.
+// Token should be provided at runtime via setToken() after server-side authentication,
+// or requests should be proxied through a backend API route (e.g., /api/canton/*).
 export const CANTON_CONFIG = {
   ledgerHost: process.env.NEXT_PUBLIC_CANTON_LEDGER_HOST || "localhost",
   ledgerPort: parseInt(process.env.NEXT_PUBLIC_CANTON_LEDGER_PORT || "6865"),
-  token: process.env.NEXT_PUBLIC_CANTON_TOKEN || "",
 };
 
 export const USDC_DECIMALS = 6;

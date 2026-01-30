@@ -2,14 +2,13 @@
 # Multi-stage build for minimal production image
 # FIX H-14: Missing Dockerfile referenced by docker-compose.yml
 #
-# FIX 5C-H05: PRODUCTION DEPLOYMENT REQUIREMENT
-# Before deploying to production, pin both base images to specific SHA256 digests:
-#   FROM node:20-alpine@sha256:<current-digest> AS builder
-#   FROM node:20-alpine@sha256:<current-digest> AS production
-# Obtain the current digest with: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
+# FIX DEP-04: Base images pinned by SHA256 digest for supply chain security.
+# Update digest periodically:
+#   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 
 # Build stage
-FROM node:20-alpine AS builder
+# FIX DEP-04: Pinned by digest instead of mutable tag
+FROM node:20-alpine@sha256:b5b9467fe7b33aad47f1ec3f6e0646a658f85f05c18d4243024212a35f492a4f AS builder
 
 WORKDIR /app
 
@@ -27,7 +26,8 @@ COPY tsconfig.json* ./
 RUN npm run build
 
 # Production stage
-FROM node:20-alpine AS production
+# FIX DEP-04: Pinned by digest instead of mutable tag
+FROM node:20-alpine@sha256:b5b9467fe7b33aad47f1ec3f6e0646a658f85f05c18d4243024212a35f492a4f AS production
 
 # Security: run as non-root user
 RUN addgroup -g 1001 -S appgroup && \

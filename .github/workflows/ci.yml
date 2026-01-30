@@ -43,7 +43,7 @@ jobs:
         with:
           name: solidity-coverage
           path: coverage/
-          retention-days: 14
+          retention-days: 30
 
   # ============================================================
   #  SOLIDITY: Static Analysis & Security Audit
@@ -67,6 +67,7 @@ jobs:
         run: npx hardhat compile
 
       # Slither static analysis
+      # FIX CI-01: Removed continue-on-error — security findings now block builds
       - name: Run Slither
         uses: crytic/slither-action@v0.4.0
         id: slither
@@ -74,7 +75,6 @@ jobs:
           solc-version: "0.8.26"
           sarif: results.sarif
           fail-on: medium
-        continue-on-error: true
 
       - name: Upload Slither SARIF
         if: always()
@@ -126,10 +126,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # FIX CI-02: TypeScript errors now fail the build (removed continue-on-error)
       - name: TypeScript compile check
         working-directory: relay
         run: npx tsc --noEmit
-        continue-on-error: true
 
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
@@ -155,6 +155,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       # Trivy vulnerability scanner
+      # FIX CI-01: Removed continue-on-error — container vuln findings now block builds
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.28.0
         with:
@@ -163,7 +164,6 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-        continue-on-error: true
 
   # ============================================================
   #  KUBERNETES: Validate Manifests
@@ -203,8 +203,7 @@ jobs:
 
       - name: npm audit (production)
         run: npm audit --omit=dev
-        continue-on-error: true
 
+      # FIX CI-01: Removed continue-on-error — dependency vuln findings now block builds
       - name: Check for known vulnerabilities
         run: npx audit-ci --moderate
-        continue-on-error: true

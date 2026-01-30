@@ -8,7 +8,9 @@ const config: HardhatUserConfig = {
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200,
+        // FIX SOL-02: Higher runs value for frequently-called functions (mint/transfer).
+        // 1000 runs reduces gas for common operations at cost of larger deploy size.
+        runs: 1000,
       },
     },
   },

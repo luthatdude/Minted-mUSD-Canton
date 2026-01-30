@@ -230,11 +230,18 @@ template StakingService
     operator : Party
     baseRate : Decimal     -- e.g. 0.05
     observers : [Party]   -- Users who can exercise Stake/Unstake
+    -- FIX DAML-M08: Configurable yield caps instead of hardcoded values.
+    -- Allows governance to adjust without contract upgrade.
+    maxAnnualYieldRate : Decimal  -- Maximum annual yield rate (e.g. 0.5 = 50%)
+    maxTotalYieldMultiplier : Decimal  -- Maximum total yield as multiplier of principal (e.g. 2.0 = 200%)
   where
     signatory operator
     observer observers
 
-    nonconsuming choice Stake : ContractId Smusd
+    -- FIX DAML-C02: Changed from nonconsuming to consuming.
+    -- Nonconsuming choices cannot archive other contracts in Daml.
+    -- The StakingService must be recreated after each stake/unstake operation.
+    choice Stake : (ContractId StakingService, ContractId Smusd)
       with
         user : Party
         musdCid : ContractId Musd
@@ -246,14 +253,18 @@ template StakingService
         -- Lock/Archive mUSD
         archive musdCid
         -- Issue sMUSD
-        create Smusd with
+        smusdCid <- create Smusd with
           issuer = operator
           owner = user
           amount = musd.amount
           entryTime = currentTime
           interestRate = baseRate
+        -- Recreate service
+        newSvc <- create this
+        return (newSvc, smusdCid)
 
-    nonconsuming choice Unstake : ContractId Musd
+    -- FIX DAML-C02: Changed from nonconsuming to consuming.
+    choice Unstake : (ContractId StakingService, ContractId Musd)
       with
         user : Party
         smusdCid : ContractId Smusd
@@ -270,19 +281,21 @@ template StakingService
         let microsecondsPerYear = 31536000000000.0  -- 365 * 24 * 60 * 60 * 1000000
         let durationYears = (intToDecimal (relToInt durationMicro)) / microsecondsPerYear
         let interest = smusd.amount * smusd.interestRate * durationYears
-        -- FIX M-15: Cap yield to prevent excessive unbacked minting
-        let maxYieldRate = 0.50  -- 50% max annual yield
-        let maxInterest = smusd.amount * maxYieldRate * durationYears
+        -- FIX M-15 + DAML-M08: Use configurable yield caps instead of hardcoded values
+        let maxInterest = smusd.amount * maxAnnualYieldRate * durationYears
         let cappedInterest = if interest > maxInterest then maxInterest else interest
-        -- FIX D-M04: Cap total yield at 200% of principal regardless of duration
-        let maxTotalYield = smusd.amount * 2.0
+        -- FIX D-M04 + DAML-M08: Configurable total yield cap
+        let maxTotalYield = smusd.amount * maxTotalYieldMultiplier
         let finalInterest = if cappedInterest > maxTotalYield then maxTotalYield else cappedInterest
         let totalReturn = smusd.amount + finalInterest
         -- Mint mUSD + Yield back to user
-        create Musd with
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = totalReturn
+        -- Recreate service
+        newSvc <- create this
+        return (newSvc, musdCid)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 4: CANTON ATTESTATION FLOW (BRIDGE)
@@ -457,6 +470,8 @@ setup = do
       operator = operator
       baseRate = 0.05
       observers = [alice]  -- Alice needs visibility to exercise Stake/Unstake
+      maxAnnualYieldRate = 0.50  -- 50% max annual yield
+      maxTotalYieldMultiplier = 2.0  -- 200% max total yield
 
   bridgeSvc <- submit operator do
     createCmd BridgeService with
@@ -471,7 +486,8 @@ setup = do
       usdcCid = usdcCid
 
   -- 5. Alice Stakes mUSD
-  smusdCid <- submit alice do
+  -- FIX DAML-C02: Stake now returns (newService, smusdCid)
+  (stakingSvc2, smusdCid) <- submit alice do
     exerciseCmd stakingSvc Stake with
       user = alice
       musdCid = musdCid
@@ -480,8 +496,9 @@ setup = do
   passTime (days 365)
 
   -- 6. Alice Unstakes (Gets Yield)
-  finalMusd <- submit alice do
-    exerciseCmd stakingSvc Unstake with
+  -- FIX DAML-C02: Unstake now returns (newService, musdCid)
+  (_stakingSvc3, finalMusd) <- submit alice do
+    exerciseCmd stakingSvc2 Unstake with
       user = alice
       smusdCid = smusdCid
 

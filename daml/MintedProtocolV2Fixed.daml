@@ -593,6 +593,10 @@ template Vault
     -- Master Participation Agreement (passed through to borrowed MUSD)
     mpaHash : Text
     mpaUri : Text
+    -- FIX DAML-C07: Per-user daily borrow rate limiting to prevent rapid supply inflation
+    dailyBorrowLimit : Money        -- Max borrow per 24h window (set at vault creation)
+    dailyBorrowed : Money           -- Cumulative borrows in current window
+    lastBorrowReset : Time          -- Timestamp of last window reset
   where
     signatory operator, owner
     observer liquidators
@@ -609,6 +613,7 @@ template Vault
 
     -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
     -- FIX 5C-H01: Returns IssuerRole to track supply cap
+    -- FIX DAML-C07: Enforces per-user daily borrow rate limit
     choice Vault_Borrow : (VaultId, MUSDId, ContractId IssuerRole)
       with
         borrowAmount : Money
@@ -620,6 +625,15 @@ template Vault
 
         let (newPrincipal, newInterest) = accrueInterest
               debtPrincipal accruedInterest lastAccrualTime currentTime interestRateBps
+
+        -- FIX DAML-C07: Per-user daily borrow rate limit check
+        let windowElapsed = subTime currentTime lastBorrowReset
+        let oneDayRel = hours 24
+        let (resetBorrowed, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, currentTime)
+              else (dailyBorrowed, lastBorrowReset)
+        assertMsg "DAILY_BORROW_LIMIT_EXCEEDED" (resetBorrowed + borrowAmount <= dailyBorrowLimit)
 
         colData <- fetch collateral
 
@@ -640,6 +654,8 @@ template Vault
           debtPrincipal = newPrincipal + borrowAmount
           accruedInterest = newInterest
           lastAccrualTime = currentTime
+          dailyBorrowed = resetBorrowed + borrowAmount
+          lastBorrowReset = resetTime
 
         -- FIX 5C-H01: Vault borrows must track supply. Require and update IssuerRole.
         issuerRole <- fetch issuerRoleCid

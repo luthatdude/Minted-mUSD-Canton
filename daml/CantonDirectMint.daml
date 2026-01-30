@@ -17,9 +17,9 @@
 module CantonDirectMint where
 
 import DA.Time
+import DA.Optional (isSome, fromSome, whenSome)
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
-import DA.Optional (whenSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -269,6 +269,8 @@ template CantonDirectMintService
     supplyCap : Money            -- Max outstanding Canton mUSD
     currentSupply : Money        -- Current outstanding Canton mUSD
     accumulatedFees : Money      -- Protocol fees collected
+    -- FIX DAML-M05: Maximum fee accumulation before withdrawal required
+    maxAccumulatedFees : Money   -- Fee cap (withdrawal forced when reached)
     paused : Bool                -- Emergency halt
     validators : [Party]         -- Bridge validators
     targetChainId : Int          -- Default: 1 (Ethereum mainnet)
@@ -299,9 +301,11 @@ template CantonDirectMintService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
-        -- Compliance check: verify minter is not blacklisted
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateMint with minter = user
+        -- FIX DAML-H03: Compliance check is MANDATORY - must not silently skip.
+        -- Previously used whenSome which would skip if complianceRegistryCid=None.
+        assertMsg "COMPLIANCE_REGISTRY_REQUIRED" (isSome complianceRegistryCid)
+        -- FIX DAML-H05: ValidateMint now takes validator param (operator acts as validator)
+        exercise (fromSome complianceRegistryCid) ValidateMint with minter = user; validator = operator
 
         usdc <- fetch usdcCid
         assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
@@ -351,10 +355,14 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
+        -- FIX DAML-M05: Check fee accumulation cap
+        let newFees = accumulatedFees + feeAmount
+        assertMsg "FEE_CAP_REACHED: withdraw fees first" (newFees <= maxAccumulatedFees)
+
         -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
-          accumulatedFees = accumulatedFees + feeAmount
+          accumulatedFees = newFees
           nextNonce = nextNonce + 1
           dailyMinted = resetMinted + netAmount
           dailyBurned = resetBurned
@@ -494,6 +502,28 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
+
+    -- FIX DAML-C03: Allow user to cancel unfulfilled redemption after timeout.
+    -- Prevents operator from blocking user exits indefinitely.
+    -- After 72 hours, user can cancel and receive mUSD back (re-mint).
+    choice Redemption_Cancel : ContractId CantonMUSD
+      with
+        mpaHash : Text
+        mpaUri : Text
+      controller user
+      do
+        assertMsg "ALREADY_FULFILLED" (not fulfilled)
+        now <- getTime
+        let timeoutDuration = hours 72
+        let elapsed = subTime now createdAt
+        assertMsg "CANCEL_TOO_EARLY: must wait 72 hours" (elapsed >= timeoutDuration)
+        -- Re-mint the burned mUSD amount back to the user
+        create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = musdBurned
+          agreementHash = mpaHash
+          agreementUri = mpaUri
 
 -- ============================================================
 --                     HELPER

@@ -110,13 +110,18 @@ template BridgeOutAttestation
           nonce = payload.nonce
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
+    -- FIX DAML-H01: Derive quorum from validatorGroup, cap signature array
+    -- FIX DAML-H08: Archive signatures after finalization to prevent replay
     choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
       with
-        requiredSignatures : Int
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
+        -- FIX DAML-H01: Derive quorum from validator group (supermajority)
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+        -- FIX DAML-H01: Cap signatures to prevent unbounded memory DoS
+        assertMsg "TOO_MANY_SIGNATURES" (length signatureCids <= 100)
 
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
@@ -135,6 +140,9 @@ template BridgeOutAttestation
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
+        -- FIX DAML-H08: Archive signatures after finalization to prevent reuse
+        mapA_ archive signatureCids
+
         return signatureCids
 
 template BridgeOutSignature
@@ -145,8 +153,9 @@ template BridgeOutSignature
     ecdsaSignature : Text
     nonce : Int
   where
-    signatory validator
-    observer aggregator
+    -- FIX DAML-H08: aggregator is signatory to allow archive in Finalize
+    signatory aggregator
+    observer validator
 
 -- ============================================================
 --                     SECTION 3: BRIDGE-IN ATTESTATION
@@ -194,13 +203,15 @@ template BridgeInAttestation
           nonce = payload.nonce
 
     -- Finalize and archive — USDC can now be minted on Canton
+    -- FIX DAML-H01/H08: Derive quorum, cap sigs, archive after finalize
     choice BridgeIn_Finalize : [ContractId BridgeInSignature]
       with
-        requiredSignatures : Int
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+        assertMsg "TOO_MANY_SIGNATURES" (length signatureCids <= 100)
 
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
@@ -213,6 +224,9 @@ template BridgeInAttestation
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
+        -- FIX DAML-H08: Archive signatures after finalization
+        mapA_ archive signatureCids
+
         return signatureCids
 
 template BridgeInSignature
@@ -223,8 +237,8 @@ template BridgeInSignature
     ecdsaSignature : Text
     nonce : Int
   where
-    signatory validator
-    observer aggregator
+    signatory aggregator
+    observer validator
 
 -- ============================================================
 --                     SECTION 4: SUPPLY CAP SYNC
@@ -270,13 +284,15 @@ template SupplyCapAttestation
           nonce = payload.nonce
 
     -- Finalize: archives attestation, returns the verified global state
+    -- FIX DAML-H01/H08: Derive quorum, cap sigs, archive after finalize
     choice SupplyCap_Finalize : SupplyCapPayload
       with
-        requiredSignatures : Int
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+        assertMsg "TOO_MANY_SIGNATURES" (length signatureCids <= 100)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
@@ -290,6 +306,9 @@ template SupplyCapAttestation
         assertMsg "UNDERCOLLATERALIZED_GLOBAL_SUPPLY"
           (payload.globalBackingUSDC >= payload.totalGlobalSupply)
 
+        -- FIX DAML-H08: Archive signatures after finalization
+        mapA_ archive signatureCids
+
         return payload
 
 template SupplyCapSignature
@@ -300,8 +319,8 @@ template SupplyCapSignature
     ecdsaSignature : Text
     nonce : Int
   where
-    signatory validator
-    observer aggregator
+    signatory aggregator
+    observer validator
 
 -- ============================================================
 --                     SECTION 5: YIELD ATTESTATION
@@ -348,13 +367,15 @@ template YieldAttestation
           nonce = payload.nonce
 
     -- Finalize: returns verified yield data for smUSD sync
+    -- FIX DAML-H01/H08: Derive quorum, cap sigs, archive after finalize
     choice Yield_Finalize : YieldPayload
       with
-        requiredSignatures : Int
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
+        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+        assertMsg "TOO_MANY_SIGNATURES" (length signatureCids <= 100)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
@@ -363,6 +384,9 @@ template YieldAttestation
         assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
+
+        -- FIX DAML-H08: Archive signatures after finalization
+        mapA_ archive signatureCids
 
         return payload
 
@@ -374,8 +398,8 @@ template YieldSignature
     ecdsaSignature : Text
     nonce : Int
   where
-    signatory validator
-    observer aggregator
+    signatory aggregator
+    observer validator
 
 -- ============================================================
 --                     HELPER FUNCTIONS

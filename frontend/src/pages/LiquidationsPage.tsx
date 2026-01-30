@@ -26,6 +26,15 @@ export function LiquidationsPage({ contracts, address }: Props) {
 
   async function handleCheck() {
     if (!liquidation || !borrow || !borrower) return;
+    // FIX FE-02: Validate Ethereum addresses before making contract calls
+    if (!ethers.isAddress(borrower)) {
+      setCheckResult(null);
+      return;
+    }
+    if (collateralToken && !ethers.isAddress(collateralToken)) {
+      setCheckResult(null);
+      return;
+    }
     try {
       const [liquidatable, hf] = await Promise.all([
         liquidation.isLiquidatable(borrower),

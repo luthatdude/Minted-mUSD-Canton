@@ -71,7 +71,9 @@ template AttestationRequest
     observer validatorGroup
 
     -- FIX H-6: Bound validator group size to prevent DoS via O(n^2) dedup
-    ensure length validatorGroup > 0 && length validatorGroup <= 100
+    -- FIX DAML-H04: Minimum 3 validators required for supermajority to be achievable.
+    -- Formula (n+1)/2+1 requires 3+ sigs from 2 validators (impossible with <3).
+    ensure length validatorGroup >= 3 && length validatorGroup <= 100
 
     -- FIX D-01: Consuming choice to prevent TOCTOU
     -- Positions are locked when attestation begins

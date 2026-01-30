@@ -34,12 +34,16 @@ template Asset
     -- FIX D-C11: Require strictly positive amounts
     ensure amount > 0.0
 
-    choice Asset_Transfer : AssetId
+    -- FIX DAML-C05: Transfer via proposal pattern to prevent unsolicited assignment.
+    -- Previously transferred directly, allowing airdrop/spam attacks.
+    choice Asset_Transfer : ContractId AssetTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create AssetTransferProposal with
+          asset = this
+          newOwner
 
     choice Asset_Split : (AssetId, AssetId)
       with
@@ -64,6 +68,27 @@ template Asset
         assertMsg "Issuers must match" $ other.issuer == issuer
         archive otherCid
         create this with amount = amount + other.amount
+
+-- FIX DAML-C05: Transfer proposal for Asset (dual-signatory safe)
+template AssetTransferProposal
+  with
+    asset : Asset
+    newOwner : Party
+  where
+    signatory asset.issuer, asset.owner
+    observer newOwner
+
+    choice AssetTransferProposal_Accept : AssetId
+      controller newOwner
+      do create asset with owner = newOwner
+
+    choice AssetTransferProposal_Reject : AssetId
+      controller newOwner
+      do create asset
+
+    choice AssetTransferProposal_Cancel : AssetId
+      controller asset.owner
+      do create asset
 
 -- | Trusted source for asset prices
 template PriceOracle
@@ -121,7 +146,9 @@ template LiquidityPool
         assertMsg "Insufficient Liquidity" $ poolHoldings.amount >= collateralOut
         archive musdCid
         (remainingPool, payout) <- exercise poolAsset Asset_Split with splitAmount = collateralOut
-        userAsset <- exercise payout Asset_Transfer with newOwner = receiver
+        -- FIX DAML-C05: Asset_Transfer now returns proposal; accept it
+        payoutProposal <- exercise payout Asset_Transfer with newOwner = receiver
+        userAsset <- exercise payoutProposal AssetTransferProposal_Accept
         -- Update pool with new collateral CID
         newPool <- create this with poolAsset = remainingPool
         return (newPool, userAsset)

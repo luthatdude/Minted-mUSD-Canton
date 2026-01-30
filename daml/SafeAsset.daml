@@ -47,9 +47,10 @@ template Asset
         assertMsg "Issuer must match" (otherAsset.issuer == issuer)
         assertMsg "Owner must match" (otherAsset.owner == owner)
 
-        -- Archive the other asset to prevent double spending.
-        -- 'this' asset is archived automatically as the choice is consuming.
-        exercise otherAssetCid Archive
+        -- FIX DAML-C06: Use 'archive' instead of 'exercise Archive'.
+        -- Daml does not expose an explicit Archive choice by default;
+        -- use the built-in 'archive' function instead.
+        archive otherAssetCid
 
         create this with amount = amount + otherAsset.amount
 

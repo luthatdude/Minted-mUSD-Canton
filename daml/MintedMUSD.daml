@@ -91,11 +91,18 @@ template MUSD_RedemptionRequest
     -- IMPROVED: NEW CHOICE to prevent "Stuck" funds.
     -- If the bank cannot fulfill (e.g. KYC fail), they return the token to the owner.
     choice MUSD_RejectRedemption : ContractId MUSD
-      with 
+      with
         rejectReason : Text
       controller usd.provider
-      do 
+      do
         -- Logic could be added here to log the rejection
+        create usd
+
+    -- FIX DAML-H07: User can cancel unfulfilled redemption request.
+    -- Prevents deadlock when provider is offline or unresponsive.
+    choice MUSD_CancelRedemption : ContractId MUSD
+      controller requester
+      do
         create usd
 -- =============================================================================
 -- 3. PROPOSAL PATTERNS (Fixing Privacy Leaks)
@@ -158,6 +165,10 @@ template IssuerRole
   where
     signatory issuer
     observer observers
+    -- FIX DAML-H06: Contract key prevents multiple IssuerRole instances per issuer,
+    -- which would allow bypassing the supply cap via parallel mint paths.
+    key issuer : Party
+    maintainer key
 
     -- | Direct mint (for bootstrapping/admin use).
     -- FIX D-C01: Consuming choice — supply tracked in contract state.

@@ -16,6 +16,7 @@
 module Compliance where
 
 import DA.Set qualified as Set
+import DA.Time
 
 -- | The ComplianceRegistry manages which parties are allowed to hold/transfer mUSD.
 -- A regulator creates one instance and uses it as a shared reference for all
@@ -27,6 +28,10 @@ template ComplianceRegistry
     blacklisted : Set.Set Party    -- O(log n) lookup via Set, not list
     frozen : Set.Set Party         -- Parties whose assets are frozen (can't transfer out)
     lastUpdated : Time
+    -- FIX DAML-M02: Next scheduled review date for blacklist/freeze entries.
+    -- Regulator must periodically review sanctions lists. Prevents permanent bans
+    -- without oversight. Set to 90 days from last update by default.
+    nextReviewDate : Time
   where
     signatory regulator
     observer operator
@@ -93,14 +98,19 @@ template ComplianceRegistry
 
     -- | Validate a mint transaction. Only the sender (minter) needs to be checked.
     -- Nonconsuming — can be called from DirectMint choices without archiving.
+    -- FIX DAML-H05: Changed from dual-controller (regulator AND operator) to
+    -- either party. This prevents deadlock when one party is offline.
     nonconsuming choice ValidateMint : ()
       with
         minter : Party
-      controller regulator, operator
+        validator : Party
+      controller validator
       do
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator == regulator || validator == operator)
         assertMsg "MINTER_BLACKLISTED" (not (Set.member minter blacklisted))
-        -- Frozen parties CAN receive (mint creates new assets for them),
-        -- but blacklisted parties cannot participate at all.
+        -- FIX DAML-C01: Frozen parties must NOT be able to mint new assets.
+        -- Previously only blacklist was checked, allowing frozen parties to mint.
+        assertMsg "MINTER_FROZEN" (not (Set.member minter frozen))
 
     -- | Validate a transfer between two parties.
     -- Checks both sender and receiver against blacklist.
@@ -132,6 +142,23 @@ template ComplianceRegistry
       controller caller
       do
         return (not (Set.member party blacklisted) && not (Set.member party frozen))
+
+    -- FIX DAML-M02: Periodic review of blacklist/freeze entries.
+    -- Regulator must acknowledge review to extend the review window.
+    -- This prevents permanent bans without periodic oversight.
+    choice ReviewCompliance : ContractId ComplianceRegistry
+      with
+        reviewNotes : Text
+      controller regulator
+      do
+        assertMsg "REVIEW_NOTES_REQUIRED" (reviewNotes /= "")
+        now <- getTime
+        -- Set next review to 90 days from now
+        let ninetyDaysRel = days 90
+        let newReviewDate = addRelTime now ninetyDaysRel
+        create this with
+          lastUpdated = now
+          nextReviewDate = newReviewDate
 
     -- | Bulk blacklist for sanctions list imports
     choice BulkBlacklist : ContractId ComplianceRegistry

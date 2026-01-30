@@ -180,6 +180,9 @@ template CantonStakingService
     -- | Sync yield from Ethereum via attestation.
     -- Called by operator after a YieldAttestation is finalized.
     -- Increases totalAssets → increases share price → smUSD holders profit.
+    -- FIX DAML-C04: SyncYield now validates yield against maximum rate to prevent
+    -- operator from arbitrarily inflating totalAssets without oracle validation.
+    -- Max yield per epoch is capped at 10% of totalAssets (reasonable for any single period).
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money  -- Verified total from YieldAttestation
@@ -189,6 +192,21 @@ template CantonStakingService
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
         assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+
+        -- FIX DAML-C04: Cap yield per sync to 10% of current totalAssets.
+        -- This prevents operator from arbitrarily inflating share price.
+        -- In production, yield should also be validated against a finalized YieldAttestation.
+        let maxYieldPerSync = totalAssets * 0.1  -- 10% max per epoch
+        assertMsg "YIELD_EXCEEDS_MAX_PER_SYNC" (yieldAccrued <= maxYieldPerSync)
+
+        -- FIX DAML-C04: Validate that newTotalTreasuryAssets is consistent
+        -- with the yield being applied (should roughly match totalAssets + yield)
+        let expectedTotal = totalAssets + yieldAccrued
+        let diff = if newTotalTreasuryAssets >= expectedTotal
+              then newTotalTreasuryAssets - expectedTotal
+              else expectedTotal - newTotalTreasuryAssets
+        -- Allow 1 unit tolerance for rounding
+        assertMsg "TREASURY_TOTAL_MISMATCH" (diff < 1.0)
 
         -- Increase total assets by the yield amount
         -- This raises the share price for all smUSD holders
