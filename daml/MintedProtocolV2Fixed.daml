@@ -25,8 +25,8 @@
 
 module MintedProtocolV2Fixed where
 
-import Prelude hiding (sum, all, elem)
-import DA.Foldable (sum, all, elem)
+import Prelude hiding (sum, all, elem, length)
+import DA.Foldable (sum, all, elem, length)
 import DA.Action (when, foldlA)
 import DA.Time
 import DA.List (dedup)

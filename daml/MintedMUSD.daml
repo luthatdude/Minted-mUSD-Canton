@@ -1,5 +1,7 @@
 module MintedMUSD where
+
 import Daml.Script
+
 -- | Constants to prevent "Dust" and precision issues.
 minimumAmount : Decimal = 0.01
 -- =============================================================================
