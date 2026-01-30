@@ -2,7 +2,6 @@ module InstitutionalAssetV4 where
 -- FIX IA-L02: Use DA.Optional.fromSome instead of custom fromSome'
 import DA.Optional (isSome, isNone, fromSome)
 import DA.List (dedup, sort)
-import DA.Math ()
 
 -- | 1. INSTRUMENT DEFINITION
 -- The "Gold Source" of truth for an asset's properties.

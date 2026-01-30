@@ -1,0 +1,1121 @@
+-- | Minted.Protocol.V3 - Unified Canton Protocol Module
+-- 
+-- This module consolidates all Canton-side templates for the Minted mUSD Protocol.
+-- Frontend expects specific choice names prefixed with template context.
+--
+-- Templates:
+--   1. MintedMUSD          - Canton mUSD token with compliance + bridge-to-ETH
+--   2. PriceOracle         - Provider-signed price feeds
+--   3. LiquidityPool       - On-chain DEX for atomic leverage operations
+--   4. Vault               - Collateralized debt position (CDP)
+--   5. VaultManager        - Factory for creating vaults
+--   6. LiquidationReceipt  - Immutable audit trail per liquidation
+--   7. LiquidationOrder    - Keeper coordination for liquidations
+--   8. CantonDirectMint    - Deposit stables → mint mUSD → auto bridge-out
+--   9. CantonSMUSD         - Yield vault synced from Ethereum attestations
+--  10. CooldownTicket      - Tracks stake time for withdrawal cooldown
+--  11. BridgeService       - Coordinates all bridge operations
+--  12. AttestationRequest  - Multi-party validation for bridge operations
+--  13. BridgeOutRequest    - Canton → ETH transfer
+--  14. BridgeInRequest     - ETH → Canton transfer
+--
+-- Choice naming convention: TemplateName_ChoiceName (e.g., MUSD_Transfer, CantonMint_Mint)
+
+module Minted.Protocol.V3 where
+
+import DA.Time
+import DA.Set qualified as Set
+import DA.Text qualified as T
+import DA.Action (foldlA)
+import DA.Optional (fromOptional)
+import DA.Foldable hiding (elem, length, all, sum)
+
+-- ============================================================
+--                     TYPE DEFINITIONS
+-- ============================================================
+
+-- | 18-decimal precision for 1:1 mapping with Ethereum Wei
+type Money = Numeric 18
+type Bps = Int
+
+-- ============================================================
+--                     1. MINTED MUSD TOKEN
+-- ============================================================
+
+-- | MintedMUSD - Canton-side mUSD token with compliance and bridge capability.
+-- The primary mUSD token on Canton Network.
+template MintedMUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+    blacklisted : Bool            -- Compliance: frozen if true
+    agreementHash : Text          -- SHA-256 of Master Participation Agreement
+    agreementUri : Text           -- URI to legal terms
+    observers : [Party]
+  where
+    signatory issuer, owner
+    observer observers
+
+    ensure amount > 0.0
+      && T.length agreementHash == 64
+      && T.length agreementUri > 0
+
+    agreement
+      "By holding or transferring this MintedMUSD token, the owner acknowledges "
+      <> "they are bound by the Master Participation Agreement. "
+      <> "Agreement hash: " <> agreementHash
+      <> " | URI: " <> agreementUri
+
+    -- | Transfer mUSD to another party
+    choice MUSD_Transfer : ContractId MintedMUSD
+      with
+        newOwner : Party
+      controller owner
+      do
+        assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        create this with owner = newOwner
+
+    -- | Split into two contracts
+    choice MUSD_Split : (ContractId MintedMUSD, ContractId MintedMUSD)
+      with
+        splitAmount : Money
+      controller owner
+      do
+        assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    -- | Merge two contracts
+    choice MUSD_Merge : ContractId MintedMUSD
+      with
+        otherCid : ContractId MintedMUSD
+      controller owner
+      do
+        assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        assertMsg "OTHER_BLACKLISTED" (not other.blacklisted)
+        archive otherCid
+        create this with amount = amount + other.amount
+
+    -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
+    choice MUSD_BridgeToEthereum : ContractId AttestationRequest
+      with
+        ethAddress : Text         -- Target Ethereum address
+        chainId : Int             -- Target chain (1 = mainnet)
+        validators : [Party]      -- Validator group for attestation
+        aggregator : Party        -- Attestation aggregator
+        nonce : Int
+        expiresAt : Time
+      controller owner
+      do
+        assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
+        
+        -- Token is consumed (burned) on Canton
+        create AttestationRequest with
+          aggregator
+          validatorGroup = validators
+          payload = AttestationPayload with
+            attestationId = "bridge-" <> show nonce
+            globalCantonAssets = amount
+            targetAddress = ethAddress
+            amount = amount
+            isMint = True  -- Mint on Ethereum side
+            nonce
+            chainId
+            expiresAt
+          collectedSignatures = Set.empty
+          direction = CantonToEthereum
+
+    -- | Set blacklist status (issuer only)
+    choice MUSD_SetBlacklist : ContractId MintedMUSD
+      with
+        newStatus : Bool
+      controller issuer
+      do
+        create this with blacklisted = newStatus
+
+-- ============================================================
+--                     2. PRICE ORACLE
+-- ============================================================
+
+-- | PriceOracle - Provider-signed price feeds with keyed lookup.
+template PriceOracle
+  with
+    provider : Party
+    symbol : Text
+    price : Money
+    lastUpdated : Time
+    observers : [Party]
+  where
+    signatory provider
+    observer observers
+
+    key (provider, symbol) : (Party, Party, Text)
+    maintainer key._1
+
+    ensure price > 0.0
+
+    nonconsuming choice Oracle_GetPrice : Money
+      controller observers
+      do return price
+
+    choice Oracle_UpdatePrice : ContractId PriceOracle
+      with
+        newPrice : Money
+      controller provider
+      do
+        assertMsg "PRICE_MUST_BE_POSITIVE" (newPrice > 0.0)
+        now <- getTime
+        create this with 
+          price = newPrice
+          lastUpdated = now
+
+-- ============================================================
+--                     3. LIQUIDITY POOL (DEX)
+-- ============================================================
+
+-- | LiquidityPool - On-chain DEX for atomic leverage operations.
+template LiquidityPool
+  with
+    operator : Party
+    baseSymbol : Text           -- e.g., "mUSD"
+    quoteSymbol : Text          -- e.g., "WBTC"
+    baseReserve : Money
+    quoteReserve : Money
+    exchangeRate : Money        -- baseSymbol per quoteSymbol
+  where
+    signatory operator
+
+    ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
+
+    -- | Swap mUSD for collateral
+    choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, Money)
+      with
+        musdAmount : Money
+        receiver : Party
+      controller receiver
+      do
+        let collateralOut = musdAmount / exchangeRate
+        assertMsg "INSUFFICIENT_LIQUIDITY" (quoteReserve >= collateralOut)
+        newPool <- create this with
+          baseReserve = baseReserve + musdAmount
+          quoteReserve = quoteReserve - collateralOut
+        return (newPool, collateralOut)
+
+    -- | Swap collateral for mUSD
+    choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money)
+      with
+        collateralAmount : Money
+        receiver : Party
+      controller receiver
+      do
+        let musdOut = collateralAmount * exchangeRate
+        assertMsg "INSUFFICIENT_LIQUIDITY" (baseReserve >= musdOut)
+        newPool <- create this with
+          baseReserve = baseReserve - musdOut
+          quoteReserve = quoteReserve + collateralAmount
+        return (newPool, musdOut)
+
+-- ============================================================
+--                     4. VAULT (CDP)
+-- ============================================================
+
+-- | VaultConfig - Configuration for vault behavior
+data VaultConfig = VaultConfig with
+    liquidationThreshold : Money    -- e.g., 1.5 (150%)
+    interestRateBps : Bps           -- Annual interest rate in basis points
+    liquidationPenaltyBps : Bps     -- Penalty on seized collateral
+    liquidationBonusBps : Bps       -- Keeper bonus from penalty
+    closeFactorBps : Bps            -- Max debt per liquidation (e.g., 5000 = 50%)
+    dustThreshold : Money           -- Force full liquidation below this
+  deriving (Eq, Show)
+
+-- | Vault - Collateralized debt position (CDP).
+-- Supports atomic leverage: deposit → borrow → swap → add collateral in one tx.
+template Vault
+  with
+    operator : Party
+    owner : Party
+    collateralSymbol : Text
+    collateralAmount : Money
+    principalDebt : Money
+    accruedInterest : Money
+    lastInterestUpdate : Time
+    config : VaultConfig
+    observers : [Party]
+  where
+    signatory operator, owner
+    observer observers
+
+    ensure collateralAmount >= 0.0 && principalDebt >= 0.0
+
+    -- | Calculate current total debt including accrued interest
+    nonconsuming choice Vault_GetTotalDebt : Money
+      controller owner
+      do
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        return (principalDebt + accruedInterest + newInterest)
+
+    -- | AdjustLeverage - Atomic leverage loop
+    -- deposit collateral + borrow mUSD + swap via DEX in one transaction
+    choice AdjustLeverage : ContractId Vault
+      with
+        depositAmount : Money
+        borrowAmount : Money
+        poolCid : ContractId LiquidityPool
+        oracleCid : ContractId PriceOracle
+        loops : Int
+      controller owner
+      do
+        assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
+        
+        -- Add deposited collateral
+        let newCollateral = collateralAmount + depositAmount
+        
+        -- Get oracle price
+        price <- exercise oracleCid Oracle_GetPrice
+        
+        -- Recursive leverage loop
+        let loopFn (col, debt, pCid) _ = do
+              let colValue = col * price
+              let maxDebt = colValue / config.liquidationThreshold
+              let borrowable = maxDebt - debt
+              if borrowable < 1.0 
+                then return (col, debt, pCid)
+                else do
+                  -- Swap borrowed mUSD for more collateral
+                  (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
+                    musdAmount = borrowable
+                    receiver = owner
+                  return (col + colOut, debt + borrowable, newPoolCid)
+        
+        (finalCol, finalDebt, _) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid) [1..loops]
+        
+        -- Health check
+        let finalValue = finalCol * price
+        assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
+        
+        now <- getTime
+        create this with
+          collateralAmount = finalCol
+          principalDebt = finalDebt
+          lastInterestUpdate = now
+
+    -- | Repay debt
+    choice Vault_Repay : ContractId Vault
+      with
+        repayAmount : Money
+      controller owner
+      do
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        let totalInterest = accruedInterest + newInterest
+        
+        -- Pay interest first, then principal
+        let (remainingRepay, newAccrued) = 
+              if repayAmount >= totalInterest
+                then (repayAmount - totalInterest, 0.0)
+                else (0.0, totalInterest - repayAmount)
+        let newPrincipal = if remainingRepay > principalDebt 
+                           then 0.0 
+                           else principalDebt - remainingRepay
+        
+        create this with
+          principalDebt = newPrincipal
+          accruedInterest = newAccrued
+          lastInterestUpdate = now
+
+    -- | Withdraw collateral (must maintain health)
+    choice Vault_WithdrawCollateral : ContractId Vault
+      with
+        withdrawAmount : Money
+        oracleCid : ContractId PriceOracle
+      controller owner
+      do
+        assertMsg "INSUFFICIENT_COLLATERAL" (collateralAmount >= withdrawAmount)
+        let newCollateral = collateralAmount - withdrawAmount
+        
+        -- Health check
+        price <- exercise oracleCid Oracle_GetPrice
+        let newValue = newCollateral * price
+        let totalDebt = principalDebt + accruedInterest
+        assertMsg "UNHEALTHY_AFTER_WITHDRAW" (totalDebt == 0.0 || newValue >= totalDebt * config.liquidationThreshold)
+        
+        create this with collateralAmount = newCollateral
+
+    -- | Liquidate - Called by keepers when vault is undercollateralized
+    choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt)
+      with
+        liquidator : Party
+        repayAmount : Money
+        oracleCid : ContractId PriceOracle
+      controller liquidator
+      do
+        -- Calculate current debt with interest
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        let totalDebt = principalDebt + accruedInterest + newInterest
+        
+        -- Check if vault is liquidatable
+        price <- exercise oracleCid Oracle_GetPrice
+        let colValue = collateralAmount * price
+        let healthBefore = colValue / totalDebt
+        assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)
+        
+        -- Close factor limits max repayment
+        let maxRepay = totalDebt * intToNumeric config.closeFactorBps / 10000.0
+        let actualRepay = if totalDebt < config.dustThreshold 
+                          then totalDebt  -- Full liquidation for dust
+                          else min repayAmount maxRepay
+        
+        -- Calculate collateral seized with penalty
+        let seizeValue = actualRepay * (10000.0 + intToNumeric config.liquidationPenaltyBps) / 10000.0
+        let seizeAmount = seizeValue / price
+        let actualSeize = min seizeAmount collateralAmount
+        
+        -- Calculate keeper bonus and protocol fee
+        let penaltyValue = actualSeize * price - actualRepay
+        let keeperBonus = penaltyValue * intToNumeric config.liquidationBonusBps / intToNumeric config.liquidationPenaltyBps
+        let protocolFee = penaltyValue - keeperBonus
+        
+        -- Update vault
+        let newCollateral = collateralAmount - actualSeize
+        let newDebt = totalDebt - actualRepay
+        let healthAfter = if newDebt == 0.0 then 999.0 else (newCollateral * price) / newDebt
+        
+        newVault <- create this with
+          collateralAmount = newCollateral
+          principalDebt = newDebt
+          accruedInterest = 0.0
+          lastInterestUpdate = now
+        
+        -- Create immutable receipt
+        receipt <- create LiquidationReceipt with
+          vaultOwner = owner
+          liquidator
+          debtRepaid = actualRepay
+          collateralSeized = actualSeize
+          penalty = penaltyValue
+          keeperBonus
+          protocolFee
+          healthBefore
+          healthAfter
+          isFullLiquidation = newDebt == 0.0
+          timestamp = now
+        
+        return (newVault, receipt)
+
+-- ============================================================
+--                     5. VAULT MANAGER
+-- ============================================================
+
+-- | VaultManager - Factory for creating vaults with default config.
+template VaultManager
+  with
+    operator : Party
+    defaultConfig : VaultConfig
+    allowedCollaterals : [Text]   -- Whitelisted collateral symbols
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    -- | Create a new vault for a user
+    choice OpenVault : ContractId Vault
+      with
+        owner : Party
+        collateralSymbol : Text
+      controller owner
+      do
+        assertMsg "COLLATERAL_NOT_ALLOWED" (collateralSymbol `elem` allowedCollaterals)
+        now <- getTime
+        create Vault with
+          operator
+          owner
+          collateralSymbol
+          collateralAmount = 0.0
+          principalDebt = 0.0
+          accruedInterest = 0.0
+          lastInterestUpdate = now
+          config = defaultConfig
+          observers = [operator]
+
+    -- | Update default config
+    choice UpdateDefaultConfig : ContractId VaultManager
+      with
+        newConfig : VaultConfig
+      controller operator
+      do create this with defaultConfig = newConfig
+
+    -- | Update vault config for a specific vault
+    choice UpdateVaultConfig : ContractId Vault
+      with
+        vaultCid : ContractId Vault
+        newConfig : VaultConfig
+      controller operator
+      do
+        vault <- fetch vaultCid
+        archive vaultCid
+        create vault with config = newConfig
+
+-- ============================================================
+--                     6. LIQUIDATION RECEIPT
+-- ============================================================
+
+-- | LiquidationReceipt - Immutable audit trail per liquidation.
+template LiquidationReceipt
+  with
+    vaultOwner : Party
+    liquidator : Party
+    debtRepaid : Money
+    collateralSeized : Money
+    penalty : Money
+    keeperBonus : Money
+    protocolFee : Money
+    healthBefore : Money
+    healthAfter : Money
+    isFullLiquidation : Bool
+    timestamp : Time
+  where
+    signatory liquidator
+    observer vaultOwner
+
+-- ============================================================
+--                     7. LIQUIDATION ORDER
+-- ============================================================
+
+-- | LiquidationOrder status
+data OrderStatus = Pending | Claimed | Executed | Cancelled
+  deriving (Eq, Show)
+
+-- | LiquidationOrder - Keeper coordination for liquidations.
+template LiquidationOrder
+  with
+    operator : Party
+    vaultCid : ContractId Vault
+    vaultOwner : Party
+    estimatedDebt : Money
+    estimatedSeize : Money
+    status : OrderStatus
+    claimedBy : Optional Party
+    createdAt : Time
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    -- | Keeper claims the order
+    choice ClaimOrder : ContractId LiquidationOrder
+      with
+        keeper : Party
+      controller keeper
+      do
+        assertMsg "ORDER_NOT_PENDING" (status == Pending)
+        create this with 
+          status = Claimed
+          claimedBy = Some keeper
+
+    -- | Complete the order after successful liquidation
+    choice CompleteOrder : ContractId LiquidationOrder
+      with
+        keeper : Party
+      controller keeper
+      do
+        assertMsg "ORDER_NOT_CLAIMED" (status == Claimed)
+        assertMsg "NOT_CLAIMANT" (claimedBy == Some keeper)
+        create this with status = Executed
+
+    -- | Cancel the order
+    choice CancelOrder : ContractId LiquidationOrder
+      controller operator
+      do
+        create this with status = Cancelled
+
+-- ============================================================
+--                     8. CANTON DIRECT MINT
+-- ============================================================
+
+-- | MintServiceConfig - Configuration for mint/redeem service
+data MintServiceConfig = MintServiceConfig with
+    mintFeeBps : Bps
+    redeemFeeBps : Bps
+    minAmount : Money
+    maxAmount : Money
+    paused : Bool
+  deriving (Eq, Show)
+
+-- | CantonDirectMint - Deposit stables → mint mUSD → auto bridge-out to ETH Treasury.
+template CantonDirectMint
+  with
+    operator : Party
+    config : MintServiceConfig
+    supplyCap : Money
+    currentSupply : Money
+    accumulatedFees : Money
+    targetChainId : Int
+    targetTreasury : Text
+    nextNonce : Int
+    dailyMintLimit : Money
+    dailyMinted : Money
+    lastRateLimitReset : Time
+    mpaHash : Text
+    mpaUri : Text
+    validators : [Party]
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    -- | Mint mUSD by depositing stables
+    choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
+      with
+        user : Party
+        depositAmount : Money
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not config.paused)
+        assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
+        
+        let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
+        let netAmount = depositAmount - feeAmount
+        
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+        
+        -- Rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, now)
+              else (dailyMinted, lastRateLimitReset)
+        assertMsg "DAILY_MINT_LIMIT" (resetMinted + netAmount <= dailyMintLimit)
+        
+        -- Mint mUSD to user
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          blacklisted = False
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          observers = []
+        
+        -- Create bridge-out request to pipe backing to Ethereum
+        bridgeReq <- create BridgeOutRequest with
+          operator
+          user
+          amount = depositAmount
+          targetChainId
+          targetTreasury
+          nonce = nextNonce
+          createdAt = now
+          status = "pending"
+        
+        -- Update service state
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
+          dailyMinted = resetMinted + netAmount
+          lastRateLimitReset = resetTime
+        
+        return (newService, musdCid, bridgeReq)
+
+    -- | Redeem mUSD for stables (creates bridge-in request from Ethereum)
+    choice CantonMint_Redeem : (ContractId CantonDirectMint, ContractId BridgeInRequest)
+      with
+        user : Party
+        musdCid : ContractId MintedMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not config.paused)
+        
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "BELOW_MIN_AMOUNT" (musd.amount >= config.minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (musd.amount <= config.maxAmount)
+        
+        let feeAmount = musd.amount * intToNumeric config.redeemFeeBps / 10000.0
+        let netAmount = musd.amount - feeAmount
+        
+        -- Burn mUSD
+        archive musdCid
+        
+        -- Create bridge-in request (pull stables from Ethereum)
+        now <- getTime
+        bridgeIn <- create BridgeInRequest with
+          operator
+          user
+          amount = netAmount
+          feeAmount
+          sourceChainId = 1
+          nonce = nextNonce
+          createdAt = now
+          status = "pending"
+        
+        newService <- create this with
+          currentSupply = currentSupply - musd.amount
+          accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
+        
+        return (newService, bridgeIn)
+
+    -- | Update service config
+    choice CantonMint_UpdateConfig : ContractId CantonDirectMint
+      with
+        newConfig : MintServiceConfig
+      controller operator
+      do create this with config = newConfig
+
+-- ============================================================
+--                     9. CANTON SMUSD (Yield Vault)
+-- ============================================================
+
+-- | SmUSDConfig - Configuration for staking service
+data SmUSDConfig = SmUSDConfig with
+    cooldownSeconds : Int
+    maxTotalDeposits : Money
+  deriving (Eq, Show)
+
+-- | CantonSMUSD - Yield vault synced from Ethereum attestations.
+-- Share price = totalAssets / totalShares
+template CantonSMUSD
+  with
+    operator : Party
+    totalShares : Money
+    totalAssets : Money
+    lastYieldEpoch : Int
+    config : SmUSDConfig
+    mpaHash : Text
+    mpaUri : Text
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure totalShares >= 0.0 && totalAssets >= 0.0
+
+    -- | Get current share price
+    nonconsuming choice SMUSD_GetSharePrice : Money
+      controller operator
+      do
+        if totalShares == 0.0
+          then return 1.0
+          else return (totalAssets / totalShares)
+
+    -- | Deposit mUSD → receive smUSD shares
+    choice SMUSD_Deposit : (ContractId CantonSMUSD, ContractId CooldownTicket)
+      with
+        user : Party
+        musdCid : ContractId MintedMUSD
+      controller user
+      do
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "MAX_DEPOSITS_EXCEEDED" (totalAssets + musd.amount <= config.maxTotalDeposits)
+        
+        -- Calculate shares
+        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        let newShares = musd.amount / sharePrice
+        
+        -- Burn mUSD
+        archive musdCid
+        
+        -- Issue cooldown ticket (tracks stake time)
+        now <- getTime
+        ticket <- create CooldownTicket with
+          operator
+          owner = user
+          shares = newShares
+          entrySharePrice = sharePrice
+          stakedAt = now
+          cooldownSeconds = config.cooldownSeconds
+        
+        -- Update pool
+        newService <- create this with
+          totalShares = totalShares + newShares
+          totalAssets = totalAssets + musd.amount
+        
+        return (newService, ticket)
+
+    -- | Withdraw smUSD shares → mUSD (after cooldown)
+    choice SMUSD_Withdraw : (ContractId CantonSMUSD, ContractId MintedMUSD)
+      with
+        user : Party
+        ticketCid : ContractId CooldownTicket
+      controller user
+      do
+        ticket <- fetch ticketCid
+        assertMsg "OWNER_MISMATCH" (ticket.owner == user)
+        
+        -- Check cooldown
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now ticket.stakedAt)
+        let cooldownMicros = ticket.cooldownSeconds * 1000000
+        assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
+        
+        -- Calculate mUSD value at current share price
+        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        let musdAmount = ticket.shares * sharePrice
+        
+        assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
+        
+        -- Burn ticket
+        archive ticketCid
+        
+        -- Mint mUSD to user (includes yield)
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = user
+          amount = musdAmount
+          blacklisted = False
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          observers = []
+        
+        -- Update pool
+        newService <- create this with
+          totalShares = totalShares - ticket.shares
+          totalAssets = totalAssets - musdAmount
+        
+        return (newService, musdCid)
+
+    -- | Sync yield from Ethereum via attestation
+    choice SMUSD_SyncYield : ContractId CantonSMUSD
+      with
+        yieldAccrued : Money
+        epochNumber : Int
+      controller operator
+      do
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
+        assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+        create this with
+          totalAssets = totalAssets + yieldAccrued
+          lastYieldEpoch = epochNumber
+
+    -- | Update config
+    choice SMUSD_UpdateConfig : ContractId CantonSMUSD
+      with
+        newConfig : SmUSDConfig
+      controller operator
+      do create this with config = newConfig
+
+-- ============================================================
+--                     10. COOLDOWN TICKET
+-- ============================================================
+
+-- | CooldownTicket - Tracks stake time for withdrawal cooldown.
+template CooldownTicket
+  with
+    operator : Party
+    owner : Party
+    shares : Money
+    entrySharePrice : Money
+    stakedAt : Time
+    cooldownSeconds : Int
+  where
+    signatory operator, owner
+
+    ensure shares > 0.0
+
+    -- | Transfer ticket to another party
+    choice Ticket_Transfer : ContractId CooldownTicket
+      with
+        newOwner : Party
+      controller owner
+      do create this with owner = newOwner
+
+    -- | Split ticket
+    choice Ticket_Split : (ContractId CooldownTicket, ContractId CooldownTicket)
+      with
+        splitShares : Money
+      controller owner
+      do
+        assertMsg "SPLIT_SHARES_POSITIVE" (splitShares > 0.0)
+        assertMsg "SPLIT_SHARES_LESS_THAN_TOTAL" (splitShares < shares)
+        c1 <- create this with shares = splitShares
+        c2 <- create this with shares = shares - splitShares
+        return (c1, c2)
+
+-- ============================================================
+--                     11. BRIDGE SERVICE
+-- ============================================================
+
+-- | BridgeService - Coordinates all bridge operations.
+template BridgeService
+  with
+    operator : Party
+    validators : [Party]
+    requiredSignatures : Int
+    totalBridgedIn : Money
+    totalBridgedOut : Money
+    lastNonce : Int
+    paused : Bool
+    observers : [Party]
+  where
+    signatory operator
+    observer validators, observers
+
+    -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
+    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
+      with
+        attestationCid : ContractId AttestationRequest
+        recipient : Party
+        amount : Money
+        mpaHash : Text
+        mpaUri : Text
+      controller operator
+      do
+        assertMsg "BRIDGE_PAUSED" (not paused)
+        
+        attestation <- fetch attestationCid
+        assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+        
+        -- Verify sufficient signatures
+        let sigCount = Set.size attestation.collectedSignatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
+        
+        -- Archive attestation (consumed)
+        archive attestationCid
+        
+        -- Mint mUSD on Canton
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = recipient
+          amount
+          blacklisted = False
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          observers = []
+        
+        newService <- create this with
+          totalBridgedIn = totalBridgedIn + amount
+          lastNonce = attestation.payload.nonce
+        
+        return (newService, musdCid)
+
+    -- | Assign nonce to a bridge-out request
+    choice Bridge_AssignNonce : (ContractId BridgeService, Int)
+      controller operator
+      do
+        let newNonce = lastNonce + 1
+        newService <- create this with lastNonce = newNonce
+        return (newService, newNonce)
+
+    -- | Complete a bridge-out after Ethereum confirmation
+    choice Bridge_CompleteBridgeOut : ContractId BridgeService
+      with
+        amount : Money
+      controller operator
+      do
+        create this with totalBridgedOut = totalBridgedOut + amount
+
+    -- | Pause bridge
+    choice Bridge_Pause : ContractId BridgeService
+      controller operator
+      do create this with paused = True
+
+    -- | Unpause bridge
+    choice Bridge_Unpause : ContractId BridgeService
+      controller operator
+      do create this with paused = False
+
+    -- | Update validators
+    choice Bridge_UpdateValidators : ContractId BridgeService
+      with
+        newValidators : [Party]
+        newRequiredSigs : Int
+      controller operator
+      do
+        assertMsg "INVALID_REQUIRED_SIGS" (newRequiredSigs > 0 && newRequiredSigs <= length newValidators)
+        create this with 
+          validators = newValidators
+          requiredSignatures = newRequiredSigs
+
+-- ============================================================
+--                     12. ATTESTATION REQUEST
+-- ============================================================
+
+-- | Bridge direction
+data BridgeDirection = CantonToEthereum | EthereumToCanton
+  deriving (Eq, Show)
+
+-- | AttestationPayload - Data being attested
+data AttestationPayload = AttestationPayload with
+    attestationId : Text
+    globalCantonAssets : Money
+    targetAddress : Text
+    amount : Money
+    isMint : Bool
+    nonce : Int
+    chainId : Int
+    expiresAt : Time
+  deriving (Eq, Show)
+
+-- | AttestationRequest - Multi-party validation for bridge operations.
+template AttestationRequest
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : AttestationPayload
+    collectedSignatures : Set.Set Party
+    direction : BridgeDirection
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    ensure length validatorGroup > 0 && length validatorGroup <= 100
+
+    -- | Validator signs the attestation
+    choice Attestation_Sign : ContractId AttestationRequest
+      with
+        validator : Party
+        ecdsaSignature : Text
+      controller validator
+      do
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature >= 130)
+        
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+        
+        create this with collectedSignatures = Set.insert validator collectedSignatures
+
+    -- | Complete attestation (called by aggregator after sufficient signatures)
+    choice Attestation_Complete : ()
+      with
+        requiredSignatures : Int
+      controller aggregator
+      do
+        let sigCount = Set.size collectedSignatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
+        
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+        
+        return ()
+
+    -- | Cancel attestation
+    choice Attestation_Cancel : ()
+      controller aggregator
+      do return ()
+
+-- ============================================================
+--                     13. BRIDGE OUT REQUEST
+-- ============================================================
+
+-- | BridgeOutRequest - Canton → ETH transfer.
+template BridgeOutRequest
+  with
+    operator : Party
+    user : Party
+    amount : Money
+    targetChainId : Int
+    targetTreasury : Text
+    nonce : Int
+    createdAt : Time
+    status : Text
+  where
+    signatory operator
+    observer user
+
+    -- | User sets target ETH address
+    choice BridgeOut_SetTarget : ContractId BridgeOutRequest
+      with
+        targetAddress : Text
+      controller user
+      do
+        assertMsg "INVALID_ETH_ADDRESS" (T.length targetAddress == 42)
+        create this with targetTreasury = targetAddress
+
+    -- | Operator assigns nonce
+    choice BridgeOut_AssignNonce : ContractId BridgeOutRequest
+      with
+        newNonce : Int
+      controller operator
+      do create this with nonce = newNonce
+
+    -- | Complete after Ethereum confirmation
+    choice BridgeOut_Complete : ContractId BridgeOutRequest
+      controller operator
+      do
+        assertMsg "MUST_BE_PENDING" (status == "pending")
+        create this with status = "bridged"
+
+    -- | Cancel request
+    choice BridgeOut_Cancel : ContractId BridgeOutRequest
+      controller operator
+      do create this with status = "cancelled"
+
+-- ============================================================
+--                     14. BRIDGE IN REQUEST
+-- ============================================================
+
+-- | BridgeInRequest - ETH → Canton transfer.
+template BridgeInRequest
+  with
+    operator : Party
+    user : Party
+    amount : Money
+    feeAmount : Money
+    sourceChainId : Int
+    nonce : Int
+    createdAt : Time
+    status : Text
+  where
+    signatory operator
+    observer user
+
+    -- | Complete by minting stables to user
+    choice BridgeIn_Complete : ContractId BridgeInRequest
+      controller operator
+      do
+        assertMsg "MUST_BE_PENDING" (status == "pending")
+        create this with status = "completed"
+
+    -- | Cancel request
+    choice BridgeIn_Cancel : ContractId BridgeInRequest
+      controller operator
+      do create this with status = "cancelled"
+
+-- ============================================================
+--                     HELPER FUNCTIONS
+-- ============================================================
+
+-- | Convert Int to Money (Numeric 18)
+intToNumeric : Int -> Money
+intToNumeric i = intToDecimal i
+
+-- | Convert RelTime to microseconds
+convertRelTimeToMicroseconds : RelTime -> Int
+convertRelTimeToMicroseconds rt = 
+  let totalMicros = convertRelTimeToMicroseconds' rt
+  in totalMicros
+  where
+    convertRelTimeToMicroseconds' relTime = 
+      -- RelTime is in microseconds internally
+      case relTimeToMicroseconds relTime of
+        micros -> micros
