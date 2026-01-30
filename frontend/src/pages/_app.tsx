@@ -5,6 +5,8 @@ import { MetaMaskProvider } from "@/hooks/useMetaMask";
 import { UnifiedWalletProvider } from "@/hooks/useUnifiedWallet";
 import { LoopWalletProvider } from "@/hooks/useLoopWallet";
 import { MultiChainDepositProvider } from "@/hooks/useMultiChainDeposit";
+import { SolanaWalletProvider } from "@/hooks/useSolanaWallet";
+import { PendingDepositProvider } from "@/hooks/usePendingDeposits";
 
 // App configuration
 const LOOP_APP_NAME = "Minted Protocol";
@@ -15,11 +17,15 @@ export default function App({ Component, pageProps }: AppProps) {
     <WalletConnectProvider autoConnect={true}>
       <MetaMaskProvider>
         <UnifiedWalletProvider>
-          <MultiChainDepositProvider>
-            <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
-              <Component {...pageProps} />
-            </LoopWalletProvider>
-          </MultiChainDepositProvider>
+          <SolanaWalletProvider>
+            <MultiChainDepositProvider>
+              <PendingDepositProvider>
+                <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
+                  <Component {...pageProps} />
+                </LoopWalletProvider>
+              </PendingDepositProvider>
+            </MultiChainDepositProvider>
+          </SolanaWalletProvider>
         </UnifiedWalletProvider>
       </MetaMaskProvider>
     </WalletConnectProvider>
