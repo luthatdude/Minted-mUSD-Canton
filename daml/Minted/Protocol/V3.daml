@@ -1105,6 +1105,4 @@ template BridgeInRequest
 --                     HELPER FUNCTIONS
 -- ============================================================
 
--- | Convert Int to Money (Numeric 18)
-intToNumeric : Int -> Money
-intToNumeric i = intToDecimal i
+-- Note: intToNumeric is provided by Prelude, no need to redefine
