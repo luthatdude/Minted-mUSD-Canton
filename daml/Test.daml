@@ -5,12 +5,11 @@
 module Test where
 
 import Daml.Script
-import BLEProtocol qualified as BLE
 import BLEProtocol
-import MintedMUSD qualified as MUSD
-import MintedMUSD
+import MintedMUSD qualified as MintedMUSD
 import DA.Time
 import DA.Set qualified as Set
+import CantonDirectMint qualified as CDM
 
 -- Test configuration
 testCollateralRatio : Numeric 18
@@ -462,7 +461,7 @@ musdAssetTest = script do
 
   -- Direct mint (admin/bootstrap path)
   (roleCid2, musdCid) <- submit issuer do
-    exerciseCmd roleCid IssuerRole_Mint with
+    exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
       mintAmount = 10000.0
       mintCurrency = "USD"
@@ -470,17 +469,17 @@ musdAssetTest = script do
 
   -- Split
   (half1Cid, half2Cid) <- submit alice do
-    exerciseCmd musdCid MUSD_Split with
+    exerciseCmd musdCid MintedMUSD.MUSD_Split with
       splitAmount = 4000.0
 
   -- Verify split amounts by merging them back
   mergedCid <- submit alice do
-    exerciseCmd half1Cid MUSD_Merge with
+    exerciseCmd half1Cid MintedMUSD.MUSD_Merge with
       otherCid = half2Cid
 
   -- Redeem (burn)
   submit alice do
-    exerciseCmd mergedCid MUSD_Redeem with
+    exerciseCmd mergedCid MintedMUSD.MUSD_Redeem with
       reason = "Test redemption"
 
   debug "mUSD asset test passed - split, merge, redeem all work"
@@ -562,7 +561,7 @@ musdAttestationMintTest = script do
       currentSupply = 0.0
 
   (roleCid2, musdCid) <- submit issuer do
-    exerciseCmd roleCid IssuerRole_Mint with
+    exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
       mintAmount = 1000000.0
       mintCurrency = "USD"
@@ -587,7 +586,7 @@ musdTransferTest = script do
       currentSupply = 0.0
 
   (roleCid2, musdCid) <- submit issuer do
-    exerciseCmd roleCid IssuerRole_Mint with
+    exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
       mintAmount = 5000.0
       mintCurrency = "USD"
@@ -595,26 +594,26 @@ musdTransferTest = script do
 
   -- Alice proposes transfer to Bob
   proposalCid <- submit alice do
-    exerciseCmd musdCid MUSD_Transfer with
+    exerciseCmd musdCid MintedMUSD.MUSD_Transfer with
       newOwner = bob
 
   -- Bob accepts
   bobMusdCid <- submit bob do
-    exerciseCmd proposalCid MUSD_AcceptTransfer with
+    exerciseCmd proposalCid MintedMUSD.MUSD_AcceptTransfer with
       newObservers = []
 
   -- Verify Bob owns it by splitting (only owner can split)
   (half1, half2) <- submit bob do
-    exerciseCmd bobMusdCid MUSD_Split with
+    exerciseCmd bobMusdCid MintedMUSD.MUSD_Split with
       splitAmount = 2000.0
 
   -- Test cancel: Bob proposes back to Alice, then cancels
   proposalCid2 <- submit bob do
-    exerciseCmd half1 MUSD_Transfer with
+    exerciseCmd half1 MintedMUSD.MUSD_Transfer with
       newOwner = alice
 
   cancelledCid <- submit bob do
-    exerciseCmd proposalCid2 MUSD_CancelTransfer
+    exerciseCmd proposalCid2 MintedMUSD.MUSD_CancelTransfer
 
   debug "Transfer proposal test passed - accept and cancel both work"
   pure ()
@@ -646,12 +645,12 @@ musdMintRequestTest = script do
 
   -- Issuer approves (now requires IssuerRole for supply cap)
   (roleCid2, musdCid) <- submit issuer do
-    exerciseCmd requestCid MintRequest_Approve with
+    exerciseCmd requestCid MintedMUSD.MintRequest_Approve with
       issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD by splitting
   (half1, half2) <- submit alice do
-    exerciseCmd musdCid MUSD_Split with
+    exerciseCmd musdCid MintedMUSD.MUSD_Split with
       splitAmount = 500.0
 
   debug "  Approve path works"
@@ -666,7 +665,7 @@ musdMintRequestTest = script do
       requestObservers = []
 
   submit issuer do
-    exerciseCmd requestCid2 MintRequest_Reject
+    exerciseCmd requestCid2 MintedMUSD.MintRequest_Reject
 
   debug "  Reject path works"
 
@@ -680,7 +679,7 @@ musdMintRequestTest = script do
       requestObservers = []
 
   submit alice do
-    exerciseCmd requestCid3 MintRequest_Cancel
+    exerciseCmd requestCid3 MintedMUSD.MintRequest_Cancel
 
   debug "Mint request test passed - approve, reject, cancel all work"
   pure ()
@@ -712,12 +711,12 @@ musdMintProposalTest = script do
 
   -- Alice accepts (now requires IssuerRole for supply cap)
   (roleCid2, musdCid) <- submit alice do
-    exerciseCmd proposalCid MintProposal_Accept with
+    exerciseCmd proposalCid MintedMUSD.MintProposal_Accept with
       issuerRoleCid = roleCid
 
   -- Verify Alice got the mUSD
   submit alice do
-    exerciseCmd musdCid MUSD_Redeem with
+    exerciseCmd musdCid MintedMUSD.MUSD_Redeem with
       reason = "Test redemption"
 
   debug "  Accept path works"
@@ -732,7 +731,7 @@ musdMintProposalTest = script do
       proposalObservers = []
 
   submit bob do
-    exerciseCmd proposalCid2 MintProposal_Decline
+    exerciseCmd proposalCid2 MintedMUSD.MintProposal_Decline
 
   debug "  Decline path works"
 
@@ -746,7 +745,7 @@ musdMintProposalTest = script do
       proposalObservers = []
 
   submit issuer do
-    exerciseCmd proposalCid3 MintProposal_Withdraw
+    exerciseCmd proposalCid3 MintedMUSD.MintProposal_Withdraw
 
   debug "Mint proposal test passed - accept, decline, withdraw all work"
   pure ()
