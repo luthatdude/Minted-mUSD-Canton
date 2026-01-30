@@ -91,6 +91,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     /// @notice Slippage tolerance in basis points (e.g., 100 = 1%)
     uint256 public maxSlippageBps;
 
+    /// @notice Maximum allowed leverage × 10 (e.g., 30 = 3.0x max)
+    uint256 public maxLeverageX10;
+
     /// @notice Per-token pool fee overrides
     mapping(address => uint24) public tokenPoolFees;
 
@@ -144,6 +147,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     );
 
     event ConfigUpdated(uint256 maxLoops, uint256 minBorrowPerLoop, uint24 defaultPoolFee, uint256 maxSlippageBps);
+    event MaxLeverageUpdated(uint256 oldMaxLeverageX10, uint256 newMaxLeverageX10);
     event TokenEnabled(address indexed token, uint24 poolFee);
     event TokenDisabled(address indexed token);
 
@@ -175,6 +179,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         minBorrowPerLoop = 100e18;      // Min 100 mUSD per loop
         defaultPoolFee = 3000;           // 0.3% Uniswap fee tier
         maxSlippageBps = 100;            // 1% max slippage
+        maxLeverageX10 = 30;             // 3.0x max leverage by default
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
@@ -211,9 +216,11 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         (bool enabled, uint256 collateralFactorBps, , ) = collateralVault.getConfig(collateralToken);
         require(enabled, "COLLATERAL_NOT_ENABLED");
 
-        // Max leverage = 1 / (1 - LTV). E.g., 75% LTV = 4x max
-        uint256 maxLeverageX10 = (10000 * 10) / (10000 - collateralFactorBps);
-        require(targetLeverageX10 <= maxLeverageX10, "LEVERAGE_EXCEEDS_MAX");
+        // Max leverage from LTV = 1 / (1 - LTV). E.g., 75% LTV = 4x max
+        uint256 ltvMaxLeverageX10 = (10000 * 10) / (10000 - collateralFactorBps);
+        // Use the lower of LTV-based max and configured max
+        uint256 effectiveMaxLeverage = ltvMaxLeverageX10 < maxLeverageX10 ? ltvMaxLeverageX10 : maxLeverageX10;
+        require(targetLeverageX10 <= effectiveMaxLeverage, "LEVERAGE_EXCEEDS_MAX");
 
         // Transfer initial collateral from user
         IERC20(collateralToken).safeTransferFrom(msg.sender, address(this), initialAmount);
@@ -546,6 +553,15 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         maxSlippageBps = _maxSlippageBps;
 
         emit ConfigUpdated(_maxLoops, _minBorrowPerLoop, _defaultPoolFee, _maxSlippageBps);
+    }
+
+    /// @notice Set maximum allowed leverage (toggle between presets: 1.5x, 2x, 2.5x, 3x)
+    /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
+    function setMaxLeverage(uint256 _maxLeverageX10) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+        require(_maxLeverageX10 >= 10 && _maxLeverageX10 <= 40, "INVALID_MAX_LEVERAGE"); // 1x to 4x range
+        uint256 oldMax = maxLeverageX10;
+        maxLeverageX10 = _maxLeverageX10;
+        emit MaxLeverageUpdated(oldMax, _maxLeverageX10);
     }
 
     /// @notice Enable a collateral token for leverage

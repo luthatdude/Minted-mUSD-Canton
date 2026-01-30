@@ -53,6 +53,13 @@ export const LeverageVaultABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "maxLeverageX10",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [{ "internalType": "address", "name": "", "type": "address" }],
     "name": "leverageEnabled",
     "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
@@ -160,6 +167,13 @@ export const LeverageVaultABI = [
     "type": "function"
   },
   {
+    "inputs": [{ "internalType": "uint256", "name": "_maxLeverageX10", "type": "uint256" }],
+    "name": "setMaxLeverage",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [
       { "internalType": "address", "name": "token", "type": "address" },
       { "internalType": "uint24", "name": "poolFee", "type": "uint24" }
@@ -221,6 +235,15 @@ export const LeverageVaultABI = [
       { "indexed": false, "internalType": "uint256", "name": "maxSlippageBps", "type": "uint256" }
     ],
     "name": "ConfigUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": false, "internalType": "uint256", "name": "oldMaxLeverageX10", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "newMaxLeverageX10", "type": "uint256" }
+    ],
+    "name": "MaxLeverageUpdated",
     "type": "event"
   },
   {

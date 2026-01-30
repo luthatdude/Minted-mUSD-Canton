@@ -234,6 +234,52 @@ describe('LeverageVault', function () {
       await leverageVault.disableToken(await newToken.getAddress());
       expect(await leverageVault.leverageEnabled(await newToken.getAddress())).to.be.false;
     });
+
+    it('should allow admin to set max leverage', async function () {
+      // Default is 30 (3.0x)
+      expect(await leverageVault.maxLeverageX10()).to.equal(30);
+
+      // Toggle to 2.0x
+      await leverageVault.setMaxLeverage(20);
+      expect(await leverageVault.maxLeverageX10()).to.equal(20);
+
+      // Toggle to 1.5x
+      await leverageVault.setMaxLeverage(15);
+      expect(await leverageVault.maxLeverageX10()).to.equal(15);
+
+      // Toggle back to 3.0x
+      await leverageVault.setMaxLeverage(30);
+      expect(await leverageVault.maxLeverageX10()).to.equal(30);
+    });
+
+    it('should reject leverage above configured max', async function () {
+      // Set max to 2.0x
+      await leverageVault.setMaxLeverage(20);
+
+      const initialDeposit = ethers.parseEther('10');
+
+      // Try 2.5x leverage - should fail
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          initialDeposit,
+          25, // 2.5x exceeds 2.0x max
+          5
+        )
+      ).to.be.revertedWith('LEVERAGE_EXCEEDS_MAX');
+    });
+
+    it('should reject invalid max leverage values', async function () {
+      // Too low (below 1x)
+      await expect(
+        leverageVault.setMaxLeverage(5)
+      ).to.be.revertedWith('INVALID_MAX_LEVERAGE');
+
+      // Too high (above 4x)
+      await expect(
+        leverageVault.setMaxLeverage(50)
+      ).to.be.revertedWith('INVALID_MAX_LEVERAGE');
+    });
   });
 
   describe('View Functions', function () {
