@@ -29,8 +29,10 @@ export function validateContracts(): { valid: boolean; missing: string[] } {
 export const CANTON_CONFIG = {
   ledgerHost: process.env.NEXT_PUBLIC_CANTON_LEDGER_HOST || "localhost",
   ledgerPort: parseInt(process.env.NEXT_PUBLIC_CANTON_LEDGER_PORT || "6865"),
-  // FIX FE-C1: Use HTTPS in production
-  protocol: process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "http", // Change to "https" in production
+  // FIX FE-C1: Use HTTPS in production, HTTP only for local development
+  protocol: process.env.NODE_ENV === 'production' 
+    ? (process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "https")
+    : (process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "http"),
   // FIX FE-C2/FE-H4: Token removed from client - fetch from secure API route
   // token: "" - Removed: Use /api/canton/token endpoint instead
 };

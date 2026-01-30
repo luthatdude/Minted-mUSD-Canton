@@ -12,7 +12,10 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline'", // Required for Next.js
+              // Production: Remove 'unsafe-eval' - Next.js 13+ supports strict CSP
+              process.env.NODE_ENV === 'production'
+                ? "script-src 'self' 'unsafe-inline'"
+                : "script-src 'self' 'unsafe-eval' 'unsafe-inline'", // Dev only
               "style-src 'self' 'unsafe-inline'", // Required for Tailwind
               "connect-src 'self' https://*.infura.io wss://*.infura.io https://*.alchemy.com wss://*.alchemy.com",
               "img-src 'self' data: https:",
