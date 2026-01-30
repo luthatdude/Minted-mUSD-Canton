@@ -1,14 +1,29 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+  USDC: `${PACKAGE_ID}:MintedProtocolV2Fixed:USDC`,
+  Collateral: `${PACKAGE_ID}:MintedProtocolV2Fixed:Collateral`,
+  Vault: `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`,
+  TransferProposal: `${PACKAGE_ID}:MintedProtocolV2Fixed:TransferProposal`,
+  AttestationRequest: `${PACKAGE_ID}:MintedProtocolV2Fixed:AttestationRequest`,
+  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
+  StakingService: `${PACKAGE_ID}:MintedProtocolV2Fixed:StakingService`,
+  PriceOracle: `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`,
+  IssuerRole: `${PACKAGE_ID}:MintedProtocolV2Fixed:IssuerRole`,
+  LiquidityPool: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidityPool`,
+};
 
-export function CantonDashboard({ canton }: Props) {
+export function CantonDashboard() {
+  const loopWallet = useLoopWallet();
+  
   const [stats, setStats] = useState({
     musdContracts: 0,
     musdTotal: 0,
@@ -27,62 +42,66 @@ export function CantonDashboard({ canton }: Props) {
   });
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
-      setLoading(true);
-      try {
-        const [musd, usdc, collateral, vaults, proposals, attestations, mintSvc, stakeSvc, oracleSvc, issuer, pool] =
-          await Promise.all([
-            canton.query("MintedProtocolV2Fixed:MUSD"),
-            canton.query("MintedProtocolV2Fixed:USDC"),
-            canton.query("MintedProtocolV2Fixed:Collateral"),
-            canton.query("MintedProtocolV2Fixed:Vault"),
-            canton.query("MintedProtocolV2Fixed:TransferProposal"),
-            canton.query("MintedProtocolV2Fixed:AttestationRequest"),
-            canton.query("MintedProtocolV2Fixed:DirectMintService"),
-            canton.query("MintedProtocolV2Fixed:StakingService"),
-            canton.query("MintedProtocolV2Fixed:PriceOracle"),
-            canton.query("MintedProtocolV2Fixed:IssuerRole"),
-            canton.query("MintedProtocolV2Fixed:LiquidityPool"),
-          ]);
+  const loadData = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    setLoading(true);
+    try {
+      const [musd, usdc, collateral, vaults, proposals, attestations, mintSvc, stakeSvc, oracleSvc, issuer, pool] =
+        await Promise.all([
+          loopWallet.queryContracts(templates.MUSD).catch(() => []),
+          loopWallet.queryContracts(templates.USDC).catch(() => []),
+          loopWallet.queryContracts(templates.Collateral).catch(() => []),
+          loopWallet.queryContracts(templates.Vault).catch(() => []),
+          loopWallet.queryContracts(templates.TransferProposal).catch(() => []),
+          loopWallet.queryContracts(templates.AttestationRequest).catch(() => []),
+          loopWallet.queryContracts(templates.DirectMintService).catch(() => []),
+          loopWallet.queryContracts(templates.StakingService).catch(() => []),
+          loopWallet.queryContracts(templates.PriceOracle).catch(() => []),
+          loopWallet.queryContracts(templates.IssuerRole).catch(() => []),
+          loopWallet.queryContracts(templates.LiquidityPool).catch(() => []),
+        ]);
 
-        setStats({
-          musdContracts: musd.length,
-          musdTotal: musd.reduce((s, c) => s + parseFloat(c.payload?.amount || "0"), 0),
-          usdcContracts: usdc.length,
-          usdcTotal: usdc.reduce((s, c) => s + parseFloat(c.payload?.amount || "0"), 0),
-          collateralContracts: collateral.length,
-          collateralTotal: collateral.reduce((s, c) => s + parseFloat(c.payload?.amount || "0"), 0),
-          vaults: vaults.length,
-          proposals: proposals.length,
-          attestations: attestations.length,
-          mintService: mintSvc.length > 0,
-          stakingService: stakeSvc.length > 0,
-          oracle: oracleSvc.length > 0,
-          issuerRole: issuer.length > 0,
-          pool: pool.length > 0,
-        });
-      } catch (err) {
-        console.error("Canton dashboard load error:", err);
-      } finally {
-        setLoading(false);
-      }
+      setStats({
+        musdContracts: musd.length,
+        musdTotal: musd.reduce((s: number, c: LoopContract) => s + parseFloat(c.payload?.amount || "0"), 0),
+        usdcContracts: usdc.length,
+        usdcTotal: usdc.reduce((s: number, c: LoopContract) => s + parseFloat(c.payload?.amount || "0"), 0),
+        collateralContracts: collateral.length,
+        collateralTotal: collateral.reduce((s: number, c: LoopContract) => s + parseFloat(c.payload?.amount || "0"), 0),
+        vaults: vaults.length,
+        proposals: proposals.length,
+        attestations: attestations.length,
+        mintService: mintSvc.length > 0,
+        stakingService: stakeSvc.length > 0,
+        oracle: oracleSvc.length > 0,
+        issuerRole: issuer.length > 0,
+        pool: pool.length > 0,
+      });
+    } catch (err) {
+      console.error("Canton dashboard load error:", err);
+    } finally {
+      setLoading(false);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
 
-  if (!canton.connected) {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  if (!loopWallet.isConnected) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="card-emerald max-w-md p-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
-            <svg className="h-8 w-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-            </svg>
+        <div className="max-w-md space-y-6">
+          <div className="card-emerald p-8 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
+              <svg className="h-8 w-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+              </svg>
+            </div>
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton Network</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to view the Canton Network dashboard.</p>
           </div>
-          <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton Ledger</h3>
-          <p className="text-gray-400">Configure your Canton JSON API connection to view the Canton Network dashboard.</p>
+          <WalletConnector mode="canton" />
         </div>
       </div>
     );

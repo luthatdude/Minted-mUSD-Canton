@@ -1,12 +1,19 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  Vault: `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`,
+  Collateral: `${PACKAGE_ID}:MintedProtocolV2Fixed:Collateral`,
+  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+};
 
-export function CantonBorrow({ canton }: Props) {
+export function CantonBorrow() {
+  const loopWallet = useLoopWallet();
+  
   const [action, setAction] = useState<"deposit" | "borrow" | "repay" | "withdraw">("deposit");
   const [amount, setAmount] = useState("");
   const [collateralCid, setCollateralCid] = useState("");
@@ -16,17 +23,17 @@ export function CantonBorrow({ canton }: Props) {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const [vaults, setVaults] = useState<any[]>([]);
-  const [collaterals, setCollaterals] = useState<any[]>([]);
-  const [musdContracts, setMusdContracts] = useState<any[]>([]);
+  const [vaults, setVaults] = useState<LoopContract[]>([]);
+  const [collaterals, setCollaterals] = useState<LoopContract[]>([]);
+  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [v, c, m] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:Vault"),
-        canton.query("MintedProtocolV2Fixed:Collateral"),
-        canton.query("MintedProtocolV2Fixed:MUSD"),
+        loopWallet.queryContracts(templates.Vault).catch(() => []),
+        loopWallet.queryContracts(templates.Collateral).catch(() => []),
+        loopWallet.queryContracts(templates.MUSD).catch(() => []),
       ]);
       setVaults(v);
       setCollaterals(c);
@@ -34,9 +41,14 @@ export function CantonBorrow({ canton }: Props) {
       if (v.length > 0) setVaultCid(v[0].contractId);
       if (c.length > 0) setCollateralCid(c[0].contractId);
       if (m.length > 0) setMusdCid(m[0].contractId);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   async function handleAction() {
     if (!vaultCid) return;
@@ -64,9 +76,10 @@ export function CantonBorrow({ canton }: Props) {
       };
 
       const { choice, args } = choiceMap[action];
-      await canton.exercise("MintedProtocolV2Fixed:Vault", vaultCid, choice, args);
+      await loopWallet.exerciseChoice(templates.Vault, vaultCid, choice, args);
       setResult(`${action.charAt(0).toUpperCase() + action.slice(1)} successful on Canton`);
       setAmount("");
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -78,8 +91,8 @@ export function CantonBorrow({ canton }: Props) {
   async function checkHealth() {
     if (!vaultCid) return;
     try {
-      const res = await canton.exercise(
-        "MintedProtocolV2Fixed:Vault",
+      const res = await loopWallet.exerciseChoice(
+        templates.Vault,
         vaultCid,
         "Vault_GetHealthFactor",
         {}
@@ -90,8 +103,18 @@ export function CantonBorrow({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
-    return <div className="text-center text-gray-400 py-20">Connect to Canton Ledger to borrow</div>;
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-6">
+          <div className="text-center">
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to borrow mUSD on Canton.</p>
+          </div>
+          <WalletConnector mode="canton" />
+        </div>
+      </div>
+    );
   }
 
   return (

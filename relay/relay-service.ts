@@ -18,6 +18,8 @@ import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 import { readSecret } from "./utils";
+// Import yield keeper for auto-deploy integration
+import { getKeeperStatus } from "./yield-keeper";
 
 // ============================================================
 //                     CONFIGURATION
@@ -33,12 +35,14 @@ interface RelayConfig {
   // Ethereum
   ethereumRpcUrl: string;
   bridgeContractAddress: string;
-  relayerPrivateKey: string;  // Hot wallet for gas
+  treasuryAddress: string;     // Treasury for auto-deploy trigger
+  relayerPrivateKey: string;   // Hot wallet for gas
 
   // Operational
   pollIntervalMs: number;
   maxRetries: number;
   confirmations: number;
+  triggerAutoDeploy: boolean;  // Whether to trigger auto-deploy after bridge
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -51,11 +55,13 @@ const DEFAULT_CONFIG: RelayConfig = {
 
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
+  treasuryAddress: process.env.TREASURY_ADDRESS || "",
   relayerPrivateKey: readSecret("relayer_private_key", "RELAYER_PRIVATE_KEY"),
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
   confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
+  triggerAutoDeploy: process.env.TRIGGER_AUTO_DEPLOY !== "false",  // Default enabled
 };
 
 // ============================================================
@@ -358,6 +364,11 @@ class RelayService {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
 
+        // Trigger auto-deploy to yield strategies if configured
+        if (this.config.triggerAutoDeploy && this.config.treasuryAddress) {
+          await this.triggerYieldDeploy();
+        }
+
         // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
         if (this.processedAttestations.size > this.MAX_PROCESSED_CACHE) {
           const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
@@ -450,6 +461,66 @@ class RelayService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Trigger Treasury auto-deploy to yield strategies after bridge-in
+   */
+  private async triggerYieldDeploy(): Promise<void> {
+    if (!this.config.treasuryAddress) return;
+
+    try {
+      const TREASURY_ABI = [
+        {
+          "inputs": [],
+          "name": "shouldAutoDeploy",
+          "outputs": [
+            { "internalType": "bool", "name": "", "type": "bool" },
+            { "internalType": "uint256", "name": "", "type": "uint256" }
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "keeperTriggerAutoDeploy",
+          "outputs": [
+            { "internalType": "uint256", "name": "deployed", "type": "uint256" }
+          ],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        }
+      ];
+
+      const treasury = new ethers.Contract(
+        this.config.treasuryAddress,
+        TREASURY_ABI,
+        this.wallet
+      );
+
+      // Check if auto-deploy would trigger
+      const [shouldDeploy, deployable] = await treasury.shouldAutoDeploy();
+
+      if (!shouldDeploy) {
+        console.log(`[Relay] Auto-deploy: No deployment needed (deployable: ${Number(deployable) / 1e6} USDC)`);
+        return;
+      }
+
+      console.log(`[Relay] Auto-deploy: Triggering deployment of ${Number(deployable) / 1e6} USDC to yield strategy...`);
+
+      const tx = await treasury.keeperTriggerAutoDeploy();
+      const receipt = await tx.wait(1);
+
+      if (receipt.status === 1) {
+        console.log(`[Relay] Auto-deploy: Successfully deployed ${Number(deployable) / 1e6} USDC to yield strategy`);
+      } else {
+        console.warn(`[Relay] Auto-deploy: Transaction reverted`);
+      }
+
+    } catch (error: any) {
+      // Don't throw - auto-deploy failure shouldn't affect bridge success
+      console.warn(`[Relay] Auto-deploy failed (non-critical):`, error.message);
+    }
   }
 }
 

@@ -1,60 +1,74 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  IssuerRole: `${PACKAGE_ID}:MintedProtocolV2Fixed:IssuerRole`,
+  PriceOracle: `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`,
+  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
+  LiquidityPool: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidityPool`,
+};
 
-export function CantonAdmin({ canton }: Props) {
+export function CantonAdmin() {
+  const loopWallet = useLoopWallet();
+  
   const [section, setSection] = useState<"issuer" | "oracle" | "mint" | "pool">("issuer");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Issuer
-  const [issuerRoles, setIssuerRoles] = useState<any[]>([]);
+  const [issuerRoles, setIssuerRoles] = useState<LoopContract[]>([]);
   const [mintOwner, setMintOwner] = useState("");
   const [mintAmount, setMintAmount] = useState("");
 
   // Oracle
-  const [oracleContracts, setOracleContracts] = useState<any[]>([]);
+  const [oracleContracts, setOracleContracts] = useState<LoopContract[]>([]);
   const [priceSymbol, setPriceSymbol] = useState("ETH");
   const [priceValue, setPriceValue] = useState("");
 
   // DirectMintService
-  const [mintServices, setMintServices] = useState<any[]>([]);
+  const [mintServices, setMintServices] = useState<LoopContract[]>([]);
   const [newCap, setNewCap] = useState("");
   const [pauseState, setPauseState] = useState(false);
 
   // Pool
-  const [pools, setPools] = useState<any[]>([]);
+  const [pools, setPools] = useState<LoopContract[]>([]);
   const [swapAmount, setSwapAmount] = useState("");
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [ir, oc, ms, pl] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:IssuerRole").catch(() => []),
-        canton.query("MintedProtocolV2Fixed:PriceOracle").catch(() => []),
-        canton.query("MintedProtocolV2Fixed:DirectMintService").catch(() => []),
-        canton.query("MintedProtocolV2Fixed:LiquidityPool").catch(() => []),
+        loopWallet.queryContracts(templates.IssuerRole).catch(() => []),
+        loopWallet.queryContracts(templates.PriceOracle).catch(() => []),
+        loopWallet.queryContracts(templates.DirectMintService).catch(() => []),
+        loopWallet.queryContracts(templates.LiquidityPool).catch(() => []),
       ]);
       setIssuerRoles(ir);
       setOracleContracts(oc);
       setMintServices(ms);
       setPools(pl);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   async function handleExercise(templateId: string, cid: string, choice: string, args: any) {
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const res = await canton.exercise(templateId, cid, choice, args);
+      const res = await loopWallet.exerciseChoice(templateId, cid, choice, args);
       setResult(`${choice} executed successfully: ${JSON.stringify(res).slice(0, 200)}`);
+      await loadContracts();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -62,8 +76,18 @@ export function CantonAdmin({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
-    return <div className="text-center text-gray-400 py-20">Connect to Canton Ledger for admin</div>;
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-6">
+          <div className="text-center">
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to access admin functions.</p>
+          </div>
+          <WalletConnector mode="canton" />
+        </div>
+      </div>
+    );
   }
 
   const sections = [
@@ -115,7 +139,7 @@ export function CantonAdmin({ canton }: Props) {
                 </div>
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:IssuerRole",
+                    templates.IssuerRole,
                     issuerRoles[0].contractId,
                     "DirectMint",
                     { owner: mintOwner, amount: mintAmount }
@@ -152,7 +176,7 @@ export function CantonAdmin({ canton }: Props) {
                 </div>
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:PriceOracle",
+                    templates.PriceOracle,
                     oracleContracts[0].contractId,
                     "GetPrice",
                     { symbol: priceSymbol }
@@ -177,7 +201,7 @@ export function CantonAdmin({ canton }: Props) {
                 </div>
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:PriceOracle",
+                    templates.PriceOracle,
                     oracleContracts[0].contractId,
                     "UpdatePrices",
                     { updates: [{ symbol: priceSymbol, price: priceValue }] }
@@ -210,7 +234,7 @@ export function CantonAdmin({ canton }: Props) {
                 <input className="input" type="number" placeholder="10000000" value={newCap} onChange={(e) => setNewCap(e.target.value)} />
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:DirectMintService",
+                    templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_UpdateSupplyCap",
                     { newSupplyCap: newCap }
@@ -224,7 +248,7 @@ export function CantonAdmin({ canton }: Props) {
               <div className="grid gap-4 sm:grid-cols-2">
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:DirectMintService",
+                    templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_SetPaused",
                     { paused: true }
@@ -236,7 +260,7 @@ export function CantonAdmin({ canton }: Props) {
                 </button>
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:DirectMintService",
+                    templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_SetPaused",
                     { paused: false }
@@ -269,7 +293,7 @@ export function CantonAdmin({ canton }: Props) {
                 <input className="input" type="number" placeholder="Amount" value={swapAmount} onChange={(e) => setSwapAmount(e.target.value)} />
                 <button
                   onClick={() => handleExercise(
-                    "MintedProtocolV2Fixed:LiquidityPool",
+                    templates.LiquidityPool,
                     pools[0].contractId,
                     "Pool_SwapMUSDForCollateral",
                     { musdAmount: swapAmount }

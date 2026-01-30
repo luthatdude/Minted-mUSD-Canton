@@ -1,13 +1,20 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const templates = {
+  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
+  USDC: `${PACKAGE_ID}:MintedProtocolV2Fixed:USDC`,
+  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+};
 
-export function CantonMint({ canton }: Props) {
+export function CantonMint() {
+  const loopWallet = useLoopWallet();
+  
   const [tab, setTab] = useState<"mint" | "redeem">("mint");
   const [amount, setAmount] = useState("");
   const [usdcContractId, setUsdcContractId] = useState("");
@@ -18,17 +25,17 @@ export function CantonMint({ canton }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // Stats
-  const [services, setServices] = useState<any[]>([]);
-  const [usdcContracts, setUsdcContracts] = useState<any[]>([]);
-  const [musdContracts, setMusdContracts] = useState<any[]>([]);
+  const [services, setServices] = useState<LoopContract[]>([]);
+  const [usdcContracts, setUsdcContracts] = useState<LoopContract[]>([]);
+  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
 
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    try {
       const [svc, usdc, musd] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:DirectMintService"),
-        canton.query("MintedProtocolV2Fixed:USDC"),
-        canton.query("MintedProtocolV2Fixed:MUSD"),
+        loopWallet.queryContracts(templates.DirectMintService).catch(() => []),
+        loopWallet.queryContracts(templates.USDC).catch(() => []),
+        loopWallet.queryContracts(templates.MUSD).catch(() => []),
       ]);
       setServices(svc);
       setUsdcContracts(usdc);
@@ -36,9 +43,14 @@ export function CantonMint({ canton }: Props) {
       if (svc.length > 0) setServiceId(svc[0].contractId);
       if (usdc.length > 0) setUsdcContractId(usdc[0].contractId);
       if (musd.length > 0) setMusdContractId(musd[0].contractId);
+    } catch (err) {
+      console.error("Failed to load contracts:", err);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   const totalUsdc = usdcContracts.reduce(
     (sum, c) => sum + parseFloat(c.payload?.amount || "0"), 0
@@ -53,14 +65,15 @@ export function CantonMint({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      const res = await canton.exercise(
-        "MintedProtocolV2Fixed:DirectMintService",
+      await loopWallet.exerciseChoice(
+        templates.DirectMintService,
         serviceId,
         "DirectMint_Mint",
         { usdcCid: usdcContractId, amount }
       );
       setResult(`Minted ${amount} mUSD on Canton`);
       setAmount("");
+      await loadContracts(); // Refresh
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -74,14 +87,15 @@ export function CantonMint({ canton }: Props) {
     setError(null);
     setResult(null);
     try {
-      const res = await canton.exercise(
-        "MintedProtocolV2Fixed:DirectMintService",
+      await loopWallet.exerciseChoice(
+        templates.DirectMintService,
         serviceId,
         "DirectMint_Redeem",
         { musdCid: musdContractId, amount }
       );
       setResult(`Redeemed ${amount} mUSD for USDC on Canton`);
       setAmount("");
+      await loadContracts(); // Refresh
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -89,17 +103,20 @@ export function CantonMint({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
+  if (!loopWallet.isConnected) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="card-emerald max-w-md p-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
-            <svg className="h-8 w-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-            </svg>
+        <div className="max-w-md space-y-6">
+          <div className="card-emerald p-8 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
+              <svg className="h-8 w-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+              </svg>
+            </div>
+            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
+            <p className="text-gray-400 mb-6">Connect your Loop Wallet to mint or redeem mUSD on the Canton Network.</p>
           </div>
-          <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
-          <p className="text-gray-400">Configure your Canton ledger connection to mint or redeem mUSD on the Canton Network.</p>
+          <WalletConnector mode="canton" />
         </div>
       </div>
     );

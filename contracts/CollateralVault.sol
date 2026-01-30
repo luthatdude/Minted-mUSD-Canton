@@ -18,6 +18,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     bytes32 public constant BORROW_MODULE_ROLE = keccak256("BORROW_MODULE_ROLE");
     bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
+    bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
 
     struct CollateralConfig {
         bool enabled;
@@ -128,6 +129,21 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
         emit Deposited(msg.sender, token, amount);
+    }
+
+    /// @notice Deposit collateral on behalf of another user (for LeverageVault integration)
+    /// @param user The user to credit the deposit to
+    /// @param token The collateral token address
+    /// @param amount Amount to deposit
+    function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
+        require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
+        require(amount > 0, "INVALID_AMOUNT");
+        require(user != address(0), "INVALID_USER");
+
+        deposits[user][token] += amount;
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        emit Deposited(user, token, amount);
     }
 
     /// @notice Withdraw collateral (BorrowModule checks health factor before allowing)

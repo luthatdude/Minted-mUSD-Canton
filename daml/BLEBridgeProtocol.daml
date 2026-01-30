@@ -110,12 +110,14 @@ template BridgeOutAttestation
           nonce = payload.nonce
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
+    -- FIX DL-H1: Derive requiredSignatures from validatorGroup size (majority quorum)
     choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
       with
-        requiredSignatures : Int
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
+        -- Derive majority threshold: (n / 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -194,12 +196,14 @@ template BridgeInAttestation
           nonce = payload.nonce
 
     -- Finalize and archive — USDC can now be minted on Canton
+    -- FIX DL-H2: Derive requiredSignatures from validatorGroup size (majority quorum)
     choice BridgeIn_Finalize : [ContractId BridgeInSignature]
       with
-        requiredSignatures : Int
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
+        -- Derive majority threshold: (n / 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -270,12 +274,14 @@ template SupplyCapAttestation
           nonce = payload.nonce
 
     -- Finalize: archives attestation, returns the verified global state
+    -- FIX DL-H3: Derive requiredSignatures from validatorGroup size (majority quorum)
     choice SupplyCap_Finalize : SupplyCapPayload
       with
-        requiredSignatures : Int
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
+        -- Derive majority threshold: (n / 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
@@ -348,12 +354,14 @@ template YieldAttestation
           nonce = payload.nonce
 
     -- Finalize: returns verified yield data for smUSD sync
+    -- FIX DL-H4: Derive requiredSignatures from validatorGroup size (majority quorum)
     choice Yield_Finalize : YieldPayload
       with
-        requiredSignatures : Int
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
+        -- Derive majority threshold: (n / 2) + 1
+        let requiredSignatures = (length validatorGroup / 2) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids

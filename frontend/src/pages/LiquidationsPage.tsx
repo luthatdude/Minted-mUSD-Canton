@@ -5,13 +5,13 @@ import { StatCard } from "@/components/StatCard";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps, formatHealthFactor } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useWCContracts } from "@/hooks/useWCContracts";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  contracts: Record<string, ethers.Contract | null>;
-  address: string | null;
-}
-
-export function LiquidationsPage({ contracts, address }: Props) {
+export function LiquidationsPage() {
+  const { address, isConnected } = useWalletConnect();
+  const contracts = useWCContracts();
   const [borrower, setBorrower] = useState("");
   const [collateralToken, setCollateralToken] = useState("");
   const [debtAmount, setDebtAmount] = useState("");
@@ -55,8 +55,8 @@ export function LiquidationsPage({ contracts, address }: Props) {
     });
   }
 
-  if (!address) {
-    return <div className="text-center text-gray-400 py-20">Connect wallet to liquidate positions</div>;
+  if (!isConnected) {
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (
