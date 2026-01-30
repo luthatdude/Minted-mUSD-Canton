@@ -229,8 +229,10 @@ template StakingService
   with
     operator : Party
     baseRate : Decimal     -- e.g. 0.05
+    observers : [Party]   -- Users who can exercise Stake/Unstake
   where
     signatory operator
+    observer observers
 
     nonconsuming choice Stake : ContractId Smusd
       with
@@ -453,6 +455,7 @@ setup = do
     createCmd StakingService with
       operator = operator
       baseRate = 0.05
+      observers = [alice]  -- Alice needs visibility to exercise Stake/Unstake
 
   bridgeSvc <- submit operator do
     createCmd BridgeService with

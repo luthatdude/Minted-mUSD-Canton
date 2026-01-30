@@ -42,12 +42,14 @@ template CantonUSDC
 
     ensure amount > 0.0
 
-    choice CantonUSDC_Transfer : ContractId CantonUSDC
+    choice CantonUSDC_Transfer : ContractId CantonUSDCTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        create CantonUSDCTransferProposal with
+          usdc = this
+          newOwner
 
     choice CantonUSDC_Split : (ContractId CantonUSDC, ContractId CantonUSDC)
       with
@@ -59,6 +61,23 @@ template CantonUSDC
         c1 <- create this with amount = splitAmount
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
+
+-- | Transfer proposal for CantonUSDC (dual-signatory safe)
+template CantonUSDCTransferProposal
+  with
+    usdc : CantonUSDC
+    newOwner : Party
+  where
+    signatory usdc.issuer, usdc.owner
+    observer newOwner
+
+    choice CantonUSDCTransferProposal_Accept : ContractId CantonUSDC
+      controller newOwner
+      do create usdc with owner = newOwner
+
+    choice CantonUSDCTransferProposal_Reject : ContractId CantonUSDC
+      controller newOwner
+      do create usdc
 
 -- ============================================================
 --                     SECTION 2: CANTON mUSD
@@ -308,7 +327,9 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        exercise usdcCid CantonUSDC_Transfer with newOwner = operator
+        -- FIX: CantonUSDC_Transfer now returns proposal; accept it
+        usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
+        exercise usdcProposal CantonUSDCTransferProposal_Accept
 
         -- Mint Canton mUSD to user (1:1 minus fee)
         musdCid <- create CantonMUSD with
@@ -462,12 +483,15 @@ template RedemptionRequest
         usdc <- fetch usdcCid
         assertMsg "INSUFFICIENT_USDC" (usdc.amount >= usdcOwed)
 
-        -- Split exact amount if needed
+        -- Split exact amount if needed, then accept transfer proposal
         payoutCid <- if usdc.amount == usdcOwed
-          then exercise usdcCid CantonUSDC_Transfer with newOwner = user
+          then do
+            proposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = user
+            exercise proposal CantonUSDCTransferProposal_Accept
           else do
             (exact, _remainder) <- exercise usdcCid CantonUSDC_Split with splitAmount = usdcOwed
-            exercise exact CantonUSDC_Transfer with newOwner = user
+            proposal <- exercise exact CantonUSDC_Transfer with newOwner = user
+            exercise proposal CantonUSDCTransferProposal_Accept
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
