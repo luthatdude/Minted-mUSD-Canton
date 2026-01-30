@@ -154,8 +154,10 @@ template IssuerRole
     issuer : Party
     supplyCap : Decimal
     currentSupply : Decimal
+    observers : [Party]  -- Parties who can see and exercise minting via proposals
   where
     signatory issuer
+    observer observers
 
     -- | Direct mint (for bootstrapping/admin use).
     -- FIX D-C01: Consuming choice — supply tracked in contract state.
@@ -175,7 +177,9 @@ template IssuerRole
           amount = mintAmount
           currency = mintCurrency
           observers = mintObservers
-        newRole <- create this with currentSupply = currentSupply + mintAmount
+        newRole <- create this with
+          currentSupply = currentSupply + mintAmount
+          observers = mintOwner :: observers  -- Add mint recipient as observer for future proposals
         return (newRole, musdCid)
 
     -- | Update the supply cap (admin only).
@@ -186,6 +190,14 @@ template IssuerRole
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         create this with supplyCap = newCap
+
+    -- | Add observer to the IssuerRole (for proposal workflows)
+    choice IssuerRole_AddObserver : ContractId IssuerRole
+      with
+        newObserver : Party
+      controller issuer
+      do
+        create this with observers = newObserver :: observers
 
 -- | User-initiated mint request.
 -- Separation of duties: the user requests minting, the issuer approves

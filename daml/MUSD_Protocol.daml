@@ -150,9 +150,10 @@ template MintingService
     usdcIssuer : Party     -- The trusted issuer of USDC
     supplyCap : Decimal    -- Maximum supply allowed
     currentSupply : Decimal -- Current minted supply
+    observers : [Party]    -- Users who can exercise Mint_Musd
   where
     signatory operator
-    observer usdcIssuer
+    observer usdcIssuer, observers
 
     -- FIX D-H03: Consuming choice to track supply cap
     choice Mint_Musd : (ContractId MintingService, ContractId Musd)
@@ -446,6 +447,7 @@ setup = do
       usdcIssuer = usdcBank
       supplyCap = 1000000.0
       currentSupply = 0.0
+      observers = [alice]  -- Alice needs visibility to exercise Mint_Musd
 
   stakingSvc <- submit operator do
     createCmd StakingService with

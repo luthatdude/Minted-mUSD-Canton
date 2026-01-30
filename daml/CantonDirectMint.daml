@@ -265,9 +265,10 @@ template CantonDirectMintService
     -- Master Participation Agreement reference (embedded in every minted token)
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
+    authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
   where
     signatory operator
-    observer usdcIssuer
+    observer usdcIssuer, authorizedMinters
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury

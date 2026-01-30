@@ -90,7 +90,7 @@ fullProtocolFlowTest = script do
 
   debug "  Attestation request created"
 
-  -- Step 3: Validators provide signatures (3-of-5)
+  -- Step 3: Validators provide signatures (4-of-5 supermajority required)
   debug "Step 3: Collecting validator signatures..."
 
   -- Validator 1 signs
@@ -115,14 +115,22 @@ fullProtocolFlowTest = script do
       validator = validator3
       ecdsaSignature = mockSignature
 
-  debug "  Validator 3 signed (threshold reached)"
+  debug "  Validator 3 signed"
+
+  -- Validator 4 signs (4th signature needed for supermajority with 5 validators)
+  (attestationCid4, sig4Cid) <- submit validator4 do
+    exerciseCmd attestationCid3 ProvideSignature with
+      validator = validator4
+      ecdsaSignature = mockSignature
+
+  debug "  Validator 4 signed (threshold reached)"
 
   -- Step 4: Aggregator finalizes attestation
   debug "Step 4: Finalizing attestation..."
 
   finalSigs <- submit aggregator do
-    exerciseCmd attestationCid3 FinalizeAttestation with
-      signatureCids = [sig1Cid, sig2Cid, sig3Cid]
+    exerciseCmd attestationCid4 FinalizeAttestation with
+      signatureCids = [sig1Cid, sig2Cid, sig3Cid, sig4Cid]
 
   debug "  Attestation finalized successfully!"
   debug "  Ready for Ethereum bridge execution"
@@ -458,6 +466,7 @@ musdAssetTest = script do
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
+      observers = []
 
   -- Direct mint (admin/bootstrap path)
   (roleCid2, musdCid) <- submit issuer do
@@ -559,6 +568,7 @@ musdAttestationMintTest = script do
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
+      observers = []
 
   (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
@@ -584,6 +594,7 @@ musdTransferTest = script do
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
+      observers = []
 
   (roleCid2, musdCid) <- submit issuer do
     exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
@@ -633,6 +644,7 @@ musdMintRequestTest = script do
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
+      observers = []
 
   -- Alice requests minting 1000 mUSD
   requestCid <- submit alice do
@@ -693,12 +705,13 @@ musdMintProposalTest = script do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
 
-  -- Create issuer role for supply cap tracking
+  -- Create issuer role for supply cap tracking (Alice needs visibility to accept proposals)
   roleCid <- submit issuer do
     createCmd MintedMUSD.IssuerRole with
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
+      observers = [alice, bob]  -- Include potential mint recipients as observers
 
   -- Issuer proposes minting 2000 mUSD to Alice
   proposalCid <- submit issuer do

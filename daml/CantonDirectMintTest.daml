@@ -67,6 +67,7 @@ directMintFlowTest = script do
       complianceRegistryCid = None
       mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      authorizedMinters = [alice]
 
   -- Alice mints mUSD
   (newServiceCid, musdCid, bridgeReqCid) <- submit alice do
@@ -129,6 +130,7 @@ redeemFlowTest = script do
       complianceRegistryCid = None
       mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      authorizedMinters = [alice]
 
   -- Issue USDC and mint mUSD
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
@@ -461,6 +463,7 @@ endToEndFlowTest = script do
       complianceRegistryCid = None
       mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      authorizedMinters = [alice]
 
   -- Mint mUSD (fee = 10000 * 0.003 = 30, net = 9970)
   (mintServiceCid2, musdCid, bridgeReqCid) <- submit alice do
@@ -595,6 +598,7 @@ pausedServiceTest = script do
       complianceRegistryCid = None
       mpaHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
+      authorizedMinters = [alice]
 
   usdcCid <- submitMulti [usdcIssuer, alice] [] do
     createCmd CantonUSDC with

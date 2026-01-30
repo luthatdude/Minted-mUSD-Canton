@@ -171,8 +171,8 @@ template ValidatorSignature
     ecdsaSignature: Text
     nonce: Int
   where
-    signatory validator
-    observer aggregator
+    signatory validator, aggregator
+    -- aggregator is signatory to allow archiving in FinalizeAttestation
 
 
 -- 5. HELPER: Create new attestation request
