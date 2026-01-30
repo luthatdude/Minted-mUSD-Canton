@@ -1108,14 +1108,3 @@ template BridgeInRequest
 -- | Convert Int to Money (Numeric 18)
 intToNumeric : Int -> Money
 intToNumeric i = intToDecimal i
-
--- | Convert RelTime to microseconds
-convertRelTimeToMicroseconds : RelTime -> Int
-convertRelTimeToMicroseconds rt = 
-  let totalMicros = convertRelTimeToMicroseconds' rt
-  in totalMicros
-  where
-    convertRelTimeToMicroseconds' relTime = 
-      -- RelTime is in microseconds internally
-      case relTimeToMicroseconds relTime of
-        micros -> micros
