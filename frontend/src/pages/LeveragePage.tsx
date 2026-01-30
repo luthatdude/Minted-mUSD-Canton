@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react';
-import { ethers } from 'ethers';
-import Layout from '../components/Layout';
+import { ethers, Contract } from 'ethers';
 import LeverageSlider from '../components/LeverageSlider';
-import TxButton from '../components/TxButton';
-import StatCard from '../components/StatCard';
-import { useWallet } from '../hooks/useWallet';
-import { useContract } from '../hooks/useContract';
+import { TxButton } from '../components/TxButton';
+import { StatCard } from '../components/StatCard';
+import WalletConnector from '../components/WalletConnector';
+import { useEthWallet } from '../hooks/useEthWallet';
 import { LeverageVaultABI } from '../abis/LeverageVault';
-import { ERC20ABI } from '../abis/ERC20';
-import { formatUsd, formatToken } from '../lib/format';
+import { ERC20_ABI } from '../abis/ERC20';
+import { formatUSD, formatToken } from '../lib/format';
 
 // Contract addresses - update for your deployment
 const LEVERAGE_VAULT_ADDRESS = process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || '';
@@ -25,9 +24,19 @@ interface Position {
 }
 
 export default function LeveragePage() {
-  const { address, isConnected } = useWallet();
-  const leverageVault = useContract(LEVERAGE_VAULT_ADDRESS, LeverageVaultABI);
-  const weth = useContract(WETH_ADDRESS, ERC20ABI);
+  const { address, isConnected, signer, provider, getContract } = useEthWallet();
+  
+  // Contracts
+  const [leverageVault, setLeverageVault] = useState<Contract | null>(null);
+  const [weth, setWeth] = useState<Contract | null>(null);
+
+  // Initialize contracts when signer is available
+  useEffect(() => {
+    if (signer && LEVERAGE_VAULT_ADDRESS && WETH_ADDRESS) {
+      setLeverageVault(new Contract(LEVERAGE_VAULT_ADDRESS, LeverageVaultABI, signer));
+      setWeth(new Contract(WETH_ADDRESS, ERC20_ABI, signer));
+    }
+  }, [signer]);
 
   // Form state
   const [depositAmount, setDepositAmount] = useState('');
@@ -161,33 +170,58 @@ export default function LeveragePage() {
     ? (Number(position.totalCollateral) / Number(position.initialDeposit)).toFixed(2)
     : '0';
 
-  return (
-    <Layout>
+  // Not connected - show wallet connector
+  if (!isConnected) {
+    return (
       <div className="max-w-4xl mx-auto p-6">
         <h1 className="text-3xl font-bold text-white mb-2">Leverage Vault</h1>
         <p className="text-gray-400 mb-8">
           Open leveraged positions with automatic looping via Uniswap V3
         </p>
+        
+        <div className="max-w-md mx-auto">
+          <WalletConnector mode="ethereum" />
+        </div>
+        
+        <div className="text-center text-gray-400 py-8">
+          Connect your wallet to use Ethereum leverage
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto p-6">
+      {/* Wallet status bar */}
+      <div className="flex justify-between items-center mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-white mb-2">Leverage Vault</h1>
+            <p className="text-gray-400">
+              Open leveraged positions with automatic looping via Uniswap V3
+            </p>
+          </div>
+          <WalletConnector mode="ethereum" compact />
+        </div>
 
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <StatCard 
-            title="WETH Balance" 
+            label="WETH Balance" 
             value={formatToken(wethBalance, 18, 4)} 
-            suffix="WETH"
+            subValue="WETH"
           />
           <StatCard 
-            title="Max Leverage" 
+            label="Max Leverage" 
             value={`${(maxLeverage / 10).toFixed(1)}x`}
           />
           <StatCard 
-            title="Your Position" 
+            label="Your Position" 
             value={hasPosition ? `${effectiveLeverage}x` : 'None'}
           />
           <StatCard 
-            title="Your Debt" 
+            label="Your Debt" 
             value={position ? formatToken(position.totalDebt, 18, 2) : '0'}
-            suffix="mUSD"
+            subValue="mUSD"
           />
         </div>
 
@@ -340,6 +374,5 @@ export default function LeveragePage() {
           </div>
         )}
       </div>
-    </Layout>
   );
 }

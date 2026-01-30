@@ -15,6 +15,7 @@
     "ethers": "^6.13.0",
     "@daml/ledger": "^2.8.0",
     "@daml/types": "^2.8.0",
+    "@fivenorth/loop-sdk": "^0.7.6",
     "recharts": "^2.10.0",
     "lucide-react": "^0.312.0"
   },

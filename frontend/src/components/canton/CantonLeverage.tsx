@@ -1,13 +1,21 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";
 import LeverageSlider from "@/components/LeverageSlider";
-import { useCanton } from "@/hooks/useCanton";
+import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import WalletConnector from "@/components/WalletConnector";
 
-interface Props {
-  canton: ReturnType<typeof useCanton>;
-}
+// DAML template IDs - adjust package ID as needed
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "your-package-id";
+const VAULT_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`;
+const COLLATERAL_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:Collateral`;
+const POOL_TEMPLATE = `${PACKAGE_ID}:MintedProtocol:LiquidityPool`;
+const ORACLE_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`;
+const LEVERAGE_MANAGER_TEMPLATE = `${PACKAGE_ID}:MintedProtocol:LeverageManager`;
+const MUSD_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`;
 
-export function CantonLeverage({ canton }: Props) {
+export function CantonLeverage() {
+  const loopWallet = useLoopWallet();
+  
   const [depositAmount, setDepositAmount] = useState("");
   const [leverageX10, setLeverageX10] = useState(20); // Default 2x
   const [loading, setLoading] = useState(false);
@@ -21,40 +29,53 @@ export function CantonLeverage({ canton }: Props) {
   const [oracleCid, setOracleCid] = useState("");
 
   // State
-  const [collaterals, setCollaterals] = useState<any[]>([]);
-  const [vaults, setVaults] = useState<any[]>([]);
-  const [pools, setPools] = useState<any[]>([]);
-  const [leverageManagers, setLeverageManagers] = useState<any[]>([]);
+  const [collaterals, setCollaterals] = useState<LoopContract[]>([]);
+  const [vaults, setVaults] = useState<LoopContract[]>([]);
+  const [pools, setPools] = useState<LoopContract[]>([]);
+  const [leverageManagers, setLeverageManagers] = useState<LoopContract[]>([]);
   const [hasPosition, setHasPosition] = useState(false);
   const [currentVault, setCurrentVault] = useState<any>(null);
 
-  // Load contracts
-  useEffect(() => {
-    if (!canton.connected) return;
-    async function load() {
+  // Load contracts using Loop SDK
+  const loadContracts = useCallback(async () => {
+    if (!loopWallet.isConnected) return;
+    
+    try {
       const [v, c, p, o, lm] = await Promise.all([
-        canton.query("MintedProtocolV2Fixed:Vault"),
-        canton.query("MintedProtocolV2Fixed:Collateral"),
-        canton.query("MintedProtocol:LiquidityPool"),
-        canton.query("MintedProtocolV2Fixed:PriceOracle"),
-        canton.query("MintedProtocol:LeverageManager"),
+        loopWallet.queryContracts(VAULT_TEMPLATE),
+        loopWallet.queryContracts(COLLATERAL_TEMPLATE),
+        loopWallet.queryContracts(POOL_TEMPLATE),
+        loopWallet.queryContracts(ORACLE_TEMPLATE),
+        loopWallet.queryContracts(LEVERAGE_MANAGER_TEMPLATE),
       ]);
+      
       setVaults(v);
       setCollaterals(c);
       setPools(p);
       setLeverageManagers(lm);
       
-      if (v.length > 0) {
-        setVaultCid(v[0].contractId);
-        setCurrentVault(v[0].payload);
-        setHasPosition(v[0].payload.debtAmount > 0);
+      // Find user's vault
+      const userVault = v.find(vault => vault.payload.owner === loopWallet.partyId);
+      if (userVault) {
+        setVaultCid(userVault.contractId);
+        setCurrentVault(userVault.payload);
+        setHasPosition(userVault.payload.debtAmount > 0);
       }
+      
+      // Set first available contracts
       if (c.length > 0) setCollateralCid(c[0].contractId);
       if (p.length > 0) setPoolCid(p[0].contractId);
       if (o.length > 0) setOracleCid(o[0].contractId);
+      
+    } catch (err: any) {
+      console.error("Failed to load contracts:", err);
+      setError(err.message);
     }
-    load();
-  }, [canton.connected]);
+  }, [loopWallet.isConnected, loopWallet.partyId, loopWallet.queryContracts]);
+
+  useEffect(() => {
+    loadContracts();
+  }, [loadContracts]);
 
   // Calculate loops needed for target leverage
   const calculateLoops = (targetLeverage: number): number => {
@@ -65,7 +86,7 @@ export function CantonLeverage({ canton }: Props) {
     return Math.min(Math.max(loopsNeeded, 1), 10);
   };
 
-  // Open leveraged position
+  // Open leveraged position using Loop SDK
   async function handleOpenPosition() {
     if (!collateralCid || !poolCid || !oracleCid) {
       setError("Missing required contracts");
@@ -83,8 +104,8 @@ export function CantonLeverage({ canton }: Props) {
       
       if (!targetVaultCid) {
         // Create new vault with initial collateral
-        const createRes = await canton.exercise(
-          "MintedProtocolV2Fixed:Collateral",
+        const createRes = await loopWallet.exerciseChoice(
+          COLLATERAL_TEMPLATE,
           collateralCid,
           "CreateVault",
           { minCollateralRatio: 1.5 }
@@ -93,8 +114,8 @@ export function CantonLeverage({ canton }: Props) {
       } else {
         // Deposit more collateral to existing vault
         if (depositAmount && parseFloat(depositAmount) > 0) {
-          await canton.exercise(
-            "MintedProtocolV2Fixed:Vault",
+          await loopWallet.exerciseChoice(
+            VAULT_TEMPLATE,
             targetVaultCid,
             "Vault_Deposit",
             { depositCid: collateralCid }
@@ -102,20 +123,21 @@ export function CantonLeverage({ canton }: Props) {
         }
       }
 
-      // Find or create LeverageManager for this user
-      let managerCid = leverageManagers.find(lm => lm.payload.user === canton.party)?.contractId;
+      // Find LeverageManager for this user
+      const manager = leverageManagers.find(
+        lm => lm.payload.user === loopWallet.partyId
+      );
       
-      if (!managerCid) {
-        // Request leverage manager creation (requires operator signature in production)
+      if (!manager) {
         setError("No LeverageManager found. Contact admin to enable leverage.");
         setLoading(false);
         return;
       }
 
-      // Execute leverage loops
-      const leverageRes = await canton.exercise(
-        "MintedProtocol:LeverageManager",
-        managerCid,
+      // Execute leverage loops via Loop SDK
+      const leverageRes = await loopWallet.exerciseChoice(
+        LEVERAGE_MANAGER_TEMPLATE,
+        manager.contractId,
         "Loop_Leverage",
         {
           vaultCid: targetVaultCid,
@@ -126,13 +148,11 @@ export function CantonLeverage({ canton }: Props) {
       );
 
       setResult(`Opened ${(leverageX10 / 10).toFixed(1)}x position with ${loops} loops`);
-      setVaultCid(leverageRes);
       setHasPosition(true);
       setDepositAmount("");
       
-      // Refresh vault data
-      const updatedVault = await canton.fetch("MintedProtocolV2Fixed:Vault", leverageRes);
-      setCurrentVault(updatedVault?.payload);
+      // Refresh contracts
+      await loadContracts();
       
     } catch (err: any) {
       setError(err.message || "Failed to open position");
@@ -150,24 +170,26 @@ export function CantonLeverage({ canton }: Props) {
 
     try {
       // Get mUSD to repay
-      const musdContracts = await canton.query("MintedProtocolV2Fixed:MUSD");
-      if (musdContracts.length === 0) {
+      const musdContracts = await loopWallet.queryContracts(MUSD_TEMPLATE);
+      const userMusd = musdContracts.find(m => m.payload.owner === loopWallet.partyId);
+      
+      if (!userMusd) {
         setError("No mUSD available to repay debt");
         setLoading(false);
         return;
       }
 
       // Repay all debt
-      await canton.exercise(
-        "MintedProtocolV2Fixed:Vault",
+      await loopWallet.exerciseChoice(
+        VAULT_TEMPLATE,
         vaultCid,
         "Vault_Repay",
-        { musdCid: musdContracts[0].contractId }
+        { musdCid: userMusd.contractId }
       );
 
       // Withdraw all collateral
-      await canton.exercise(
-        "MintedProtocolV2Fixed:Vault",
+      await loopWallet.exerciseChoice(
+        VAULT_TEMPLATE,
         vaultCid,
         "Vault_WithdrawCollateral",
         { amount: currentVault?.collateralAmount || 0 }
@@ -177,6 +199,9 @@ export function CantonLeverage({ canton }: Props) {
       setHasPosition(false);
       setCurrentVault(null);
       
+      // Refresh contracts
+      await loadContracts();
+      
     } catch (err: any) {
       setError(err.message || "Failed to close position");
     } finally {
@@ -184,10 +209,20 @@ export function CantonLeverage({ canton }: Props) {
     }
   }
 
-  if (!canton.connected) {
+  // Not connected state
+  if (!loopWallet.isConnected) {
     return (
-      <div className="text-center text-gray-400 py-20">
-        Connect to Canton Ledger to use leverage
+      <div className="space-y-6">
+        <h1 className="text-3xl font-bold text-white">Leverage Vault</h1>
+        <p className="text-purple-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
+        
+        <div className="max-w-md mx-auto">
+          <WalletConnector mode="canton" />
+        </div>
+        
+        <div className="text-center text-gray-400 py-8">
+          Connect your Loop Wallet to use Canton leverage
+        </div>
       </div>
     );
   }
@@ -204,20 +239,20 @@ export function CantonLeverage({ canton }: Props) {
       {/* Stats Row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard 
-          title="Available Collateral" 
+          label="Available Collateral" 
           value={collaterals[0]?.payload?.amount?.toFixed(2) || "0"} 
         />
         <StatCard 
-          title="Current Leverage" 
+          label="Current Leverage" 
           value={hasPosition ? `${effectiveLeverage}x` : "None"}
         />
         <StatCard 
-          title="Vault Debt" 
+          label="Vault Debt" 
           value={currentVault?.debtAmount?.toFixed(2) || "0"}
-          suffix="mUSD"
+          subValue="mUSD"
         />
         <StatCard 
-          title="Health Factor" 
+          label="Health Factor" 
           value={currentVault?.healthFactor?.toFixed(2) || "∞"}
         />
       </div>
