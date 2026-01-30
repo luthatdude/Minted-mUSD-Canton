@@ -4,6 +4,7 @@
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
 import { createLogger, format, transports } from "winston";
+import MEVProtectedExecutor from "./flashbots";
 
 dotenv.config();
 
@@ -126,6 +127,7 @@ class LiquidationBot {
   private collateralVault: ethers.Contract;
   private priceOracle: ethers.Contract;
   private musd: ethers.Contract;
+  private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
   private supportedTokens: string[] = [];
@@ -145,6 +147,12 @@ class LiquidationBot {
     this.collateralVault = new ethers.Contract(config.collateralVault, COLLATERAL_VAULT_ABI, this.wallet);
     this.priceOracle = new ethers.Contract(config.priceOracle, PRICE_ORACLE_ABI, this.provider);
     this.musd = new ethers.Contract(config.musd, ERC20_ABI, this.wallet);
+    
+    // Initialize MEV protection if enabled
+    if (config.useFlashbots) {
+      this.mevExecutor = new MEVProtectedExecutor(this.provider, this.wallet, config.chainId);
+      logger.info("Flashbots MEV protection enabled");
+    }
   }
 
   async initialize(): Promise<void> {
@@ -370,28 +378,48 @@ class LiquidationBot {
         return;
       }
       
-      // Get gas settings
-      const feeData = await this.provider.getFeeData();
-      const gasPrice = feeData.gasPrice || 0n;
-      const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
+      let success = false;
+      let txHash: string | undefined;
       
-      // Execute liquidation
-      const tx = await this.liquidationEngine.liquidate(
-        opp.borrower,
-        opp.collateralToken,
-        opp.debtToRepay,
-        {
-          gasLimit: 500000n,
-          gasPrice: bufferedGasPrice,
-        }
-      );
+      // Use Flashbots if enabled for MEV protection
+      if (this.mevExecutor && config.useFlashbots) {
+        logger.info("Executing via Flashbots (MEV protected)...");
+        const result = await this.mevExecutor.executeWithFallback(
+          this.liquidationEngine,
+          opp.borrower,
+          opp.collateralToken,
+          opp.debtToRepay,
+          true // useFlashbots
+        );
+        success = result.success;
+        txHash = result.txHash;
+        logger.info(`Execution method: ${result.method}`);
+      } else {
+        // Regular transaction (public mempool)
+        logger.info("Executing via regular transaction...");
+        const feeData = await this.provider.getFeeData();
+        const gasPrice = feeData.gasPrice || 0n;
+        const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
+        
+        const tx = await this.liquidationEngine.liquidate(
+          opp.borrower,
+          opp.collateralToken,
+          opp.debtToRepay,
+          {
+            gasLimit: 500000n,
+            gasPrice: bufferedGasPrice,
+          }
+        );
+        
+        logger.info(`Transaction submitted: ${tx.hash}`);
+        txHash = tx.hash;
+        
+        const receipt = await tx.wait();
+        success = receipt.status === 1;
+      }
       
-      logger.info(`Transaction submitted: ${tx.hash}`);
-      
-      const receipt = await tx.wait();
-      
-      if (receipt.status === 1) {
-        logger.info(`✅ Liquidation successful! Gas used: ${receipt.gasUsed}`);
+      if (success) {
+        logger.info(`✅ Liquidation successful! TX: ${txHash}`);
         this.totalProfitUsd += opp.estimatedProfitUsd;
         
         // Remove borrower if fully liquidated

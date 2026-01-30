@@ -132,15 +132,59 @@ await liquidationEngine.liquidate(
 - Consider using Flashbots to avoid front-running
 - Run on a secure server with restricted access
 
-## MEV Protection (Optional)
+## MEV Protection
 
-To avoid being front-run by other bots:
+The bot includes full Flashbots integration to avoid front-running by other bots.
+
+### Enable Flashbots
 
 ```bash
-# Enable in .env
+# In .env
 USE_FLASHBOTS=true
 FLASHBOTS_RELAY_URL=https://relay.flashbots.net
 ```
+
+### How It Works
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Liquidation    │────▶│  Flashbots Relay │────▶│   Block Builder │
+│     Bot         │     │  (private)       │     │   (MEV-Boost)   │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                                                          │
+                                                          ▼
+                                                 ┌─────────────────┐
+                                                 │   Ethereum      │
+                                                 │   Block         │
+                                                 └─────────────────┘
+```
+
+1. **Bundle Creation** - Transaction is signed but NOT broadcast publicly
+2. **Simulation** - Flashbots simulates to verify it won't revert
+3. **Private Submission** - Bundle sent directly to block builders
+4. **Inclusion** - Builders include bundle if profitable
+5. **No Front-running** - Transaction never hits public mempool
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **Private Mempool** | Transactions not visible to other bots |
+| **Bundle Simulation** | Verify success before paying gas |
+| **Auto-Retry** | Tries inclusion for 5 consecutive blocks |
+| **Fallback** | Falls back to regular tx if Flashbots fails |
+
+### Alternative: Flashbots Protect RPC
+
+For simpler MEV protection without bundles, use Flashbots Protect RPC:
+
+```bash
+# Just replace your RPC_URL with:
+RPC_URL=https://rpc.flashbots.net
+USE_FLASHBOTS=false
+```
+
+This sends transactions through a private channel without the bundle complexity.
 
 ## Monitoring & Alerts
 
