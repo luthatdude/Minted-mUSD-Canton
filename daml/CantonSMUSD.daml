@@ -26,12 +26,14 @@ import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 -- | Individual smUSD position.
 -- Represents a user's share in the yield vault.
 -- Amount is in "shares" — redeemable for mUSD at current share price.
+-- Yield can be claimed without unstaking via ClaimYield.
 template CantonSMUSD
   with
     issuer : Party
     owner : Party
-    shares : Money          -- Number of shares (not mUSD amount)
-    entrySharePrice : Money -- Share price when staked (for tracking)
+    shares : Money              -- Number of shares (not mUSD amount)
+    entrySharePrice : Money     -- Share price when staked (for tracking)
+    lastClaimedPrice : Money    -- Share price at last yield claim
   where
     signatory issuer, owner
 
@@ -149,12 +151,13 @@ template CantonStakingService
         -- Lock the mUSD (burn from user, add to pool)
         exercise musdCid CantonMUSD_Burn
 
-        -- Issue smUSD shares
+        -- Issue smUSD shares (lastClaimedPrice = entry price, no yield yet)
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = newShares
           entrySharePrice = sharePrice
+          lastClaimedPrice = sharePrice
 
         -- Update pool state
         newService <- create this with
@@ -202,6 +205,51 @@ template CantonStakingService
 
         return (newService, musdCid)
 
+    -- | Claim yield without unstaking.
+    -- User keeps their smUSD shares but receives accumulated yield as mUSD.
+    -- Yield = shares × (currentSharePrice - lastClaimedPrice)
+    choice ClaimYield : (ContractId CantonStakingService, ContractId CantonSMUSD, ContractId CantonMUSD)
+      with
+        user : Party
+        smusdCid : ContractId CantonSMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        smusd <- fetch smusdCid
+        assertMsg "OWNER_MISMATCH" (smusd.owner == user)
+
+        -- Calculate current share price
+        let currentPrice = if totalShares == 0.0
+              then 1.000000000000000000
+              else totalAssets / totalShares
+
+        -- Calculate yield since last claim
+        let priceDelta = currentPrice - smusd.lastClaimedPrice
+        assertMsg "NO_YIELD_TO_CLAIM" (priceDelta > 0.0)
+
+        let yieldAmount = smusd.shares * priceDelta
+        assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= yieldAmount)
+
+        -- Update smUSD position with new claimed price (keep shares)
+        archive smusdCid
+        newSmusdCid <- create smusd with
+          lastClaimedPrice = currentPrice
+
+        -- Mint yield as mUSD to user
+        yieldMusdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = yieldAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Reduce pool assets by claimed yield
+        newService <- create this with
+          totalAssets = totalAssets - yieldAmount
+
+        return (newService, newSmusdCid, yieldMusdCid)
+
     -- | Sync yield from Ethereum via attestation.
     -- Called by operator after a YieldAttestation is finalized.
     -- Increases totalAssets → increases share price → smUSD holders profit.
@@ -228,3 +276,98 @@ template CantonStakingService
       controller operator
       do
         create this with paused = newPaused
+
+-- ============================================================
+--                     SECTION 3: YIELD DISTRIBUTION
+-- ============================================================
+
+-- | Pending yield claim for a user.
+-- Created when yield is auto-distributed, user can claim anytime.
+-- This allows yield to be pushed without requiring user to initiate.
+template PendingYieldClaim
+  with
+    operator : Party
+    user : Party
+    yieldAmount : Money           -- mUSD yield owed
+    epochNumber : Int             -- From which yield epoch
+    createdAt : Time
+    mpaHash : Text
+    mpaUri : Text
+  where
+    signatory operator
+    observer user
+
+    ensure yieldAmount > 0.0
+
+    -- User claims their pending yield → gets mUSD
+    choice YieldClaim_Collect : ContractId CantonMUSD
+      controller user
+      do
+        create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = yieldAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+    -- Admin can cancel if needed (e.g., compliance issue)
+    choice YieldClaim_Cancel : ()
+      controller operator
+      do pure ()
+
+-- | Yield distribution request from Ethereum.
+-- When ETH Treasury has yield to distribute, a bridge-in brings USDC
+-- which backs the mUSD that will be distributed to stakers.
+template YieldDistributionRequest
+  with
+    operator : Party
+    totalYieldAmount : Money      -- Total yield to distribute
+    epochNumber : Int
+    backingBridgedIn : Bool       -- Whether USDC backing has arrived
+    createdAt : Time
+  where
+    signatory operator
+
+    ensure totalYieldAmount > 0.0
+
+    -- Mark backing as received (after bridge-in from Ethereum)
+    choice YieldDist_ConfirmBacking : ContractId YieldDistributionRequest
+      controller operator
+      do
+        create this with backingBridgedIn = True
+
+    -- Distribute yield to a specific staker (called per position)
+    -- This pushes yield without user action
+    choice YieldDist_DistributeToStaker : (ContractId YieldDistributionRequest, ContractId PendingYieldClaim)
+      with
+        smusdCid : ContractId CantonSMUSD
+        stakingServiceCid : ContractId CantonStakingService
+        mpaHash : Text
+        mpaUri : Text
+      controller operator
+      do
+        assertMsg "BACKING_NOT_BRIDGED" backingBridgedIn
+
+        smusd <- fetch smusdCid
+        service <- fetch stakingServiceCid
+
+        -- Calculate this user's share of yield
+        let userShareRatio = smusd.shares / service.totalShares
+        let userYield = totalYieldAmount * userShareRatio
+
+        now <- getTime
+        claimCid <- create PendingYieldClaim with
+          operator = operator
+          user = smusd.owner
+          yieldAmount = userYield
+          epochNumber = epochNumber
+          createdAt = now
+          mpaHash = mpaHash
+          mpaUri = mpaUri
+
+        -- Track remaining yield to distribute
+        let remainingYield = totalYieldAmount - userYield
+        newDistReq <- create this with
+          totalYieldAmount = remainingYield
+
+        return (newDistReq, claimCid)
