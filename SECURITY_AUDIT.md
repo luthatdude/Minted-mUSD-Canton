@@ -66,58 +66,127 @@ Minted mUSD is a **stablecoin protocol** that issues mUSD tokens backed by:
 
 ### 2.1 Core Token Flow
 
+Every function available on Ethereum has a Canton-side equivalent. The Canton side is a thin accounting layer — actual USDC backing lives on Ethereum where yield is generated. Canton operations route to the Ethereum Treasury via the validator-attested bridge.
+
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           MINTED mUSD PROTOCOL                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ┌──────────────┐    attestations    ┌──────────────┐                       │
-│  │ Canton       │ ────────────────▶  │ BLEBridgeV9  │ ──▶ setSupplyCap()   │
-│  │ Validators   │   (multi-sig)      └──────────────┘                       │
-│  └──────────────┘                           │                               │
-│                                             ▼                               │
-│  ┌──────────────┐    deposit USDC    ┌──────────────┐      ┌──────────────┐ │
-│  │ Users        │ ────────────────▶  │ DirectMint   │ ──▶  │    MUSD      │ │
-│  │              │ ◀──── mint mUSD ── │   /V2        │      │  (ERC-20)    │ │
-│  └──────────────┘                    └──────────────┘      └──────────────┘ │
-│         │                                   │                      │        │
-│         │                                   ▼                      ▼        │
-│         │                            ┌──────────────┐      ┌──────────────┐ │
-│         │                            │  Treasury    │      │   SMUSD      │ │
-│         │                            │    /V2       │      │  (ERC-4626)  │ │
-│         │                            └──────────────┘      └──────────────┘ │
-│         │                                   │                               │
-│         │                                   ▼                               │
-│         │                            ┌──────────────┐                       │
-│         │                            │  Strategies  │ ◀── Yield generation │
-│         │                            └──────────────┘                       │
-│         │                                                                   │
-│  ┌──────┴──────────────────────────────────────────────────────────────┐   │
-│  │                    OVERCOLLATERALIZED BORROWING                      │   │
-│  │                                                                      │   │
-│  │  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐       │   │
-│  │  │ Collateral   │ ◀──▶ │ BorrowModule │ ◀──▶ │ Liquidation  │       │   │
-│  │  │ Vault        │      │              │      │ Engine       │       │   │
-│  │  └──────────────┘      └──────────────┘      └──────────────┘       │   │
-│  │         ▲                     ▲                                      │   │
-│  │         │                     │                                      │   │
-│  │         └──────────┬──────────┘                                      │   │
-│  │                    ▼                                                 │   │
-│  │            ┌──────────────┐                                          │   │
-│  │            │ PriceOracle  │ ◀── Chainlink Feeds                      │   │
-│  │            └──────────────┘                                          │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                       MINTED mUSD PROTOCOL                                          │
+│                                                                                                     │
+│  CANTON NETWORK (DAML)                          │  ETHEREUM (Solidity)                              │
+│  Thin accounting layer                          │  Backing + yield layer                            │
+│                                                 │                                                   │
+│  ┌──────────────────┐                           │  ┌──────────────────┐                             │
+│  │ CantonDirectMint │   BridgeOutRequest        │  │ DirectMint/V2    │                             │
+│  │  (deposit USDC   │ ─────────────────────────▶│  │  (deposit USDC   │                             │
+│  │   → mint mUSD)   │   backing stables piped   │  │   → mint mUSD)   │                             │
+│  │                  │   to ETH Treasury          │  │                  │                             │
+│  │  Also: USDCx via │                           │  └────────┬─────────┘                             │
+│  │  Circle CCTP     │                           │           │                                       │
+│  └────────┬─────────┘                           │           ▼                                       │
+│           │                                     │  ┌──────────────────┐                             │
+│           ▼                                     │  │  Treasury/V2     │                             │
+│  ┌──────────────────┐                           │  │  (USDC custody + │                             │
+│  │   CantonMUSD     │◀───────────────────────── │  │   yield alloc)   │                             │
+│  │  (DAML token,    │  SupplyCapAttestation      │  └────────┬─────────┘                             │
+│  │   dual-signatory)│  syncs global supply       │           │                                       │
+│  └────────┬─────────┘                           │           ▼                                       │
+│           │                                     │  ┌──────────────────┐                             │
+│           ▼                                     │  │  Strategies      │ ◀── Yield generation        │
+│  ┌──────────────────┐                           │  └────────┬─────────┘                             │
+│  │  CantonSMUSD     │◀───────────────────────── │           │                                       │
+│  │  (yield vault,   │  YieldAttestation          │           │ yield data                            │
+│  │   ERC-4626       │  syncs share price         │           ▼                                       │
+│  │   equivalent)    │                           │  ┌──────────────────┐                             │
+│  └──────────────────┘                           │  │   SMUSD          │                             │
+│                                                 │  │  (ERC-4626)      │                             │
+│  ┌──────────────────┐     Redemption →          │  └──────────────────┘                             │
+│  │ RedemptionRequest│  BridgeInAttestation       │                                                   │
+│  │  (burn mUSD,     │ ◀─────────────────────────│  ┌──────────────────┐                             │
+│  │   await bridge)  │  USDC bridged back         │  │   MUSD (ERC-20)  │                             │
+│  └──────────────────┘                           │  └──────────────────┘                             │
+│                                                 │                                                   │
+│  ┌──────────────────┐                           │  ┌──────────────────┐                             │
+│  │  ComplianceReg   │                           │  │  MUSD.blacklist  │                             │
+│  │  (blacklist +    │                           │  │  (OFAC/sanctions)│                             │
+│  │   freeze, DAML)  │                           │  └──────────────────┘                             │
+│  └──────────────────┘                           │                                                   │
+│                                                 │                                                   │
+│  ┌──────────────────────────────────────────┐   │  ┌──────────────────────────────────────────┐    │
+│  │         OVERCOLLATERALIZED BORROWING      │   │  │         OVERCOLLATERALIZED BORROWING      │    │
+│  │            (Canton / V3 Module)            │   │  │            (Ethereum / Solidity)           │    │
+│  │                                            │   │  │                                            │    │
+│  │  ┌────────────┐  ┌────────────┐            │   │  │  ┌────────────┐  ┌────────────┐            │    │
+│  │  │   Vault    │◀▶│ Liquidation│            │   │  │  │ Collateral │◀▶│ BorrowModule│            │    │
+│  │  │   (CDP)    │  │  + Keeper  │            │   │  │  │ Vault      │  │             │            │    │
+│  │  └─────┬──────┘  │  Receipts  │            │   │  │  └─────┬──────┘  └──────┬──────┘            │    │
+│  │        │         └────────────┘            │   │  │        │                │                   │    │
+│  │        ▼                                   │   │  │        ▼                ▼                   │    │
+│  │  ┌────────────┐  ┌────────────┐            │   │  │  ┌────────────┐  ┌────────────┐            │    │
+│  │  │ PriceOracle│  │ Liquidity  │            │   │  │  │ Liquidation│  │ PriceOracle│            │    │
+│  │  │ (provider- │  │ Pool (DEX) │            │   │  │  │ Engine     │  │ (Chainlink)│            │    │
+│  │  │  signed)   │  └────────────┘            │   │  │  └────────────┘  └────────────┘            │    │
+│  │  └────────────┘                            │   │  │                                            │    │
+│  │  ┌────────────┐                            │   │  │                                            │    │
+│  │  │ Leverage   │ (atomic loops, max 10)     │   │  │                                            │    │
+│  │  │ Manager    │                            │   │  │                                            │    │
+│  │  └────────────┘                            │   │  │                                            │    │
+│  └──────────────────────────────────────────┘   │  └──────────────────────────────────────────┘    │
+│                                                 │                                                   │
+├─────────────────────────────────────────────────┼───────────────────────────────────────────────────┤
+│                                                 │                                                   │
+│               ┌──────────────────────────────────────────────────────┐                              │
+│               │              VALIDATOR BRIDGE LAYER                   │                              │
+│               │                                                      │                              │
+│               │  ┌──────────────┐     ┌──────────────┐               │                              │
+│               │  │ Canton       │     │ BLEBridgeV9  │               │                              │
+│               │  │ Validators   │────▶│ (Solidity)   │               │                              │
+│               │  │ (multi-sig   │     │              │               │                              │
+│               │  │  attestation)│◀────│ processAttest│               │                              │
+│               │  └──────────────┘     └──────────────┘               │                              │
+│               │                                                      │                              │
+│               │  Attestation Types:                                  │                              │
+│               │  ├── BridgeOutAttestation  (Canton → ETH backing)    │                              │
+│               │  ├── BridgeInAttestation   (ETH → Canton redemption) │                              │
+│               │  ├── SupplyCapAttestation  (global supply sync)      │                              │
+│               │  └── YieldAttestation      (ETH yield → Canton smUSD)│                              │
+│               └──────────────────────────────────────────────────────┘                              │
+│                                                                                                     │
+│  GLOBAL INVARIANT: Canton mUSD + Ethereum mUSD ≤ Total USDC Backing (Ethereum Treasury)            │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Trust Assumptions
+### 2.2 Canton↔Ethereum Function Mapping
+
+Every user-facing function on Ethereum has a Canton-side equivalent. Canton operations that affect backing are routed to the Ethereum Treasury via the bridge.
+
+| Function | Ethereum (Solidity) | Canton (DAML) | Bridge Route |
+|----------|-------------------|---------------|--------------|
+| **Mint mUSD** | `DirectMintV2.mint()` — USDC in, mUSD out | `CantonDirectMintService.DirectMint_Mint` — USDC in, CantonMUSD out | `BridgeOutRequest` pipes USDC to ETH Treasury |
+| **Mint via USDCx** | N/A (direct USDC only) | `DirectMint_MintWithUSDCx` — Circle CCTP USDCx in | No bridge needed — USDCx already backed on ETH via xReserve |
+| **Redeem mUSD** | `DirectMintV2.redeem()` — mUSD burned, USDC out | `DirectMint_Redeem` — CantonMUSD burned, `RedemptionRequest` created | `BridgeInAttestation` brings USDC back from ETH |
+| **Stake (smUSD)** | `SMUSD.deposit()` — ERC-4626 vault | `CantonStakingService.Stake` — mUSD → smUSD shares | None — share accounting is local |
+| **Unstake** | `SMUSD.withdraw()` — shares → mUSD | `CantonStakingService.Unstake` — shares × sharePrice → mUSD | None — yield synced via `YieldAttestation` |
+| **Yield sync** | Native (Treasury strategies report directly) | `CantonStakingService.SyncYield` — operator applies attested yield | `YieldAttestation` (ETH → Canton) |
+| **Borrow** | `BorrowModule.borrow()` — collateral → mUSD | `Vault.Vault_Borrow` — collateral → mUSD (V3) | None — collateral + debt tracked locally |
+| **Repay** | `BorrowModule.repay()` — mUSD → reduce debt | `Vault.Vault_Repay` (V3) | None |
+| **Liquidate** | `LiquidationEngine.liquidate()` | `LiquidationEngine.Liquidate` (V2Fixed) / `Vault.Vault_Liquidate` (V3) | None |
+| **Supply cap sync** | `BLEBridgeV9.processAttestation()` → `setSupplyCap()` | `SupplyCapAttestation.SupplyCap_Finalize` | Bidirectional — keeps both chains in sync |
+| **Compliance** | `MUSD.blacklist()` / `unblacklist()` | `ComplianceRegistry.BlacklistUser` / `FreezeUser` | Independent — each chain enforces its own |
+| **Transfer** | `MUSD.transfer()` (ERC-20) | `CantonMUSD_Transfer` → proposal → accept (dual-signatory) | None |
+| **Price feeds** | `PriceOracle` → Chainlink aggregation | `PriceOracle.GetPrice` (provider-signed, staleness check) | None — independent oracle infrastructure |
+
+### 2.3 Trust Assumptions
 
 | Entity | Trust Level | Failure Mode |
 |--------|-------------|--------------|
-| Canton Validators | **High** | Compromised validators could inflate supply cap up to daily rate limit |
-| Protocol Admin | **High** | Can upgrade contracts, change fees, add strategies |
+| Canton Validators | **Critical** | Compromised majority could forge attestations — inflate supply cap, fake yield, authorize unbacked bridge transfers |
+| Protocol Admin (ETH) | **High** | Can upgrade contracts (UUPS), change fees, add strategies |
+| Protocol Operator (Canton) | **High** | Controls service templates, pause, supply cap, fee changes, compliance registry |
 | Strategy Contracts | **High** | Malicious strategy could steal treasury funds |
-| Chainlink Oracles | **Medium** | Oracle failure/manipulation affects liquidations |
+| Chainlink Oracles (ETH) | **Medium** | Oracle failure/manipulation affects ETH-side liquidations |
+| Canton PriceOracle | **Medium** | Provider-signed feeds — staleness enforced but single provider |
+| Aggregator | **Medium** | Initiates/finalizes attestations — cannot forge without validator quorum |
+| xReserve (USDCx) | **Medium** | USDCx backing depends on Circle CCTP + xReserve solvency |
 | Liquidators | **Low** | MEV extraction expected, benefits protocol security |
 
 ---
