@@ -85,15 +85,19 @@ contract PriceOracle is AccessControl {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
+        // FIX M-23: Capture roundId and answeredInRound for staleness check
         (
-            ,
+            uint80 roundId,
             int256 answer,
             ,
             uint256 updatedAt,
+            uint80 answeredInRound
         ) = config.feed.latestRoundData();
 
         require(answer > 0, "INVALID_PRICE");
         require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        // FIX M-23: Ensure the round was fully answered (not incomplete)
+        require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();
         require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
@@ -111,15 +115,19 @@ contract PriceOracle is AccessControl {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
+        // FIX M-23: Capture roundId and answeredInRound for staleness check
         (
-            ,
+            uint80 roundId,
             int256 answer,
             ,
             uint256 updatedAt,
+            uint80 answeredInRound
         ) = config.feed.latestRoundData();
 
         require(answer > 0, "INVALID_PRICE");
         require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        // FIX M-23: Ensure the round was fully answered (not incomplete)
+        require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();
         require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
