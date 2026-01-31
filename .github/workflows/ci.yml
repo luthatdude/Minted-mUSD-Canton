@@ -218,5 +218,5 @@ jobs:
         # Fails on HIGH or CRITICAL vulnerabilities
 
       - name: Check for known vulnerabilities
-        run: npx audit-ci --high
-        # Only fail on HIGH severity, not moderate
+        run: npx audit-ci --config audit-ci.json
+        # GHSA-37qj-frw5-hhjh allowlisted (mitigated via npm override)
