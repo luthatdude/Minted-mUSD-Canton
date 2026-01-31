@@ -460,13 +460,13 @@ musdAssetTest = script do
   issuer <- allocateParty "Issuer"
   alice <- allocateParty "Alice"
 
-  -- Create issuer role
+  -- Create issuer role (alice as observer for dual-controller mint)
   roleCid <- submit issuer do
     createCmd MintedMUSD.IssuerRole with
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
-      observers = []
+      observers = [alice]
 
   -- Direct mint (admin/bootstrap path)
   -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
@@ -564,12 +564,13 @@ musdAttestationMintTest = script do
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
 
   -- Create issuer role and mint mUSD (attestation verified above)
+  -- alice as observer for dual-controller mint
   roleCid <- submit issuer do
     createCmd MintedMUSD.IssuerRole with
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
-      observers = []
+      observers = [alice]
 
   -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
@@ -590,13 +591,13 @@ musdTransferTest = script do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
 
-  -- Create issuer role and mint
+  -- Create issuer role and mint (alice as observer for dual-controller)
   roleCid <- submit issuer do
     createCmd MintedMUSD.IssuerRole with
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
-      observers = []
+      observers = [alice]
 
   -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
@@ -641,13 +642,13 @@ musdMintRequestTest = script do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
 
-  -- Create issuer role for supply cap tracking
+  -- Create issuer role for supply cap tracking (alice as observer for dual-controller)
   roleCid <- submit issuer do
     createCmd MintedMUSD.IssuerRole with
       issuer
       supplyCap = 10000000.0
       currentSupply = 0.0
-      observers = []
+      observers = [alice]
 
   -- Alice requests minting 1000 mUSD
   requestCid <- submit alice do
