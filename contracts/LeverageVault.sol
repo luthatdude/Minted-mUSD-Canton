@@ -37,6 +37,7 @@ interface ICollateralVault {
         bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps
     );
     function depositFor(address user, address token, uint256 amount) external;
+    function withdrawFor(address user, address token, uint256 amount, address recipient) external;
 }
 
 /// @notice mUSD mint interface
@@ -276,6 +277,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
 
         address collateralToken = pos.collateralToken;
         uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
+        
+        // Get total collateral in vault
+        uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);
 
         if (debtToRepay > 0) {
             // Calculate how much collateral to sell to cover debt
@@ -283,10 +287,14 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
 
             // Add slippage buffer
             collateralToSell = (collateralToSell * (10000 + maxSlippageBps)) / 10000;
+            
+            // Cap at available collateral
+            if (collateralToSell > totalCollateralInVault) {
+                collateralToSell = totalCollateralInVault;
+            }
 
-            // Withdraw collateral to sell
-            // Note: This requires CollateralVault to support withdrawFor or user pre-approval
-            // For now, we assume user has withdrawn or this contract has permission
+            // FIX: Actually withdraw collateral from vault to this contract
+            collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this));
 
             // Swap collateral → mUSD
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
@@ -299,16 +307,25 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // Swap excess mUSD back to collateral
+                // Swap excess mUSD back to collateral (received to this contract)
                 _swapMusdToCollateral(collateralToken, excessMusd);
             }
         }
 
-        // Withdraw remaining collateral to user
+        // FIX: Withdraw ALL remaining collateral from vault to user
         uint256 remainingCollateral = collateralVault.deposits(msg.sender, collateralToken);
+        if (remainingCollateral > 0) {
+            collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender);
+        }
+        
+        // Also send any collateral held by this contract to user
+        uint256 heldCollateral = IERC20(collateralToken).balanceOf(address(this));
+        if (heldCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(msg.sender, heldCollateral);
+            remainingCollateral += heldCollateral;
+        }
+        
         require(remainingCollateral >= minCollateralOut, "SLIPPAGE_EXCEEDED");
-
-        // Note: User must withdraw from CollateralVault separately, or we need withdrawFor
 
         collateralReturned = remainingCollateral;
 
