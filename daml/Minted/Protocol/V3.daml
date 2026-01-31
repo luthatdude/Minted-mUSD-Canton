@@ -356,7 +356,7 @@ template Vault
         let newCollateral = collateralAmount + depositAmount
         
         -- Get oracle price
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = owner
         
         -- Recursive leverage loop
         let loopFn (col, debt, pCid) _ = do
@@ -422,7 +422,7 @@ template Vault
         let newCollateral = collateralAmount - withdrawAmount
         
         -- Health check
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = owner
         let newValue = newCollateral * price
         let totalDebt = principalDebt + accruedInterest
         assertMsg "UNHEALTHY_AFTER_WITHDRAW" (totalDebt == 0.0 || newValue >= totalDebt * config.liquidationThreshold)
@@ -446,7 +446,7 @@ template Vault
         let totalDebt = principalDebt + accruedInterest + newInterest
         
         -- Check if vault is liquidatable
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = liquidator
         let colValue = collateralAmount * price
         let healthBefore = colValue / totalDebt
         assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)
