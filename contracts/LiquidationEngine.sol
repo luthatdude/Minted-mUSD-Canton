@@ -6,6 +6,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -47,10 +48,11 @@ interface IMUSDBurn {
 /// @notice Liquidates undercollateralized borrowing positions.
 ///         Liquidators repay a portion of the debt in mUSD and receive
 ///         the borrower's collateral at a discount (liquidation penalty).
-contract LiquidationEngine is AccessControl, ReentrancyGuard {
+contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant ENGINE_ADMIN_ROLE = keccak256("ENGINE_ADMIN_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     ICollateralVaultLiq public immutable vault;
     IBorrowModule public immutable borrowModule;
@@ -106,7 +108,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         address borrower,
         address collateralToken,
         uint256 debtToRepay
-    ) external nonReentrant {
+    ) external nonReentrant whenNotPaused {
         require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
         require(debtToRepay > 0, "INVALID_AMOUNT");
 
@@ -137,17 +139,15 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         require(collateralPrice > 0, "INVALID_PRICE");
 
-        // debtRepaid is in 18 decimals (mUSD), price is in 18 decimals (USD per token)
-        // seize value in USD = actualRepay * (10000 + penaltyBps) / 10000
-        uint256 seizeValueUsd = (actualRepay * (10000 + penaltyBps)) / 10000;
-
         // FIX H-01: Convert USD value to collateral token amount accounting for token decimals
         // collateralPrice is USD per 1 full token (18 decimals)
         // For a token with D decimals: seizeAmount = seizeValueUsd * 10^D / collateralPrice
         // FIX L-04: Require decimals() to succeed instead of silently defaulting to 18,
         // which would cause wildly incorrect seizure amounts for non-18-decimal tokens.
+        // FIX: Combined calculation to avoid divide-before-multiply precision loss
+        // seizeAmount = actualRepay * (10000 + penaltyBps) * 10^D / (10000 * collateralPrice)
         uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
-        uint256 seizeAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
+        uint256 seizeAmount = (actualRepay * (10000 + penaltyBps) * (10 ** tokenDecimals)) / (10000 * collateralPrice);
 
         // Cap at available collateral
         uint256 available = vault.deposits(borrower, collateralToken);
@@ -200,10 +200,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         uint256 collateralPrice = oracle.getPrice(collateralToken);
         if (collateralPrice == 0) return 0;
 
-        uint256 seizeValueUsd = (debtToRepay * (10000 + penaltyBps)) / 10000;
         // FIX L-04: Require decimals() — view function, safe to let revert for unsupported tokens
+        // FIX: Combined calculation to avoid divide-before-multiply precision loss
         uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
-        collateralAmount = (seizeValueUsd * (10 ** tokenDecimals)) / collateralPrice;
+        collateralAmount = (debtToRepay * (10000 + penaltyBps) * (10 ** tokenDecimals)) / (10000 * collateralPrice);
 
         uint256 available = vault.deposits(borrower, collateralToken);
         if (collateralAmount > available) {
@@ -226,5 +226,19 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
         emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS
+    // ============================================================
+
+    /// @notice Pause liquidations
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause liquidations
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }
