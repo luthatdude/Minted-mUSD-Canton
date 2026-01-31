@@ -136,8 +136,9 @@ template MUSD_MintProposal
     signatory provider
     observer owner
     ensure amount >= minimumAmount
+    -- FIX AUTH: Dual controller for creating dual-signatory MUSD
     choice MUSD_MintProposal_Accept : ContractId MUSD
-      controller owner
+      controller owner, provider
       do create MUSD with ..
     choice MUSD_MintProposal_Reject : ()
       controller owner
@@ -163,13 +164,14 @@ template IssuerRole
 
     -- | Direct mint (for bootstrapping/admin use).
     -- FIX D-C01: Consuming choice — supply tracked in contract state.
+    -- FIX AUTH: Dual controller (issuer + mintOwner) required for dual-signatory MUSD
     choice IssuerRole_Mint : (ContractId IssuerRole, ContractId MUSD)
       with
         mintOwner : Party
         mintAmount : Decimal
         mintCurrency : Text
         mintObservers : [Party]
-      controller issuer
+      controller issuer, mintOwner
       do
         assertMsg "Mint amount must be positive." (mintAmount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + mintAmount <= supplyCap)
@@ -219,10 +221,11 @@ template MintRequest
     ensure requestAmount > 0.0
 
     -- | Issuer approves the request via IssuerRole (enforces supply cap).
+    -- FIX AUTH: Dual controller (issuer + owner) for nested IssuerRole_Mint
     choice MintRequest_Approve : (ContractId IssuerRole, ContractId MUSD)
       with
         issuerRoleCid : ContractId IssuerRole
-      controller issuer
+      controller issuer, owner
       do
         exercise issuerRoleCid IssuerRole_Mint with
           mintOwner = owner
@@ -260,10 +263,11 @@ template MintProposal
     ensure proposalAmount > 0.0
 
     -- | Owner accepts the mint proposal via IssuerRole (enforces supply cap).
+    -- FIX AUTH: Dual controller (owner + issuer) for nested IssuerRole_Mint
     choice MintProposal_Accept : (ContractId IssuerRole, ContractId MUSD)
       with
         issuerRoleCid : ContractId IssuerRole
-      controller owner
+      controller owner, issuer
       do
         exercise issuerRoleCid IssuerRole_Mint with
           mintOwner = owner
@@ -288,9 +292,9 @@ template MintProposal
 test_stablecoin_audit : Script ()
 test_stablecoin_audit = script do
   [bank, alice, bob, regAlice, regBob] <- mapA allocateParty ["Bank", "Alice", "Bob", "RegAlice", "RegBob"]
-  -- 1. Mint
+  -- 1. Mint (FIX AUTH: dual-controller for dual-signatory MUSD)
   mintProp <- submit bank do createCmd MUSD_MintProposal with provider=bank; owner=alice; amount=100.0; currency="USD"; observers=[regAlice]
-  aliceUSD <- submit alice do exerciseCmd mintProp MUSD_MintProposal_Accept
+  aliceUSD <- submitMulti [alice, bank] [] do exerciseCmd mintProp MUSD_MintProposal_Accept
   -- 2. Privacy Check: Transfer
   -- Alice transfers to Bob. Bob ensures ONLY his regulator (regBob) can see the new contract.
   transferProp <- submit alice do exerciseCmd aliceUSD MUSD_Transfer with newOwner = bob
