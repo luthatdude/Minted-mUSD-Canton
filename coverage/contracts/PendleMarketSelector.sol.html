@@ -1,0 +1,1574 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>Code coverage report for contracts/PendleMarketSelector.sol</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../prettify.css" />
+    <link rel="stylesheet" href="../base.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+<body>
+<div class='wrapper'>
+  <div class='pad1'>
+    <h1>
+      <a href="../index.html">all files</a> / <a href="index.html">contracts/</a> PendleMarketSelector.sol
+    </h1>
+    <div class='clearfix'>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Statements</span>
+        <span class='fraction'>0/90</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Branches</span>
+        <span class='fraction'>0/72</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Functions</span>
+        <span class='fraction'>0/16</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Lines</span>
+        <span class='fraction'>0/111</span>
+      </div>
+    </div>
+  </div>
+  <div class='status-line low'></div>
+<pre><table class="coverage">
+<tr><td class="line-count quiet">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+486
+487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503
+504</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: MIT
+pragma solidity 0.8.26;
+&nbsp;
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+&nbsp;
+/**
+ * @title PendleMarketSelector
+ * @notice Selects optimal Pendle PT market based on TVL and implied yield
+ * @dev Used by PendleStrategyV2 to auto-select best market for deposits
+ *
+ * Selection Criteria:
+ *   1. Filter: Only markets with underlying = target asset (e.g., USDC-based)
+ *   2. Filter: Only markets not expired and &gt; minTimeToExpiry
+ *   3. Score: TVL weight (40%) + Implied APY weight (60%)
+ *   4. Select: Highest scoring market
+ */
+&nbsp;
+// Pendle Market interface
+interface IPendleMarket {
+    function readTokens() external view returns (address sy, address pt, address yt);
+    function expiry() external view returns (uint256);
+    function isExpired() external view returns (bool);
+&nbsp;
+    // Market storage - gives us totalPt, totalSy, lastLnImpliedRate
+    function _storage() external view returns (
+        int128 totalPt,
+        int128 totalSy,
+        uint96 lastLnImpliedRate,
+        uint16 observationIndex,
+        uint16 observationCardinality,
+        uint16 observationCardinalityNext
+    );
+}
+&nbsp;
+// Pendle Oracle interface
+interface IPendleOracle {
+    function getPtToSyRate(address market, uint32 duration) external view returns (uint256);
+    function getYtToSyRate(address market, uint32 duration) external view returns (uint256);
+    function getLpToSyRate(address market, uint32 duration) external view returns (uint256);
+}
+&nbsp;
+// SY interface to get underlying asset
+interface ISY {
+    function yieldToken() external view returns (address);
+    function getTokensIn() external view returns (address[] memory);
+    function getTokensOut() external view returns (address[] memory);
+    function exchangeRate() external view returns (uint256);
+}
+&nbsp;
+contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
+&nbsp;
+    /// @custom:oz-upgrades-unsafe-allow constructor
+<span class="fstat-no" title="function not covered" >    constructor() {</span>
+<span class="cstat-no" title="statement not covered" >        _disableInitializers()</span>;
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // CONSTANTS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /// @notice Pendle Oracle (same address on all chains)
+    address public constant PENDLE_ORACLE = 0x9a9Fa8338dd5E5B2188006f1Cd2Ef26d921650C2;
+&nbsp;
+    /// @notice TWAP duration for oracle queries (15 min recommended)
+    uint32 public constant TWAP_DURATION = 900;
+&nbsp;
+    /// @notice Basis points denominator
+    uint256 public constant BPS = 10000;
+&nbsp;
+    /// @notice Seconds per year for APY calculation
+    uint256 public constant SECONDS_PER_YEAR = 365 days;
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // STATE
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /// @notice Whitelisted Pendle markets (manually curated for safety)
+    address[] public whitelistedMarkets;
+&nbsp;
+    /// @notice Market address → is whitelisted
+    mapping(address =&gt; bool) public isWhitelisted;
+&nbsp;
+    /// @notice Market address → underlying asset category (e.g., "USD", "ETH")
+    mapping(address =&gt; string) public marketCategory;
+&nbsp;
+    /// @notice Minimum time to expiry for market selection (default 30 days)
+    uint256 public minTimeToExpiry;
+&nbsp;
+    /// @notice Minimum TVL in USD for market selection
+    uint256 public minTvlUsd;
+&nbsp;
+    /// @notice Minimum APY in basis points (e.g., 900 = 9%)
+    uint256 public minApyBps;
+&nbsp;
+    /// @notice Weight for TVL in scoring (basis points, e.g., 4000 = 40%)
+    uint256 public tvlWeight;
+&nbsp;
+    /// @notice Weight for APY in scoring (basis points)
+    uint256 public apyWeight;
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // STRUCTS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    struct MarketInfo {
+        address market;
+        address sy;
+        address pt;
+        uint256 expiry;
+        uint256 timeToExpiry;
+        uint256 totalPt;
+        uint256 totalSy;
+        uint256 tvlSy;           // TVL in SY terms
+        uint256 impliedRate;     // ln(implied rate) from storage
+        uint256 impliedAPY;      // Annualized APY in basis points
+        uint256 score;           // Composite score for ranking
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // EVENTS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    event MarketWhitelisted(address indexed market, string category);
+    event MarketRemoved(address indexed market);
+    event BestMarketSelected(address indexed market, uint256 tvl, uint256 impliedAPY, uint256 score);
+    event ParamsUpdated(uint256 minTimeToExpiry, uint256 minTvlUsd, uint256 tvlWeight, uint256 apyWeight);
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // ERRORS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    error NoValidMarkets();
+    error MarketNotWhitelisted();
+    error InvalidWeights();
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // INITIALIZER
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+<span class="fstat-no" title="function not covered" >    function initialize(address _owner) external initializer {</span>
+<span class="cstat-no" title="statement not covered" >        __Ownable_init(_owner)</span>;
+<span class="cstat-no" title="statement not covered" >        __UUPSUpgradeable_init()</span>;
+&nbsp;
+        // Default parameters
+        // 30 days minimum - shorter pools often have 1-2% APY premium
+        // which more than offsets the ~1.2% annual slippage from more frequent rolls
+        minTimeToExpiry = 30 days;
+        minTvlUsd = 50_000_000e6;      // $50M minimum (6 decimals)
+        minApyBps = 900;               // 9% minimum APY
+        tvlWeight = 4000;              // 40%
+        apyWeight = 6000;              // 60% - favors higher APY shorter-dated pools
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // MARKET SELECTION
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /**
+     * @notice Select the best market for a given category
+     * @param category Asset category (e.g., "USD" for USDC-based markets)
+     * @return bestMarket Address of the best market
+     * @return info Full info about the selected market
+     */
+<span class="fstat-no" title="function not covered" >    function selectBestMarket(string calldata category)</span>
+        external
+        view
+        returns (address bestMarket, MarketInfo memory info)
+    {
+<span class="cstat-no" title="statement not covered" >        MarketInfo[] memory validMarkets = getValidMarkets(category);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        if (validMarkets.length == 0) revert NoValidMarkets();</span>
+&nbsp;
+        // Find highest score
+<span class="cstat-no" title="statement not covered" >        uint256 bestScore = 0;</span>
+<span class="cstat-no" title="statement not covered" >        uint256 bestIndex = 0;</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; validMarkets.length; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            if (validMarkets[i].score &gt; bestScore) {</span>
+                bestScore = validMarkets[i].score;
+                bestIndex = i;
+            }
+        }
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        return (validMarkets[bestIndex].market, validMarkets[bestIndex]);</span>
+    }
+&nbsp;
+    /**
+     * @notice Get all valid markets for a category with full info
+     * @param category Asset category to filter by
+     * @return markets Array of MarketInfo for valid markets
+     */
+<span class="fstat-no" title="function not covered" >    function getValidMarkets(string calldata category)</span>
+        public
+        view
+        returns (MarketInfo[] memory markets)
+    {
+        // FIX M-01: Single pass — cache MarketInfo to avoid double external calls.
+        // Build temporary array with all whitelisted markets' info, then filter.
+<span class="cstat-no" title="statement not covered" >        uint256 len = whitelistedMarkets.length;</span>
+<span class="cstat-no" title="statement not covered" >        MarketInfo[] memory temp = new MarketInfo[](len);</span>
+<span class="cstat-no" title="statement not covered" >        bool[] memory valid = new bool[](len);</span>
+<span class="cstat-no" title="statement not covered" >        uint256 validCount = 0;</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; len; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            address market = whitelistedMarkets[i];</span>
+<span class="cstat-no" title="statement not covered" >            if (!isWhitelisted[market]) continue;</span>
+<span class="cstat-no" title="statement not covered" >            if (keccak256(bytes(marketCategory[market])) != keccak256(bytes(category))) continue;</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >            IPendleMarket pendleMarket = IPendleMarket(market);</span>
+<span class="cstat-no" title="statement not covered" >            if (pendleMarket.isExpired()) continue;</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >            uint256 expiry = pendleMarket.expiry();</span>
+<span class="cstat-no" title="statement not covered" >            if (expiry &lt; block.timestamp + minTimeToExpiry) continue;</span>
+&nbsp;
+            // Get info once (expensive external calls)
+<span class="cstat-no" title="statement not covered" >            MarketInfo memory info = _getMarketInfo(market);</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >            if (info.tvlSy &lt; minTvlUsd) continue;</span>
+<span class="cstat-no" title="statement not covered" >            if (info.impliedAPY &lt; minApyBps) continue;</span>
+&nbsp;
+            temp[i] = info;
+            valid[i] = true;
+            validCount++;
+        }
+&nbsp;
+        // Compact into result array
+        markets = new MarketInfo[](validCount);
+<span class="cstat-no" title="statement not covered" >        uint256 index = 0;</span>
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; len; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            if (valid[i]) {</span>
+                markets[index] = temp[i];
+                index++;
+            }
+        }
+&nbsp;
+        // Calculate scores
+<span class="cstat-no" title="statement not covered" >        if (validCount &gt; 0) {</span>
+<span class="cstat-no" title="statement not covered" >            _calculateScores(markets)</span>;
+        }
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        return markets;</span>
+    }
+&nbsp;
+    /**
+     * @notice Get detailed info for a specific market
+     * @param market Market address
+     * @return info MarketInfo struct
+     */
+<span class="fstat-no" title="function not covered" >    function getMarketInfo(address market) external view returns (MarketInfo memory info) {</span>
+<span class="cstat-no" title="statement not covered" >        return _getMarketInfo(market);</span>
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTERNAL HELPERS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /**
+     * @notice Check if market passes basic filters
+     */
+<span class="fstat-no" title="function not covered" >    function _isValidMarket(address market, string calldata category) internal view returns (bool) {</span>
+        // Must be whitelisted
+<span class="cstat-no" title="statement not covered" >        if (!isWhitelisted[market]) <span class="cstat-no" title="statement not covered" >return false;</span></span>
+&nbsp;
+        // Must match category
+<span class="cstat-no" title="statement not covered" >        if (keccak256(bytes(marketCategory[market])) != keccak256(bytes(category))) {</span>
+<span class="cstat-no" title="statement not covered" >            return false;</span>
+        }
+&nbsp;
+        // Must not be expired
+<span class="cstat-no" title="statement not covered" >        IPendleMarket pendleMarket = IPendleMarket(market);</span>
+<span class="cstat-no" title="statement not covered" >        if (pendleMarket.isExpired()) <span class="cstat-no" title="statement not covered" >return false;</span></span>
+&nbsp;
+        // Must have enough time to expiry
+<span class="cstat-no" title="statement not covered" >        uint256 expiry = pendleMarket.expiry();</span>
+<span class="cstat-no" title="statement not covered" >        if (expiry &lt; block.timestamp + minTimeToExpiry) <span class="cstat-no" title="statement not covered" >return false;</span></span>
+&nbsp;
+        // Get market info for TVL and APY checks
+<span class="cstat-no" title="statement not covered" >        MarketInfo memory info = _getMarketInfo(market);</span>
+&nbsp;
+        // Must meet minimum TVL (convert to same decimals)
+<span class="cstat-no" title="statement not covered" >        if (info.tvlSy &lt; minTvlUsd) <span class="cstat-no" title="statement not covered" >return false;</span></span>
+&nbsp;
+        // Must meet minimum APY
+<span class="cstat-no" title="statement not covered" >        if (info.impliedAPY &lt; minApyBps) <span class="cstat-no" title="statement not covered" >return false;</span></span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        return true;</span>
+    }
+&nbsp;
+    /**
+     * @notice Get full market info
+     */
+<span class="fstat-no" title="function not covered" >    function _getMarketInfo(address market) internal view returns (MarketInfo memory info) {</span>
+<span class="cstat-no" title="statement not covered" >        IPendleMarket pendleMarket = IPendleMarket(market);</span>
+&nbsp;
+        // Get tokens
+<span class="cstat-no" title="statement not covered" >        (address sy, address pt,) = pendleMarket.readTokens();</span>
+&nbsp;
+        // Get storage data
+<span class="cstat-no" title="statement not covered" >        (</span>
+            int128 totalPt,
+            int128 totalSy,
+            uint96 lastLnImpliedRate,
+            , ,
+        ) = pendleMarket._storage();
+&nbsp;
+        // Get expiry
+<span class="cstat-no" title="statement not covered" >        uint256 expiry = pendleMarket.expiry();</span>
+<span class="cstat-no" title="statement not covered" >        uint256 timeToExpiry = expiry &gt; block.timestamp ? expiry - block.timestamp : 0;</span>
+&nbsp;
+        // Calculate TVL in SY terms (totalPt converted + totalSy)
+        // PT trades at discount, so we use oracle rate
+<span class="cstat-no" title="statement not covered" >        uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);</span>
+<span class="cstat-no" title="statement not covered" >        uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;</span>
+<span class="cstat-no" title="statement not covered" >        uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));</span>
+&nbsp;
+        // Convert lnImpliedRate to APY
+        // lnImpliedRate is stored as ln(1 + rate) scaled by 1e18
+        // APY = exp(lnImpliedRate * timeToExpiry / SECONDS_PER_YEAR) - 1
+        // Simplified: APY ≈ lnImpliedRate for small rates (first-order approximation)
+<span class="cstat-no" title="statement not covered" >        uint256 impliedAPY = _lnRateToAPY(uint256(lastLnImpliedRate), timeToExpiry);</span>
+&nbsp;
+        info = MarketInfo({
+            market: market,
+            sy: sy,
+            pt: pt,
+            expiry: expiry,
+            timeToExpiry: timeToExpiry,
+            totalPt: uint256(uint128(totalPt)),
+            totalSy: uint256(uint128(totalSy)),
+            tvlSy: tvlSy,
+            impliedRate: uint256(lastLnImpliedRate),
+            impliedAPY: impliedAPY,
+            score: 0 // Calculated separately
+        });
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        return info;</span>
+    }
+&nbsp;
+    /**
+     * @notice Convert ln(implied rate) to annualized APY in basis points
+     * @dev lnImpliedRate = ln(1 + rate_to_expiry) scaled by 1e18
+     *      APY = (1 + rate_to_expiry)^(365/days_to_expiry) - 1
+     *      Simplified using: ln(APY + 1) ≈ lnImpliedRate * 365 / days_to_expiry
+     */
+<span class="fstat-no" title="function not covered" >    function _lnRateToAPY(uint256 lnImpliedRate, uint256 timeToExpiry) internal pure returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        if (timeToExpiry == 0) <span class="cstat-no" title="statement not covered" >return 0;</span></span>
+&nbsp;
+        // Annualize the ln rate
+        // lnAPY = lnImpliedRate * SECONDS_PER_YEAR / timeToExpiry
+<span class="cstat-no" title="statement not covered" >        uint256 lnAPY = (lnImpliedRate * SECONDS_PER_YEAR) / timeToExpiry;</span>
+&nbsp;
+        // Convert to APY: exp(lnAPY) - 1
+        // For small rates (&lt; 50%), use approximation: APY ≈ lnAPY
+        // For larger rates, this underestimates slightly (acceptable for scoring)
+&nbsp;
+        // Return in basis points (multiply by 10000, divide by 1e18)
+        // lnAPY is in 1e18 scale, so:
+        // APY_bps = lnAPY * 10000 / 1e18
+<span class="cstat-no" title="statement not covered" >        return (lnAPY * BPS) / 1e18;</span>
+    }
+&nbsp;
+    /**
+     * @notice Calculate composite scores for market ranking
+     * @dev Score = (TVL_normalized * tvlWeight + APY_normalized * apyWeight) / 10000
+     */
+<span class="fstat-no" title="function not covered" >    function _calculateScores(MarketInfo[] memory markets) internal view {</span>
+<span class="cstat-no" title="statement not covered" >        if (markets.length == 0) <span class="cstat-no" title="statement not covered" >return;</span></span>
+&nbsp;
+        // Find max TVL and max APY for normalization
+<span class="cstat-no" title="statement not covered" >        uint256 maxTvl = 0;</span>
+<span class="cstat-no" title="statement not covered" >        uint256 maxAPY = 0;</span>
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; markets.length; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            if (markets[i].tvlSy &gt; maxTvl) maxTvl = markets[i].tvlSy;</span>
+<span class="cstat-no" title="statement not covered" >            if (markets[i].impliedAPY &gt; maxAPY) maxAPY = markets[i].impliedAPY;</span>
+        }
+&nbsp;
+        // Calculate normalized scores
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; markets.length; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            uint256 tvlScore = maxTvl &gt; 0</span>
+                ? (markets[i].tvlSy * BPS) / maxTvl
+                : 0;
+&nbsp;
+<span class="cstat-no" title="statement not covered" >            uint256 apyScore = maxAPY &gt; 0</span>
+                ? (markets[i].impliedAPY * BPS) / maxAPY
+                : 0;
+&nbsp;
+            // Weighted composite score
+            markets[i].score = (tvlScore * tvlWeight + apyScore * apyWeight) / BPS;
+        }
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // ADMIN FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /**
+     * @notice Add a market to whitelist
+     * @param market Market address
+     * @param category Asset category (e.g., "USD", "ETH")
+     */
+<span class="fstat-no" title="function not covered" >    function whitelistMarket(address market, string calldata category) external onlyOwner {</span>
+        // FIX L-07: Validate market address
+<span class="cstat-no" title="statement not covered" >        require(market != address(0), "ZERO_ADDRESS")</span>;
+<span class="cstat-no" title="statement not covered" >        if (!isWhitelisted[market]) {</span>
+<span class="cstat-no" title="statement not covered" >            whitelistedMarkets.push(market)</span>;
+            isWhitelisted[market] = true;
+        }
+        marketCategory[market] = category;
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        emit MarketWhitelisted(market, category);</span>
+    }
+&nbsp;
+    /**
+     * @notice Batch whitelist markets
+     * @param markets Array of market addresses
+     * @param categories Array of categories
+     */
+<span class="fstat-no" title="function not covered" >    function whitelistMarkets(</span>
+        address[] calldata markets,
+        string[] calldata categories
+    ) external onlyOwner {
+<span class="cstat-no" title="statement not covered" >        require(markets.length == categories.length, "Length mismatch")</span>;
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; markets.length; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            if (!isWhitelisted[markets[i]]) {</span>
+<span class="cstat-no" title="statement not covered" >                whitelistedMarkets.push(markets[i])</span>;
+                isWhitelisted[markets[i]] = true;
+            }
+            marketCategory[markets[i]] = categories[i];
+&nbsp;
+<span class="cstat-no" title="statement not covered" >            emit MarketWhitelisted(markets[i], categories[i]);</span>
+        }
+    }
+&nbsp;
+    /**
+     * @notice Remove a market from whitelist
+     * @param market Market address
+     */
+<span class="fstat-no" title="function not covered" >    function removeMarket(address market) external onlyOwner {</span>
+<span class="cstat-no" title="statement not covered" >        if (!isWhitelisted[market]) revert MarketNotWhitelisted();</span>
+&nbsp;
+        isWhitelisted[market] = false;
+        delete marketCategory[market];
+&nbsp;
+        // Remove from array
+<span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; whitelistedMarkets.length; i++) {</span>
+<span class="cstat-no" title="statement not covered" >            if (whitelistedMarkets[i] == market) {</span>
+                whitelistedMarkets[i] = whitelistedMarkets[whitelistedMarkets.length - 1];
+<span class="cstat-no" title="statement not covered" >                whitelistedMarkets.pop()</span>;
+                break;
+            }
+        }
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        emit MarketRemoved(market);</span>
+    }
+&nbsp;
+    /**
+     * @notice Update selection parameters
+     */
+<span class="fstat-no" title="function not covered" >    function setParams(</span>
+        uint256 _minTimeToExpiry,
+        uint256 _minTvlUsd,
+        uint256 _minApyBps,
+        uint256 _tvlWeight,
+        uint256 _apyWeight
+    ) external onlyOwner {
+<span class="cstat-no" title="statement not covered" >        if (_tvlWeight + _apyWeight != BPS) revert InvalidWeights();</span>
+&nbsp;
+        minTimeToExpiry = _minTimeToExpiry;
+        minTvlUsd = _minTvlUsd;
+        minApyBps = _minApyBps;
+        tvlWeight = _tvlWeight;
+        apyWeight = _apyWeight;
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        emit ParamsUpdated(_minTimeToExpiry, _minTvlUsd, _tvlWeight, _apyWeight);</span>
+    }
+&nbsp;
+    /**
+     * @notice Get all whitelisted markets
+     */
+<span class="fstat-no" title="function not covered" >    function getWhitelistedMarkets() external view returns (address[] memory) {</span>
+<span class="cstat-no" title="statement not covered" >        return whitelistedMarkets;</span>
+    }
+&nbsp;
+    /**
+     * @notice Get count of whitelisted markets
+     */
+<span class="fstat-no" title="function not covered" >    function whitelistedCount() external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        return whitelistedMarkets.length;</span>
+    }
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // UPGRADEABILITY
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /// @notice FIX H-02: UUPS upgrade authorization
+<span class="fstat-no" title="function not covered" >    function _authorizeUpgrade(address) internal override onlyOwner {}</span>
+&nbsp;
+    /// @dev FIX H-02: Storage gap for future upgrades
+    uint256[40] private __gap;
+}
+&nbsp;</pre></td></tr>
+</table></pre>
+<div class='push'></div><!-- for sticky footer -->
+</div><!-- /wrapper -->
+<div class='footer quiet pad2 space-top1 center small'>
+  Code coverage
+  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sat Jan 31 2026 16:59:22 GMT-0500 (Eastern Standard Time)
+</div>
+</div>
+<script src="../prettify.js"></script>
+<script>
+window.onload = function () {
+        if (typeof prettyPrint === 'function') {
+            prettyPrint();
+        }
+};
+</script>
+<script src="../sorter.js"></script>
+</body>
+</html>
