@@ -20,5 +20,8 @@
     "@openzeppelin/contracts-upgradeable": "^5.0.0",
     "dotenv": "^17.2.3",
     "ethers": "^6.0.0"
+  },
+  "overrides": {
+    "fast-xml-parser": "^5.3.4"
   }
 }
