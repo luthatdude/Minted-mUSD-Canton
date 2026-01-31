@@ -1,4 +1,7 @@
--- | Minted.Protocol - Daml Leverage Looping
+-- | DEPRECATED: Use Minted.Protocol.V3 (daml/Minted/Protocol/V3.daml) for production.
+-- This module is retained for reference only and should NOT be deployed.
+--
+-- Minted.Protocol - Daml Leverage Looping
 -- In Solidity, leverage looping involves flash loans or repeated calls to external DEXs.
 -- In Daml (UTXO), operations are atomic. We cannot "flash loan" in the same way,
 -- but we can chain choices in a single transaction to achieve the same state result.

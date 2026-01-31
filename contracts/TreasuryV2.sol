@@ -119,6 +119,9 @@ contract TreasuryV2 is
     event FeesClaimed(address indexed recipient, uint256 amount);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
+    /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
+    event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
+    event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -508,10 +511,11 @@ contract TreasuryV2 is
                     allocations[i] = deposited;
                     // FIX H-04: Clear approval after successful deposit to prevent dangling approvals
                     asset.forceApprove(strat, 0);
-                } catch {
-                    // Strategy deposit failed, keep in reserve
+                } catch (bytes memory reason) {
+                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
                     allocations[i] = 0;
                     asset.forceApprove(strat, 0);
+                    emit StrategyDepositFailed(strat, share, reason);
                 }
             }
         }
@@ -561,8 +565,9 @@ contract TreasuryV2 is
                 try IStrategy(strat).withdraw(toWithdraw) returns (uint256 withdrawn) {
                     totalWithdrawn += withdrawn;
                     remaining = remaining > withdrawn ? remaining - withdrawn : 0;
-                } catch {
-                    // Strategy withdrawal failed, try next
+                } catch (bytes memory reason) {
+                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
+                    emit StrategyWithdrawFailed(strat, toWithdraw, reason);
                 }
             }
         }

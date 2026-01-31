@@ -1,4 +1,7 @@
--- | SafeAsset - A secure Asset template demonstrating Daml security best practices.
+-- | REFERENCE ONLY: Security pattern demonstration — not deployed in production.
+-- Production asset templates are in Minted.Protocol.V3 and InstitutionalAssetV4.
+--
+-- SafeAsset - A secure Asset template demonstrating Daml security best practices.
 -- Fixes common vulnerabilities such as:
 -- 1. Unwanted state (Negative amounts) -> Fixed via 'ensure'.
 -- 2. Forced ownership (Spamming) -> Fixed via 'Proposal-Accept' pattern.

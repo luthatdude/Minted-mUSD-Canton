@@ -1,3 +1,5 @@
+-- | DEPRECATED: Early draft — not deployed in production.
+-- Production token templates are in Minted.Protocol.V3 and CantonDirectMint.
 module TokenInterface where
 
 -- TokenInterface module (previously MUSD.daml draft)
