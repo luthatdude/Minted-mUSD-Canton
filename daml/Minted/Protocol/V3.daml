@@ -67,14 +67,24 @@ template MintedMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    -- | Transfer mUSD to another party
-    choice MUSD_Transfer : ContractId MintedMUSD
+    -- | Transfer mUSD to another party (FIX C-2: Proposal pattern for proper authorization)
+    -- Creates a TransferProposal that the newOwner must accept
+    choice MUSD_Transfer : ContractId MUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
-        create this with owner = newOwner
+        assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        create MUSDTransferProposal with
+          issuer
+          sender = owner
+          receiver = newOwner
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
 
     -- | Split into two contracts
     choice MUSD_Split : (ContractId MintedMUSD, ContractId MintedMUSD)
@@ -141,6 +151,58 @@ template MintedMUSD
       do
         create this with blacklisted = newStatus
 
+-- | FIX C-2: MUSDTransferProposal - Proposal pattern for proper authorization
+-- Receiver must explicitly accept the transfer, providing proper signatory structure
+template MUSDTransferProposal
+  with
+    issuer : Party
+    sender : Party
+    receiver : Party
+    amount : Money
+    blacklisted : Bool
+    agreementHash : Text
+    agreementUri : Text
+    observers : [Party]
+  where
+    signatory issuer, sender
+    observer receiver :: observers
+    
+    ensure amount > 0.0
+
+    -- | Receiver accepts the transfer, becoming owner
+    choice TransferProposal_Accept : ContractId MintedMUSD
+      controller receiver
+      do
+        create MintedMUSD with
+          issuer
+          owner = receiver
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+
+    -- | Sender cancels the proposal
+    choice TransferProposal_Cancel : ()
+      controller sender
+      do
+        return ()
+    
+    -- | Issuer can reject for compliance
+    choice TransferProposal_Reject : ()
+      controller issuer
+      do
+        -- Return tokens to sender
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+        return ()
+
 -- ============================================================
 --                     2. PRICE ORACLE
 -- ============================================================
@@ -162,9 +224,15 @@ template PriceOracle
 
     ensure price > 0.0
 
+    -- FIX M-26: Explicit controller for nonconsuming choice
+    -- Any observer can query the price (read-only operation)
     nonconsuming choice Oracle_GetPrice : Money
-      controller observers
-      do return price
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == provider)
+        return price
 
     choice Oracle_UpdatePrice : ContractId PriceOracle
       with
@@ -257,9 +325,13 @@ template Vault
     ensure collateralAmount >= 0.0 && principalDebt >= 0.0
 
     -- | Calculate current total debt including accrued interest
+    -- FIX M-27: Explicit controller for nonconsuming choice
     nonconsuming choice Vault_GetTotalDebt : Money
-      controller owner
+      with
+        requester : Party
+      controller requester
       do
+        assertMsg "NOT_AUTHORIZED" (requester == owner || requester == operator)
         now <- getTime
         let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
         let secondsElapsed = intToNumeric (elapsed / 1000000)
@@ -284,7 +356,7 @@ template Vault
         let newCollateral = collateralAmount + depositAmount
         
         -- Get oracle price
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = owner
         
         -- Recursive leverage loop
         let loopFn (col, debt, pCid) _ = do
@@ -350,7 +422,7 @@ template Vault
         let newCollateral = collateralAmount - withdrawAmount
         
         -- Health check
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = owner
         let newValue = newCollateral * price
         let totalDebt = principalDebt + accruedInterest
         assertMsg "UNHEALTHY_AFTER_WITHDRAW" (totalDebt == 0.0 || newValue >= totalDebt * config.liquidationThreshold)
@@ -374,7 +446,7 @@ template Vault
         let totalDebt = principalDebt + accruedInterest + newInterest
         
         -- Check if vault is liquidatable
-        price <- exercise oracleCid Oracle_GetPrice
+        price <- exercise oracleCid Oracle_GetPrice with requester = liquidator
         let colValue = collateralAmount * price
         let healthBefore = colValue / totalDebt
         assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)
@@ -716,9 +788,13 @@ template CantonSMUSD
     ensure totalShares >= 0.0 && totalAssets >= 0.0
 
     -- | Get current share price
+    -- FIX M-27: Explicit controller for nonconsuming choice
     nonconsuming choice SMUSD_GetSharePrice : Money
-      controller operator
+      with
+        requester : Party
+      controller requester
       do
+        assertMsg "NOT_AUTHORIZED" (requester == operator || requester `elem` observers)
         if totalShares == 0.0
           then return 1.0
           else return (totalAssets / totalShares)
@@ -839,12 +915,22 @@ template CooldownTicket
 
     ensure shares > 0.0
 
-    -- | Transfer ticket to another party
-    choice Ticket_Transfer : ContractId CooldownTicket
+    -- | Transfer ticket to another party (FIX C-3: Proposal pattern)
+    -- Creates a TicketTransferProposal that the newOwner must accept
+    choice Ticket_Transfer : ContractId TicketTransferProposal
       with
         newOwner : Party
       controller owner
-      do create this with owner = newOwner
+      do
+        assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        create TicketTransferProposal with
+          operator
+          sender = owner
+          receiver = newOwner
+          shares
+          entrySharePrice
+          stakedAt
+          cooldownSeconds
 
     -- | Split ticket
     choice Ticket_Split : (ContractId CooldownTicket, ContractId CooldownTicket)
@@ -857,6 +943,48 @@ template CooldownTicket
         c1 <- create this with shares = splitShares
         c2 <- create this with shares = shares - splitShares
         return (c1, c2)
+
+-- | FIX C-3: TicketTransferProposal - Proposal pattern for proper authorization
+-- Receiver must explicitly accept the ticket transfer
+template TicketTransferProposal
+  with
+    operator : Party
+    sender : Party
+    receiver : Party
+    shares : Money
+    entrySharePrice : Money
+    stakedAt : Time
+    cooldownSeconds : Int
+  where
+    signatory operator, sender
+    observer receiver
+
+    ensure shares > 0.0
+
+    -- | Receiver accepts the transfer
+    choice TicketTransfer_Accept : ContractId CooldownTicket
+      controller receiver
+      do
+        create CooldownTicket with
+          operator
+          owner = receiver
+          shares
+          entrySharePrice
+          stakedAt
+          cooldownSeconds
+
+    -- | Sender cancels the proposal
+    choice TicketTransfer_Cancel : ContractId CooldownTicket
+      controller sender
+      do
+        -- Return ticket to sender
+        create CooldownTicket with
+          operator
+          owner = sender
+          shares
+          entrySharePrice
+          stakedAt
+          cooldownSeconds
 
 -- ============================================================
 --                     11. BRIDGE SERVICE
