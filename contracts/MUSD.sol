@@ -6,11 +6,14 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract MUSD is ERC20, AccessControl {
+/// FIX H-3: Add Pausable so transfers can be halted in emergencies
+contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
@@ -28,12 +31,14 @@ contract MUSD is ERC20, AccessControl {
     }
 
     /// @notice Set supply cap - callable by admin or cap manager (BLEBridgeV9)
+    /// FIX C-2: Floor at current totalSupply to prevent blocking existing holders
     function setSupplyCap(uint256 _cap) external {
         require(
             hasRole(DEFAULT_ADMIN_ROLE, msg.sender) || hasRole(CAP_MANAGER_ROLE, msg.sender),
             "UNAUTHORIZED"
         );
         require(_cap > 0, "INVALID_SUPPLY_CAP");
+        require(_cap >= totalSupply(), "CAP_BELOW_SUPPLY");
         uint256 oldCap = supplyCap;
         supplyCap = _cap;
         emit SupplyCapUpdated(oldCap, _cap);
@@ -61,8 +66,18 @@ contract MUSD is ERC20, AccessControl {
         emit Burn(from, amount);
     }
 
-    function _update(address from, address to, uint256 value) internal override {
+    function _update(address from, address to, uint256 value) internal override whenNotPaused {
         require(!isBlacklisted[from] && !isBlacklisted[to], "COMPLIANCE_REJECT");
         super._update(from, to, value);
+    }
+
+    /// FIX H-3: Emergency pause — stops all transfers, mints, and burns
+    function pause() external onlyRole(EMERGENCY_ROLE) {
+        _pause();
+    }
+
+    /// FIX H-3: Unpause requires admin (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }

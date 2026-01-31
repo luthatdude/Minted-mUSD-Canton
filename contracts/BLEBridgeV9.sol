@@ -58,6 +58,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public dailyCapDecreased;      // Cumulative cap decreases in current window (offsets increases)
     uint256 public lastRateLimitReset;     // Timestamp of last window reset
 
+    /// FIX H-5: Maximum attestation age — reject attestations older than this
+    uint256 public constant MAX_ATTESTATION_AGE = 6 hours;
+
     // Attestation tracking
     mapping(bytes32 => bool) public usedAttestationIds;
 
@@ -224,6 +227,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(att.cantonAssets > 0, "ZERO_ASSETS");
         require(att.timestamp <= block.timestamp, "FUTURE_TIMESTAMP");
         require(att.timestamp > lastAttestationTime, "STALE_ATTESTATION");
+        /// FIX H-5: Reject attestations older than MAX_ATTESTATION_AGE
+        require(block.timestamp - att.timestamp <= MAX_ATTESTATION_AGE, "ATTESTATION_TOO_OLD");
 
         // Verify signatures
         bytes32 messageHash = keccak256(abi.encodePacked(
