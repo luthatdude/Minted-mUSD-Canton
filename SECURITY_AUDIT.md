@@ -4,8 +4,8 @@
 **Audit Scope:** Minted mUSD Smart Contract System  
 **Repository:** https://github.com/luthatdude/Minted-mUSD-Canton  
 **Version:** main branch (as of January 30, 2026)  
-**Compiler:** Solidity 0.8.26  
-**Framework:** Hardhat, OpenZeppelin Contracts v5.x
+**Compiler:** Solidity 0.8.26 / DAML SDK 2.10.3
+**Framework:** Hardhat, OpenZeppelin Contracts v5.x, Canton Network
 
 ---
 
@@ -20,7 +20,8 @@
 7. [External Dependencies](#7-external-dependencies)
 8. [Deployment Configuration](#8-deployment-configuration)
 9. [Test Coverage](#9-test-coverage)
-10. [Appendix: Full Contract Details](#appendix-full-contract-details)
+10. [Canton DAML Contracts](#10-canton-daml-contracts)
+11. [Appendix: Full Contract Details](#appendix-full-contract-details)
 
 ---
 
@@ -788,11 +789,507 @@ struct CollateralConfig {
 
 ---
 
+## 10. Canton DAML Contracts
+
+### 10.1 Overview
+
+The protocol includes **17 DAML contract files** running on the Canton Network, implementing Canton-side token accounting, cross-chain bridge attestation, compliance enforcement, staking, vaults (CDPs), and liquidation. These contracts are the Canton-side counterpart to the Solidity contracts on Ethereum and form the other half of the protocol's security surface.
+
+**SDK Version:** 2.10.3
+**Project Name:** `ble-protocol`
+**Precision:** `Numeric 18` (18-decimal, 1:1 mapping with Ethereum Wei)
+
+### 10.2 Canton Contract Inventory
+
+#### Core Protocol Contracts
+
+| Module | File | Templates | Audit Priority |
+|--------|------|-----------|----------------|
+| BLEProtocol | `daml/BLEProtocol.daml` | InstitutionalEquityPosition, AttestationRequest, ValidatorSignature | **P0** |
+| BLEBridgeProtocol | `daml/BLEBridgeProtocol.daml` | BridgeOutAttestation, BridgeInAttestation, SupplyCapAttestation, YieldAttestation + Signatures | **P0** |
+| CantonDirectMint | `daml/CantonDirectMint.daml` | CantonMUSD, CantonUSDC, USDCx, CantonDirectMintService, BridgeOutRequest, ReserveTracker, RedemptionRequest | **P0** |
+| CantonSMUSD | `daml/CantonSMUSD.daml` | CantonSMUSD, CantonSMUSDTransferProposal, CantonStakingService | **P1** |
+| Compliance | `daml/Compliance.daml` | ComplianceRegistry | **P0** |
+| MintedMUSD | `daml/MintedMUSD.daml` | MUSD, MUSD_Locked, MUSD_RedemptionRequest, MUSD_TransferProposal, IssuerRole, MintRequest, MintProposal | **P1** |
+| InstitutionalAssetV4 | `daml/InstitutionalAssetV4.daml` | Instrument, AssetRegistry, Asset, TransferProposal | **P1** |
+
+#### Unified Protocol Modules
+
+| Module | File | Templates | Audit Priority |
+|--------|------|-----------|----------------|
+| Minted.Protocol.V3 | `daml/Minted/Protocol/V3.daml` | MintedMUSD, PriceOracle, LiquidityPool, Vault, VaultManager, LiquidationReceipt, LiquidationOrder, CantonDirectMint, CantonSMUSD, CooldownTicket, BridgeService, AttestationRequest, BridgeOutRequest, BridgeInRequest | **P0** |
+| MintedProtocolV2Fixed | `daml/MintedProtocolV2Fixed.daml` | MUSD, Collateral, USDC, PriceOracle, DirectMintService, StakingService, Vault, LiquidationEngine, LiquidityPool, LeverageManager, IssuerRole, AttestationRequest, ValidatorSignature + Transfer Proposals | **P0** |
+
+#### Legacy / Reference Contracts
+
+| Module | File | Notes |
+|--------|------|-------|
+| MintedProtocol | `daml/MintedProtocol.daml` | Earlier protocol version |
+| MUSD_Protocol | `daml/MUSD_Protocol.daml` | Standalone minting/staking/bridge |
+| SecureCoin | `daml/SecureCoin.daml` | Secure coin pattern reference |
+| SafeAsset | `daml/SafeAsset.daml` | Security best practices reference |
+| TokenInterface | `daml/TokenInterface.daml` | Minimal token interface |
+
+#### Test Contracts
+
+| Module | File | Tests |
+|--------|------|-------|
+| Test | `daml/Test.daml` | 9 integration tests: BLE flow, collateral, duplicate sigs, expiration, validator auth, precision, mUSD lifecycle |
+| CantonDirectMintTest | `daml/CantonDirectMintTest.daml` | 10 integration tests: mint, redeem, bridge-out/in, supply cap sync, yield attestation, end-to-end flow, reserve tracker, paused enforcement, USDCx flow |
+
+### 10.3 Canton Security Architecture
+
+#### 10.3.1 Signatory Model (DAML-Specific)
+
+DAML's authorization model differs fundamentally from Solidity's role-based access control. In DAML, **signatories** are parties who must authorize contract creation and archival, enforced by the Canton ledger runtime — not by application code.
+
+| Pattern | Purpose | Risk |
+|---------|---------|------|
+| **Dual signatory** (issuer + owner) | Prevents unilateral control — issuer cannot archive user tokens, owner cannot inflate supply | Low |
+| **Proposal pattern** | Safe transfers: recipient must explicitly accept, preventing forced signatory obligations | Low |
+| **Observer visibility** | Restricts which parties can see contract data — prevents privacy leaks | Low |
+| **Consuming choices** | Archives the contract atomically on exercise, preventing double-spend/replay | Low |
+| **NonConsuming choices** | Read-only queries that don't archive — used for validation hooks and price queries | Low |
+
+#### 10.3.2 Trust Assumptions (Canton-Specific)
+
+| Entity | Trust Level | Failure Mode |
+|--------|-------------|--------------|
+| Canton Validator Group | **Critical** | Compromised validators (majority) could forge attestations for bridge operations |
+| Protocol Operator | **High** | Controls service templates, can pause operations, update caps and fees |
+| Aggregator | **High** | Initiates and finalizes attestation requests, coordinates validators |
+| Regulator (Compliance) | **Medium** | Controls blacklist/freeze — can block any party from transacting |
+| xReserve (USDCx Issuer) | **Medium** | Controls USDCx minting — relies on Circle CCTP for backing |
+
+### 10.4 Template-by-Template Analysis
+
+#### 10.4.1 BLEProtocol.daml (Critical — Attestation Core)
+
+```daml
+template AttestationRequest
+├── Signatories: aggregator
+├── Observers: validatorGroup
+├── Invariants:
+│   ├── length validatorGroup > 0 && <= 100 (FIX H-6: DoS bound)
+│   └── collectedSignatures tracks signed validators (FIX D-02)
+│
+├── choice ProvideSignature (CONSUMING — FIX D-01: TOCTOU prevention)
+│   ├── Controller: validator
+│   ├── Validates:
+│   │   ├── validator not in collectedSignatures (FIX D-02: duplicate prevention)
+│   │   ├── validator in validatorGroup
+│   │   ├── signature length >= 130 chars (FIX M-24)
+│   │   ├── now < payload.expiresAt (FIX D-03: expiration)
+│   │   ├── Fetches all positionCids atomically
+│   │   ├── totalValue >= amount * 1.1 (110% collateral)
+│   │   └── Tolerance-based value comparison (FIX D-H08: Numeric 18 rounding)
+│   └── Risk: Medium — consuming choice locks state between signatures
+│
+├── choice FinalizeAttestation (CONSUMING)
+│   ├── Controller: aggregator
+│   ├── Validates:
+│   │   ├── Derives requiredSignatures = (n+1)/2 + 1 (FIX C-12: supermajority)
+│   │   ├── Dedup check on sigValidators (FIX H-17)
+│   │   ├── All signers in validatorGroup
+│   │   ├── Expiration check (FIX D-03)
+│   │   └── Final collateral verification
+│   ├── Effects: Archives signature contracts (FIX D-M05: prevents reuse)
+│   └── Risk: CRITICAL — finalization gates all minting operations
+```
+
+**Security Fixes Applied:**
+- **D-01 (TOCTOU):** `ProvideSignature` changed to consuming choice — position CIDs are locked when attestation begins, preventing value changes between validation and finalization
+- **D-02 (Signature Uniqueness):** `Set.Set Party` tracks signed validators; duplicate signatures rejected
+- **D-03 (Timestamp Validation):** `expiresAt` field with `getTime` checks prevents stale attestations
+- **C-12 (Quorum Bypass):** `requiredSignatures` derived from `validatorGroup` size, not caller-supplied
+- **H-17 (Signature Dedup):** `Set.fromList` + length check enforces uniqueness at finalization
+- **H-6 (DoS Bound):** Validator group capped at 100 parties
+
+#### 10.4.2 BLEBridgeProtocol.daml (Critical — Cross-Chain Bridge Pipe)
+
+```daml
+template BridgeOutAttestation  — Canton stables → Ethereum Treasury
+├── Signatories: aggregator
+├── Observers: validatorGroup
+├── choice BridgeOut_Sign (CONSUMING — FIX D-02)
+│   ├── Tracks signedValidators list to prevent double-signing
+│   ├── Expiration check, collateral verification (110%)
+│   └── Returns updated attestation + signature contract
+├── choice BridgeOut_Finalize
+│   ├── Derives majority quorum: (n/2) + 1 (FIX DL-H1)
+│   ├── Validates nonce consistency across all signatures
+│   ├── Dedup check on validators
+│   └── Final collateral verification
+└── Risk: CRITICAL — controls flow of backing assets to Ethereum
+
+template BridgeInAttestation  — Ethereum USDC → Canton
+├── choice BridgeIn_Sign (nonconsuming)
+│   └── ⚠️ WARNING: nonconsuming — does NOT prevent double-signing
+│       (contrast with BridgeOutAttestation which uses consuming)
+├── choice BridgeIn_Finalize
+│   ├── Derives majority quorum: (n/2) + 1 (FIX DL-H2)
+│   ├── Validates requestCid consistency
+│   └── Dedup check on validators
+└── Risk: HIGH — controls minting of Canton USDC on redemption
+
+template SupplyCapAttestation  — Cross-chain supply sync
+├── Invariant: totalGlobalSupply == cantonMUSDSupply + ethereumMUSDSupply
+├── choice SupplyCap_Finalize
+│   ├── Majority quorum (FIX DL-H3)
+│   └── Validates: globalBackingUSDC >= totalGlobalSupply (no undercollateralization)
+└── Risk: HIGH — incorrect supply cap could enable over-minting
+
+template YieldAttestation  — Ethereum yield → Canton smUSD
+├── Invariant: totalTreasuryAssets >= totalMUSDSupply
+├── choice Yield_Finalize
+│   ├── Majority quorum (FIX DL-H4)
+│   └── Sequential epoch numbers prevent replay
+└── Risk: MEDIUM — inflated yield could benefit smUSD holders unfairly
+```
+
+**⚠️ FINDING: BridgeIn_Sign Inconsistency**
+
+`BridgeIn_Sign` is `nonconsuming` while `BridgeOut_Sign` is `consuming`. This means a validator could theoretically sign a bridge-in attestation multiple times. The dedup check in `BridgeIn_Finalize` mitigates this at finalization, but the inconsistency should be reviewed for defense-in-depth.
+
+#### 10.4.3 CantonDirectMint.daml (High — Canton Minting Service)
+
+```daml
+template CantonDirectMintService
+├── Signatories: operator
+├── Observers: usdcIssuer, authorizedMinters
+├── State: supplyCap, currentSupply, accumulatedFees, paused, rate limits
+│
+├── choice DirectMint_Mint
+│   ├── Controller: user
+│   ├── Validates:
+│   │   ├── Service not paused
+│   │   ├── Compliance check via ComplianceRegistry.ValidateMint (if configured)
+│   │   ├── USDC issuer and owner match
+│   │   ├── Amount within [minAmount, maxAmount]
+│   │   ├── Net amount within supply cap
+│   │   └── 24h rolling window rate limit check
+│   ├── Effects:
+│   │   ├── Transfers USDC to operator (via proposal pattern)
+│   │   ├── Mints CantonMUSD with MPA agreement embedded
+│   │   └── Creates BridgeOutRequest to pipe backing to Ethereum
+│   └── Risk: HIGH — primary Canton minting path
+│
+├── choice DirectMint_MintWithUSDCx
+│   ├── Same validations as DirectMint_Mint
+│   ├── Accepts USDCx (Circle CCTP bridged USDC) instead of CantonUSDC
+│   ├── No BridgeOutRequest needed (USDCx already backed on Ethereum)
+│   └── Risk: HIGH — relies on xReserve/Circle CCTP for USDC backing
+│
+├── choice DirectMint_Redeem
+│   ├── Controller: user
+│   ├── Validates: Compliance check via ValidateRedemption
+│   ├── Burns mUSD, creates RedemptionRequest (two-phase)
+│   ├── Burns offset mints in rate limit window
+│   └── Risk: MEDIUM — redemption fulfilled asynchronously after bridge-in
+│
+├── Admin choices: UpdateSupplyCap, SetPaused, SetDailyMintLimit, SetComplianceRegistry, WithdrawFees
+│   ├── All controlled by: operator
+│   └── Risk: MEDIUM — centralized operator control
+```
+
+**Key Security Features:**
+- 24-hour rolling window rate limiting with separate mint/burn tracking
+- Compliance hooks via optional `ComplianceRegistry` reference
+- Master Participation Agreement hash embedded in every minted token
+- Supply cap enforcement on every mint
+- Proposal pattern for all asset transfers (dual-signatory safe)
+
+#### 10.4.4 CantonSMUSD.daml (Medium — Yield Vault)
+
+```daml
+template CantonStakingService
+├── Signatories: operator
+├── State: totalShares, totalAssets, lastYieldEpoch, cooldownSeconds
+│
+├── choice Stake (CONSUMING)
+│   ├── Calculates shares = depositAmount / sharePrice
+│   ├── Burns mUSD, issues CantonSMUSD shares
+│   └── Risk: LOW
+│
+├── choice Unstake (CONSUMING)
+│   ├── Calculates mUSD = shares × sharePrice (includes yield)
+│   ├── Validates totalAssets >= musdAmount
+│   ├── Burns smUSD, mints mUSD at current share price
+│   └── Risk: LOW — pool insolvency checked
+│
+├── choice SyncYield
+│   ├── Controller: operator (after YieldAttestation finalization)
+│   ├── Validates: epochNumber > lastYieldEpoch (sequential)
+│   ├── Validates: yieldAccrued >= 0.0
+│   ├── Effects: totalAssets += yieldAccrued → raises share price
+│   └── Risk: MEDIUM — operator-gated, relies on attestation integrity
+```
+
+**Share Price Model:** `sharePrice = totalAssets / totalShares` (ERC-4626 equivalent)
+
+#### 10.4.5 Compliance.daml (High — Regulatory Enforcement)
+
+```daml
+template ComplianceRegistry
+├── Signatories: regulator
+├── Observers: operator
+├── State: blacklisted (Set.Set Party), frozen (Set.Set Party)
+├── Invariant: regulator /= operator (separation of duties)
+│
+├── choice BlacklistUser / RemoveFromBlacklist
+│   ├── Controller: regulator
+│   ├── Requires: reason (audit trail)
+│   └── Risk: LOW — standard compliance operation
+│
+├── choice FreezeUser / UnfreezeUser
+│   ├── Controller: regulator
+│   ├── Frozen parties: cannot transfer or redeem, CAN receive
+│   └── Risk: LOW — allows recovery/consolidation
+│
+├── nonconsuming choice ValidateMint / ValidateTransfer / ValidateRedemption
+│   ├── Controller: regulator, operator (both required)
+│   ├── Checks party against blacklist and freeze sets
+│   ├── O(log n) lookup via DA.Set
+│   └── Risk: LOW — read-only validation hooks
+│
+├── choice BulkBlacklist
+│   ├── Controller: regulator
+│   ├── Capped at 100 parties per call (prevents abuse)
+│   └── Risk: LOW — bounded bulk operation
+```
+
+#### 10.4.6 Minted.Protocol.V3.daml (Critical — Unified Canton Protocol)
+
+This is the consolidated production module (1,111 lines, 14 templates). Key additions beyond individual modules:
+
+```daml
+template Vault (CDP)
+├── Signatories: operator, owner
+├── choice AdjustLeverage (atomic leverage loop)
+│   ├── Bounded: max 10 loops
+│   ├── Deposits collateral → borrows mUSD → swaps via DEX → adds collateral
+│   ├── Health check after all loops
+│   └── Risk: HIGH — complex atomic operation, oracle dependency
+│
+├── choice Liquidate
+│   ├── Controller: liquidator (any party)
+│   ├── Validates: healthFactor < liquidationThreshold
+│   ├── Close factor limits max repayment
+│   ├── Dust threshold triggers full liquidation
+│   ├── Keeper bonus from penalty
+│   ├── Creates immutable LiquidationReceipt
+│   └── Risk: HIGH — oracle manipulation could trigger false liquidations
+
+template VaultManager (Factory)
+├── Whitelisted collateral symbols
+├── Default config application to new vaults
+└── Risk: MEDIUM — config changes affect new vaults only
+
+template BridgeService
+├── choice Bridge_ReceiveFromEthereum
+│   ├── Validates attestation direction = EthereumToCanton
+│   ├── Verifies sufficient signatures >= requiredSignatures
+│   ├── Archives attestation (consumed — replay prevention)
+│   └── Risk: CRITICAL — mints mUSD on Canton from Ethereum attestation
+
+template AttestationRequest (V3)
+├── choice Attestation_Sign (CONSUMING)
+│   ├── Set-based duplicate tracking
+│   ├── Signature length validation
+│   └── Expiration enforcement
+├── choice Attestation_Complete
+│   ├── Derives majority quorum: (n/2) + 1 (FIX A-03)
+│   └── Risk: CRITICAL — previously accepted caller-supplied requiredSignatures
+```
+
+#### 10.4.7 MintedProtocolV2Fixed.daml (Critical — Audited Protocol with Security Fixes)
+
+```
+Critical Fixes Applied:
+├── TIME MANIPULATION: Removed user-provided `currentTime` across all choices
+│   (Vault, Oracle, Liquidation). Replaced with `getTime` (Ledger Effective Time)
+├── LIQUIDITY POOL STATE: Fixed Pool_SwapMUSDForCollateral — previously failed to update
+│   poolCollateral CID, breaking pool after first trade
+├── REPLAY ATTACK: MintFromAttestation is now CONSUMING — previously allowed infinite
+│   minting from a single valid attestation
+└── ATTESTATION CONCURRENCY: ProvideSignature changed to nonconsuming for parallel signing
+    (contrast: later BLEProtocol changed it back to consuming for TOCTOU prevention)
+
+Additional Fixes:
+├── D-H01: Positive amount enforcement on all assets
+├── D-H01: Proposal pattern for Collateral and USDC transfers
+├── D-H04: Signature tracking set to prevent duplicates
+├── D-H10: Liquidator observer visibility for health factor checks
+├── D-C05: Quorum derived from validatorGroup (supermajority)
+├── D-M01: Tolerance-based Numeric 18 comparison (< 1.0 USD)
+├── D-M05: Strict inequality to prevent zero-remainder splits
+├── H-07: Health factor queryable by any observer
+├── H-08: Fee withdrawal creates USDC payment (not destroyed)
+├── H-09: Repayment overpayment returned as change
+├── 5C-H01: Vault borrows track supply against IssuerRole cap
+└── 5C-H02: Unstake yield minting tracked against supply cap
+```
+
+#### 10.4.8 MintedMUSD.daml (Medium — Core Token with Issuance Workflows)
+
+```daml
+template IssuerRole
+├── Signatories: issuer
+├── State: supplyCap, currentSupply (on-ledger — FIX D-C01)
+│
+├── choice IssuerRole_Mint (CONSUMING)
+│   ├── Controller: issuer, mintOwner (dual controller — FIX AUTH)
+│   ├── Validates: currentSupply + mintAmount <= supplyCap
+│   ├── Returns: updated IssuerRole + minted MUSD
+│   └── Risk: MEDIUM — supply cap enforced, dual authorization required
+│
+├── choice IssuerRole_UpdateSupplyCap
+│   ├── Validates: newCap >= currentSupply
+│   └── Risk: LOW
+
+template MintRequest
+├── Signatories: owner (requester)
+├── choice MintRequest_Approve
+│   ├── Controller: issuer, owner (dual — FIX AUTH)
+│   ├── Exercises IssuerRole_Mint (enforces supply cap — FIX 5C-C01)
+│   └── Risk: LOW — separation of request/approval duties
+
+template MintProposal
+├── Signatories: issuer
+├── choice MintProposal_Accept
+│   ├── Controller: owner, issuer (dual — FIX AUTH)
+│   └── Risk: LOW — airdrop-safe (user must accept)
+```
+
+#### 10.4.9 InstitutionalAssetV4.daml (Medium — Institutional Custody)
+
+```daml
+template Asset
+├── Signatories: issuer, owner
+├── Observers: observers, depository
+├── Invariants: amount > 0.0, metadata length <= 100
+│
+├── choice Asset_Transfer
+│   ├── Validates: not locked, registry authority matches, compliance check
+│   ├── Prevents credit laundering via identity checks on merge
+│   └── Risk: LOW — multi-layer validation
+│
+├── choice Asset_EmergencyTransfer
+│   ├── Controller: issuer (court order/regulatory)
+│   ├── Validates: non-empty reason (FIX IA-M03), compliance whitelist (FIX IA-C01)
+│   ├── Appends reason to metadata audit trail
+│   └── Risk: MEDIUM — issuer can forcibly move assets (by design for regulatory)
+│
+├── choice Asset_Split
+│   ├── Validates: not locked, positive amount, instrument precision scale
+│   └── Risk: LOW — precision validation prevents dust
+
+template Instrument
+├── Invariant: decimalScale in [0, 18] (FIX IA-L01)
+
+template AssetRegistry
+├── Invariant: 1 <= authorizedParties length <= 10,000 (FIX IA-M02)
+```
+
+### 10.5 Canton Security Posture Summary
+
+| Category | Status |
+|----------|--------|
+| Dual Signatory Enforcement | ✅ All token templates use dual signatories (issuer + owner) |
+| Proposal Pattern (Anti-Airdrop) | ✅ All transfers use accept/reject proposals |
+| Replay Prevention | ✅ Consuming choices archive attestations after use |
+| TOCTOU Prevention | ✅ Consuming choices lock position CIDs during attestation (FIX D-01) |
+| Duplicate Signature Prevention | ✅ Set-based tracking on attestation requests (FIX D-02) |
+| Timestamp Validation | ✅ `expiresAt` with `getTime` checks (FIX D-03) |
+| Quorum Derivation | ✅ Required signatures derived from validator group size, not caller-supplied (FIX C-12) |
+| Supply Cap Enforcement | ✅ On-ledger state tracking in IssuerRole / service contracts |
+| Rate Limiting | ✅ 24h rolling window with mint/burn offset tracking |
+| Compliance Hooks | ✅ Optional ComplianceRegistry with O(log n) blacklist/freeze checks |
+| Oracle Staleness | ✅ Enforced via `getTime` comparison (not user-supplied time) |
+| Numeric Precision | ✅ Numeric 18 with tolerance-based comparisons where needed |
+| Validator Group Bounds | ✅ Capped at 100 parties (FIX H-6) |
+| Legal Agreement Embedding | ✅ MPA hash + URI in every minted token |
+
+### 10.6 Canton-Specific Findings & Recommendations
+
+| Severity | Finding | Details | Recommendation |
+|----------|---------|---------|----------------|
+| **Medium** | BridgeIn_Sign is nonconsuming | Unlike BridgeOut_Sign (consuming), BridgeIn_Sign does not prevent double-signing. Mitigated by dedup at finalization. | Change to consuming for consistency and defense-in-depth |
+| **Medium** | Operator centralization | CantonDirectMintService operator has unilateral control over pause, supply cap, fee changes, and compliance registry updates | Consider multi-party authorization or timelock for critical admin choices |
+| **Medium** | No cooldown on CantonStakingService Unstake | Unlike V3's CooldownTicket pattern, the standalone CantonSMUSD module has no cooldown enforcement in Unstake | Verify which module is deployed in production; apply cooldown if needed |
+| **Low** | Quorum inconsistency | BLEProtocol uses supermajority `(n+1)/2 + 1`; BLEBridgeProtocol uses simple majority `(n/2) + 1` | Standardize across all attestation types |
+| **Low** | CantonMUSD_Merge lacks compliance check | Merge allows combining tokens without checking compliance registry | Add compliance validation if ComplianceRegistry is configured |
+| **Low** | YieldAttestation epoch gap not bounded | Sequential epoch required, but large gaps between epochs are unchecked | Consider maximum epoch gap to detect missed attestations |
+| **Info** | Multiple protocol versions coexist | V2Fixed, V3, standalone modules — unclear which is production | Document canonical production module; deprecate others |
+| **Info** | MintedMUSD.daml uses `Decimal` (10-precision) | Other modules use `Numeric 18` — precision mismatch if interoperating | Ensure modules deployed together use consistent precision type |
+
+### 10.7 Cross-Chain Bridge Security Analysis
+
+The Canton↔Ethereum bridge is the **most critical security boundary** in the system. Compromise of the bridge enables unbacked minting on either chain.
+
+```
+Canton Network                          Ethereum Network
+┌─────────────────────┐                 ┌──────────────────────┐
+│  CantonDirectMint   │   BridgeOut     │                      │
+│  (mint mUSD)        │──────────────▶  │  Ethereum Treasury   │
+│                     │   (attestation) │  (holds USDC backing)│
+│  CantonSMUSD        │                 │                      │
+│  (yield vault)      │◀──────────────  │  Yield Strategies    │
+│                     │   YieldAttest   │                      │
+│  BLEBridgeProtocol  │                 │  BLEBridgeV9.sol     │
+│  (validator multi-  │◀──────────────▶ │  (processAttestation)│
+│   sig attestation)  │   SupplyCap     │                      │
+│                     │   Sync          │                      │
+│  Compliance         │                 │  MUSD.sol            │
+│  (blacklist/freeze) │   BridgeIn      │  (ERC-20 + blacklist)│
+│                     │◀──────────────  │                      │
+│  RedemptionRequest  │   (USDC return) │  DirectMintV2.sol    │
+└─────────────────────┘                 └──────────────────────┘
+```
+
+**Bridge Security Controls:**
+1. **Multi-signature attestation** — Majority/supermajority validator quorum required
+2. **Nonce-based replay prevention** — Sequential nonces on both sides
+3. **Expiration timestamps** — Stale attestations rejected via `getTime`
+4. **Collateral verification** — 110% collateral ratio checked at sign and finalize
+5. **Rate limiting** — 24h rolling window on Canton side; daily cap increase limit on Ethereum side
+6. **Supply cap synchronization** — SupplyCapAttestation keeps both chains consistent
+7. **Two-phase redemption** — Burn first, then bridge-in fulfills asynchronously
+
+**⚠️ CRITICAL: Bridge Invariant**
+
+The fundamental invariant is:
+```
+Canton mUSD Supply + Ethereum mUSD Supply ≤ Total USDC Backing (Ethereum Treasury)
+```
+This is enforced by SupplyCapAttestation which validates `globalBackingUSDC >= totalGlobalSupply`.
+
+### 10.8 Canton Test Coverage
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| `daml/Test.daml` | 9 scenarios | BLE attestation flow, collateral validation, duplicate signatures, expiration, validator authorization, Numeric 18 precision, mUSD split/merge/redeem, attestation-gated minting, transfer proposals |
+| `daml/CantonDirectMintTest.daml` | 10 scenarios | Direct mint, redeem, bridge-out (3-of-5), bridge-in, supply cap sync, yield attestation + smUSD sync, end-to-end flow, reserve tracker, paused enforcement, USDCx/Circle CCTP flow |
+| `daml/MintedMUSD.daml` (inline) | 1 scenario | Mint proposal, transfer privacy, failed redemption recovery, compliance locking |
+
+**Recommended Additional Canton Tests:**
+- [ ] Attestation with exactly quorum vs. quorum-1 signatures (boundary test)
+- [ ] Rate limit window reset timing edge cases
+- [ ] Concurrent attestation requests with overlapping validator groups
+- [ ] ComplianceRegistry integration with all minting paths
+- [ ] Cross-module precision consistency (Decimal vs. Numeric 18)
+- [ ] Negative/zero amount rejection across all templates
+- [ ] Emergency transfer audit trail verification
+- [ ] YieldAttestation with epoch gaps
+
+---
+
 ## Document Control
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
-| 1.0 | 2026-01-30 | Protocol Team | Initial audit preparation |
+| 1.0 | 2026-01-30 | Protocol Team | Initial audit preparation (Solidity contracts) |
+| 1.1 | 2026-01-31 | Protocol Team | Added Canton DAML contracts audit (Section 10) |
 
 ---
 
