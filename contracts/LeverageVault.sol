@@ -301,8 +301,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
             require(musdReceived >= debtToRepay, "INSUFFICIENT_MUSD_FROM_SWAP");
 
-            // Repay debt
-            musd.approve(address(borrowModule), debtToRepay);
+            // FIX M-6: Use forceApprove for consistency and USDT-safety
+            IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repay(debtToRepay);
 
             // Refund excess mUSD if any
@@ -382,9 +382,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
             borrowModule.borrowFor(user, toBorrow);
             totalDebt += toBorrow;
 
-            // Swap mUSD → collateral
+            // FIX C-3: Swap mUSD → collateral — revert on failure to prevent orphaned debt
             uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow);
-            if (collateralReceived == 0) break;
+            require(collateralReceived > 0, "SWAP_FAILED_ORPHANED_DEBT");
 
             // Deposit new collateral
             IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
@@ -427,8 +427,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         uint256 expectedOut = _getCollateralForMusd(collateralToken, musdAmount);
         uint256 minOut = (expectedOut * (10000 - maxSlippageBps)) / 10000;
 
-        // Approve router
-        musd.approve(address(swapRouter), musdAmount);
+        // FIX M-6: Use forceApprove for consistency
+        IERC20(address(musd)).forceApprove(address(swapRouter), musdAmount);
 
         // Get pool fee for this token
         uint24 poolFee = tokenPoolFees[collateralToken];
@@ -605,5 +605,46 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     /// @notice Emergency withdraw stuck tokens
     function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         IERC20(token).safeTransfer(msg.sender, amount);
+    }
+
+    /// @notice FIX C-4: Emergency close a position when normal close fails (e.g., bad debt)
+    /// @dev Admin can forcibly close, returning whatever collateral remains to the user.
+    ///      Debt is written off — protocol takes the loss rather than trapping user funds.
+    /// @param user The user whose position to emergency-close
+    function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        LeveragePosition storage pos = positions[user];
+        require(pos.totalCollateral > 0, "NO_POSITION");
+
+        address collateralToken = pos.collateralToken;
+
+        // Withdraw all collateral from vault to this contract
+        uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);
+        if (totalCollateralInVault > 0) {
+            collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this));
+        }
+
+        // Attempt to repay as much debt as possible
+        uint256 debtToRepay = borrowModule.totalDebt(user);
+        if (debtToRepay > 0 && totalCollateralInVault > 0) {
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, totalCollateralInVault);
+            if (musdReceived > 0) {
+                uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
+                IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
+                try borrowModule.repay(repayAmount) {} catch {}
+            }
+        }
+
+        // Send any remaining collateral + mUSD back to the user
+        uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));
+        if (remainingCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(user, remainingCollateral);
+        }
+        uint256 remainingMusd = musd.balanceOf(address(this));
+        if (remainingMusd > 0) {
+            IERC20(address(musd)).safeTransfer(user, remainingMusd);
+        }
+
+        emit LeverageClosed(user, collateralToken, remainingCollateral, debtToRepay, 0);
+        delete positions[user];
     }
 }
