@@ -493,11 +493,12 @@ setup = do
 
   -- 6. Alice Unstakes (Gets Yield)
   -- FIX: Unstake now requires MintingService reference and returns tuple
+  -- FIX: Use mintingSvc2 (returned from Mint_Musd), not consumed mintingSvc
   (updatedMintingSvc, finalMusd) <- submit alice do
     exerciseCmd stakingSvc Unstake with
       user = alice
       smusdCid = smusdCid
-      mintingServiceCid = mintingSvc
+      mintingServiceCid = mintingSvc2
 
   -- 7. Alice Bridges to another Canton Domain
   submit alice do
