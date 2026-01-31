@@ -316,8 +316,8 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
         // Accumulate fees
         accumulatedFees += fee;
         
-        // Approve token bridge
-        usdc.approve(address(tokenBridge), netAmount);
+        // FIX H-7: Use forceApprove for USDT-safe approval
+        usdc.forceApprove(address(tokenBridge), netAmount);
         
         // Increment nonce
         _nonce++;

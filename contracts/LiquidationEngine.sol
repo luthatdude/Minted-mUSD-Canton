@@ -65,6 +65,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
     // Minimum health factor below which full liquidation is allowed
     uint256 public fullLiquidationThreshold; // bps, e.g., 5000 = 0.5
+    
+    // FIX M-20: Minimum profitable liquidation to prevent dust attacks
+    // Set to 100 mUSD (18 decimals) to ensure liquidations are economically meaningful
+    uint256 public constant MIN_LIQUIDATION_AMOUNT = 100e18;
 
     event Liquidation(
         address indexed liquidator,
@@ -111,6 +115,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     ) external nonReentrant whenNotPaused {
         require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
         require(debtToRepay > 0, "INVALID_AMOUNT");
+        // FIX M-20: Prevent dust liquidations that waste gas and spam events
+        require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
 
         // Check position is liquidatable
         uint256 hf = borrowModule.healthFactor(borrower);

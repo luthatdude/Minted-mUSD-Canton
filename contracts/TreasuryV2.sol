@@ -40,6 +40,9 @@ contract TreasuryV2 is
 
     uint256 public constant BPS = 10000;
     uint256 public constant MAX_STRATEGIES = 10;
+    
+    // FIX H-2: Minimum time between fee accruals to prevent flash loan manipulation
+    uint256 public constant MIN_ACCRUAL_INTERVAL = 1 hours;
 
     // ═══════════════════════════════════════════════════════════════════════
     // ROLES
@@ -115,6 +118,7 @@ contract TreasuryV2 is
     event StrategyAdded(address indexed strategy, uint256 targetBps);
     event StrategyRemoved(address indexed strategy);
     event StrategyUpdated(address indexed strategy, uint256 newTargetBps);
+    event StrategyWithdrawn(address indexed strategy, uint256 amount); // FIX H-3: Event for withdrawal tracking
     event FeesAccrued(uint256 yield_, uint256 protocolFee);
     event FeesClaimed(address indexed recipient, uint256 amount);
     event Rebalanced(uint256 totalValue);
@@ -581,8 +585,15 @@ contract TreasuryV2 is
 
     /**
      * @notice Accrue protocol fees on yield
+     * FIX H-2: Added minimum time interval between accruals to prevent flash loan manipulation.
+     * Attacker cannot inflate totalValue() temporarily and immediately accrue fees.
      */
     function _accrueFees() internal {
+        // FIX H-2: Skip fee accrual if called too soon (prevents flash loan manipulation)
+        if (block.timestamp < lastFeeAccrual + MIN_ACCRUAL_INTERVAL) {
+            return;
+        }
+        
         uint256 currentValue = totalValue();
 
         if (currentValue > lastRecordedValue) {
@@ -685,15 +696,21 @@ contract TreasuryV2 is
 
     /**
      * @notice Remove a strategy (withdraws all funds first)
+     * FIX H-3: Revert on withdrawal failure to prevent fund loss
      */
     function removeStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
 
         uint256 idx = strategyIndex[strategy];
 
-        // Withdraw all from strategy
+        // FIX H-3: Withdraw all from strategy - REVERT on failure
         if (strategies[idx].active) {
-            try IStrategy(strategy).withdrawAll() {} catch {}
+            uint256 stratValue = IStrategy(strategy).totalValue();
+            if (stratValue > 0) {
+                uint256 withdrawn = IStrategy(strategy).withdrawAll();
+                require(withdrawn > 0, "WITHDRAWAL_FAILED");
+                emit StrategyWithdrawn(strategy, withdrawn);
+            }
         }
 
         // Deactivate (don't delete to preserve indices)
