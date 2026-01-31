@@ -282,25 +282,26 @@ bridgeInAttestationTest = script do
       aggregator
       validatorGroup = validators
       payload
+      signedValidators = []
 
-  -- All 3 validators sign
-  sig1 <- submit validator1 do
+  -- All 3 validators sign (consuming choice returns updated attestation + signature)
+  (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid BridgeIn_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2 <- submit validator2 do
-    exerciseCmd attCid BridgeIn_Sign with
+  (attCid3, sig2) <- submit validator2 do
+    exerciseCmd attCid2 BridgeIn_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3 <- submit validator3 do
-    exerciseCmd attCid BridgeIn_Sign with
+  (attCid4, sig3) <- submit validator3 do
+    exerciseCmd attCid3 BridgeIn_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   finalSigs <- submit aggregator do
-    exerciseCmd attCid BridgeIn_Finalize with
+    exerciseCmd attCid4 BridgeIn_Finalize with
       signatureCids = [sig1, sig2, sig3]
 
   debug "Bridge-in attestation test passed - 3-of-3 validators signed"
