@@ -51,7 +51,7 @@ interface PortfolioData {
 }
 
 export function DashboardPage() {
-  const { address, signer, isConnected, ensName, chainName } = useWalletConnect();
+  const { address, signer, isConnected, ensName, chain } = useWalletConnect();
   const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -157,14 +157,17 @@ export function DashboardPage() {
           try {
             const tokens: string[] = await vault.getSupportedTokens();
             for (const token of tokens) {
-              const deposited = await vault.getDeposit(address, token);
+              const dep = await vault.getDeposit(address, token);
+              const deposited = BigInt(dep);
               if (deposited > 0n) {
                 const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
-                const [symbol, decimals, price] = await Promise.all([
+                const [symbol, dec, prc] = await Promise.all([
                   erc20.symbol(),
                   erc20.decimals(),
                   oracle.getPrice(token).catch(() => 0n),
                 ]);
+                const decimals = Number(dec);
+                const price = BigInt(prc);
                 const valueUsd = price > 0n 
                   ? (deposited * price) / (10n ** BigInt(decimals))
                   : 0n;
@@ -172,7 +175,7 @@ export function DashboardPage() {
                 collaterals.push({
                   symbol,
                   deposited,
-                  decimals: Number(decimals),
+                  decimals,
                   valueUsd,
                 });
               }
@@ -255,7 +258,7 @@ export function DashboardPage() {
         <PageHeader
           title="Dashboard"
           subtitle={`Welcome back${ensName ? `, ${ensName}` : ''}`}
-          badge={chainName || "Ethereum"}
+          badge={chain?.name || "Ethereum"}
           badgeColor="brand"
         />
         <div className="flex items-center gap-2">
@@ -682,3 +685,5 @@ function ActionCard({ title, description, icon, color }: {
     </button>
   );
 }
+
+export default DashboardPage;

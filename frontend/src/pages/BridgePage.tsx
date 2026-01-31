@@ -179,3 +179,5 @@ export function BridgePage() {
     </div>
   );
 }
+
+export default BridgePage;

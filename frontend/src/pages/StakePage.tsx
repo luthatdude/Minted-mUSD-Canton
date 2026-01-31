@@ -186,3 +186,5 @@ export function StakePage() {
     </div>
   );
 }
+
+export default StakePage;

@@ -151,3 +151,5 @@ export function LiquidationsPage() {
     </div>
   );
 }
+
+export default LiquidationsPage;
