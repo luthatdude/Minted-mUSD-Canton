@@ -542,9 +542,16 @@ function getValueUsd(address token, uint256 amount) external view returns (uint2
 | ID | Issue | Design Decision | Rationale |
 |----|-------|-----------------|-----------|
 | H-02 | Simple interest, not compound | Intentional | Gas efficiency, predictable for users |
-| H-09 | BLEBridgeV9 incompatible with V8 storage | Migration required | Clean slate for improved design |
+| H-09 | BLEBridgeV9 incompatible with V8 storage | Fresh deployment + migration | Clean slate for improved design |
 | 5C-M05 | Interest rate changes apply prospectively | Intentional | Existing positions stable |
 | S-M02 | No timelock on admin operations | Intentional for emergency response | Consider adding for production |
+
+**⚠️ H-09 Migration Plan:** See [docs/MIGRATION_V8_TO_V9.md](docs/MIGRATION_V8_TO_V9.md) for:
+- Storage layout comparison
+- Step-by-step migration procedure
+- Migration script at [scripts/migrate-v8-to-v9.ts](scripts/migrate-v8-to-v9.ts)
+- Rollback procedure
+- Timeline estimates
 
 ### 6.2 Fixed Issues (Prior Internal Review)
 
