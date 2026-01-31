@@ -5,6 +5,7 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -492,10 +493,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Get collateral amount for given mUSD amount (via oracle)
+    /// FIX L-05: Handle tokens with non-18 decimals (e.g., WBTC has 8)
     function _getCollateralForMusd(address collateralToken, uint256 musdAmount) internal view returns (uint256) {
         // mUSD is 1:1 with USD, so musdAmount = USD value
         // Get collateral price in USD
-        uint256 oneUnit = 10 ** 18; // Assuming 18 decimals
+        // FIX L-05: Query actual token decimals instead of assuming 18
+        uint256 tokenDecimals = IERC20Metadata(collateralToken).decimals();
+        uint256 oneUnit = 10 ** tokenDecimals;
         uint256 oneUnitValue = priceOracle.getValueUsd(collateralToken, oneUnit);
         if (oneUnitValue == 0) return 0;
 

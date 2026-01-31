@@ -224,6 +224,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     // ============================================================
 
     /// @notice Accrue interest on a user's debt
+    /// @dev Uses SIMPLE INTEREST model (not compound).
+    ///      Formula: interest = principal × rate × time
+    ///      This is intentional for gas efficiency and predictability.
+    ///      For multi-year positions, compound interest could be added.
+    ///      H-02: DOCUMENTED DESIGN DECISION - simple interest is intentional.
     function _accrueInterest(address user) internal {
         DebtPosition storage pos = positions[user];
         if (pos.principal == 0 && pos.accruedInterest == 0) {

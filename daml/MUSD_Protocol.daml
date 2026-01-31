@@ -253,10 +253,13 @@ template StakingService
           entryTime = currentTime
           interestRate = baseRate
 
-    nonconsuming choice Unstake : ContractId Musd
+    -- FIX W-03: Unstake now requires MintingService reference to enforce supply cap
+    -- Previously yield minting completely bypassed supply cap
+    nonconsuming choice Unstake : (ContractId MintingService, ContractId Musd)
       with
         user : Party
         smusdCid : ContractId Smusd
+        mintingServiceCid : ContractId MintingService  -- FIX W-03: Required for supply cap check
       controller user
       do
         smusd <- fetch smusdCid
@@ -278,11 +281,20 @@ template StakingService
         let maxTotalYield = smusd.amount * 2.0
         let finalInterest = if cappedInterest > maxTotalYield then maxTotalYield else cappedInterest
         let totalReturn = smusd.amount + finalInterest
+        
+        -- FIX W-03: Enforce supply cap on yield minting
+        -- Only the interest is new supply; principal was already counted
+        svc <- fetch mintingServiceCid
+        assertMsg "YIELD_EXCEEDS_SUPPLY_CAP" (svc.currentSupply + finalInterest <= svc.supplyCap)
+        archive mintingServiceCid
+        newSvc <- create svc with currentSupply = svc.currentSupply + finalInterest
+        
         -- Mint mUSD + Yield back to user
-        create Musd with
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = totalReturn
+        return (newSvc, musdCid)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 4: CANTON ATTESTATION FLOW (BRIDGE)

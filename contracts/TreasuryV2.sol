@@ -364,6 +364,12 @@ contract TreasuryV2 is
             actualAmount = reserve + withdrawn;
             if (actualAmount > amount) actualAmount = amount;
 
+            // FIX H-01: Revert if we can't fulfill the full requested amount
+            // Silent partial withdrawals can leave protocol in inconsistent state
+            if (actualAmount < amount) {
+                revert("INSUFFICIENT_LIQUIDITY");
+            }
+
             asset.safeTransfer(vault, actualAmount);
         }
 
@@ -500,6 +506,8 @@ contract TreasuryV2 is
 
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
+                    // FIX H-04: Clear approval after successful deposit to prevent dangling approvals
+                    asset.forceApprove(strat, 0);
                 } catch {
                     // Strategy deposit failed, keep in reserve
                     allocations[i] = 0;
