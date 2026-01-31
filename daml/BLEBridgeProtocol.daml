@@ -231,9 +231,11 @@ template BridgeInAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        -- Enforce all sigs belong to this attestation (by nonce, not contract ID)
+        -- Contract ID changes on each BridgeIn_Sign, but nonce stays constant
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
