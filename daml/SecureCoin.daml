@@ -1,3 +1,5 @@
+-- | REFERENCE ONLY: Security pattern demonstration — not deployed in production.
+-- Production token templates are in Minted.Protocol.V3 and CantonDirectMint.
 module SecureCoin where
 
 -- | A secure Coin template demonstrating the Proposal pattern.
