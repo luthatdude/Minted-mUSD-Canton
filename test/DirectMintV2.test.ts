@@ -4,7 +4,7 @@
  */
 
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
 
@@ -32,17 +32,17 @@ describe("DirectMintV2", function () {
 
     // Deploy MUSD
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy();
+    musd = await MUSDFactory.deploy(SUPPLY_CAP) as MUSD;
     await musd.waitForDeployment();
 
-    // Set supply cap
-    const SUPPLY_MANAGER_ROLE = await musd.SUPPLY_MANAGER_ROLE?.() || ethers.keccak256(ethers.toUtf8Bytes("SUPPLY_MANAGER_ROLE"));
-    await musd.grantRole(SUPPLY_MANAGER_ROLE, deployer.address);
-    await musd.setSupplyCap(SUPPLY_CAP);
-
-    // Deploy TreasuryV2
+    // Deploy TreasuryV2 (upgradeable proxy)
     const TreasuryFactory = await ethers.getContractFactory("TreasuryV2");
-    treasury = await TreasuryFactory.deploy(await usdc.getAddress());
+    treasury = (await upgrades.deployProxy(TreasuryFactory, [
+      await usdc.getAddress(),
+      deployer.address,  // vault placeholder
+      deployer.address,  // admin
+      feeRecipient.address,
+    ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
     // Deploy DirectMintV2
@@ -55,12 +55,13 @@ describe("DirectMintV2", function () {
     );
     await directMint.waitForDeployment();
 
-    // Setup roles
-    const MINTER_ROLE = await musd.MINTER_ROLE();
-    await musd.grantRole(MINTER_ROLE, await directMint.getAddress());
+    // Setup roles - MUSD uses BRIDGE_ROLE for minting
+    const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+    await musd.grantRole(BRIDGE_ROLE, await directMint.getAddress());
 
-    const DEPOSITOR_ROLE = await treasury.DEPOSITOR_ROLE?.() || ethers.keccak256(ethers.toUtf8Bytes("DEPOSITOR_ROLE"));
-    await treasury.grantRole(DEPOSITOR_ROLE, await directMint.getAddress());
+    // TreasuryV2 uses VAULT_ROLE for deposit/withdraw
+    const VAULT_ROLE = await treasury.VAULT_ROLE();
+    await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
 
     // Mint USDC to user
     await usdc.mint(user.address, INITIAL_USDC);
@@ -224,7 +225,7 @@ describe("DirectMintV2", function () {
 
     it("Should reject fees above maximum", async function () {
       await expect(directMint.setFees(600, 0)) // 6% > 5% max
-        .to.be.revertedWith("FEE_TOO_HIGH");
+        .to.be.revertedWith("MINT_FEE_TOO_HIGH");
     });
 
     it("Should allow fee withdrawal", async function () {
@@ -273,7 +274,7 @@ describe("DirectMintV2", function () {
     it("Should reject invalid limits (min > max)", async function () {
       await expect(
         directMint.setLimits(1000, 100, 1, 1000) // min > max
-      ).to.be.revertedWith("INVALID_LIMITS");
+      ).to.be.revertedWith("INVALID_MINT_LIMITS");
     });
   });
 
