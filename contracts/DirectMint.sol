@@ -138,8 +138,9 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         require(usdcEquivalent >= minRedeemAmount, "BELOW_MIN");
         require(usdcEquivalent <= maxRedeemAmount, "ABOVE_MAX");
 
-        // Calculate fee
-        uint256 feeUsdc = (usdcEquivalent * redeemFeeBps) / 10000;
+        // Calculate fee - using combined calculation to avoid precision loss
+        // feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000)
+        uint256 feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
         usdcOut = usdcEquivalent - feeUsdc;
 
         require(usdcOut > 0, "ZERO_OUTPUT");
@@ -175,7 +176,8 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Preview how much USDC user will receive for mUSD redemption
     function previewRedeem(uint256 musdAmount) external view returns (uint256 usdcOut, uint256 feeUsdc) {
         uint256 usdcEquivalent = musdAmount / 1e12;
-        feeUsdc = (usdcEquivalent * redeemFeeBps) / 10000;
+        // Combined calculation to avoid precision loss
+        feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
         usdcOut = usdcEquivalent - feeUsdc;
     }
 
