@@ -12,7 +12,7 @@ contract MockStrategy is IStrategy {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable _asset;
-    address public treasury;
+    address public immutable treasury;
     uint256 public deposited;
     bool public active;
     bool public depositShouldFail;

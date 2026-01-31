@@ -19,9 +19,9 @@ interface IMintableToken {
 contract MockSwapRouter {
     using SafeERC20 for IERC20;
 
-    IERC20 public musd;
-    IERC20 public weth;
-    IPriceOracle public oracle;
+    IERC20 public immutable musd;
+    IERC20 public immutable weth;
+    IPriceOracle public immutable oracle;
 
     struct ExactInputSingleParams {
         address tokenIn;
