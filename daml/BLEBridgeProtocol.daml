@@ -178,32 +178,42 @@ data BridgeInPayload = BridgeInPayload with
 
 -- | Bridge-in attestation.
 -- Created when Ethereum Treasury sends USDC back to Canton for redemptions.
+-- FIX M-5: Added signedValidators tracking for consistency with BridgeOutAttestation
 template BridgeInAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeInPayload
+    signedValidators : [Party]    -- FIX M-5: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
-    nonconsuming choice BridgeIn_Sign : ContractId BridgeInSignature
+    -- FIX M-5: Changed from nonconsuming to consuming to prevent double-signing
+    -- Mirrors BridgeOut_Sign pattern: archives old, creates new with updated tracker
+    choice BridgeIn_Sign : (ContractId BridgeInAttestation, ContractId BridgeInSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX M-5: Prevent duplicate signatures
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
 
-        create BridgeInSignature with
+        sig <- create BridgeInSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+
+        -- FIX M-5: Return updated attestation with validator added to signedValidators
+        newAttestation <- create this with signedValidators = validator :: signedValidators
+        return (newAttestation, sig)
 
     -- Finalize and archive — USDC can now be minted on Canton
     -- FIX DL-H2: Derive requiredSignatures from validatorGroup size (majority quorum)
@@ -221,9 +231,11 @@ template BridgeInAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        -- Enforce all sigs belong to this attestation (by nonce, not contract ID)
+        -- Contract ID changes on each BridgeIn_Sign, but nonce stays constant
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 

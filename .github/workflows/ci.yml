@@ -41,11 +41,12 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          # Ensure at least 50% statement coverage
+          # FIX M-3: Raise coverage threshold to 80% for institutional audit readiness
           COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
           echo "Statement coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 50" | bc -l) )); then
-            echo "::warning::Coverage below 50% threshold"
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "::error::Coverage below 80% threshold — institutional audit requires ≥80%"
+            exit 1
           fi
         continue-on-error: true
 
