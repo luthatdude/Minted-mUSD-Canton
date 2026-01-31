@@ -1,4 +1,8 @@
--- | MintedProtocolV2Fixed
+-- | SUPERSEDED: Use Minted.Protocol.V3 (daml/Minted/Protocol/V3.daml) for production.
+-- V3 consolidates all V2Fixed fixes into a unified module. This file is retained for
+-- audit trail purposes — all security fix IDs (D-H01 through 5C-H02) originated here.
+--
+-- MintedProtocolV2Fixed
 -- Full audited Daml protocol with security fixes applied
 --
 -- ============================================================

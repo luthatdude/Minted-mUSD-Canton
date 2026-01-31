@@ -1,4 +1,7 @@
--- | MUSD_Protocol
+-- | DEPRECATED: Use Minted.Protocol.V3 (daml/Minted/Protocol/V3.daml) for production.
+-- This module is retained for reference only and should NOT be deployed.
+--
+-- MUSD_Protocol
 -- Full mUSD protocol implementation on Canton/Daml
 -- Sections: Asset definitions, Direct minting, Staking/yield, Canton attestation bridge
 
