@@ -457,6 +457,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Swap collateral to mUSD via Uniswap V3
+    /// FIX C-1: Revert on swap failure instead of returning 0 to prevent fund loss
     function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount) internal returns (uint256 musdReceived) {
         if (collateralAmount == 0) return 0;
 
@@ -471,8 +472,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         uint24 poolFee = tokenPoolFees[collateralToken];
         if (poolFee == 0) poolFee = defaultPoolFee;
 
-        // Execute swap
-        try swapRouter.exactInputSingle(
+        // FIX C-1: Execute swap - REVERT on failure, do not silently return 0
+        musdReceived = swapRouter.exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: collateralToken,
                 tokenOut: address(musd),
@@ -483,11 +484,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0
             })
-        ) returns (uint256 amountOut) {
-            musdReceived = amountOut;
-        } catch {
-            musdReceived = 0;
-        }
+        );
+        
+        // FIX C-1: Explicit check for zero output
+        require(musdReceived > 0, "SWAP_RETURNED_ZERO");
 
         return musdReceived;
     }
