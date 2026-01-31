@@ -6,6 +6,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -31,12 +32,13 @@ interface IMUSDMint {
 /// @notice Manages debt positions for overcollateralized mUSD borrowing.
 ///         Users deposit collateral in CollateralVault, then borrow mUSD here.
 ///         Interest accrues per-second on outstanding debt.
-contract BorrowModule is AccessControl, ReentrancyGuard {
+contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     ICollateralVault public immutable vault;
     IPriceOracle public immutable oracle;
@@ -95,7 +97,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
     /// @notice Borrow mUSD against deposited collateral
     /// @param amount Amount of mUSD to borrow (18 decimals)
-    function borrow(uint256 amount) external nonReentrant {
+    function borrow(uint256 amount) external nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
         // Accrue interest first
@@ -122,7 +124,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     /// @notice Borrow mUSD on behalf of a user (for LeverageVault integration)
     /// @param user The user to borrow for
     /// @param amount Amount of mUSD to borrow (18 decimals)
-    function borrowFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
+    function borrowFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
         require(user != address(0), "INVALID_USER");
 
@@ -147,7 +149,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
     /// @notice Repay mUSD debt
     /// @param amount Amount of mUSD to repay (18 decimals)
-    function repay(uint256 amount) external nonReentrant {
+    function repay(uint256 amount) external nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
         _accrueInterest(msg.sender);
@@ -185,7 +187,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     /// @param token The collateral token
     /// @param amount Amount to withdraw
     /// FIX H-05: Checks health BEFORE withdrawal (CEI pattern)
-    function withdrawCollateral(address token, uint256 amount) external nonReentrant {
+    function withdrawCollateral(address token, uint256 amount) external nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
         _accrueInterest(msg.sender);
@@ -383,5 +385,19 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
         emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS
+    // ============================================================
+
+    /// @notice Pause borrowing and repayments
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause borrowing and repayments
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }

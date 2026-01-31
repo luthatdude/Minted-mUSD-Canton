@@ -8,11 +8,14 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
-contract SMUSD is ERC4626, AccessControl {
+contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
@@ -23,12 +26,14 @@ contract SMUSD is ERC4626, AccessControl {
 
     constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
     }
 
     // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party deposit.
     // A depositor can always set their own cooldown, and depositing on behalf of someone
     // correctly locks the receiver's withdrawal window.
-    function deposit(uint256 assets, address receiver) public override returns (uint256) {
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.deposit(assets, receiver);
@@ -36,19 +41,22 @@ contract SMUSD is ERC4626, AccessControl {
 
     // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
     // Matches deposit() behavior — any path that increases shares must reset cooldown.
-    function mint(uint256 shares, address receiver) public override returns (uint256) {
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.mint(shares, receiver);
     }
 
-    function withdraw(uint256 assets, address receiver, address owner) public override returns (uint256) {
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
         require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
         return super.withdraw(assets, receiver, owner);
     }
 
     // FIX S-02: Override redeem to enforce cooldown
-    function redeem(uint256 shares, address receiver, address owner) public override returns (uint256) {
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
         require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
         return super.redeem(shares, receiver, owner);
     }
@@ -100,5 +108,19 @@ contract SMUSD is ERC4626, AccessControl {
     // View function to check if withdrawal is allowed
     function canWithdraw(address account) external view returns (bool) {
         return block.timestamp >= lastDeposit[account] + WITHDRAW_COOLDOWN;
+    }
+
+    // ============================================================
+    //                     EMERGENCY CONTROLS
+    // ============================================================
+
+    /// @notice Pause all deposits and withdrawals
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause all deposits and withdrawals
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }
