@@ -1,1 +1,418 @@
-{}
+{
+  "../node_modules/@reown/appkit-controllers/dist/esm/src/utils/ViemUtil.js -> viem": {
+    "id": 970,
+    "files": [
+      "static/chunks/970.a995abf1fc096fba.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowCircleDown": {
+    "id": 4,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4.b67c75a16ba13ae5.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowClockwise": {
+    "id": 16,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/16.5b7dfa0001bb3fb1.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowDown": {
+    "id": 3568,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/3568.e3a829b84dde1ce8.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowLeft": {
+    "id": 6455,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6455.19c030a1ce2576b9.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowRight": {
+    "id": 6224,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6224.288a646cc71b671d.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowSquareOut": {
+    "id": 2365,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2365.47e54cc7d6890352.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowUp": {
+    "id": 8135,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/8135.9db842d985db3f15.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowUpRight": {
+    "id": 7199,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2437.c4711405cfe1c8e3.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowsClockwise": {
+    "id": 7011,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/7011.456a4e10aacca971.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowsDownUp": {
+    "id": 1198,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/1198.1be7079771a2b2af.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhArrowsLeftRight": {
+    "id": 5522,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/5522.3b8fa943f0e14c1e.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhBank": {
+    "id": 6029,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6029.89d0febbed58dec2.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhBrowser": {
+    "id": 771,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/771.8169e8f3e7600162.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCaretDown": {
+    "id": 9470,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/9470.dfac03889cd96218.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCaretLeft": {
+    "id": 7173,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/7173.9444e58864e70881.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCaretRight": {
+    "id": 4790,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4790.a720d0d789d77c81.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCaretUp": {
+    "id": 7121,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/7121.00212be5efa1a5a0.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCheck": {
+    "id": 5091,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/5091.4d30038ed65d3f74.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCircleHalf": {
+    "id": 156,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/156.4294fb6c82def946.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhClock": {
+    "id": 9701,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/9701.c060213374278b6b.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCompass": {
+    "id": 5443,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/5443.64c62351777589b2.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCopy": {
+    "id": 1556,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/1556.0a715d0da282923d.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCreditCard": {
+    "id": 6634,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6634.2d3fc938c1e98a05.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhCurrencyDollar": {
+    "id": 4940,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4940.1e91460f470c9cef.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhDesktop": {
+    "id": 7243,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/7243.1829e7b36ed38701.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhDeviceMobile": {
+    "id": 4983,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4983.0f0e80add5025d99.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhDotsThree": {
+    "id": 3095,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/3095.2ec91073f2bdc7b0.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhEnvelope": {
+    "id": 2191,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2191.5ee6f6ff2c26bcea.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhFunnelSimple": {
+    "id": 2141,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2141.24a2971627c47ac9.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhGlobe": {
+    "id": 164,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/164.32ef61f6bdcc35ee.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhIdentificationCard": {
+    "id": 1567,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/1567.1742c73fdee2aaf0.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhImage": {
+    "id": 908,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/908.9fc37b9bfbcd52c0.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhInfo": {
+    "id": 2767,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2767.d67f36d541d7a779.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhLightbulb": {
+    "id": 2806,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2806.7cd03264b7ad36d8.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhMagnifyingGlass": {
+    "id": 6558,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6558.9cd72b90549b2594.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhPaperPlaneRight": {
+    "id": 4746,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4746.447655242f92d5e1.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhPlus": {
+    "id": 2939,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/2939.a8af405d7e832f93.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhPower": {
+    "id": 888,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/888.f4cbb6b7ea9c5071.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhPuzzlePiece": {
+    "id": 845,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/845.790eb133ac86b344.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhQrCode": {
+    "id": 3097,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/3097.23411653b90b3f01.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhQuestion": {
+    "id": 4111,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/4111.6315722ccc5923aa.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhQuestionMark": {
+    "id": 5300,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/5300.fb2a0c2a6b391e1b.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhSealCheck": {
+    "id": 3270,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/3270.64079d4837b6e6b6.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhSignOut": {
+    "id": 2729,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/5110.e711db77f51ec5ba.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhSpinner": {
+    "id": 9140,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/9140.f670ad60bcfe8a0c.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhTrash": {
+    "id": 3345,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/3345.f3b0e1a322cb1939.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhUser": {
+    "id": 7614,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/7614.0184f6386f2b1246.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhVault": {
+    "id": 6951,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6951.e82a07e9ef566f4b.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhWallet": {
+    "id": 1132,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/1132.1d7294d94fff5b0d.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhWarning": {
+    "id": 1999,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/1999.8f8a4ec64d20bca5.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhWarningCircle": {
+    "id": 9859,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/9859.86a9b8f88a6eb9e7.js"
+    ]
+  },
+  "../node_modules/@reown/appkit-ui/dist/esm/src/components/wui-icon/index.js -> @phosphor-icons/webcomponents/PhX": {
+    "id": 6619,
+    "files": [
+      "static/chunks/605.3724f9e9645b4b11.js",
+      "static/chunks/6619.c1a8780a166fa15d.js"
+    ]
+  },
+  "../node_modules/@reown/appkit/dist/esm/src/client/appkit-base-client.js -> @reown/appkit-controllers/features": {
+    "id": 6123,
+    "files": [
+      "static/chunks/6123.f56d5ede30a66aa4.js"
+    ]
+  },
+  "../node_modules/@reown/appkit/dist/esm/src/client/appkit-core.js -> @reown/appkit-scaffold-ui/basic": {
+    "id": 789,
+    "files": [
+      "static/chunks/17.fc1cac8f658618ed.js",
+      "static/chunks/789.91b4b3ce43fc8734.js"
+    ]
+  },
+  "../node_modules/@reown/appkit/dist/esm/src/client/appkit-core.js -> @reown/appkit-scaffold-ui/w3m-modal": {
+    "id": 1615,
+    "files": [
+      "static/chunks/17.fc1cac8f658618ed.js",
+      "static/chunks/1615.3655ea46c14dd0dc.js"
+    ]
+  },
+  "../node_modules/viem/_esm/actions/public/call.js -> ../../utils/ccip.js": {
+    "id": 1599,
+    "files": [
+      "static/chunks/1599.d6574b13997d2698.js"
+    ]
+  },
+  "../node_modules/viem/_esm/utils/rpc/webSocket.js -> isows": {
+    "id": null,
+    "files": []
+  },
+  "../node_modules/viem/_esm/utils/signature/recoverPublicKey.js -> @noble/curves/secp256k1": {
+    "id": 1161,
+    "files": []
+  },
+  "components/canton/CantonBridge.tsx -> @fivenorth/loop-sdk": {
+    "id": 9249,
+    "files": [
+      "static/chunks/9249.7917fee7869fb555.js"
+    ]
+  },
+  "hooks/useLoopWallet.tsx -> @fivenorth/loop-sdk": {
+    "id": 9249,
+    "files": [
+      "static/chunks/9249.7917fee7869fb555.js"
+    ]
+  }
+}
