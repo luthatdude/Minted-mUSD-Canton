@@ -492,10 +492,12 @@ setup = do
   passTime (days 365)
 
   -- 6. Alice Unstakes (Gets Yield)
-  finalMusd <- submit alice do
+  -- FIX: Unstake now requires MintingService reference and returns tuple
+  (updatedMintingSvc, finalMusd) <- submit alice do
     exerciseCmd stakingSvc Unstake with
       user = alice
       smusdCid = smusdCid
+      mintingServiceCid = mintingSvc
 
   -- 7. Alice Bridges to another Canton Domain
   submit alice do

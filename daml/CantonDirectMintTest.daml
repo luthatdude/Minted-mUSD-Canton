@@ -223,26 +223,27 @@ bridgeOutAttestationTest = script do
       validatorGroup = validators
       payload
       positionCids = [pos1Cid, pos2Cid]
+      signedValidators = []  -- FIX: Initialize empty list
 
-  -- 3-of-5 validators sign
-  sig1Cid <- submit validator1 do
+  -- 3-of-5 validators sign (choice now returns updated attestation + signature)
+  (attCid2, sig1Cid) <- submit validator1 do
     exerciseCmd attCid BridgeOut_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2Cid <- submit validator2 do
-    exerciseCmd attCid BridgeOut_Sign with
+  (attCid3, sig2Cid) <- submit validator2 do
+    exerciseCmd attCid2 BridgeOut_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3Cid <- submit validator3 do
-    exerciseCmd attCid BridgeOut_Sign with
+  (attCid4, sig3Cid) <- submit validator3 do
+    exerciseCmd attCid3 BridgeOut_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   -- Aggregator finalizes with 3-of-5
   finalSigs <- submit aggregator do
-    exerciseCmd attCid BridgeOut_Finalize with
+    exerciseCmd attCid4 BridgeOut_Finalize with
       signatureCids = [sig1Cid, sig2Cid, sig3Cid]
 
   debug "Bridge-out attestation test passed - 3-of-5 validators signed"
