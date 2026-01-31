@@ -35,6 +35,17 @@ jobs:
 
       - name: Coverage report
         run: npx hardhat coverage
+        # Coverage can fail on CI due to memory limits but should not block
+        continue-on-error: true
+
+      - name: Check coverage threshold
+        run: |
+          # Ensure at least 50% statement coverage
+          COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
+          echo "Statement coverage: $COVERAGE%"
+          if (( $(echo "$COVERAGE < 50" | bc -l) )); then
+            echo "::warning::Coverage below 50% threshold"
+          fi
         continue-on-error: true
 
       - name: Upload coverage
@@ -73,15 +84,15 @@ jobs:
         with:
           solc-version: "0.8.26"
           sarif: results.sarif
-          fail-on: medium
-        continue-on-error: true
+          fail-on: high
+          # Only fail on HIGH severity - medium often has false positives
 
       - name: Upload Slither SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
-        continue-on-error: true
+        continue-on-error: true  # SARIF upload can fail on forks
 
   # ============================================================
   #  DAML: Build & Test
@@ -123,13 +134,13 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install relay dependencies
+        working-directory: relay
+        run: npm ci || npm install
 
       - name: TypeScript compile check
         working-directory: relay
         run: npx tsc --noEmit
-        continue-on-error: true
 
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
@@ -164,7 +175,7 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-        continue-on-error: true
+          # Fail on CRITICAL/HIGH vulnerabilities
 
   # ============================================================
   #  KUBERNETES: Validate Manifests
@@ -203,9 +214,9 @@ jobs:
         run: npm ci
 
       - name: npm audit (production)
-        run: npm audit --omit=dev
-        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
+        # Fails on HIGH or CRITICAL vulnerabilities
 
       - name: Check for known vulnerabilities
-        run: npx audit-ci --moderate
-        continue-on-error: true
+        run: npx audit-ci --high
+        # Only fail on HIGH severity, not moderate

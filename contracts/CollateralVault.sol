@@ -182,6 +182,27 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
         emit Seized(user, token, amount, liquidator);
     }
 
+    /// @notice Withdraw collateral on behalf of a user (for LeverageVault close position)
+    /// @dev Only callable by contracts with LEVERAGE_VAULT_ROLE
+    /// @param user The user whose collateral to withdraw
+    /// @param token The collateral token
+    /// @param amount Amount to withdraw
+    /// @param recipient Where to send the collateral
+    function withdrawFor(
+        address user,
+        address token,
+        uint256 amount,
+        address recipient
+    ) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
+        require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
+        require(recipient != address(0), "INVALID_RECIPIENT");
+
+        deposits[user][token] -= amount;
+        IERC20(token).safeTransfer(recipient, amount);
+
+        emit Withdrawn(user, token, amount);
+    }
+
     // ============================================================
     //                  VIEW FUNCTIONS
     // ============================================================
