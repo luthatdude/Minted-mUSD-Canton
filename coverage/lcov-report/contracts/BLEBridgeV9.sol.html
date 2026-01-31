@@ -1,0 +1,1250 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>Code coverage report for contracts/BLEBridgeV9.sol</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../prettify.css" />
+    <link rel="stylesheet" href="../base.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+<body>
+<div class='wrapper'>
+  <div class='pad1'>
+    <h1>
+      <a href="../index.html">all files</a> / <a href="index.html">contracts/</a> BLEBridgeV9.sol
+    </h1>
+    <div class='clearfix'>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">74.42% </span>
+        <span class="quiet">Statements</span>
+        <span class='fraction'>64/86</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">52.78% </span>
+        <span class="quiet">Branches</span>
+        <span class='fraction'>57/108</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">60.87% </span>
+        <span class="quiet">Functions</span>
+        <span class='fraction'>14/23</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">79.09% </span>
+        <span class="quiet">Lines</span>
+        <span class='fraction'>87/110</span>
+      </div>
+    </div>
+  </div>
+  <div class='status-line medium'></div>
+<pre><table class="coverage">
+<tr><td class="line-count quiet">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">26×</span>
+<span class="cline-any cline-yes">26×</span>
+<span class="cline-any cline-yes">26×</span>
+<span class="cline-any cline-yes">26×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">26×</span>
+<span class="cline-any cline-yes">25×</span>
+<span class="cline-any cline-yes">24×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-yes">23×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">4×</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">16×</span>
+<span class="cline-any cline-yes">15×</span>
+<span class="cline-any cline-yes">14×</span>
+<span class="cline-any cline-yes">12×</span>
+<span class="cline-any cline-yes">12×</span>
+<span class="cline-any cline-yes">11×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">10×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">10×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">10×</span>
+<span class="cline-any cline-yes">10×</span>
+<span class="cline-any cline-yes">29×</span>
+<span class="cline-any cline-yes">29×</span>
+<span class="cline-any cline-yes">29×</span>
+<span class="cline-any cline-yes">28×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">7×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-yes">2×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">7×</span>
+<span class="cline-any cline-yes">7×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">9×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: MIT
+// BLE Protocol - V9
+// Refactored: Canton attestations update supply cap, not mint directly
+//
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  H-09 WARNING: V9 has INCOMPATIBLE storage layout with V8                     ║
+// ║                                                                               ║
+// ║  V8 Storage Layout (12 vars + __gap[38] = 50 slots):                         ║
+// ║    - musdToken, totalCantonAssets, currentNonce, minSignatures               ║
+// ║    - dailyMintLimit, dailyMinted, dailyBurned, lastReset                     ║
+// ║    - navOracle, maxNavDeviationBps, navOracleEnabled, usedAttestationIds     ║
+// ║                                                                               ║
+// ║  V9 Storage Layout (12 vars + __gap[38] = 50 slots):                         ║
+// ║    - musdToken, attestedCantonAssets, collateralRatioBps, currentNonce       ║
+// ║    - minSignatures, lastAttestationTime, lastRatioChangeTime                 ║
+// ║    - dailyCapIncreaseLimit, dailyCapIncreased, dailyCapDecreased             ║
+// ║    - lastRateLimitReset, usedAttestationIds                                  ║
+// ║                                                                               ║
+// ║  MIGRATION REQUIRED: Deploy new V9 proxy, migrate state via admin script.    ║
+// ║  DO NOT use UUPS upgradeToAndCall() from V8 to V9 directly.                  ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
+&nbsp;
+pragma solidity 0.8.26;
+&nbsp;
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+&nbsp;
+interface IMUSD {
+    function setSupplyCap(uint256 _cap) external;
+    function supplyCap() external view returns (uint256);
+    function totalSupply() external view returns (uint256);
+}
+&nbsp;
+contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
+    using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
+&nbsp;
+    bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
+    bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+&nbsp;
+    IMUSD public musdToken;
+&nbsp;
+    // Canton attestation state
+    uint256 public attestedCantonAssets;  // Total assets Canton has attested to
+    uint256 public collateralRatioBps;    // Required ratio (e.g., 11000 = 110%)
+    uint256 public currentNonce;
+    uint256 public minSignatures;
+    uint256 public lastAttestationTime;
+    uint256 public lastRatioChangeTime;
+&nbsp;
+    // 24h rolling window rate limiting on supply cap increases
+    uint256 public dailyCapIncreaseLimit;  // Max supply cap increase per 24h window
+    uint256 public dailyCapIncreased;      // Cumulative cap increases in current window
+    uint256 public dailyCapDecreased;      // Cumulative cap decreases in current window (offsets increases)
+    uint256 public lastRateLimitReset;     // Timestamp of last window reset
+&nbsp;
+    // Attestation tracking
+    mapping(bytes32 =&gt; bool) public usedAttestationIds;
+&nbsp;
+    struct Attestation {
+        bytes32 id;
+        uint256 cantonAssets;      // Total assets on Canton (e.g., $500M)
+        uint256 nonce;
+        uint256 timestamp;
+    }
+&nbsp;
+    // Events
+    event AttestationReceived(
+        bytes32 indexed id,
+        uint256 cantonAssets,
+        uint256 newSupplyCap,
+        uint256 nonce,
+        uint256 timestamp
+    );
+    event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets);
+    event CollateralRatioUpdated(uint256 oldRatio, uint256 newRatio);
+    event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
+    event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
+    event MUSDTokenUpdated(address indexed oldToken, address indexed newToken);
+    // FIX S-H03: Event for attestation invalidation audit trail
+    event AttestationInvalidated(bytes32 indexed attestationId, string reason);
+    // FIX S-M02: Event for min signatures change
+    event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
+    // Rate limiting events
+    event RateLimitReset(uint256 timestamp);
+    event DailyCapIncreaseLimitUpdated(uint256 oldLimit, uint256 newLimit);
+    event RateLimitedCapIncrease(uint256 requestedIncrease, uint256 allowedIncrease, uint256 remainingLimit);
+&nbsp;
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+&nbsp;
+    function initialize(
+        uint256 _minSigs,
+        address _musdToken,
+        uint256 _collateralRatioBps,
+        uint256 _dailyCapIncreaseLimit
+    ) public <span class="missing-if-branch" title="else path not taken" >E</span>initializer {
+        __AccessControl_init();
+        __UUPSUpgradeable_init();
+        __ReentrancyGuard_init();
+        __Pausable_init();
+&nbsp;
+        require(_minSigs &gt; 0, "INVALID_MIN_SIGS");
+        require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
+        require(_collateralRatioBps &gt;= 10000, "RATIO_BELOW_100_PERCENT");
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(_dailyCapIncreaseLimit &gt; 0, "INVALID_DAILY_LIMIT");
+&nbsp;
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(EMERGENCY_ROLE, msg.sender);
+&nbsp;
+        minSignatures = _minSigs;
+        musdToken = IMUSD(_musdToken);
+        collateralRatioBps = _collateralRatioBps;
+        dailyCapIncreaseLimit = _dailyCapIncreaseLimit;
+        lastRateLimitReset = block.timestamp;
+    }
+&nbsp;
+    // ============================================================
+    //                    ADMIN FUNCTIONS
+    // ============================================================
+&nbsp;
+<span class="fstat-no" title="function not covered" >    function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {</span>
+<span class="cstat-no" title="statement not covered" >        require(_musdToken != address(0), "INVALID_ADDRESS")</span>;
+<span class="cstat-no" title="statement not covered" >        emit MUSDTokenUpdated(address(musdToken), _musdToken);</span>
+        musdToken = IMUSD(_musdToken);
+    }
+&nbsp;
+    // FIX S-M02: Emit event for admin parameter change
+    function setMinSignatures(uint256 _minSigs) external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(DEFAULT_ADMIN_ROLE) {
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(_minSigs &gt; 0, "INVALID_MIN_SIGS");
+        emit MinSignaturesUpdated(minSignatures, _minSigs);
+        minSignatures = _minSigs;
+    }
+&nbsp;
+    function setDailyCapIncreaseLimit(uint256 _limit) external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(DEFAULT_ADMIN_ROLE) {
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(_limit &gt; 0, "INVALID_LIMIT");
+        emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
+        dailyCapIncreaseLimit = _limit;
+    }
+&nbsp;
+    // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
+    // For production, this should be behind a timelock contract.
+    function setCollateralRatio(uint256 _ratioBps) external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(DEFAULT_ADMIN_ROLE) {
+        // FIX S-M02: Rate-limit ratio changes to once per day
+        require(block.timestamp &gt;= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(_ratioBps &gt;= 10000, "RATIO_BELOW_100_PERCENT");
+        // FIX M-05: Prevent drastic ratio changes (max 10% change at a time)
+        uint256 oldRatio = collateralRatioBps;
+        uint256 diff = _ratioBps &gt; oldRatio ? _ratioBps - oldRatio : <span class="missing-if-branch" title="else path not taken" >E</span>oldRatio - _ratioBps;
+        require(diff &lt;= 1000, "RATIO_CHANGE_TOO_LARGE"); // Max 10% change per call
+&nbsp;
+        collateralRatioBps = _ratioBps;
+        emit CollateralRatioUpdated(oldRatio, _ratioBps);
+&nbsp;
+        // Recalculate supply cap with new ratio
+        <span class="missing-if-branch" title="if path not taken" >I</span>if (attestedCantonAssets &gt; 0) {
+<span class="cstat-no" title="statement not covered" >            _updateSupplyCap(attestedCantonAssets)</span>;
+        }
+&nbsp;
+        lastRatioChangeTime = block.timestamp;
+    }
+&nbsp;
+    // ============================================================
+    //                  EMERGENCY FUNCTIONS
+    // ============================================================
+&nbsp;
+    function pause() external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(EMERGENCY_ROLE) {
+        _pause();
+    }
+&nbsp;
+    /// FIX H-05: Unpause requires DEFAULT_ADMIN_ROLE (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+&nbsp;
+    /// @notice Emergency reduction of supply cap
+    function emergencyReduceCap(uint256 _newCap, string calldata _reason) external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(EMERGENCY_ROLE) {
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(bytes(_reason).length &gt; 0, "REASON_REQUIRED");
+        uint256 oldCap = musdToken.supplyCap();
+        require(_newCap &lt; oldCap, "NOT_A_REDUCTION");
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(_newCap &gt;= musdToken.totalSupply(), "CAP_BELOW_SUPPLY");
+&nbsp;
+        musdToken.setSupplyCap(_newCap);
+        emit EmergencyCapReduction(oldCap, _newCap, _reason);
+    }
+&nbsp;
+    /// @notice Force update nonce for stuck attestations
+<span class="fstat-no" title="function not covered" >    function forceUpdateNonce(uint256 _newNonce, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {</span>
+<span class="cstat-no" title="statement not covered" >        require(bytes(_reason).length &gt; 0, "REASON_REQUIRED")</span>;
+<span class="cstat-no" title="statement not covered" >        require(_newNonce &gt; currentNonce, "NONCE_MUST_INCREASE")</span>;
+<span class="cstat-no" title="statement not covered" >        emit NonceForceUpdated(currentNonce, _newNonce, _reason);</span>
+        currentNonce = _newNonce;
+    }
+&nbsp;
+    /// @notice Invalidate an attestation ID
+    /// FIX S-H03: Added reason parameter and event emission for audit trail
+    function invalidateAttestationId(bytes32 _attestationId, string calldata _reason) external <span class="missing-if-branch" title="else path not taken" >E</span>onlyRole(EMERGENCY_ROLE) {
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(!usedAttestationIds[_attestationId], "ALREADY_USED");
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(bytes(_reason).length &gt; 0, "REASON_REQUIRED");
+        usedAttestationIds[_attestationId] = true;
+        emit AttestationInvalidated(_attestationId, _reason);
+    }
+&nbsp;
+    // ============================================================
+    //                  CORE ATTESTATION LOGIC
+    // ============================================================
+&nbsp;
+    /// @notice Process Canton attestation and update mUSD supply cap
+    /// @param att The attestation data from Canton validators
+    /// @param signatures Validator signatures
+    function processAttestation(
+        Attestation calldata att,
+        bytes[] calldata signatures
+    ) external <span class="missing-if-branch" title="else path not taken" >E</span>nonReentrant whenNotPaused {
+        require(signatures.length &gt;= minSignatures, "INSUFFICIENT_SIGNATURES");
+        require(att.nonce == currentNonce + 1, "INVALID_NONCE");
+        require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(att.cantonAssets &gt; 0, "ZERO_ASSETS");
+        require(att.timestamp &lt;= block.timestamp, "FUTURE_TIMESTAMP");
+        require(att.timestamp &gt; lastAttestationTime, "STALE_ATTESTATION");
+&nbsp;
+        // Verify signatures
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            att.id,
+            att.cantonAssets,
+            att.nonce,
+            att.timestamp,
+            block.chainid,
+            address(this)
+        ));
+&nbsp;
+        bytes32 ethHash = messageHash.toEthSignedMessageHash();
+&nbsp;
+        address lastSigner = address(0);
+        for (uint256 i = 0; i &lt; signatures.length; i++) {
+            address signer = ethHash.recover(signatures[i]);
+            <span class="missing-if-branch" title="else path not taken" >E</span>require(hasRole(VALIDATOR_ROLE, signer), "INVALID_VALIDATOR");
+            require(signer &gt; lastSigner, "UNSORTED_SIGNATURES");
+            lastSigner = signer;
+        }
+&nbsp;
+        // Mark attestation as used
+        usedAttestationIds[att.id] = true;
+        currentNonce++;
+        lastAttestationTime = att.timestamp;
+        attestedCantonAssets = att.cantonAssets;
+&nbsp;
+        // Update supply cap based on attested assets
+        uint256 newCap = _updateSupplyCap(att.cantonAssets);
+&nbsp;
+        emit AttestationReceived(att.id, att.cantonAssets, newCap, att.nonce, att.timestamp);
+    }
+&nbsp;
+    // ============================================================
+    //                    INTERNAL FUNCTIONS
+    // ============================================================
+&nbsp;
+    /// @notice Calculate and update supply cap based on attested assets, enforcing rate limit
+    /// @param _attestedAssets Total assets attested by Canton
+    /// @return newCap The new supply cap
+    function _updateSupplyCap(uint256 _attestedAssets) internal returns (uint256 newCap) {
+        // supplyCap = attestedAssets / (collateralRatio / 10000)
+        // e.g., $500M assets at 110% ratio = $454.5M cap
+        newCap = (_attestedAssets * 10000) / collateralRatioBps;
+&nbsp;
+        uint256 oldCap = musdToken.supplyCap();
+&nbsp;
+        // Only update if cap is changing
+        <span class="missing-if-branch" title="else path not taken" >E</span>if (newCap != oldCap) {
+            if (newCap &gt; oldCap) {
+                // Cap is increasing — enforce 24h rate limit
+                uint256 increase = newCap - oldCap;
+                newCap = oldCap + _handleRateLimitCapIncrease(increase);
+            } else {
+                // Cap is decreasing — always allow (decreases offset future increases)
+                _handleRateLimitCapDecrease(oldCap - newCap);
+            }
+&nbsp;
+            // FIX M-04: Do NOT floor at currentSupply when cap drops.
+            // If assets decreased, the cap should reflect reality (no new minting).
+            // Existing tokens remain but the cap correctly signals undercollateralization.
+            musdToken.setSupplyCap(newCap);
+            emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+        }
+    }
+&nbsp;
+    // ============================================================
+    //                      RATE LIMITING
+    // ============================================================
+&nbsp;
+    /// @notice Enforce 24h rolling window on supply cap increases
+    /// @param increase The requested cap increase amount
+    /// @return allowed The actual allowed increase (clamped to remaining limit)
+    function _handleRateLimitCapIncrease(uint256 increase) internal returns (uint256 allowed) {
+        _resetDailyLimitsIfNeeded();
+&nbsp;
+        // Net increase = dailyCapIncreased - dailyCapDecreased (burns offset mints)
+        uint256 netIncreased = dailyCapIncreased &gt; dailyCapDecreased
+            ? <span class="missing-if-branch" title="if path not taken" >I</span>dailyCapIncreased - dailyCapDecreased
+            : 0;
+&nbsp;
+        <span class="missing-if-branch" title="else path not taken" >E</span>require(netIncreased &lt; dailyCapIncreaseLimit, "DAILY_CAP_INCREASE_LIMIT");
+&nbsp;
+        uint256 remaining = dailyCapIncreaseLimit - netIncreased;
+        allowed = increase &gt; remaining ? remaining : <span class="missing-if-branch" title="else path not taken" >E</span>increase;
+&nbsp;
+        dailyCapIncreased += allowed;
+&nbsp;
+        <span class="missing-if-branch" title="else path not taken" >E</span>if (allowed &lt; increase) {
+            emit RateLimitedCapIncrease(increase, allowed, 0);
+        }
+    }
+&nbsp;
+    /// @notice Track cap decreases to offset increases within the same window
+    /// @param decrease The cap decrease amount
+    function _handleRateLimitCapDecrease(uint256 decrease) internal {
+        _resetDailyLimitsIfNeeded();
+        dailyCapDecreased += decrease;
+    }
+&nbsp;
+    /// @notice Reset daily limits if 24h window has elapsed
+    /// FIX M-03: Use &gt;= to prevent boundary timing attack at exact reset second
+    function _resetDailyLimitsIfNeeded() internal {
+        if (block.timestamp &gt;= lastRateLimitReset + 1 days) {
+            dailyCapIncreased = 0;
+            dailyCapDecreased = 0;
+            lastRateLimitReset = block.timestamp;
+            emit RateLimitReset(block.timestamp);
+        }
+    }
+&nbsp;
+    // ============================================================
+    //                      VIEW FUNCTIONS
+    // ============================================================
+&nbsp;
+    /// @notice Get the current supply cap based on attestations
+<span class="fstat-no" title="function not covered" >    function getCurrentSupplyCap() external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        return musdToken.supplyCap();</span>
+    }
+&nbsp;
+    /// @notice Get remaining mintable mUSD
+<span class="fstat-no" title="function not covered" >    function getRemainingMintable() external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        uint256 cap = musdToken.supplyCap();</span>
+<span class="cstat-no" title="statement not covered" >        uint256 supply = musdToken.totalSupply();</span>
+<span class="cstat-no" title="statement not covered" >        return cap &gt; supply ? cap - supply : 0;</span>
+    }
+&nbsp;
+    /// @notice Calculate what supply cap would be for given assets
+<span class="fstat-no" title="function not covered" >    function calculateSupplyCap(uint256 _assets) external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        return (_assets * 10000) / collateralRatioBps;</span>
+    }
+&nbsp;
+    /// @notice Get the net daily cap increase used in the current window
+<span class="fstat-no" title="function not covered" >    function getNetDailyCapIncrease() external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        if (block.timestamp &gt;= lastRateLimitReset + 1 days) {</span>
+<span class="cstat-no" title="statement not covered" >            return 0;</span>
+        }
+<span class="cstat-no" title="statement not covered" >        return dailyCapIncreased &gt; dailyCapDecreased</span>
+            ? dailyCapIncreased - dailyCapDecreased
+            : 0;
+    }
+&nbsp;
+    /// @notice Get remaining daily cap increase allowance
+<span class="fstat-no" title="function not covered" >    function getRemainingDailyCapLimit() external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        if (block.timestamp &gt;= lastRateLimitReset + 1 days) {</span>
+<span class="cstat-no" title="statement not covered" >            return dailyCapIncreaseLimit;</span>
+        }
+<span class="cstat-no" title="statement not covered" >        uint256 netIncreased = dailyCapIncreased &gt; dailyCapDecreased</span>
+            ? dailyCapIncreased - dailyCapDecreased
+            : 0;
+<span class="cstat-no" title="statement not covered" >        return netIncreased &gt;= dailyCapIncreaseLimit ? 0 : dailyCapIncreaseLimit - netIncreased;</span>
+    }
+&nbsp;
+    /// @notice Get health ratio (attested assets / current supply)
+<span class="fstat-no" title="function not covered" >    function getHealthRatio() external view returns (uint256 ratioBps) {</span>
+<span class="cstat-no" title="statement not covered" >        uint256 supply = musdToken.totalSupply();</span>
+<span class="cstat-no" title="statement not covered" >        if (supply == 0) <span class="cstat-no" title="statement not covered" >return type(uint256).max;</span></span>
+<span class="cstat-no" title="statement not covered" >        return (attestedCantonAssets * 10000) / supply;</span>
+    }
+&nbsp;
+    // ============================================================
+    //                      UPGRADEABILITY
+    // ============================================================
+&nbsp;
+<span class="fstat-no" title="function not covered" >    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}</span>
+&nbsp;
+    // Storage gap for future upgrades — 12 state variables → 50 - 12 = 38
+    uint256[38] private __gap;
+}
+&nbsp;</pre></td></tr>
+</table></pre>
+<div class='push'></div><!-- for sticky footer -->
+</div><!-- /wrapper -->
+<div class='footer quiet pad2 space-top1 center small'>
+  Code coverage
+  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sat Jan 31 2026 16:59:22 GMT-0500 (Eastern Standard Time)
+</div>
+</div>
+<script src="../prettify.js"></script>
+<script>
+window.onload = function () {
+        if (typeof prettyPrint === 'function') {
+            prettyPrint();
+        }
+};
+</script>
+<script src="../sorter.js"></script>
+</body>
+</html>
