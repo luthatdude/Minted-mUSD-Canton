@@ -31,7 +31,7 @@ describe("BLEBridgeV9", function () {
 
     // Deploy MUSD
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = (await MUSDFactory.deploy()) as MUSD;
+    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP)) as MUSD;
     await musd.waitForDeployment();
 
     // Deploy BLEBridgeV9
@@ -45,12 +45,13 @@ describe("BLEBridgeV9", function () {
     await bridge.waitForDeployment();
 
     // Setup roles
-    const BRIDGE_ROLE = await musd.MINTER_ROLE();
+    const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
     const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
     const EMERGENCY_ROLE = await bridge.EMERGENCY_ROLE();
-    const SUPPLY_MANAGER_ROLE = await musd.SUPPLY_MANAGER_ROLE?.() || ethers.keccak256(ethers.toUtf8Bytes("SUPPLY_MANAGER_ROLE"));
+    const CAP_MANAGER_ROLE = await musd.CAP_MANAGER_ROLE();
 
-    await musd.grantRole(SUPPLY_MANAGER_ROLE, await bridge.getAddress());
+    await musd.grantRole(BRIDGE_ROLE, await bridge.getAddress());
+    await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     await bridge.grantRole(EMERGENCY_ROLE, emergency.address);
 
     for (const v of validators) {

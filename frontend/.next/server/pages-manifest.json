@@ -1,6 +1,15 @@
 {
   "/_app": "pages/_app.js",
-  "/_error": "pages/_error.js",
   "/_document": "pages/_document.js",
-  "/": "pages/index.js"
+  "/AdminPage": "pages/AdminPage.html",
+  "/BorrowPage": "pages/BorrowPage.html",
+  "/BridgePage": "pages/BridgePage.html",
+  "/DashboardPage": "pages/DashboardPage.html",
+  "/LeveragePage": "pages/LeveragePage.html",
+  "/LiquidationsPage": "pages/LiquidationsPage.html",
+  "/StakePage": "pages/StakePage.html",
+  "/MintPage": "pages/MintPage.html",
+  "/": "pages/index.html",
+  "/_error": "pages/_error.js",
+  "/404": "pages/404.html"
 }
