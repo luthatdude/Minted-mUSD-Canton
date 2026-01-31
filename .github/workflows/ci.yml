@@ -86,6 +86,7 @@ jobs:
           solc-version: "0.8.26"
           sarif: results.sarif
           fail-on: high
+          slither-args: --exclude-dependencies --exclude naming-convention
           # Only fail on HIGH severity - medium often has false positives
 
       - name: Upload Slither SARIF
