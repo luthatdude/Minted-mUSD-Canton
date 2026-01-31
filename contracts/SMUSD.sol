@@ -19,6 +19,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
+    
+    // FIX M-3: Maximum yield per distribution (10% of total assets) to prevent excessive dilution
+    uint256 public constant MAX_YIELD_BPS = 1000; // 10% max yield per distribution
 
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
@@ -80,9 +83,15 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     // FIX S-04: Use SafeERC20 for token transfers
+    // FIX M-3: Added maximum yield cap to prevent excessive dilution attacks
     function distributeYield(uint256 amount) external onlyRole(YIELD_MANAGER_ROLE) {
         require(totalSupply() > 0, "NO_SHARES_EXIST");
         require(amount > 0, "INVALID_AMOUNT");
+        
+        // FIX M-3: Cap yield distribution to prevent excessive dilution
+        uint256 currentAssets = totalAssets();
+        uint256 maxYield = (currentAssets * MAX_YIELD_BPS) / 10000;
+        require(amount <= maxYield, "YIELD_EXCEEDS_CAP");
 
         // FIX S-04: Use safeTransferFrom
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
