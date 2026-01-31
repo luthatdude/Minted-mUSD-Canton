@@ -449,6 +449,11 @@ To create a clean zip archive of the repository (excluding node_modules, build a
 
 This will generate `Minted-mUSD-Canton.zip` containing all source files tracked by git.
 
+You can also specify a custom name:
+```bash
+./create-zip.sh my-custom-name
+```
+
 ## License
 
 Proprietary
