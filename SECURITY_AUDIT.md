@@ -77,10 +77,10 @@ Every function available on Ethereum has a Canton-side equivalent. The Canton si
 │                                                 │                                                   │
 │  ┌──────────────────┐                           │  ┌──────────────────┐                             │
 │  │ CantonDirectMint │   BridgeOutRequest        │  │ DirectMint/V2    │                             │
-│  │  (deposit USDC   │ ─────────────────────────▶│  │  (deposit USDC   │                             │
+│  │  (deposit USDCx  │ ─────────────────────────▶│  │  (deposit USDC   │                             │
 │  │   → mint mUSD)   │   backing stables piped   │  │   → mint mUSD)   │                             │
 │  │                  │   to ETH Treasury          │  │                  │                             │
-│  │  Also: USDCx via │                           │  └────────┬─────────┘                             │
+│  │  USDCx via       │                           │  └────────┬─────────┘                             │
 │  │  Circle CCTP     │                           │           │                                       │
 │  └────────┬─────────┘                           │           ▼                                       │
 │           │                                     │  ┌──────────────────┐                             │
@@ -161,8 +161,7 @@ Every user-facing function on Ethereum has a Canton-side equivalent. Canton oper
 
 | Function | Ethereum (Solidity) | Canton (DAML) | Bridge Route |
 |----------|-------------------|---------------|--------------|
-| **Mint mUSD** | `DirectMintV2.mint()` — USDC in, mUSD out | `CantonDirectMintService.DirectMint_Mint` — USDC in, CantonMUSD out | `BridgeOutRequest` pipes USDC to ETH Treasury |
-| **Mint via USDCx** | N/A (direct USDC only) | `DirectMint_MintWithUSDCx` — Circle CCTP USDCx in | No bridge needed — USDCx already backed on ETH via xReserve |
+| **Mint mUSD** | `DirectMintV2.mint()` — USDC in, mUSD out | `CantonDirectMintService.DirectMint_MintWithUSDCx` — USDCx in (Circle CCTP), CantonMUSD out | `BridgeOutRequest` pipes backing to ETH Treasury. USDCx is already backed 1:1 on ETH via xReserve |
 | **Redeem mUSD** | `DirectMintV2.redeem()` — mUSD burned, USDC out | `DirectMint_Redeem` — CantonMUSD burned, `RedemptionRequest` created | `BridgeInAttestation` brings USDC back from ETH |
 | **Stake (smUSD)** | `SMUSD.deposit()` — ERC-4626 vault | `CantonStakingService.Stake` — mUSD → smUSD shares | None — share accounting is local |
 | **Unstake** | `SMUSD.withdraw()` — shares → mUSD | `CantonStakingService.Unstake` — shares × sharePrice → mUSD | None — yield synced via `YieldAttestation` |
