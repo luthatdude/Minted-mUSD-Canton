@@ -2,14 +2,23 @@
 // BLE Protocol - V9
 // Refactored: Canton attestations update supply cap, not mint directly
 //
-// WARNING (S-C01): V9 has INCOMPATIBLE storage layout with V8.
-// V8 has 12 state variables (musdToken, totalCantonAssets, currentNonce, minSignatures,
-// dailyMintLimit, dailyMinted, dailyBurned, lastReset, navOracle, maxNavDeviationBps,
-// navOracleEnabled, usedAttestationIds) + __gap[38] = 50 slots.
-// V9 has 12 state variables (musdToken, attestedCantonAssets, collateralRatioBps, currentNonce,
-// minSignatures, lastAttestationTime, lastRatioChangeTime, dailyCapIncreaseLimit,
-// dailyCapIncreased, dailyCapDecreased, lastRateLimitReset, usedAttestationIds) + __gap[38] = 50 slots.
-// Direct UUPS upgrade from V8->V9 will corrupt storage. A migration contract is required.
+// ╔═══════════════════════════════════════════════════════════════════════════════╗
+// ║  H-09 WARNING: V9 has INCOMPATIBLE storage layout with V8                     ║
+// ║                                                                               ║
+// ║  V8 Storage Layout (12 vars + __gap[38] = 50 slots):                         ║
+// ║    - musdToken, totalCantonAssets, currentNonce, minSignatures               ║
+// ║    - dailyMintLimit, dailyMinted, dailyBurned, lastReset                     ║
+// ║    - navOracle, maxNavDeviationBps, navOracleEnabled, usedAttestationIds     ║
+// ║                                                                               ║
+// ║  V9 Storage Layout (12 vars + __gap[38] = 50 slots):                         ║
+// ║    - musdToken, attestedCantonAssets, collateralRatioBps, currentNonce       ║
+// ║    - minSignatures, lastAttestationTime, lastRatioChangeTime                 ║
+// ║    - dailyCapIncreaseLimit, dailyCapIncreased, dailyCapDecreased             ║
+// ║    - lastRateLimitReset, usedAttestationIds                                  ║
+// ║                                                                               ║
+// ║  MIGRATION REQUIRED: Deploy new V9 proxy, migrate state via admin script.    ║
+// ║  DO NOT use UUPS upgradeToAndCall() from V8 to V9 directly.                  ║
+// ╚═══════════════════════════════════════════════════════════════════════════════╝
 
 pragma solidity 0.8.26;
 

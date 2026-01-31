@@ -74,24 +74,29 @@ data BridgeOutPayload = BridgeOutPayload with
 -- | Bridge-out attestation request.
 -- Created when backing stables need to move from Canton to Ethereum Treasury.
 -- Validators verify the Canton reserve matches, then sign.
+-- FIX D-02: Added signedValidators set to prevent duplicate signatures
 template BridgeOutAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeOutPayload
     positionCids : [ContractId InstitutionalEquityPosition]
+    signedValidators : [Party]    -- FIX D-02: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
-    -- Validators sign concurrently (nonconsuming — performance fix from V2)
-    nonconsuming choice BridgeOut_Sign : ContractId BridgeOutSignature
+    -- FIX D-02: Made CONSUMING to update signedValidators and prevent double-signing
+    -- Previously nonconsuming allowed validators to sign the same attestation multiple times
+    choice BridgeOut_Sign : (ContractId BridgeOutAttestation, ContractId BridgeOutSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX D-02: Prevent duplicate signatures
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         -- D-03: Check expiration
         now <- getTime
@@ -102,12 +107,16 @@ template BridgeOutAttestation
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
-        create BridgeOutSignature with
+        sig <- create BridgeOutSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+        
+        -- FIX D-02: Return updated attestation with validator added to signedValidators
+        newAttestation <- create this with signedValidators = validator :: signedValidators
+        return (newAttestation, sig)
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
     -- FIX DL-H1: Derive requiredSignatures from validatorGroup size (majority quorum)

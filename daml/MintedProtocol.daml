@@ -97,23 +97,29 @@ template PriceOracle
 
 -- | Represents a liquidity provider (DEX) to facilitate the leverage swap
 -- (Selling mUSD to buy Collateral)
+-- FIX C-02: Added authorizedSwappers list to prevent anyone with visibility from draining pool
 template LiquidityPool
   with
     operator : Party
     poolAsset : AssetId       -- The Collateral asset held by pool
     musdSymbol : Text
     exchangeRate : Decimal    -- Simple constant AMM (mUSD per Collateral)
+    authorizedSwappers : [Party]  -- FIX C-02: Only these parties can initiate swaps
   where
     signatory operator
+    observer authorizedSwappers
 
     -- FIX C-07: Made CONSUMING to update poolAsset CID after split
     -- Previously nonconsuming, which left poolAsset pointing to an archived contract
+    -- FIX C-02: Changed controller to operator, receiver must be in authorizedSwappers
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, AssetId)
       with
         musdCid : AssetId
         receiver : Party
-      controller receiver
+      controller operator
       do
+        -- FIX C-02: Verify receiver is authorized to swap
+        assertMsg "UNAUTHORIZED_SWAPPER" (receiver `elem` authorizedSwappers)
         musd <- fetch musdCid
         assertMsg "Must be mUSD" $ musd.symbol == musdSymbol
         let collateralOut = musd.amount / exchangeRate

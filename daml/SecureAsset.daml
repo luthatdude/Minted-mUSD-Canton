@@ -5,6 +5,7 @@ template Asset
     issuer : Party
     owner : Party
     amount : Decimal
+    assetId : Text      -- FIX K-01: Unique asset ID allows users to hold multiple assets
     observers : [Party]
   where
     signatory issuer, owner
@@ -12,8 +13,9 @@ template Asset
 
     ensure amount > 0.0
 
-    -- Performance: Contract keys allow O(1) lookups
-    key (issuer, owner) : (Party, Party)
+    -- FIX K-01: Key now includes assetId to allow multiple assets per user
+    -- Previously (issuer, owner) prevented holding multiple assets
+    key (issuer, owner, assetId) : (Party, Party, Text)
     maintainer key._1
 
     -- Security: Use Proposal pattern (Swap/Transfer) to avoid forced ownership

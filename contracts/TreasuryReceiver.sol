@@ -42,6 +42,14 @@ interface ITokenBridge {
 }
 
 /**
+ * @title IDirectMint
+ * @notice Interface for DirectMint to mint mUSD for users
+ */
+interface IDirectMint {
+    function mintFor(address recipient, uint256 usdcAmount) external returns (uint256 musdMinted);
+}
+
+/**
  * @title TreasuryReceiver
  * @notice Receives bridged USDC from L2 DepositRouters and forwards to DirectMint
  * @dev Deploy this on Ethereum mainnet to receive cross-chain deposits
@@ -91,6 +99,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     event RouterRevoked(uint16 chainId);
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
+    // FIX H-07: Events for mUSD minting success/fallback
+    event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
+    event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
 
     // ============ Errors ============
     
@@ -151,8 +162,17 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         // Decode the payload to get recipient
         (address recipient) = abi.decode(vm.payload, (address));
         
-        // Forward USDC to treasury
-        usdc.safeTransfer(treasury, received);
+        // FIX H-07: Actually mint mUSD for the recipient via DirectMint
+        // Previously forwarded USDC to treasury but never minted mUSD
+        usdc.forceApprove(directMint, received);
+        try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
+            emit MUSDMinted(recipient, received, musdMinted, vm.hash);
+        } catch {
+            // If minting fails, forward to treasury as fallback (funds not lost)
+            usdc.forceApprove(directMint, 0);
+            usdc.safeTransfer(treasury, received);
+            emit MintFallbackToTreasury(recipient, received, vm.hash);
+        }
         
         emit DepositReceived(
             vm.emitterChainId,

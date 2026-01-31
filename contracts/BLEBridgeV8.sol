@@ -139,7 +139,8 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         uint256 _maxDeviationBps,
         bool _enabled
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_maxDeviationBps <= 10000, "DEVIATION_TOO_HIGH"); // Max 100%
+        // FIX H-06: Cap to 50% - 100% deviation makes NAV oracle useless
+        require(_maxDeviationBps <= 5000, "DEVIATION_TOO_HIGH"); // Max 50%
         if (_enabled) {
             require(_oracle != address(0), "INVALID_ORACLE");
         }

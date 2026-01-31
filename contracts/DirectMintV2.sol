@@ -32,6 +32,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER_ROLE");
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // FIX H-07: Role for TreasuryReceiver
 
     IERC20 public immutable usdc;
     IMUSD_V2 public immutable musd;
@@ -158,6 +159,49 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         }
 
         emit Redeemed(msg.sender, musdAmount, usdcOut, feeUsdc);
+    }
+
+    // ============================================================
+    //              RECEIVER INTEGRATION (H-07 FIX)
+    // ============================================================
+
+    /// @notice Mint mUSD for a recipient (called by TreasuryReceiver for cross-chain mints)
+    /// @dev Only callable by authorized MINTER_ROLE (grant to TreasuryReceiver)
+    /// @param recipient Address to receive mUSD
+    /// @param usdcAmount Amount of USDC being deposited (6 decimals)
+    /// @return musdOut Amount of mUSD minted (18 decimals)
+    function mintFor(address recipient, uint256 usdcAmount) external nonReentrant whenNotPaused onlyRole(MINTER_ROLE) returns (uint256 musdOut) {
+        require(recipient != address(0), "INVALID_RECIPIENT");
+        require(usdcAmount >= minMintAmount, "BELOW_MIN");
+        require(usdcAmount <= maxMintAmount, "ABOVE_MAX");
+
+        // Calculate fee in USDC terms
+        uint256 feeUsdc = (usdcAmount * mintFeeBps) / 10000;
+        uint256 usdcAfterFee = usdcAmount - feeUsdc;
+
+        // Convert USDC (6 decimals) to mUSD (18 decimals)
+        musdOut = usdcAfterFee * 1e12;
+
+        // Check supply cap
+        require(musd.totalSupply() + musdOut <= musd.supplyCap(), "EXCEEDS_SUPPLY_CAP");
+
+        // Transfer USDC from caller (TreasuryReceiver) to this contract
+        usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
+
+        // Send net amount to TreasuryV2
+        usdc.forceApprove(address(treasury), usdcAfterFee);
+        treasury.deposit(address(this), usdcAfterFee);
+
+        // Track mint fees
+        if (feeUsdc > 0) {
+            mintFees += feeUsdc;
+        }
+
+        // Mint mUSD to recipient
+        musd.mint(recipient, musdOut);
+
+        emit Minted(recipient, usdcAmount, musdOut, feeUsdc);
+        return musdOut;
     }
 
     // ============================================================

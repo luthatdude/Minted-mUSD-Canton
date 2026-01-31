@@ -1005,11 +1005,13 @@ template AttestationRequest
         create this with collectedSignatures = Set.insert validator collectedSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
+    -- FIX A-03: Derive requiredSignatures from validatorGroup size (majority quorum)
+    -- Previously accepted as caller parameter, allowing aggregator to bypass quorum
     choice Attestation_Complete : ()
-      with
-        requiredSignatures : Int
       controller aggregator
       do
+        -- FIX A-03: Majority threshold = (n / 2) + 1, derived from group size
+        let requiredSignatures = (length validatorGroup / 2) + 1
         let sigCount = Set.size collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
         

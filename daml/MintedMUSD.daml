@@ -15,8 +15,10 @@ template MUSD
     currency   : Text
     observers  : [Party] 
   where
-    signatory provider
-    observer owner, observers
+    -- FIX A-01: Dual signatory prevents unilateral control over user tokens
+    -- Provider cannot archive/modify without owner consent, owner cannot inflate supply
+    signatory provider, owner
+    observer observers
     ensure amount >= minimumAmount
     -- --- LOGIC: Lifecycle ---
     -- IMPROVED: Added a 'reason' to the redemption for audit trails.
