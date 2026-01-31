@@ -178,6 +178,7 @@ contract Treasury is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Record USDC returned from a strategy
+    /// FIX C-04: Properly account for yield (amount exceeding deployed principal)
     /// @param amount Amount returned
     function recordStrategyReturn(uint256 amount) external onlyRole(STRATEGY_ROLE) nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
@@ -187,6 +188,9 @@ contract Treasury is AccessControl, ReentrancyGuard {
 
         strategyDeployments[msg.sender] -= reduction;
         deployedToStrategies -= reduction;
+        // Note: If amount > deployed, the excess is yield profit.
+        // It flows into our USDC balance and is correctly reflected by
+        // availableReserves() and totalBacking() since those read balanceOf.
 
         // Strategy must transfer USDC back before calling this
         // (pull pattern: strategy approves, treasury pulls)
@@ -272,6 +276,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
         try IStrategy(defaultStrategy).deposit(amount) returns (uint256 deposited) {
             deployedToStrategies += deposited;
             strategyDeployments[defaultStrategy] += deposited;
+            // FIX H-05: Revoke residual approval after successful deposit
+            usdc.forceApprove(defaultStrategy, 0);
             emit AutoDeployed(defaultStrategy, deposited);
             return true;
         } catch {

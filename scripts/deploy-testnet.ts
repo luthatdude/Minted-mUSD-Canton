@@ -63,9 +63,10 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   // Deploy MUSD
   // ═══════════════════════════════════════════════════════════
+  // FIX: MUSD constructor requires _initialSupplyCap parameter
   console.log("2/10 Deploying MUSD...");
   const MUSD = await ethers.getContractFactory("MUSD");
-  const musd = await MUSD.deploy();
+  const musd = await MUSD.deploy(ethers.parseEther("100000000")); // 100M supply cap
   await musd.waitForDeployment();
   const musdAddress = await musd.getAddress();
   console.log(`     MUSD: ${musdAddress}`);
@@ -135,12 +136,15 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   // Deploy DirectMint
   // ═══════════════════════════════════════════════════════════
-  console.log("8/10 Deploying DirectMint...");
+  // FIX: DirectMintV2 constructor requires (usdc, musd, treasury, feeRecipient)
+  // Note: Treasury not deployed yet, will update after treasury deploy
+  console.log("8/10 Deploying DirectMint (deferred treasury config)...");
   const DirectMint = await ethers.getContractFactory("DirectMintV2");
   const directMint = await DirectMint.deploy(
-    musdAddress,
     mockUSDCAddress,
-    deployer.address // Treasury address (self for testnet)
+    musdAddress,
+    deployer.address, // Placeholder treasury — updated post-deploy
+    deployer.address  // Fee recipient
   );
   await directMint.waitForDeployment();
   const directMintAddress = await directMint.getAddress();
@@ -149,26 +153,41 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   // Deploy Treasury
   // ═══════════════════════════════════════════════════════════
-  console.log("9/10 Deploying Treasury...");
+  // FIX: TreasuryV2 is upgradeable — deploy via proxy or use hardhat-upgrades
+  // For testnet simplicity, deploy implementation and call initialize directly
+  console.log("9/10 Deploying TreasuryV2...");
   const Treasury = await ethers.getContractFactory("TreasuryV2");
-  const treasury = await Treasury.deploy(mockUSDCAddress);
+  const treasury = await Treasury.deploy();
   await treasury.waitForDeployment();
   const treasuryAddress = await treasury.getAddress();
+  // Initialize the treasury (asset, vault, admin, feeRecipient)
+  await treasury.initialize(
+    mockUSDCAddress,
+    smusdAddress,     // vault = smUSD
+    deployer.address, // admin
+    deployer.address  // fee recipient
+  );
   console.log(`     Treasury: ${treasuryAddress}`);
   
   // ═══════════════════════════════════════════════════════════
   // Deploy BLEBridgeV9 (Mock mode - no real Canton)
   // ═══════════════════════════════════════════════════════════
+  // FIX: BLEBridgeV9 is upgradeable — deploy and call initialize
   console.log("10/10 Deploying BLEBridgeV9 (mock mode)...");
   const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
-  const bridge = await BLEBridgeV9.deploy(
-    musdAddress,
-    [deployer.address], // Single validator for testnet
-    1, // Threshold of 1
-    ethers.parseEther("10000000") // 10M supply cap
-  );
+  const bridge = await BLEBridgeV9.deploy();
   await bridge.waitForDeployment();
   const bridgeAddress = await bridge.getAddress();
+  // Initialize: (minSigs, musdToken, collateralRatioBps, dailyCapIncreaseLimit)
+  await bridge.initialize(
+    1,                                   // Single validator for testnet
+    musdAddress,
+    11000,                               // 110% collateral ratio
+    ethers.parseEther("10000000")        // 10M daily cap increase limit
+  );
+  // Grant validator role to deployer for testnet
+  const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
+  await bridge.grantRole(VALIDATOR_ROLE, deployer.address);
   console.log(`     BLEBridgeV9: ${bridgeAddress}`);
   
   console.log("");
@@ -180,17 +199,31 @@ async function main() {
   // Configure Roles & Permissions
   // ═══════════════════════════════════════════════════════════
   
-  // Grant MINTER_ROLE to DirectMint and Bridge
-  console.log("Granting MINTER_ROLE...");
-  const MINTER_ROLE = await musd.MINTER_ROLE();
-  await musd.grantRole(MINTER_ROLE, directMintAddress);
-  await musd.grantRole(MINTER_ROLE, bridgeAddress);
-  await musd.grantRole(MINTER_ROLE, borrowModuleAddress);
-  
+  // FIX: MUSD uses BRIDGE_ROLE, not MINTER_ROLE
+  console.log("Granting BRIDGE_ROLE...");
+  const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+  await musd.grantRole(BRIDGE_ROLE, directMintAddress);
+  await musd.grantRole(BRIDGE_ROLE, bridgeAddress);
+  await musd.grantRole(BRIDGE_ROLE, borrowModuleAddress);
+
   // Grant LIQUIDATION_ROLE to LiquidationEngine
   console.log("Granting LIQUIDATION_ROLE...");
   const LIQUIDATION_ROLE = await borrowModule.LIQUIDATION_ROLE();
   await borrowModule.grantRole(LIQUIDATION_ROLE, liquidationEngineAddress);
+
+  // FIX: Grant BORROW_MODULE_ROLE on CollateralVault
+  console.log("Granting BORROW_MODULE_ROLE...");
+  const BORROW_MODULE_ROLE = await vault.BORROW_MODULE_ROLE();
+  await vault.grantRole(BORROW_MODULE_ROLE, borrowModuleAddress);
+
+  // Grant LIQUIDATION_ROLE on CollateralVault
+  const VAULT_LIQUIDATION_ROLE = await vault.LIQUIDATION_ROLE();
+  await vault.grantRole(VAULT_LIQUIDATION_ROLE, liquidationEngineAddress);
+
+  // Grant CAP_MANAGER_ROLE to bridge for supply cap updates
+  console.log("Granting CAP_MANAGER_ROLE to bridge...");
+  const CAP_MANAGER_ROLE = await musd.CAP_MANAGER_ROLE();
+  await musd.grantRole(CAP_MANAGER_ROLE, bridgeAddress);
   
   // Configure PriceOracle with Chainlink feeds
   console.log("Configuring Chainlink price feeds...");

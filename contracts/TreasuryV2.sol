@@ -119,6 +119,10 @@ contract TreasuryV2 is
     event FeesClaimed(address indexed recipient, uint256 amount);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
+    // FIX M-04: Events for admin parameter changes
+    event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
+    event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
+    event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -156,7 +160,8 @@ contract TreasuryV2 is
         address _admin,
         address _feeRecipient
     ) external initializer {
-        if (_asset == address(0) || _vault == address(0) || _admin == address(0)) {
+        // FIX M-14: Also validate feeRecipient to prevent fees burned to zero address
+        if (_asset == address(0) || _vault == address(0) || _admin == address(0) || _feeRecipient == address(0)) {
             revert ZeroAddress();
         }
 
@@ -198,12 +203,19 @@ contract TreasuryV2 is
     /**
      * @notice Total value across reserve + all strategies
      */
+    /// FIX M-05: Wrap strategy totalValue() in try/catch to prevent one broken
+    /// strategy from bricking the entire treasury
     function totalValue() public view returns (uint256) {
         uint256 total = reserveBalance();
 
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
-                total += IStrategy(strategies[i].strategy).totalValue();
+                try IStrategy(strategies[i].strategy).totalValue() returns (uint256 val) {
+                    total += val;
+                } catch {
+                    // Strategy is broken — skip its value (conservative: undercount)
+                    // Admin should removeStrategy to clean up
+                }
             }
         }
 
@@ -500,6 +512,8 @@ contract TreasuryV2 is
 
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
+                    // FIX H-04: Revoke any residual approval after successful deposit
+                    asset.forceApprove(strat, 0);
                 } catch {
                     // Strategy deposit failed, keep in reserve
                     allocations[i] = 0;
@@ -678,9 +692,25 @@ contract TreasuryV2 is
 
         uint256 idx = strategyIndex[strategy];
 
-        // Withdraw all from strategy
+        // FIX M-10: Withdraw all from strategy, revert if withdrawal fails
+        // to prevent permanent fund loss in broken strategies
         if (strategies[idx].active) {
-            try IStrategy(strategy).withdrawAll() {} catch {}
+            try IStrategy(strategy).withdrawAll() returns (uint256 withdrawn) {
+                // withdrawn funds are now in our balance
+                if (withdrawn == 0) {
+                    // Strategy returned 0 — check if it actually held funds
+                    // If so, this is a silent failure and we should not deactivate
+                    uint256 remainingValue;
+                    try IStrategy(strategy).totalValue() returns (uint256 val) {
+                        remainingValue = val;
+                    } catch {
+                        remainingValue = 0;
+                    }
+                    require(remainingValue == 0, "STRATEGY_WITHDRAWAL_FAILED_FUNDS_REMAIN");
+                }
+            } catch {
+                revert("STRATEGY_WITHDRAWAL_FAILED");
+            }
         }
 
         // Deactivate (don't delete to preserve indices)
@@ -824,6 +854,8 @@ contract TreasuryV2 is
 
         fees.performanceFeeBps = _performanceFeeBps;
         fees.feeRecipient = _feeRecipient;
+        // FIX M-04: Emit event for fee config change
+        emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
     }
 
     /**
@@ -831,6 +863,8 @@ contract TreasuryV2 is
      */
     function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+        // FIX M-04: Emit event for reserve bps change
+        emit ReserveBpsUpdated(reserveBps, _reserveBps);
         reserveBps = _reserveBps;
     }
 
@@ -838,6 +872,8 @@ contract TreasuryV2 is
      * @notice Update minimum auto-allocate amount
      */
     function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        // FIX M-04: Emit event for min auto-allocate change
+        emit MinAutoAllocateUpdated(minAutoAllocateAmount, _minAmount);
         minAutoAllocateAmount = _minAmount;
     }
 

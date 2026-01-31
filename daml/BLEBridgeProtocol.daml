@@ -42,7 +42,8 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    ensure totalValue >= 0.0
+    -- FIX: Require strictly positive equity value to prevent zero-value positions
+    ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
     maintainer key._1
@@ -52,6 +53,8 @@ template InstitutionalEquityPosition
         newValue : Money
       controller bank
       do
+        -- FIX: Require positive value on update
+        assertMsg "ZERO_EQUITY_VALUE" (newValue > 0.0)
         now <- getTime
         create this with totalValue = newValue, lastUpdated = now
 

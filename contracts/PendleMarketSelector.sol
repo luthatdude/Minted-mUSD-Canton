@@ -400,10 +400,15 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      * @param market Market address
      * @param category Asset category (e.g., "USD", "ETH")
      */
+    /// @notice Maximum number of whitelisted markets to prevent gas DoS
+    uint256 public constant MAX_WHITELISTED_MARKETS = 50;
+
     function whitelistMarket(address market, string calldata category) external onlyOwner {
         // FIX L-07: Validate market address
         require(market != address(0), "ZERO_ADDRESS");
         if (!isWhitelisted[market]) {
+            // FIX M-09: Enforce size limit on whitelisted markets array
+            require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "TOO_MANY_MARKETS");
             whitelistedMarkets.push(market);
             isWhitelisted[market] = true;
         }

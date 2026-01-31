@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
   # ============================================================
@@ -33,9 +34,9 @@ jobs:
       - name: Run tests
         run: npx hardhat test
 
+      # FIX T-03: Coverage must pass (removed continue-on-error)
       - name: Coverage report
         run: npx hardhat coverage
-        continue-on-error: true
 
       - name: Upload coverage
         if: always()
@@ -66,7 +67,7 @@ jobs:
       - name: Compile contracts
         run: npx hardhat compile
 
-      # Slither static analysis
+      # FIX T-03: Slither must pass (removed continue-on-error)
       - name: Run Slither
         uses: crytic/slither-action@v0.4.0
         id: slither
@@ -74,14 +75,13 @@ jobs:
           solc-version: "0.8.26"
           sarif: results.sarif
           fail-on: medium
-        continue-on-error: true
 
       - name: Upload Slither SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
-        continue-on-error: true
+        continue-on-error: true  # SARIF upload is optional (GitHub feature)
 
   # ============================================================
   #  DAML: Build & Test
@@ -126,10 +126,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # FIX T-03: TypeScript must compile (removed continue-on-error)
       - name: TypeScript compile check
         working-directory: relay
         run: npx tsc --noEmit
-        continue-on-error: true
 
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
@@ -155,7 +155,7 @@ jobs:
           load: true
           no-cache: true
 
-      # Trivy vulnerability scanner
+      # FIX T-03: Trivy must pass (removed continue-on-error)
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@0.28.0
         with:
@@ -164,7 +164,6 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-        continue-on-error: true
 
   # ============================================================
   #  KUBERNETES: Validate Manifests
@@ -202,10 +201,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # FIX T-03: npm audit must pass (removed continue-on-error)
       - name: npm audit (production)
         run: npm audit --omit=dev
-        continue-on-error: true
 
       - name: Check for known vulnerabilities
         run: npx audit-ci --moderate
-        continue-on-error: true

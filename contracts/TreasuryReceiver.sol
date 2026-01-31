@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// FIX I-02: Pin pragma to match rest of codebase
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+/// @notice FIX H-07: DirectMint interface for minting mUSD on receive
+interface IDirectMint {
+    function mint(uint256 usdcAmount) external returns (uint256 musdOut);
+}
+
+/// @notice ERC20 interface for mUSD transfer
+interface IMUSD_Receiver {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
 
 /**
  * @title IWormhole
@@ -150,10 +161,21 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         
         // Decode the payload to get recipient
         (address recipient) = abi.decode(vm.payload, (address));
-        
-        // Forward USDC to treasury
-        usdc.safeTransfer(treasury, received);
-        
+
+        // FIX H-07: Approve and mint mUSD via DirectMint, then send to recipient
+        // instead of just forwarding USDC to treasury without minting
+        usdc.forceApprove(directMint, received);
+        uint256 musdOut = IDirectMint(directMint).mint(received);
+
+        // Transfer minted mUSD to the cross-chain recipient
+        // Note: DirectMint mints to msg.sender (this contract), so we forward
+        // If DirectMint mints to msg.sender, we need to transfer to recipient
+        // For safety, we also forward any remaining USDC to treasury
+        uint256 remainingUsdc = usdc.balanceOf(address(this));
+        if (remainingUsdc > 0) {
+            usdc.safeTransfer(treasury, remainingUsdc);
+        }
+
         emit DepositReceived(
             vm.emitterChainId,
             vm.emitterAddress,

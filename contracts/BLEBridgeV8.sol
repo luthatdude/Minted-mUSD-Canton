@@ -80,6 +80,9 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event NavOracleUpdated(address indexed oracle, uint256 maxDeviationBps, bool enabled);
     event EmergencyPause(address indexed triggeredBy, string reason);
     event AttestationInvalidated(bytes32 indexed id, string reason);
+    // FIX M-06/M-07: Add missing events for admin parameter changes
+    event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
+    event DailyMintLimitUpdated(uint256 oldLimit, uint256 newLimit);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -122,11 +125,15 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minSigs > 0, "INVALID_MIN_SIGS");
+        // FIX M-06: Emit event for security parameter change
+        emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
 
     function setDailyMintLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_limit > 0, "INVALID_LIMIT");
+        // FIX M-07: Emit event for rate limit change
+        emit DailyMintLimitUpdated(dailyMintLimit, _limit);
         dailyMintLimit = _limit;
     }
 
@@ -139,7 +146,8 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         uint256 _maxDeviationBps,
         bool _enabled
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_maxDeviationBps <= 10000, "DEVIATION_TOO_HIGH"); // Max 100%
+        // FIX H-06: Cap at 20% (was 100% which renders the check useless)
+        require(_maxDeviationBps <= 2000, "DEVIATION_TOO_HIGH"); // Max 20%
         if (_enabled) {
             require(_oracle != address(0), "INVALID_ORACLE");
         }

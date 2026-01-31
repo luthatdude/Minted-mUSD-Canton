@@ -368,6 +368,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
     /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
     /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
     function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
+        // FIX M-12: Enforce minimum interest rate to prevent free leverage
+        require(_rateBps >= 10, "RATE_TOO_LOW"); // Min 0.1% APR
         require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
         uint256 old = interestRateBps;
         interestRateBps = _rateBps;

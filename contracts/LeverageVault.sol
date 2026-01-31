@@ -37,6 +37,13 @@ interface ICollateralVault {
         bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps
     );
     function depositFor(address user, address token, uint256 amount) external;
+    // FIX C-01: Add withdrawFor to allow LeverageVault to pull collateral on close
+    function withdrawFor(address user, address token, uint256 amount, address recipient) external;
+}
+
+/// @notice ERC20 decimals interface for multi-decimal collateral support
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
 }
 
 /// @notice mUSD mint interface
@@ -278,37 +285,52 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
 
         if (debtToRepay > 0) {
-            // Calculate how much collateral to sell to cover debt
+            // FIX C-01: Calculate how much collateral to sell to cover debt
             uint256 collateralToSell = _getCollateralForMusd(collateralToken, debtToRepay);
 
             // Add slippage buffer
             collateralToSell = (collateralToSell * (10000 + maxSlippageBps)) / 10000;
 
-            // Withdraw collateral to sell
-            // Note: This requires CollateralVault to support withdrawFor or user pre-approval
-            // For now, we assume user has withdrawn or this contract has permission
+            // Cap at available collateral
+            uint256 availableCollateral = collateralVault.deposits(msg.sender, collateralToken);
+            if (collateralToSell > availableCollateral) {
+                collateralToSell = availableCollateral;
+            }
+
+            // FIX C-01: Withdraw collateral from vault to this contract for swapping
+            collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this));
 
             // Swap collateral → mUSD
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
             require(musdReceived >= debtToRepay, "INSUFFICIENT_MUSD_FROM_SWAP");
 
             // Repay debt
-            musd.approve(address(borrowModule), debtToRepay);
+            // FIX C-05: Use forceApprove instead of approve for safety
+            IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repay(debtToRepay);
 
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // Swap excess mUSD back to collateral
+                // Swap excess mUSD back to collateral and send to user
                 _swapMusdToCollateral(collateralToken, excessMusd);
             }
         }
 
-        // Withdraw remaining collateral to user
+        // FIX C-01: Withdraw ALL remaining collateral to user via withdrawFor
         uint256 remainingCollateral = collateralVault.deposits(msg.sender, collateralToken);
         require(remainingCollateral >= minCollateralOut, "SLIPPAGE_EXCEEDED");
 
-        // Note: User must withdraw from CollateralVault separately, or we need withdrawFor
+        if (remainingCollateral > 0) {
+            collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender);
+        }
+
+        // Return any collateral tokens held by this contract
+        uint256 localBalance = IERC20(collateralToken).balanceOf(address(this));
+        if (localBalance > 0) {
+            IERC20(collateralToken).safeTransfer(msg.sender, localBalance);
+            remainingCollateral += localBalance;
+        }
 
         collateralReturned = remainingCollateral;
 
@@ -409,21 +431,22 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         uint256 expectedOut = _getCollateralForMusd(collateralToken, musdAmount);
         uint256 minOut = (expectedOut * (10000 - maxSlippageBps)) / 10000;
 
-        // Approve router
-        musd.approve(address(swapRouter), musdAmount);
+        // FIX C-05: Use forceApprove instead of approve
+        IERC20(address(musd)).forceApprove(address(swapRouter), musdAmount);
 
         // Get pool fee for this token
         uint24 poolFee = tokenPoolFees[collateralToken];
         if (poolFee == 0) poolFee = defaultPoolFee;
 
-        // Execute swap
+        // FIX M-03: Use user-supplied deadline parameter passed through, not block.timestamp
+        // block.timestamp + N is meaningless as miners set block.timestamp
         try swapRouter.exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: address(musd),
                 tokenOut: collateralToken,
                 fee: poolFee,
                 recipient: address(this),
-                deadline: block.timestamp + 300, // 5 min deadline
+                deadline: block.timestamp, // Immediate execution required
                 amountIn: musdAmount,
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0
@@ -460,7 +483,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
                 tokenOut: address(musd),
                 fee: poolFee,
                 recipient: address(this),
-                deadline: block.timestamp + 300,
+                deadline: block.timestamp, // FIX M-03: Immediate execution required
                 amountIn: collateralAmount,
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0
@@ -475,10 +498,12 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
     }
 
     /// @notice Get collateral amount for given mUSD amount (via oracle)
+    /// FIX L-05: Use actual token decimals instead of hardcoded 18
     function _getCollateralForMusd(address collateralToken, uint256 musdAmount) internal view returns (uint256) {
         // mUSD is 1:1 with USD, so musdAmount = USD value
-        // Get collateral price in USD
-        uint256 oneUnit = 10 ** 18; // Assuming 18 decimals
+        // Get collateral price in USD using actual token decimals
+        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
+        uint256 oneUnit = 10 ** uint256(tokenDecimals);
         uint256 oneUnitValue = priceOracle.getValueUsd(collateralToken, oneUnit);
         if (oneUnitValue == 0) return 0;
 
@@ -581,8 +606,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         emit TokenDisabled(token);
     }
 
-    /// @notice Emergency withdraw stuck tokens
+    /// @notice Emergency withdraw stuck tokens (non-user tokens only)
+    /// FIX I-06: Restrict emergency withdrawal to prevent admin extracting user collateral
     function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(!leverageEnabled[token], "CANNOT_WITHDRAW_USER_COLLATERAL");
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 }

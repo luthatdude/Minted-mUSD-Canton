@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// FIX I-02: Pin pragma to match rest of codebase
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -259,6 +260,8 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
     function withdrawFees(address to) external onlyOwner {
         if (to == address(0)) revert InvalidAddress();
         uint256 amount = accumulatedFees;
+        // FIX M-11: Check for zero fees to avoid unnecessary transfer
+        require(amount > 0, "NO_FEES");
         accumulatedFees = 0;
         usdc.safeTransfer(to, amount);
         emit FeesWithdrawn(to, amount);
@@ -316,8 +319,8 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
         // Accumulate fees
         accumulatedFees += fee;
         
-        // Approve token bridge
-        usdc.approve(address(tokenBridge), netAmount);
+        // FIX C-05: Use forceApprove to handle non-zero allowance from partial failures
+        usdc.forceApprove(address(tokenBridge), netAmount);
         
         // Increment nonce
         _nonce++;

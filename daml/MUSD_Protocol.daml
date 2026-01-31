@@ -253,10 +253,13 @@ template StakingService
           entryTime = currentTime
           interestRate = baseRate
 
-    nonconsuming choice Unstake : ContractId Musd
+    -- FIX W-03: Unstake now requires MintingService to enforce supply cap on yield minting.
+    -- The yield portion creates new mUSD, which must respect the global supply cap.
+    nonconsuming choice Unstake : (ContractId MintingService, ContractId Musd)
       with
         user : Party
         smusdCid : ContractId Smusd
+        mintingServiceCid : ContractId MintingService
       controller user
       do
         smusd <- fetch smusdCid
@@ -278,11 +281,17 @@ template StakingService
         let maxTotalYield = smusd.amount * 2.0
         let finalInterest = if cappedInterest > maxTotalYield then maxTotalYield else cappedInterest
         let totalReturn = smusd.amount + finalInterest
+        -- FIX W-03: Enforce supply cap on yield (only interest is new supply)
+        svc <- fetch mintingServiceCid
+        assertMsg "UNSTAKE_YIELD_EXCEEDS_SUPPLY_CAP" (svc.currentSupply + finalInterest <= svc.supplyCap)
+        archive mintingServiceCid
+        newSvc <- create svc with currentSupply = svc.currentSupply + finalInterest
         -- Mint mUSD + Yield back to user
-        create Musd with
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = totalReturn
+        return (newSvc, musdCid)
 
 -- | -----------------------------------------------------------------------------------------
 -- | SECTION 4: CANTON ATTESTATION FLOW (BRIDGE)
@@ -305,20 +314,28 @@ template BridgeLock
     observer validators
 
     -- FIX D-M07: Require minimum lock duration before cancellation
-    -- FIX 5C-M01: Bridge cancellation refund does not mint new supply;
-    -- the locked mUSD was already counted in supply when originally minted.
-    -- Document: Cancel refunds existing supply, not new mint.
-    choice Cancel_BridgeLock : ContractId Musd
+    -- FIX C-06: Cancel_BridgeLock must update MintingService.currentSupply to stay in sync.
+    -- The locked mUSD was archived (burned) during Lock_Musd_For_Bridge, so recreating
+    -- it here is effectively re-minting. Track via MintingService to prevent desync.
+    choice Cancel_BridgeLock : (ContractId MintingService, ContractId Musd)
+      with
+        mintingServiceCid : ContractId MintingService
       controller user, operator
       do
         now <- getTime
         let minLockDuration = minutes 10
         assertMsg "CANCEL_TOO_EARLY: minimum 10 minute lock" (subTime now lockedAt >= minLockDuration)
-        -- Refund mUSD to user (not new supply — this was already minted)
-        create Musd with
+        -- FIX C-06: Enforce supply cap on re-creation since original was archived
+        svc <- fetch mintingServiceCid
+        assertMsg "CANCEL_EXCEEDS_SUPPLY_CAP" (svc.currentSupply + amount <= svc.supplyCap)
+        archive mintingServiceCid
+        newSvc <- create svc with currentSupply = svc.currentSupply + amount
+        -- Refund mUSD to user
+        musdCid <- create Musd with
           issuer = operator
           owner = user
           amount = amount
+        return (newSvc, musdCid)
 
 -- | Service to initiate the bridge lock.
 template BridgeService
@@ -480,10 +497,12 @@ setup = do
   passTime (days 365)
 
   -- 6. Alice Unstakes (Gets Yield)
-  finalMusd <- submit alice do
+  -- FIX W-03: Unstake now requires MintingService for supply cap enforcement
+  (mintingSvc3, finalMusd) <- submit alice do
     exerciseCmd stakingSvc Unstake with
       user = alice
       smusdCid = smusdCid
+      mintingServiceCid = mintingSvc2
 
   -- 7. Alice Bridges to another Canton Domain
   submit alice do
