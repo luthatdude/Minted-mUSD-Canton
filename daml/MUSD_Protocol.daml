@@ -456,7 +456,8 @@ setup = do
       amount = 1000.0
 
   -- 3. Deploy Protocol Services
-  mintingSvc <- submit operator do
+  -- Note: We don't store the CID because we'll re-query after each consuming exercise
+  _ <- submit operator do
     createCmd MintingService with
       operator = operator
       usdcIssuer = usdcBank
@@ -477,8 +478,10 @@ setup = do
       observers = [alice]  -- Alice needs visibility to exercise Lock_Musd_For_Bridge
 
   -- 4. Alice Mints mUSD (Swaps USDC)
-  (mintingSvc2, musdCid) <- submit alice do
-    exerciseCmd mintingSvc Mint_Musd with
+  -- Re-query MintingService to get current active contract
+  mintingSvcCid <- getMintingService operator
+  (_, musdCid) <- submit alice do
+    exerciseCmd mintingSvcCid Mint_Musd with
       user = alice
       usdcCid = usdcCid
 
@@ -492,13 +495,13 @@ setup = do
   passTime (days 365)
 
   -- 6. Alice Unstakes (Gets Yield)
-  -- FIX: Unstake now requires MintingService reference and returns tuple
-  -- FIX: Use mintingSvc2 (returned from Mint_Musd), not consumed mintingSvc
-  (updatedMintingSvc, finalMusd) <- submit alice do
+  -- Re-query MintingService to get current active contract after Mint consumed it
+  mintingSvcCid2 <- getMintingService operator
+  (_, finalMusd) <- submit alice do
     exerciseCmd stakingSvc Unstake with
       user = alice
       smusdCid = smusdCid
-      mintingServiceCid = mintingSvc2
+      mintingServiceCid = mintingSvcCid2
 
   -- 7. Alice Bridges to another Canton Domain
   submit alice do
@@ -517,3 +520,13 @@ relToInt : RelTime -> Int
 relToInt rt =
   if rt < seconds 0 then 0
   else convertRelTimeToMicroseconds rt
+
+-- | Helper: Query for the active MintingService contract
+-- Key rule: Never reuse a service CID after an exercise. Always re-query.
+getMintingService : Party -> Script (ContractId MintingService)
+getMintingService operator = do
+  svcs <- query @MintingService operator
+  case svcs of
+    [(cid, _)] -> pure cid
+    [] -> abort "No active MintingService found"
+    _  -> abort "Multiple MintingService contracts found"
