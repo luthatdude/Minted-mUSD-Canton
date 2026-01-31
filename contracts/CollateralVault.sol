@@ -8,17 +8,19 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /// @title CollateralVault
 /// @notice Holds collateral deposits for the borrowing system.
 ///         BorrowModule and LiquidationEngine interact with this vault.
-contract CollateralVault is AccessControl, ReentrancyGuard {
+contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant BORROW_MODULE_ROLE = keccak256("BORROW_MODULE_ROLE");
     bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     struct CollateralConfig {
         bool enabled;
@@ -121,7 +123,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     /// @notice Deposit collateral
     /// @param token The collateral token address
     /// @param amount Amount to deposit
-    function deposit(address token, uint256 amount) external nonReentrant {
+    function deposit(address token, uint256 amount) external nonReentrant whenNotPaused {
         require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
         require(amount > 0, "INVALID_AMOUNT");
 
@@ -135,7 +137,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     /// @param user The user to credit the deposit to
     /// @param token The collateral token address
     /// @param amount Amount to deposit
-    function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
+    function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
         require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
         require(amount > 0, "INVALID_AMOUNT");
         require(user != address(0), "INVALID_USER");
@@ -226,5 +228,19 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     ) {
         CollateralConfig storage c = collateralConfigs[token];
         return (c.enabled, c.collateralFactorBps, c.liquidationThresholdBps, c.liquidationPenaltyBps);
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS
+    // ============================================================
+
+    /// @notice Pause deposits
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause deposits
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }
