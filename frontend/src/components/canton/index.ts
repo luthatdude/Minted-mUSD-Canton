@@ -1,9 +1,9 @@
 // Canton Components - Loop Wallet SDK Integration
-export { default as CantonDashboard } from "./CantonDashboard";
-export { default as CantonMint } from "./CantonMint";
-export { default as CantonStake } from "./CantonStake";
-export { default as CantonBorrow } from "./CantonBorrow";
-export { default as CantonBridge } from "./CantonBridge";
-export { default as CantonLiquidations } from "./CantonLiquidations";
-export { default as CantonAdmin } from "./CantonAdmin";
-export { default as CantonLeverage } from "./CantonLeverage";
+export { CantonDashboard } from "./CantonDashboard";
+export { CantonMint } from "./CantonMint";
+export { CantonStake } from "./CantonStake";
+export { CantonBorrow } from "./CantonBorrow";
+export { CantonBridge } from "./CantonBridge";
+export { CantonLiquidations } from "./CantonLiquidations";
+export { CantonAdmin } from "./CantonAdmin";
+export { CantonLeverage } from "./CantonLeverage";

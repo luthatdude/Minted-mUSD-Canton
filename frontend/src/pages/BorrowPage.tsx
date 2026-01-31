@@ -50,20 +50,23 @@ export function BorrowPage() {
 
         for (const token of tokens) {
           const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
-          const [symbol, decimals, deposited, price, config] = await Promise.all([
+          const [symbol, dec, dep, prc, config] = await Promise.all([
             erc20.symbol(),
             erc20.decimals(),
             vault.getDeposit(address, token),
             oracle.getPrice(token).catch(() => 0n),
             vault.getConfig(token),
           ]);
+          const decimals = Number(dec);
+          const deposited = BigInt(dep);
+          const price = BigInt(prc);
           const valueUsd = deposited > 0n && price > 0n
             ? (deposited * price) / (10n ** BigInt(decimals))
             : 0n;
           infos.push({
             token,
             symbol,
-            decimals: Number(decimals),
+            decimals,
             deposited,
             price,
             valueUsd,
@@ -230,7 +233,7 @@ export function BorrowPage() {
 
       {/* Stats Grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Your Debt" value={formatUSD(debt)} color={debt > 0n ? "red" : "gray"} />
+        <StatCard label="Your Debt" value={formatUSD(debt)} color={debt > 0n ? "red" : "default"} />
         <StatCard 
           label="Health Factor" 
           value={formatHealthFactor(healthFactor)} 
@@ -372,3 +375,5 @@ export function BorrowPage() {
     </div>
   );
 }
+
+export default BorrowPage;

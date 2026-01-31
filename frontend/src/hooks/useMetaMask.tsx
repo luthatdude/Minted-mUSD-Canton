@@ -203,9 +203,9 @@ export function MetaMaskProvider({ children }: MetaMaskProviderProps) {
       setEthBalance('0');
     };
 
-    sdkProvider.on('accountsChanged', (accounts: string[]) => handleAccountsChanged(accounts));
-    sdkProvider.on('chainChanged', handleChainChanged);
-    sdkProvider.on('disconnect', handleDisconnect);
+    sdkProvider.on('accountsChanged', ((accounts: string[]) => handleAccountsChanged(accounts)) as (...args: unknown[]) => void);
+    sdkProvider.on('chainChanged', handleChainChanged as (...args: unknown[]) => void);
+    sdkProvider.on('disconnect', handleDisconnect as (...args: unknown[]) => void);
 
     return () => {
       sdkProvider.removeListener('accountsChanged', handleAccountsChanged as any);

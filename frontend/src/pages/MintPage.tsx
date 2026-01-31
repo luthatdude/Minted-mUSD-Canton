@@ -461,3 +461,5 @@ export function MintPage() {
     </div>
   );
 }
+
+export default MintPage;
