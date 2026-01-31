@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>Code coverage report for contracts/TreasuryReceiver.sol</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../prettify.css" />
+    <link rel="stylesheet" href="../base.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+<body>
+<div class='wrapper'>
+  <div class='pad1'>
+    <h1>
+      <a href="../index.html">all files</a> / <a href="index.html">contracts/</a> TreasuryReceiver.sol
+    </h1>
+    <div class='clearfix'>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Statements</span>
+        <span class='fraction'>0/32</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Branches</span>
+        <span class='fraction'>0/36</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Functions</span>
+        <span class='fraction'>0/8</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">0% </span>
+        <span class="quiet">Lines</span>
+        <span class='fraction'>0/43</span>
+      </div>
+    </div>
+  </div>
+  <div class='status-line low'></div>
+<pre><table class="coverage">
+<tr><td class="line-count quiet">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+&nbsp;
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+&nbsp;
+/**
+ * @title IWormhole
+ * @notice Minimal interface for Wormhole core contract
+ */
+interface IWormhole {
+    function parseAndVerifyVM(bytes calldata encodedVM) external view returns (
+        IWormhole.VM memory vm,
+        bool valid,
+        string memory reason
+    );
+    
+    struct VM {
+        uint8 version;
+        uint32 timestamp;
+        uint32 nonce;
+        uint16 emitterChainId;
+        bytes32 emitterAddress;
+        uint64 sequence;
+        uint8 consistencyLevel;
+        bytes payload;
+        uint32 guardianSetIndex;
+        bytes signatures;
+        bytes32 hash;
+    }
+}
+&nbsp;
+/**
+ * @title ITokenBridge
+ * @notice Interface for Wormhole Token Bridge to complete transfers
+ */
+interface ITokenBridge {
+    function completeTransfer(bytes memory encodedVm) external;
+    function completeTransferAndUnwrapETH(bytes memory encodedVm) external;
+}
+&nbsp;
+/**
+ * @title IDirectMint
+ * @notice Interface for DirectMint to mint mUSD for users
+ */
+interface IDirectMint {
+    function mintFor(address recipient, uint256 usdcAmount) external returns (uint256 musdMinted);
+}
+&nbsp;
+/**
+ * @title TreasuryReceiver
+ * @notice Receives bridged USDC from L2 DepositRouters and forwards to DirectMint
+ * @dev Deploy this on Ethereum mainnet to receive cross-chain deposits
+ */
+contract TreasuryReceiver is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+&nbsp;
+    // ============ State Variables ============
+    
+    /// @notice USDC token on Ethereum
+    IERC20 public immutable usdc;
+    
+    /// @notice Wormhole core contract
+    IWormhole public immutable wormhole;
+    
+    /// @notice Wormhole token bridge
+    ITokenBridge public immutable tokenBridge;
+    
+    /// @notice DirectMint contract for minting mUSD
+    address public directMint;
+    
+    /// @notice Treasury address for reserve deposits
+    address public treasury;
+    
+    /// @notice Mapping of processed VAAs (to prevent replay)
+    mapping(bytes32 =&gt; bool) public processedVAAs;
+    
+    /// @notice Authorized source chains and their DepositRouter addresses
+    mapping(uint16 =&gt; bytes32) public authorizedRouters;
+    
+    /// @notice Wormhole chain IDs
+    uint16 public constant BASE_CHAIN_ID = 30;
+    uint16 public constant ARBITRUM_CHAIN_ID = 23;
+    uint16 public constant SOLANA_CHAIN_ID = 1;
+&nbsp;
+    // ============ Events ============
+    
+    event DepositReceived(
+        uint16 sourceChain,
+        bytes32 sourceRouter,
+        address indexed recipient,
+        uint256 amount,
+        bytes32 vaaHash
+    );
+    
+    event RouterAuthorized(uint16 chainId, bytes32 routerAddress);
+    event RouterRevoked(uint16 chainId);
+    event DirectMintUpdated(address oldDirectMint, address newDirectMint);
+    event TreasuryUpdated(address oldTreasury, address newTreasury);
+    // FIX H-07: Events for mUSD minting success/fallback
+    event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
+    event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+&nbsp;
+    // ============ Errors ============
+    
+    error InvalidAddress();
+    error InvalidVAA();
+    error VAAAlreadyProcessed();
+    error UnauthorizedRouter();
+    error MintFailed();
+&nbsp;
+    // ============ Constructor ============
+    
+<span class="fstat-no" title="function not covered" >    constructor(</span>
+        address _usdc,
+        address _wormhole,
+        address _tokenBridge,
+        address _directMint,
+        address _treasury
+    ) Ownable(msg.sender) {
+<span class="cstat-no" title="statement not covered" >        if (_usdc == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        if (_wormhole == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        if (_tokenBridge == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        if (_directMint == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        if (_treasury == address(0)) revert InvalidAddress();</span>
+        
+        usdc = IERC20(_usdc);
+        wormhole = IWormhole(_wormhole);
+        tokenBridge = ITokenBridge(_tokenBridge);
+        directMint = _directMint;
+        treasury = _treasury;
+    }
+&nbsp;
+    // ============ External Functions ============
+    
+    /**
+     * @notice Complete a cross-chain deposit and mint mUSD
+     * @param encodedVAA Wormhole VAA from the source chain
+     */
+<span class="fstat-no" title="function not covered" >    function receiveAndMint(bytes calldata encodedVAA) external nonReentrant {</span>
+        // Parse and verify the VAA
+<span class="cstat-no" title="statement not covered" >        (IWormhole.VM memory vm, bool valid, string memory reason) = wormhole.parseAndVerifyVM(encodedVAA);</span>
+<span class="cstat-no" title="statement not covered" >        if (!valid) revert InvalidVAA();</span>
+        
+        // Check for replay
+<span class="cstat-no" title="statement not covered" >        if (processedVAAs[vm.hash]) revert VAAAlreadyProcessed();</span>
+        processedVAAs[vm.hash] = true;
+        
+        // Verify source is authorized
+<span class="cstat-no" title="statement not covered" >        bytes32 authorizedRouter = authorizedRouters[vm.emitterChainId];</span>
+<span class="cstat-no" title="statement not covered" >        if (authorizedRouter == bytes32(0) || authorizedRouter != vm.emitterAddress) {</span>
+            revert UnauthorizedRouter();
+        }
+        
+        // Complete the token transfer (this receives USDC)
+<span class="cstat-no" title="statement not covered" >        uint256 balanceBefore = usdc.balanceOf(address(this));</span>
+<span class="cstat-no" title="statement not covered" >        tokenBridge.completeTransfer(encodedVAA)</span>;
+<span class="cstat-no" title="statement not covered" >        uint256 received = usdc.balanceOf(address(this)) - balanceBefore;</span>
+        
+        // Decode the payload to get recipient
+<span class="cstat-no" title="statement not covered" >        (address recipient) = abi.decode(vm.payload, (address));</span>
+        
+        // FIX H-07: Actually mint mUSD for the recipient via DirectMint
+        // Previously forwarded USDC to treasury but never minted mUSD
+<span class="cstat-no" title="statement not covered" >        usdc.forceApprove(directMint, received)</span>;
+<span class="cstat-no" title="statement not covered" >        try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {</span>
+<span class="cstat-no" title="statement not covered" >            emit MUSDMinted(recipient, received, musdMinted, vm.hash);</span>
+        } catch {
+            // If minting fails, forward to treasury as fallback (funds not lost)
+<span class="cstat-no" title="statement not covered" >            usdc.forceApprove(directMint, 0)</span>;
+<span class="cstat-no" title="statement not covered" >            usdc.safeTransfer(treasury, received)</span>;
+<span class="cstat-no" title="statement not covered" >            emit MintFallbackToTreasury(recipient, received, vm.hash);</span>
+        }
+        
+<span class="cstat-no" title="statement not covered" >        emit DepositReceived(</span>
+            vm.emitterChainId,
+            vm.emitterAddress,
+            recipient,
+            received,
+            vm.hash
+        );
+    }
+    
+    /**
+     * @notice Check if a VAA has been processed
+     * @param vaaHash Hash of the VAA
+     * @return processed Whether it's been processed
+     */
+<span class="fstat-no" title="function not covered" >    function isVAAProcessed(bytes32 vaaHash) external view returns (bool processed) {</span>
+<span class="cstat-no" title="statement not covered" >        return processedVAAs[vaaHash];</span>
+    }
+&nbsp;
+    // ============ Admin Functions ============
+    
+    /**
+     * @notice Authorize a DepositRouter on a source chain
+     * @param chainId Wormhole chain ID
+     * @param routerAddress Address of the DepositRouter (as bytes32)
+     */
+<span class="fstat-no" title="function not covered" >    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyOwner {</span>
+        authorizedRouters[chainId] = routerAddress;
+<span class="cstat-no" title="statement not covered" >        emit RouterAuthorized(chainId, routerAddress);</span>
+    }
+    
+    /**
+     * @notice Revoke authorization for a source chain
+     * @param chainId Wormhole chain ID
+     */
+<span class="fstat-no" title="function not covered" >    function revokeRouter(uint16 chainId) external onlyOwner {</span>
+        delete authorizedRouters[chainId];
+<span class="cstat-no" title="statement not covered" >        emit RouterRevoked(chainId);</span>
+    }
+    
+    /**
+     * @notice Update DirectMint address
+     * @param newDirectMint New DirectMint contract address
+     */
+<span class="fstat-no" title="function not covered" >    function setDirectMint(address newDirectMint) external onlyOwner {</span>
+<span class="cstat-no" title="statement not covered" >        if (newDirectMint == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        address old = directMint;</span>
+        directMint = newDirectMint;
+<span class="cstat-no" title="statement not covered" >        emit DirectMintUpdated(old, newDirectMint);</span>
+    }
+    
+    /**
+     * @notice Update Treasury address
+     * @param newTreasury New Treasury address
+     */
+<span class="fstat-no" title="function not covered" >    function setTreasury(address newTreasury) external onlyOwner {</span>
+<span class="cstat-no" title="statement not covered" >        if (newTreasury == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        address old = treasury;</span>
+        treasury = newTreasury;
+<span class="cstat-no" title="statement not covered" >        emit TreasuryUpdated(old, newTreasury);</span>
+    }
+    
+    /**
+     * @notice Emergency withdrawal
+     * @param token Token to withdraw
+     * @param to Recipient
+     * @param amount Amount to withdraw
+     */
+<span class="fstat-no" title="function not covered" >    function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner {</span>
+<span class="cstat-no" title="statement not covered" >        if (to == address(0)) revert InvalidAddress();</span>
+<span class="cstat-no" title="statement not covered" >        IERC20(token).safeTransfer(to, amount)</span>;
+    }
+}
+&nbsp;</pre></td></tr>
+</table></pre>
+<div class='push'></div><!-- for sticky footer -->
+</div><!-- /wrapper -->
+<div class='footer quiet pad2 space-top1 center small'>
+  Code coverage
+  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sat Jan 31 2026 16:59:22 GMT-0500 (Eastern Standard Time)
+</div>
+</div>
+<script src="../prettify.js"></script>
+<script>
+window.onload = function () {
+        if (typeof prettyPrint === 'function') {
+            prettyPrint();
+        }
+};
+</script>
+<script src="../sorter.js"></script>
+</body>
+</html>

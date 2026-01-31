@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>Code coverage report for contracts/SMUSD.sol</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../prettify.css" />
+    <link rel="stylesheet" href="../base.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+<body>
+<div class='wrapper'>
+  <div class='pad1'>
+    <h1>
+      <a href="../index.html">all files</a> / <a href="index.html">contracts/</a> SMUSD.sol
+    </h1>
+    <div class='clearfix'>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">50% </span>
+        <span class="quiet">Statements</span>
+        <span class='fraction'>14/28</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">33.33% </span>
+        <span class="quiet">Branches</span>
+        <span class='fraction'>12/36</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">50% </span>
+        <span class="quiet">Functions</span>
+        <span class='fraction'>6/12</span>
+      </div>
+      <div class='fl pad1y space-right2'>
+        <span class="strong">51.61% </span>
+        <span class="quiet">Lines</span>
+        <span class='fraction'>16/31</span>
+      </div>
+    </div>
+  </div>
+  <div class='status-line medium'></div>
+<pre><table class="coverage">
+<tr><td class="line-count quiet">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">27×</span>
+<span class="cline-any cline-yes">27×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">4×</span>
+<span class="cline-any cline-yes">4×</span>
+<span class="cline-any cline-yes">4×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-yes">1×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">6×</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: MIT
+// BLE Protocol - Fixed Version
+// Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
+//        S-03 (Donation attack mitigation), S-04 (SafeERC20)
+&nbsp;
+pragma solidity 0.8.26;
+&nbsp;
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+&nbsp;
+contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
+    using SafeERC20 for IERC20;
+&nbsp;
+    bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+&nbsp;
+    mapping(address =&gt; uint256) public lastDeposit;
+    uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
+&nbsp;
+    // Events
+    event YieldDistributed(address indexed from, uint256 amount);
+    event CooldownUpdated(address indexed account, uint256 timestamp);
+&nbsp;
+    constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
+    }
+&nbsp;
+    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party deposit.
+    // A depositor can always set their own cooldown, and depositing on behalf of someone
+    // correctly locks the receiver's withdrawal window.
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function deposit(uint256 assets, address receiver) public override <span class="missing-if-branch" title="else path not taken" >E</span>nonReentrant <span class="missing-if-branch" title="else path not taken" >E</span>whenNotPaused returns (uint256) {
+        lastDeposit[receiver] = block.timestamp;
+        emit CooldownUpdated(receiver, block.timestamp);
+        return super.deposit(assets, receiver);
+    }
+&nbsp;
+    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
+    // Matches deposit() behavior — any path that increases shares must reset cooldown.
+    // FIX: Added nonReentrant and whenNotPaused for security
+<span class="fstat-no" title="function not covered" >    function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {</span>
+        lastDeposit[receiver] = block.timestamp;
+<span class="cstat-no" title="statement not covered" >        emit CooldownUpdated(receiver, block.timestamp);</span>
+<span class="cstat-no" title="statement not covered" >        return super.mint(shares, receiver);</span>
+    }
+&nbsp;
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function withdraw(uint256 assets, address receiver, address owner) public override <span class="missing-if-branch" title="else path not taken" >E</span>nonReentrant <span class="missing-if-branch" title="else path not taken" >E</span>whenNotPaused returns (uint256) {
+        require(block.timestamp &gt;= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
+        return super.withdraw(assets, receiver, owner);
+    }
+&nbsp;
+    // FIX S-02: Override redeem to enforce cooldown
+    // FIX: Added nonReentrant and whenNotPaused for security
+    function redeem(uint256 shares, address receiver, address owner) public override <span class="missing-if-branch" title="else path not taken" >E</span>nonReentrant <span class="missing-if-branch" title="else path not taken" >E</span>whenNotPaused returns (uint256) {
+        <span class="missing-if-branch" title="if path not taken" >I</span>require(block.timestamp &gt;= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
+<span class="cstat-no" title="statement not covered" >        return super.redeem(shares, receiver, owner);</span>
+    }
+&nbsp;
+    // FIX S-01: Propagate cooldown on transfer to prevent bypass
+    function _update(address from, address to, uint256 value) internal override {
+        // Skip cooldown propagation for mint (from == 0) and burn (to == 0)
+        if (from != address(0) &amp;&amp; to != address(0)) {
+            // Transfer: propagate the stricter cooldown to receiver
+            uint256 fromCooldown = lastDeposit[from];
+            uint256 toCooldown = lastDeposit[to];
+&nbsp;
+            // Receiver inherits the later (more restrictive) cooldown
+            <span class="missing-if-branch" title="else path not taken" >E</span>if (fromCooldown &gt; toCooldown) {
+                lastDeposit[to] = fromCooldown;
+                emit CooldownUpdated(to, fromCooldown);
+            }
+        }
+&nbsp;
+        super._update(from, to, value);
+    }
+&nbsp;
+    // FIX S-04: Use SafeERC20 for token transfers
+<span class="fstat-no" title="function not covered" >    function distributeYield(uint256 amount) external onlyRole(YIELD_MANAGER_ROLE) {</span>
+<span class="cstat-no" title="statement not covered" >        require(totalSupply() &gt; 0, "NO_SHARES_EXIST")</span>;
+<span class="cstat-no" title="statement not covered" >        require(amount &gt; 0, "INVALID_AMOUNT")</span>;
+&nbsp;
+        // FIX S-04: Use safeTransferFrom
+<span class="cstat-no" title="statement not covered" >        IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount)</span>;
+&nbsp;
+<span class="cstat-no" title="statement not covered" >        emit YieldDistributed(msg.sender, amount);</span>
+    }
+&nbsp;
+    // FIX S-03: decimalsOffset provides some protection against donation attacks
+    // by making the initial share price calculation more robust
+    function _decimalsOffset() internal pure override returns (uint8) {
+        return 3;
+    }
+&nbsp;
+    // View function to check remaining cooldown time
+<span class="fstat-no" title="function not covered" >    function getRemainingCooldown(address account) external view returns (uint256) {</span>
+<span class="cstat-no" title="statement not covered" >        uint256 cooldownEnd = lastDeposit[account] + WITHDRAW_COOLDOWN;</span>
+<span class="cstat-no" title="statement not covered" >        if (block.timestamp &gt;= cooldownEnd) {</span>
+<span class="cstat-no" title="statement not covered" >            return 0;</span>
+        }
+<span class="cstat-no" title="statement not covered" >        return cooldownEnd - block.timestamp;</span>
+    }
+&nbsp;
+    // View function to check if withdrawal is allowed
+<span class="fstat-no" title="function not covered" >    function canWithdraw(address account) external view returns (bool) {</span>
+<span class="cstat-no" title="statement not covered" >        return block.timestamp &gt;= lastDeposit[account] + WITHDRAW_COOLDOWN;</span>
+    }
+&nbsp;
+    // ============================================================
+    //                     EMERGENCY CONTROLS
+    // ============================================================
+&nbsp;
+    /// @notice Pause all deposits and withdrawals
+<span class="fstat-no" title="function not covered" >    function pause() external onlyRole(PAUSER_ROLE) {</span>
+<span class="cstat-no" title="statement not covered" >        _pause()</span>;
+    }
+&nbsp;
+    /// @notice Unpause all deposits and withdrawals
+<span class="fstat-no" title="function not covered" >    function unpause() external onlyRole(PAUSER_ROLE) {</span>
+<span class="cstat-no" title="statement not covered" >        _unpause()</span>;
+    }
+}
+&nbsp;</pre></td></tr>
+</table></pre>
+<div class='push'></div><!-- for sticky footer -->
+</div><!-- /wrapper -->
+<div class='footer quiet pad2 space-top1 center small'>
+  Code coverage
+  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sat Jan 31 2026 16:59:22 GMT-0500 (Eastern Standard Time)
+</div>
+</div>
+<script src="../prettify.js"></script>
+<script>
+window.onload = function () {
+        if (typeof prettyPrint === 'function') {
+            prettyPrint();
+        }
+};
+</script>
+<script src="../sorter.js"></script>
+</body>
+</html>
