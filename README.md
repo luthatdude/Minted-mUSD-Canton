@@ -439,6 +439,16 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 | CantonDirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
 | DirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
 
+## Creating Repository Archive
+
+To create a clean zip archive of the repository (excluding node_modules, build artifacts, and sensitive files):
+
+```bash
+./create-zip.sh
+```
+
+This will generate `Minted-mUSD-Canton.zip` containing all source files tracked by git.
+
 ## License
 
 Proprietary

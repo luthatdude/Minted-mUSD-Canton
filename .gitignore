@@ -21,3 +21,6 @@ relay/secrets/
 # IDE
 .vscode/
 .idea/
+
+# Generated zip files
+*.zip
