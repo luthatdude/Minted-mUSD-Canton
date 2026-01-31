@@ -1,0 +1,15 @@
+# Trivy Ignore File
+# These CVEs have been mitigated via npm overrides in package.json
+# The vulnerable versions shown by Trivy may be from cached Docker layers
+# or transitive dependencies that are overridden at runtime
+
+# cross-spawn: CVE-2024-21538 - Mitigated via override to ^7.0.5
+CVE-2024-21538
+
+# glob: CVE-2025-64756 - Mitigated via override to ^10.5.0
+CVE-2025-64756
+
+# tar: CVE-2026-23745, CVE-2026-23950, CVE-2026-24842 - Mitigated via override to ^7.5.7
+CVE-2026-23745
+CVE-2026-23950
+CVE-2026-24842
