@@ -97,7 +97,14 @@ describe("BLEBridgeV9", function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("INVALID_MIN_SIGS");
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: Now requires >= 2
+    });
+
+    it("Should reject initialization with one minSig (FIX C-01)", async function () {
+      const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
+      await expect(
+        upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
     });
 
     it("Should reject initialization with zero MUSD address", async function () {

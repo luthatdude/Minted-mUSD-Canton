@@ -39,6 +39,21 @@ type Money = Numeric 18
 type Bps = Int
 
 -- ============================================================
+--                     0. CANTON USDC (Deposit Asset)
+-- ============================================================
+
+-- | CantonUSDC - Represents USDC deposited on Canton side.
+-- FIX H-01: Added to V3 for deposit verification in CantonMint_Mint
+template CantonUSDC
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+    ensure amount > 0.0
+
+-- ============================================================
 --                     1. MINTED MUSD TOKEN
 -- ============================================================
 
@@ -524,8 +539,9 @@ template Vault
           accruedInterest = 0.0
           lastInterestUpdate = now
         
-        -- Create immutable receipt
+        -- Create immutable receipt (FIX H-02: operator signs the receipt)
         receipt <- create LiquidationReceipt with
+          operator  -- FIX H-02: Use vault's operator as receipt signer
           vaultOwner = owner
           liquidator
           debtRepaid = actualRepay
@@ -598,9 +614,12 @@ template VaultManager
 -- ============================================================
 
 -- | LiquidationReceipt - Immutable audit trail per liquidation.
--- FIX C-02: Both vaultOwner and liquidator are signatories for authenticity
+-- FIX H-02: Changed to operator-signed pattern to make receipt creatable
+-- The operator (protocol) signs the receipt, with both vaultOwner and liquidator as observers
+-- This allows the receipt to be created within the Vault.Liquidate choice context
 template LiquidationReceipt
   with
+    operator : Party          -- FIX H-02: Protocol operator signs
     vaultOwner : Party
     liquidator : Party
     debtRepaid : Money
@@ -613,8 +632,8 @@ template LiquidationReceipt
     isFullLiquidation : Bool
     timestamp : Time
   where
-    signatory vaultOwner, liquidator  -- FIX C-02: Both parties sign
-    observer ([] : [Party])  -- No observers needed, both parties are signatories
+    signatory operator  -- FIX H-02: Only operator signs (can create in Vault context)
+    observer vaultOwner, liquidator  -- Both parties can see the receipt
 
 -- ============================================================
 --                     7. LIQUIDATION ORDER
@@ -703,15 +722,25 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
+    -- FIX H-01: Now requires actual CantonUSDC token to verify deposit
     choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
-        depositAmount : Money
+        depositCid : ContractId CantonUSDC  -- FIX H-01: Require actual token
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
+        
+        -- FIX H-01: Fetch and verify the deposit token
+        deposit <- fetch depositCid
+        assertMsg "DEPOSIT_OWNER_MISMATCH" (deposit.owner == user)
+        let depositAmount = deposit.amount
+        
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
+        
+        -- FIX H-01: Archive (consume) the deposit token
+        archive depositCid
         
         let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
         let netAmount = depositAmount - feeAmount
