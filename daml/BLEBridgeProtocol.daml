@@ -316,9 +316,10 @@ template SupplyCapAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -404,9 +405,10 @@ template YieldAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
