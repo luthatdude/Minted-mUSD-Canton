@@ -1194,13 +1194,13 @@ template AttestationRequest
         create this with collectedSignatures = Set.insert validator collectedSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- FIX A-03: Derive requiredSignatures from validatorGroup size (majority quorum)
-    -- Previously accepted as caller parameter, allowing aggregator to bypass quorum
+    -- FIX A-03: Derive requiredSignatures from validatorGroup size (supermajority quorum)
+    -- FIX R-02: Changed from simple majority to supermajority for consistency with BLEBridgeProtocol
     choice Attestation_Complete : ()
       controller aggregator
       do
-        -- FIX A-03: Majority threshold = (n / 2) + 1, derived from group size
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX R-02: Supermajority threshold = (n + 1) / 2 + 1, consistent with BLEBridgeProtocol
+        let requiredSignatures = (length validatorGroup + 1) `div` 2 + 1
         let sigCount = Set.size collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
         
