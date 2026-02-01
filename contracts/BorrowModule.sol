@@ -239,6 +239,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         uint256 elapsed = block.timestamp - pos.lastAccrualTime;
+        // slither-disable-next-line incorrect-equality
         if (elapsed == 0) return;
 
         // interest = principal * rate * elapsed / (10000 * SECONDS_PER_YEAR)
@@ -261,6 +262,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///      Returns in basis points (10000 = 1.0). Below 10000 = liquidatable.
     function _healthFactor(address user) internal view returns (uint256) {
         uint256 debt = totalDebt(user);
+        // slither-disable-next-line incorrect-equality
         if (debt == 0) return type(uint256).max;
 
         uint256 weightedCollateral = _weightedCollateralValue(user);
@@ -346,6 +348,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @return Health factor in basis points (10000 = 1.0)
     function healthFactor(address user) external view returns (uint256) {
         uint256 debt = totalDebt(user);
+        // slither-disable-next-line incorrect-equality
         if (debt == 0) return type(uint256).max;
 
         uint256 weightedCollateral = _weightedCollateralValue(user);
