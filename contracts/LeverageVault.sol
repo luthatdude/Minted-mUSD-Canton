@@ -156,6 +156,15 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     event TokenEnabled(address indexed token, uint24 poolFee);
     event TokenDisabled(address indexed token);
 
+    /// @notice FIX M-01: Event for direct mUSD repayment close (no swap needed)
+    event LeverageClosedWithDirectRepay(
+        address indexed user,
+        address indexed collateralToken,
+        uint256 collateralReturned,
+        uint256 debtRepaid,
+        uint256 musdProvidedByUser
+    );
+
     // ============================================================
     //                  CONSTRUCTOR
     // ============================================================
@@ -276,6 +285,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Close leveraged position - repay debt and withdraw collateral
     /// @param minCollateralOut Minimum collateral to receive (slippage protection)
     /// @return collateralReturned Amount of collateral returned to user
+    /// @dev FIX M-01: If swap fails, use closeLeveragedPositionWithMusd() instead
     function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         require(pos.totalCollateral > 0, "NO_POSITION");
@@ -343,6 +353,65 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             collateralReturned,
             debtToRepay,
             profitOrLoss >= 0 ? uint256(profitOrLoss) : 0
+        );
+
+        // Clear position
+        delete positions[msg.sender];
+
+        return collateralReturned;
+    }
+
+    /// @notice FIX M-01: Close leveraged position by providing mUSD directly
+    /// @dev Use this if closeLeveragedPosition() fails due to swap issues.
+    ///      User provides mUSD to repay debt, receives ALL collateral back.
+    ///      This completely eliminates swap failure risk.
+    /// @param musdAmount Amount of mUSD to provide for debt repayment
+    /// @return collateralReturned Amount of collateral returned to user
+    function closeLeveragedPositionWithMusd(uint256 musdAmount) external nonReentrant returns (uint256 collateralReturned) {
+        LeveragePosition storage pos = positions[msg.sender];
+        require(pos.totalCollateral > 0, "NO_POSITION");
+
+        address collateralToken = pos.collateralToken;
+        uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
+
+        // If there's debt, user must provide enough mUSD to cover it
+        if (debtToRepay > 0) {
+            require(musdAmount >= debtToRepay, "INSUFFICIENT_MUSD_PROVIDED");
+
+            // Pull mUSD from user
+            IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), musdAmount);
+
+            // Repay the debt
+            IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
+            borrowModule.repay(debtToRepay);
+
+            // Refund excess mUSD if user provided more than needed
+            uint256 excessMusd = musdAmount - debtToRepay;
+            if (excessMusd > 0) {
+                IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
+            }
+        }
+
+        // Withdraw ALL collateral from vault directly to user
+        uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);
+        if (totalCollateralInVault > 0) {
+            collateralVault.withdrawFor(msg.sender, collateralToken, totalCollateralInVault, msg.sender);
+        }
+
+        // Also send any collateral held by this contract to user
+        uint256 heldCollateral = IERC20(collateralToken).balanceOf(address(this));
+        if (heldCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(msg.sender, heldCollateral);
+        }
+
+        collateralReturned = totalCollateralInVault + heldCollateral;
+
+        emit LeverageClosedWithDirectRepay(
+            msg.sender,
+            collateralToken,
+            collateralReturned,
+            debtToRepay,
+            musdAmount
         );
 
         // Clear position
@@ -519,6 +588,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Get user's current position
     function getPosition(address user) external view returns (LeveragePosition memory) {
         return positions[user];
+    }
+
+    /// @notice FIX M-01: Get the mUSD amount needed to close a position via closeLeveragedPositionWithMusd()
+    /// @param user The user's address
+    /// @return musdNeeded Amount of mUSD required to repay debt and close position
+    function getMusdNeededToClose(address user) external view returns (uint256 musdNeeded) {
+        return borrowModule.totalDebt(user);
     }
 
     /// @notice Calculate effective leverage for a position
