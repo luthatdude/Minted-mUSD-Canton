@@ -337,24 +337,26 @@ supplyCapSyncTest = script do
       aggregator
       validatorGroup = validators
       payload
+      signedValidators = []  -- FIX: Initialize empty
 
-  sig1 <- submit validator1 do
+  -- FIX: Sign choice now returns (newAttCid, sigCid)
+  (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid SupplyCap_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2 <- submit validator2 do
-    exerciseCmd attCid SupplyCap_Sign with
+  (attCid3, sig2) <- submit validator2 do
+    exerciseCmd attCid2 SupplyCap_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3 <- submit validator3 do
-    exerciseCmd attCid SupplyCap_Sign with
+  (attCid4, sig3) <- submit validator3 do
+    exerciseCmd attCid3 SupplyCap_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   verifiedPayload <- submit aggregator do
-    exerciseCmd attCid SupplyCap_Finalize with
+    exerciseCmd attCid4 SupplyCap_Finalize with
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Supply cap sync verified: total=" <> show verifiedPayload.totalGlobalSupply
@@ -391,24 +393,26 @@ yieldAttestationTest = script do
       aggregator
       validatorGroup = validators
       payload
+      signedValidators = []  -- FIX: Initialize empty
 
-  sig1 <- submit validator1 do
+  -- FIX: Sign choice now returns (newAttCid, sigCid)
+  (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid Yield_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2 <- submit validator2 do
-    exerciseCmd attCid Yield_Sign with
+  (attCid3, sig2) <- submit validator2 do
+    exerciseCmd attCid2 Yield_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3 <- submit validator3 do
-    exerciseCmd attCid Yield_Sign with
+  (attCid4, sig3) <- submit validator3 do
+    exerciseCmd attCid3 Yield_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   verifiedYield <- submit aggregator do
-    exerciseCmd attCid Yield_Finalize with
+    exerciseCmd attCid4 Yield_Finalize with
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Yield attestation verified: accrued=" <> show verifiedYield.yieldAccrued
