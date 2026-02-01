@@ -225,13 +225,19 @@ template PriceOracle
     ensure price > 0.0
 
     -- FIX M-26: Explicit controller for nonconsuming choice
+    -- FIX H-01: Added maxAge parameter for staleness check
     -- Any observer can query the price (read-only operation)
     nonconsuming choice Oracle_GetPrice : Money
       with
         requester : Party
+        maxStaleness : RelTime  -- FIX H-01: Maximum acceptable age of price data
       controller requester
       do
         assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == provider)
+        -- FIX H-01: Check price staleness
+        now <- getTime
+        let age = subTime now lastUpdated
+        assertMsg "PRICE_STALE" (age <= maxStaleness)
         return price
 
     choice Oracle_UpdatePrice : ContractId PriceOracle
@@ -250,6 +256,7 @@ template PriceOracle
 -- ============================================================
 
 -- | LiquidityPool - On-chain DEX for atomic leverage operations.
+-- FIX C-01: Swaps now require actual token contract IDs for verification
 template LiquidityPool
   with
     operator : Party
@@ -263,26 +270,36 @@ template LiquidityPool
 
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
 
-    -- | Swap mUSD for collateral
+    -- | Swap mUSD for collateral (FIX C-01: requires actual token)
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, Money)
       with
-        musdAmount : Money
+        musdCid : ContractId MintedMUSD  -- FIX: Require actual token contract
         receiver : Party
       controller receiver
       do
+        -- FIX C-01: Verify token ownership and consume it
+        musd <- fetch musdCid
+        assertMsg "NOT_OWNER" (musd.owner == receiver)
+        assertMsg "TOKEN_BLACKLISTED" (not musd.blacklisted)
+        let musdAmount = musd.amount
         let collateralOut = musdAmount / exchangeRate
         assertMsg "INSUFFICIENT_LIQUIDITY" (quoteReserve >= collateralOut)
+        
+        -- Archive (consume) the input token
+        archive musdCid
+        
         newPool <- create this with
           baseReserve = baseReserve + musdAmount
           quoteReserve = quoteReserve - collateralOut
         return (newPool, collateralOut)
 
     -- | Swap collateral for mUSD
+    -- Note: For collateral tokens, we trust the operator to verify external deposits
     choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money)
       with
         collateralAmount : Money
         receiver : Party
-      controller receiver
+      controller operator  -- FIX: Operator must verify collateral deposit externally
       do
         let musdOut = collateralAmount * exchangeRate
         assertMsg "INSUFFICIENT_LIQUIDITY" (baseReserve >= musdOut)
@@ -322,7 +339,18 @@ template Vault
     signatory operator, owner
     observer observers
 
-    ensure collateralAmount >= 0.0 && principalDebt >= 0.0
+    -- FIX C-03: Validate VaultConfig bounds to prevent malicious configuration
+    ensure collateralAmount >= 0.0 
+      && principalDebt >= 0.0
+      && config.liquidationThreshold >= 1.0        -- At least 100% collateralization
+      && config.liquidationThreshold <= 10.0       -- Max 1000% (reasonable upper bound)
+      && config.closeFactorBps >= 0
+      && config.closeFactorBps <= 10000            -- Max 100% per liquidation
+      && config.liquidationPenaltyBps >= 0
+      && config.liquidationPenaltyBps <= 2000      -- Max 20% penalty
+      && config.liquidationBonusBps >= 0
+      && config.liquidationBonusBps <= config.liquidationPenaltyBps  -- Bonus <= penalty
+      && config.dustThreshold >= 0.0
 
     -- | Calculate current total debt including accrued interest
     -- FIX M-27: Explicit controller for nonconsuming choice
@@ -347,6 +375,9 @@ template Vault
         borrowAmount : Money
         poolCid : ContractId LiquidityPool
         oracleCid : ContractId PriceOracle
+        musdIssuer : Party          -- Issuer for minting mUSD
+        agreementHash : Text        -- Required for MintedMUSD
+        agreementUri : Text         -- Required for MintedMUSD
         loops : Int
       controller owner
       do
@@ -355,10 +386,12 @@ template Vault
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
         
-        -- Get oracle price
-        price <- exercise oracleCid Oracle_GetPrice with requester = owner
+        -- Get oracle price (FIX H-01: with staleness check - 1 hour max)
+        price <- exercise oracleCid Oracle_GetPrice with 
+          requester = owner
+          maxStaleness = hours 1
         
-        -- Recursive leverage loop
+        -- Recursive leverage loop (FIX C-01: mint actual mUSD before swap)
         let loopFn (col, debt, pCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
@@ -366,9 +399,18 @@ template Vault
               if borrowable < 1.0 
                 then return (col, debt, pCid)
                 else do
-                  -- Swap borrowed mUSD for more collateral
+                  -- FIX C-01: Create actual MintedMUSD token for the borrow
+                  musdCid <- create MintedMUSD with
+                    issuer = musdIssuer
+                    owner = owner
+                    amount = borrowable
+                    blacklisted = False
+                    agreementHash = agreementHash
+                    agreementUri = agreementUri
+                    observers = []
+                  -- Swap actual mUSD token for collateral
                   (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
-                    musdAmount = borrowable
+                    musdCid = musdCid
                     receiver = owner
                   return (col + colOut, debt + borrowable, newPoolCid)
         
@@ -421,8 +463,10 @@ template Vault
         assertMsg "INSUFFICIENT_COLLATERAL" (collateralAmount >= withdrawAmount)
         let newCollateral = collateralAmount - withdrawAmount
         
-        -- Health check
-        price <- exercise oracleCid Oracle_GetPrice with requester = owner
+        -- Health check (FIX H-01: with staleness check)
+        price <- exercise oracleCid Oracle_GetPrice with 
+          requester = owner
+          maxStaleness = hours 1
         let newValue = newCollateral * price
         let totalDebt = principalDebt + accruedInterest
         assertMsg "UNHEALTHY_AFTER_WITHDRAW" (totalDebt == 0.0 || newValue >= totalDebt * config.liquidationThreshold)
@@ -445,8 +489,10 @@ template Vault
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         let totalDebt = principalDebt + accruedInterest + newInterest
         
-        -- Check if vault is liquidatable
-        price <- exercise oracleCid Oracle_GetPrice with requester = liquidator
+        -- Check if vault is liquidatable (FIX H-01: with staleness check)
+        price <- exercise oracleCid Oracle_GetPrice with 
+          requester = liquidator
+          maxStaleness = hours 1
         let colValue = collateralAmount * price
         let healthBefore = colValue / totalDebt
         assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)
@@ -552,6 +598,7 @@ template VaultManager
 -- ============================================================
 
 -- | LiquidationReceipt - Immutable audit trail per liquidation.
+-- FIX C-02: Both vaultOwner and liquidator are signatories for authenticity
 template LiquidationReceipt
   with
     vaultOwner : Party
@@ -566,8 +613,8 @@ template LiquidationReceipt
     isFullLiquidation : Bool
     timestamp : Time
   where
-    signatory liquidator
-    observer vaultOwner
+    signatory vaultOwner, liquidator  -- FIX C-02: Both parties sign
+    observer ([] : [Party])  -- No observers needed, both parties are signatories
 
 -- ============================================================
 --                     7. LIQUIDATION ORDER
@@ -789,15 +836,17 @@ template CantonSMUSD
 
     -- | Get current share price
     -- FIX M-27: Explicit controller for nonconsuming choice
+    -- FIX H-02: Uses virtual shares to prevent dilution attack
     nonconsuming choice SMUSD_GetSharePrice : Money
       with
         requester : Party
       controller requester
       do
         assertMsg "NOT_AUTHORIZED" (requester == operator || requester `elem` observers)
-        if totalShares == 0.0
-          then return 1.0
-          else return (totalAssets / totalShares)
+        -- FIX H-02: Virtual offset prevents dilution attack (similar to ERC-4626 fix)
+        let virtualShares = totalShares + 1000.0
+        let virtualAssets = totalAssets + 1000.0
+        return (virtualAssets / virtualShares)
 
     -- | Deposit mUSD → receive smUSD shares
     choice SMUSD_Deposit : (ContractId CantonSMUSD, ContractId CooldownTicket)
@@ -811,8 +860,10 @@ template CantonSMUSD
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
         assertMsg "MAX_DEPOSITS_EXCEEDED" (totalAssets + musd.amount <= config.maxTotalDeposits)
         
-        -- Calculate shares
-        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        -- FIX H-02: Calculate shares using virtual offset to prevent dilution attack
+        let virtualShares = totalShares + 1000.0
+        let virtualAssets = totalAssets + 1000.0
+        let sharePrice = virtualAssets / virtualShares
         let newShares = musd.amount / sharePrice
         
         -- Burn mUSD
@@ -991,6 +1042,7 @@ template TicketTransferProposal
 -- ============================================================
 
 -- | BridgeService - Coordinates all bridge operations.
+-- FIX H-04: Added ensure clause for proper bounds validation
 template BridgeService
   with
     operator : Party
@@ -1004,6 +1056,14 @@ template BridgeService
   where
     signatory operator
     observer validators, observers
+
+    -- FIX H-04: Ensure clause validates requiredSignatures bounds
+    ensure requiredSignatures > 0
+      && requiredSignatures <= length validators
+      && length validators > 0
+      && totalBridgedIn >= 0.0
+      && totalBridgedOut >= 0.0
+      && lastNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)

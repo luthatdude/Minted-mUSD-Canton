@@ -105,25 +105,42 @@ jobs:
   daml:
     name: DAML Build & Test
     runs-on: ubuntu-latest
+    env:
+      DAML_SDK_VERSION: "2.10.3"
+      DAML_HOME: /home/runner/.daml
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install DAML SDK 2.10.3
+      - name: Install DAML SDK ${{ env.DAML_SDK_VERSION }}
         run: |
-          curl -sSL https://get.daml.com/ | sh -s 2.10.3
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          # Create DAML directories
+          mkdir -p "$DAML_HOME/bin" "$DAML_HOME/sdk/$DAML_SDK_VERSION"
+          
+          # Download and run installer with TERM set
+          export TERM=xterm
+          curl -sSL https://get.daml.com/ | bash -s $DAML_SDK_VERSION
+        env:
+          TERM: xterm
+
+      - name: Add DAML to PATH
+        run: echo "$DAML_HOME/bin" >> $GITHUB_PATH
 
       - name: Verify DAML installation
         run: |
+          export PATH="$DAML_HOME/bin:$PATH"
           daml version
 
       - name: Build DAML
         working-directory: daml
-        run: daml build
+        run: |
+          export PATH="$DAML_HOME/bin:$PATH"
+          daml build
 
       - name: Run DAML tests
         working-directory: daml
-        run: daml test
+        run: |
+          export PATH="$DAML_HOME/bin:$PATH"
+          daml test
 
   # ============================================================
   #  RELAY: TypeScript Build & Lint
