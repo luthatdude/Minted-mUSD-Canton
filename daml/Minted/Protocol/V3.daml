@@ -144,9 +144,14 @@ template MUSDSupplyService
           agreementUri = agreementUri
           observers = []
         
-        -- FIX DL-C01: Consume the approval if used
+        -- FIX H-02: Reduce approval by consumed amount (not remove entirely)
+        -- This allows a $10M approval to be used across multiple mints
+        let reduceApproval (p, amt) = 
+              if p == borrower && amt >= borrowAmount
+              then (p, amt - borrowAmount)  -- Reduce by consumed amount
+              else (p, amt)
         let newPendingMints = if isLargeMint && hasApproval
-              then filter (\(p, _) -> p /= borrower) pendingLargeMints
+              then filter (\(_, amt) -> amt >= largeMintThreshold) (map reduceApproval pendingLargeMints)
               else pendingLargeMints
         
         newService <- create this with
