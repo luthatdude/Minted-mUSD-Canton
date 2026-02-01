@@ -360,7 +360,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      *      APY = (1 + rate_to_expiry)^(365/days_to_expiry) - 1
      *      Simplified using: ln(APY + 1) ≈ lnImpliedRate * 365 / days_to_expiry
      */
+    // slither-disable-next-line divide-before-multiply
     function _lnRateToAPY(uint256 lnImpliedRate, uint256 timeToExpiry) internal pure returns (uint256) {
+        // slither-disable-next-line incorrect-equality
         if (timeToExpiry == 0) return 0;
 
         // Annualize the ln rate

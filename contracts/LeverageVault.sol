@@ -425,6 +425,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Swap mUSD to collateral via Uniswap V3
     function _swapMusdToCollateral(address collateralToken, uint256 musdAmount) internal returns (uint256 collateralReceived) {
+        // slither-disable-next-line incorrect-equality
         if (musdAmount == 0) return 0;
 
         // Get expected output for slippage calculation
@@ -463,6 +464,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Swap collateral to mUSD via Uniswap V3
     /// FIX C-1: Revert on swap failure instead of returning 0 to prevent fund loss
     function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount) internal returns (uint256 musdReceived) {
+        // slither-disable-next-line incorrect-equality
         if (collateralAmount == 0) return 0;
 
         // Get expected output
@@ -522,6 +524,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Calculate effective leverage for a position
     function getEffectiveLeverage(address user) external view returns (uint256 leverageX10) {
         LeveragePosition memory pos = positions[user];
+        // slither-disable-next-line incorrect-equality
         if (pos.initialDeposit == 0) return 0;
         return (pos.totalCollateral * 10) / pos.initialDeposit;
     }

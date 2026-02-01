@@ -16,6 +16,8 @@ interface IMintableToken {
 
 /// @title MockSwapRouter
 /// @notice Mock Uniswap V3 router for testing LeverageVault
+/// @dev Test-only contract, locked ether is acceptable
+// slither-disable-next-line locked-ether
 contract MockSwapRouter {
     using SafeERC20 for IERC20;
 
