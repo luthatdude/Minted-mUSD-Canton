@@ -1,18 +1,18 @@
 -- | CantonSMUSD
--- Canton-side staked mUSD (smUSD) with yield synchronized from Ethereum
+-- Canton-side staked mUSD (smUSD) with UNIFIED yield from Ethereum
 --
 -- Architecture:
---   smUSD yield on Canton is synchronized from Ethereum via attestations.
---   The bridge reports total yield, Canton smUSD applies it.
+--   smUSD yield on Canton uses a GLOBAL share price synchronized from Ethereum.
+--   This ensures equal yield distribution across both chains.
 --
---   ERC-4626 equivalent share price model:
---     sharePrice = totalAssets / totalShares
+--   UNIFIED share price model:
+--     globalSharePrice = TreasuryV2.totalValue() / (ethShares + cantonShares)
 --
 --   When Ethereum Treasury generates yield:
---     1. Yield attestation arrives via BLEBridgeProtocol.YieldAttestation
---     2. Operator calls SyncYield with verified payload
---     3. totalAssets increases → sharePrice increases
---     4. Users unstake at new share price → receive more mUSD than deposited
+--     1. YieldSyncService calculates global share price on Ethereum
+--     2. Global share price is synced to Canton via SyncGlobalSharePrice
+--     3. All smUSD holders on both chains benefit equally
+--     4. Users unstake at global share price → same yield rate everywhere
 
 module CantonSMUSD where
 
@@ -95,14 +95,17 @@ template CantonSMUSDTransferProposal
 --                     SECTION 2: STAKING SERVICE
 -- ============================================================
 
--- | Canton smUSD staking service.
--- Manages the share price model and yield sync from Ethereum.
+-- | Canton smUSD staking service with UNIFIED cross-chain yield.
+-- Uses global share price synced from Ethereum for equal yield distribution.
 template CantonStakingService
   with
     operator : Party
-    totalShares : Money         -- Total smUSD shares outstanding
-    totalAssets : Money         -- Total mUSD value backing all shares
-    lastYieldEpoch : Int        -- Last synced yield epoch from Ethereum
+    totalShares : Money         -- Total smUSD shares on Canton
+    -- UNIFIED YIELD: Global share price from Ethereum (includes all chains)
+    globalSharePrice : Money    -- Synced from Ethereum: globalAssets / globalShares
+    globalTotalAssets : Money   -- Total assets backing all shares (both chains)
+    globalTotalShares : Money   -- Total shares across both chains
+    lastSyncEpoch : Int         -- Last synced epoch from Ethereum
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
     paused : Bool
@@ -114,19 +117,16 @@ template CantonStakingService
     signatory operator
     observer observers
 
-    ensure totalShares >= 0.0 && totalAssets >= 0.0
+    ensure totalShares >= 0.0 && globalSharePrice > 0.0
 
-    -- | Current share price: totalAssets / totalShares
-    -- Returns 1.0 if no shares exist (initial price)
+    -- | Current share price: uses GLOBAL share price for unified yield
     nonconsuming choice GetSharePrice : Money
       controller operator
       do
-        if totalShares == 0.0
-          then return 1.000000000000000000
-          else return (totalAssets / totalShares)
+        return globalSharePrice
 
-    -- | Stake: mUSD → smUSD shares
-    -- User deposits mUSD, receives shares at current share price
+    -- | Stake: mUSD → smUSD shares at GLOBAL share price
+    -- User deposits mUSD, receives shares at the unified global share price
     choice Stake : (ContractId CantonStakingService, ContractId CantonSMUSD)
       with
         user : Party
@@ -140,11 +140,8 @@ template CantonStakingService
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
         assertMsg "BELOW_MIN_DEPOSIT" (musd.amount >= minDeposit)
 
-        -- Calculate shares: amount / sharePrice
-        let sharePrice = if totalShares == 0.0
-              then 1.000000000000000000
-              else totalAssets / totalShares
-        let newShares = musd.amount / sharePrice
+        -- Calculate shares using GLOBAL share price
+        let newShares = musd.amount / globalSharePrice
 
         -- Lock the mUSD (burn from user, add to pool)
         exercise musdCid CantonMUSD_Burn
@@ -154,17 +151,16 @@ template CantonStakingService
           issuer = operator
           owner = user
           shares = newShares
-          entrySharePrice = sharePrice
+          entrySharePrice = globalSharePrice
 
-        -- Update pool state
+        -- Update pool state (local shares only - global sync happens via bridge)
         newService <- create this with
           totalShares = totalShares + newShares
-          totalAssets = totalAssets + musd.amount
 
         return (newService, smusdCid)
 
-    -- | Unstake: smUSD shares → mUSD
-    -- User redeems shares at current share price (which includes yield)
+    -- | Unstake: smUSD shares → mUSD at GLOBAL share price
+    -- User redeems shares at the unified global share price (includes all yield)
     choice Unstake : (ContractId CantonStakingService, ContractId CantonMUSD)
       with
         user : Party
@@ -176,18 +172,13 @@ template CantonStakingService
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
 
-        -- Calculate mUSD value: shares × sharePrice
-        let sharePrice = if totalShares == 0.0
-              then 1.000000000000000000
-              else totalAssets / totalShares
-        let musdAmount = smusd.shares * sharePrice
-
-        assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
+        -- Calculate mUSD value using GLOBAL share price
+        let musdAmount = smusd.shares * globalSharePrice
 
         -- Burn smUSD shares
         archive smusdCid
 
-        -- Mint mUSD to user (at current share price — includes yield)
+        -- Mint mUSD to user (at global share price — includes cross-chain yield)
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -198,28 +189,46 @@ template CantonStakingService
         -- Update pool state
         newService <- create this with
           totalShares = totalShares - smusd.shares
-          totalAssets = totalAssets - musdAmount
 
         return (newService, musdCid)
 
-    -- | Sync yield from Ethereum via attestation.
-    -- Called by operator after a YieldAttestation is finalized.
-    -- Increases totalAssets → increases share price → smUSD holders profit.
-    choice SyncYield : ContractId CantonStakingService
+    -- | Sync global share price from Ethereum (replaces old SyncYield)
+    -- Called by operator after YieldSyncService calculates global share price
+    choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
-        newTotalTreasuryAssets : Money  -- Verified total from YieldAttestation
-        yieldAccrued : Money            -- New yield since last sync
-        epochNumber : Int               -- Must be sequential
+        newGlobalSharePrice : Money   -- Global share price from Ethereum
+        newGlobalTotalAssets : Money  -- Total assets across both chains
+        newGlobalTotalShares : Money  -- Total shares across both chains
+        epochNumber : Int             -- Must be sequential
       controller operator
       do
-        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
-        assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
+        assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
+        assertMsg "SHARE_PRICE_DECREASED" (newGlobalSharePrice >= globalSharePrice)  -- Yield only increases
 
-        -- Increase total assets by the yield amount
-        -- This raises the share price for all smUSD holders
         create this with
-          totalAssets = totalAssets + yieldAccrued
-          lastYieldEpoch = epochNumber
+          globalSharePrice = newGlobalSharePrice
+          globalTotalAssets = newGlobalTotalAssets
+          globalTotalShares = newGlobalTotalShares
+          lastSyncEpoch = epochNumber
+
+    -- | Legacy SyncYield for backwards compatibility (deprecated)
+    choice SyncYield : ContractId CantonStakingService
+      with
+        newTotalTreasuryAssets : Money
+        yieldAccrued : Money
+        epochNumber : Int
+      controller operator
+      do
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
+        -- Convert to global share price model
+        let newSharePrice = if globalTotalShares > 0.0
+              then newTotalTreasuryAssets / globalTotalShares
+              else globalSharePrice
+        create this with
+          globalSharePrice = newSharePrice
+          globalTotalAssets = newTotalTreasuryAssets
+          lastSyncEpoch = epochNumber
 
     -- | Admin: Pause/unpause
     choice Staking_SetPaused : ContractId CantonStakingService

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// BLE Protocol - Fixed Version
+// BLE Protocol - Fixed Version with Unified Cross-Chain Yield
 // Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
 //        S-03 (Donation attack mitigation), S-04 (SafeERC20)
+// Feature: Unified share price across Ethereum and Canton for equal yield distribution
 
 pragma solidity 0.8.26;
 
@@ -16,6 +17,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
@@ -23,9 +25,24 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // FIX M-3: Maximum yield per distribution (10% of total assets) to prevent excessive dilution
     uint256 public constant MAX_YIELD_BPS = 1000; // 10% max yield per distribution
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // UNIFIED CROSS-CHAIN YIELD: Canton shares tracking
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// @notice Total smUSD shares on Canton (synced via bridge attestation)
+    uint256 public cantonTotalShares;
+    
+    /// @notice Last sync epoch from Canton
+    uint256 public lastCantonSyncEpoch;
+    
+    /// @notice Treasury contract for global asset value
+    address public treasury;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
+    event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
 
     constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -117,6 +134,86 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // View function to check if withdrawal is allowed
     function canWithdraw(address account) external view returns (bool) {
         return block.timestamp >= lastDeposit[account] + WITHDRAW_COOLDOWN;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // UNIFIED CROSS-CHAIN YIELD: Global share price calculation
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Set the treasury address for global asset calculation
+    function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_treasury != address(0), "ZERO_ADDRESS");
+        address oldTreasury = treasury;
+        treasury = _treasury;
+        emit TreasuryUpdated(oldTreasury, _treasury);
+    }
+
+    /// @notice Sync Canton shares from bridge attestation
+    /// @param _cantonShares Total smUSD shares on Canton
+    /// @param epoch Sync epoch (must be sequential)
+    function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
+        require(epoch > lastCantonSyncEpoch, "EPOCH_NOT_SEQUENTIAL");
+        
+        cantonTotalShares = _cantonShares;
+        lastCantonSyncEpoch = epoch;
+        
+        emit CantonSharesSynced(_cantonShares, epoch, globalSharePrice());
+    }
+
+    /// @notice Get global total shares across both chains
+    function globalTotalShares() public view returns (uint256) {
+        return totalSupply() + cantonTotalShares;
+    }
+
+    /// @notice Get global total assets from Treasury
+    /// @dev Falls back to local totalAssets if treasury not set
+    function globalTotalAssets() public view returns (uint256) {
+        if (treasury == address(0)) {
+            return totalAssets();
+        }
+        // Treasury.totalValue() returns total USDC backing all mUSD
+        // slither-disable-next-line calls-loop
+        (bool success, bytes memory data) = treasury.staticcall(
+            abi.encodeWithSignature("totalValue()")
+        );
+        if (success && data.length >= 32) {
+            return abi.decode(data, (uint256));
+        }
+        return totalAssets();
+    }
+
+    /// @notice Global share price used for both chains
+    /// @dev sharePrice = globalTotalAssets / globalTotalShares
+    /// @return Share price in asset decimals (6 for USDC)
+    function globalSharePrice() public view returns (uint256) {
+        uint256 shares = globalTotalShares();
+        if (shares == 0) {
+            return 10 ** _decimalsOffset(); // 1.0 with offset
+        }
+        return (globalTotalAssets() * (10 ** _decimalsOffset())) / shares;
+    }
+
+    /// @notice Ethereum-only shares (for cross-chain sync)
+    function ethereumTotalShares() external view returns (uint256) {
+        return totalSupply();
+    }
+
+    /// @notice Override convertToShares to use global share price
+    function convertToShares(uint256 assets) public view override returns (uint256) {
+        uint256 shares = globalTotalShares();
+        if (shares == 0) {
+            return assets * (10 ** _decimalsOffset());
+        }
+        return (assets * shares) / globalTotalAssets();
+    }
+
+    /// @notice Override convertToAssets to use global share price
+    function convertToAssets(uint256 shares) public view override returns (uint256) {
+        uint256 totalShares = globalTotalShares();
+        if (totalShares == 0) {
+            return shares / (10 ** _decimalsOffset());
+        }
+        return (shares * globalTotalAssets()) / totalShares;
     }
 
     // ============================================================
