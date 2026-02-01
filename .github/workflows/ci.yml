@@ -105,13 +105,31 @@ jobs:
   daml:
     name: DAML Build & Test
     runs-on: ubuntu-latest
+    env:
+      DAML_SDK_VERSION: "2.10.3"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install DAML SDK 2.10.3
+      - name: Install DAML SDK ${{ env.DAML_SDK_VERSION }}
         run: |
-          curl -sSL https://get.daml.com/ | sh -s 2.10.3
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          # Set TERM for tput compatibility in CI
+          export TERM=dumb
+          
+          # Direct download method for CI environments (more reliable than get.daml.com script)
+          DAML_HOME="$HOME/.daml"
+          mkdir -p "$DAML_HOME/bin"
+          
+          # Download SDK tarball directly from GitHub releases
+          SDK_URL="https://github.com/digital-asset/daml/releases/download/v${DAML_SDK_VERSION}/daml-sdk-${DAML_SDK_VERSION}-linux.tar.gz"
+          echo "Downloading DAML SDK ${DAML_SDK_VERSION} from $SDK_URL"
+          
+          curl -sSL "$SDK_URL" -o /tmp/daml-sdk.tar.gz
+          
+          # Extract to DAML home
+          tar -xzf /tmp/daml-sdk.tar.gz -C "$DAML_HOME" --strip-components=1
+          
+          # Add to PATH for subsequent steps
+          echo "$DAML_HOME/bin" >> $GITHUB_PATH
 
       - name: Verify DAML installation
         run: |
