@@ -3,8 +3,9 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /**
  * @title IWormhole
@@ -53,9 +54,15 @@ interface IDirectMint {
  * @title TreasuryReceiver
  * @notice Receives bridged USDC from L2 DepositRouters and forwards to DirectMint
  * @dev Deploy this on Ethereum mainnet to receive cross-chain deposits
+ * @dev FIX H-02: Migrated from Ownable to AccessControl for role-based access
+ * @dev FIX H-02: Added Pausable for emergency controls
  */
-contract TreasuryReceiver is Ownable, ReentrancyGuard {
+contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
+
+    // ============ Roles ============
+    bytes32 public constant BRIDGE_ADMIN_ROLE = keccak256("BRIDGE_ADMIN_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     // ============ State Variables ============
     
@@ -124,7 +131,7 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         address _tokenBridge,
         address _directMint,
         address _treasury
-    ) Ownable(msg.sender) {
+    ) {
         if (_usdc == address(0)) revert InvalidAddress();
         if (_wormhole == address(0)) revert InvalidAddress();
         if (_tokenBridge == address(0)) revert InvalidAddress();
@@ -136,6 +143,11 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         tokenBridge = ITokenBridge(_tokenBridge);
         directMint = _directMint;
         treasury = _treasury;
+        
+        // FIX H-02: Grant roles
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(BRIDGE_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
     }
 
     // ============ External Functions ============
@@ -143,8 +155,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     /**
      * @notice Complete a cross-chain deposit and mint mUSD
      * @param encodedVAA Wormhole VAA from the source chain
+     * @dev FIX H-02: Added whenNotPaused for emergency controls
      */
-    function receiveAndMint(bytes calldata encodedVAA) external nonReentrant {
+    function receiveAndMint(bytes calldata encodedVAA) external nonReentrant whenNotPaused {
         // Parse and verify the VAA
         (IWormhole.VM memory vm, bool valid, string memory reason) = wormhole.parseAndVerifyVM(encodedVAA);
         if (!valid) revert InvalidVAA();
@@ -203,8 +216,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
      * @notice Authorize a DepositRouter on a source chain
      * @param chainId Wormhole chain ID
      * @param routerAddress Address of the DepositRouter (as bytes32)
+     * @dev FIX H-02: Changed from onlyOwner to role-based access
      */
-    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyOwner {
+    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyRole(BRIDGE_ADMIN_ROLE) {
         authorizedRouters[chainId] = routerAddress;
         emit RouterAuthorized(chainId, routerAddress);
     }
@@ -212,8 +226,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     /**
      * @notice Revoke authorization for a source chain
      * @param chainId Wormhole chain ID
+     * @dev FIX H-02: Changed from onlyOwner to role-based access
      */
-    function revokeRouter(uint16 chainId) external onlyOwner {
+    function revokeRouter(uint16 chainId) external onlyRole(BRIDGE_ADMIN_ROLE) {
         delete authorizedRouters[chainId];
         emit RouterRevoked(chainId);
     }
@@ -221,8 +236,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     /**
      * @notice Update DirectMint address
      * @param newDirectMint New DirectMint contract address
+     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
      */
-    function setDirectMint(address newDirectMint) external onlyOwner {
+    function setDirectMint(address newDirectMint) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newDirectMint == address(0)) revert InvalidAddress();
         address old = directMint;
         directMint = newDirectMint;
@@ -232,8 +248,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     /**
      * @notice Update Treasury address
      * @param newTreasury New Treasury address
+     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
      */
-    function setTreasury(address newTreasury) external onlyOwner {
+    function setTreasury(address newTreasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newTreasury == address(0)) revert InvalidAddress();
         address old = treasury;
         treasury = newTreasury;
@@ -277,9 +294,23 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
      * @param token Token to withdraw
      * @param to Recipient
      * @param amount Amount to withdraw
+     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner {
+    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
+    }
+
+    // ============ Emergency Controls (FIX H-02) ============
+    
+    /// @notice Pause all receiving and minting
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause operations
+    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }

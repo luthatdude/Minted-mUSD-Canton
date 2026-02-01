@@ -109,7 +109,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        require(_minSigs > 0, "INVALID_MIN_SIGS");
+        // FIX C-01: Enforce minimum signature threshold of 2 at initialization
+        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
         require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
         require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
         require(_dailyCapIncreaseLimit > 0, "INVALID_DAILY_LIMIT");
@@ -135,8 +136,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     // FIX S-M02: Emit event for admin parameter change
+    // FIX C-01: Enforce minimum signature threshold of 2 to prevent single-point compromise
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_minSigs > 0, "INVALID_MIN_SIGS");
+        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }

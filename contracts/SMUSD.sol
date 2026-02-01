@@ -132,7 +132,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause all deposits and withdrawals
-    /// FIX R-01: Require DEFAULT_ADMIN_ROLE for unpause (separation of duties)
+    /// @dev FIX C-01 / R-01: Requires DEFAULT_ADMIN_ROLE for separation of duties
+    /// This ensures a compromised PAUSER cannot immediately re-enable operations
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }

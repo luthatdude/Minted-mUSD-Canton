@@ -277,14 +277,14 @@ template SupplyCapAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : SupplyCapPayload
-    signedValidators : [Party]    -- FIX M-26: Track who has already signed
+    signedValidators : [Party]    -- FIX M-26 / C-01: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
     ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
 
-    -- FIX M-26: Changed from nonconsuming to consuming to prevent double-signing
+    -- FIX M-26 / C-01: Changed to consuming choice to prevent double-signing
     choice SupplyCap_Sign : (ContractId SupplyCapAttestation, ContractId SupplyCapSignature)
       with
         validator : Party
@@ -292,7 +292,7 @@ template SupplyCapAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX M-26: Prevent duplicate signatures
+        -- FIX M-26 / C-01: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         -- FIX M-29: Check expiration
@@ -306,7 +306,7 @@ template SupplyCapAttestation
           ecdsaSignature
           nonce = payload.nonce
 
-        -- FIX M-26: Return updated attestation with validator added
+        -- Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
@@ -326,9 +326,9 @@ template SupplyCapAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
+        -- FIX M-26: Validate by nonce (contract ID changes on each consuming sign)
         let sigNonces = map (.nonce) sigs
 
-        -- FIX M-26: Validate by nonce (contract ID changes on each consuming sign)
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
@@ -375,7 +375,7 @@ template YieldAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : YieldPayload
-    signedValidators : [Party]    -- FIX M-27: Track who has already signed
+    signedValidators : [Party]    -- FIX M-27 / C-02: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
@@ -383,7 +383,7 @@ template YieldAttestation
     -- Treasury assets must be >= mUSD supply (no undercollateralization)
     ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
 
-    -- FIX M-27: Changed from nonconsuming to consuming to prevent double-signing
+    -- FIX M-27 / C-02: Changed to consuming choice to prevent double-signing
     choice Yield_Sign : (ContractId YieldAttestation, ContractId YieldSignature)
       with
         validator : Party
@@ -391,7 +391,7 @@ template YieldAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX M-27: Prevent duplicate signatures
+        -- FIX M-27 / C-02: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         -- FIX M-29: Check expiration
@@ -405,7 +405,7 @@ template YieldAttestation
           ecdsaSignature
           nonce = payload.nonce
 
-        -- FIX M-27: Return updated attestation with validator added
+        -- Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
@@ -425,9 +425,9 @@ template YieldAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
+        -- FIX M-27: Validate by nonce (contract ID changes on each consuming sign)
         let sigNonces = map (.nonce) sigs
 
-        -- FIX M-27: Validate by nonce (contract ID changes on each consuming sign)
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)

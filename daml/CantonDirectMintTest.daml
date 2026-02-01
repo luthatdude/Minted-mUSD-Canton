@@ -340,9 +340,9 @@ supplyCapSyncTest = script do
       aggregator
       validatorGroup = validators
       payload
-      signedValidators = []  -- FIX M-26: Initialize empty
+      signedValidators = []  -- FIX M-26 / C-01: Initialize empty
 
-  -- FIX M-26: SupplyCap_Sign is now consuming, returns (newAtt, sig)
+  -- FIX M-26 / C-01: SupplyCap_Sign is now consuming, returns (newAtt, sig)
   (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid SupplyCap_Sign with
       validator = validator1
@@ -399,9 +399,9 @@ yieldAttestationTest = script do
       aggregator
       validatorGroup = validators
       payload
-      signedValidators = []  -- FIX M-27: Initialize empty
+      signedValidators = []  -- FIX M-27 / C-02: Initialize empty
 
-  -- FIX M-27: Yield_Sign is now consuming, returns (newAtt, sig)
+  -- FIX M-27 / C-02: Yield_Sign is now consuming, returns (newAtt, sig)
   (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid Yield_Sign with
       validator = validator1

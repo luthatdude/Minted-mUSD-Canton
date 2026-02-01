@@ -54,6 +54,20 @@ data:
           admin-api {
             port = 5012
             address = "127.0.0.1"  # Admin API is localhost-only — never expose externally
+            
+            # FIX IF-H03: Enable TLS client certificate authentication for Admin API
+            # Requires mounting admin client certificates
+            tls {
+              cert-chain-file = "/etc/canton/tls/admin-tls.crt"
+              private-key-file = "/etc/canton/tls/admin-tls.key"
+              trust-collection-file = "/etc/canton/tls/admin-ca.crt"
+              client-auth = {
+                type = require
+                admin-client {
+                  cert-chain-file = "/etc/canton/tls/admin-client.crt"
+                }
+              }
+            }
           }
 
           parameters {

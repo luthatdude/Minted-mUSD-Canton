@@ -39,6 +39,72 @@ type Money = Numeric 18
 type Bps = Int
 
 -- ============================================================
+--                     0. CANTON USDC (Deposit Asset)
+-- ============================================================
+
+-- | CantonUSDC - Represents USDC deposited on Canton side.
+-- FIX H-01: Added to V3 for deposit verification in CantonMint_Mint
+template CantonUSDC
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+  where
+    signatory issuer, owner
+    ensure amount > 0.0
+
+-- ============================================================
+--                     0b. MUSD SUPPLY SERVICE (Supply Cap Tracking)
+-- ============================================================
+
+-- | MUSDSupplyService - Global supply cap tracking for vault borrows.
+-- FIX DL-C03: Ensures Vault.AdjustLeverage respects global supply limits.
+template MUSDSupplyService
+  with
+    operator : Party
+    supplyCap : Money
+    currentSupply : Money
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure supplyCap >= currentSupply
+
+    -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
+    -- FIX DL-C03: This enables vault leverage to respect global supply caps
+    choice SupplyService_VaultMint : (ContractId MUSDSupplyService, ContractId MintedMUSD)
+      with
+        borrower : Party
+        borrowAmount : Money
+        agreementHash : Text
+        agreementUri : Text
+      controller operator
+      do
+        assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = borrower
+          amount = borrowAmount
+          blacklisted = False
+          agreementHash = agreementHash
+          agreementUri = agreementUri
+          observers = []
+        newService <- create this with
+          currentSupply = currentSupply + borrowAmount
+        return (newService, musdCid)
+
+    -- | Update the supply cap (admin only)
+    choice SupplyService_UpdateCap : ContractId MUSDSupplyService
+      with
+        newCap : Money
+      controller operator
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
+
+-- ============================================================
 --                     1. MINTED MUSD TOKEN
 -- ============================================================
 
@@ -391,18 +457,15 @@ template Vault
 
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
-    -- FIX DL-C2: Added supplyCap and currentSupply parameters to enforce global mUSD supply cap.
-    -- The operator must pass the current CantonDirectMint service CID so the vault
-    -- can verify supply capacity before minting. The mUSD minted in the loop is transient
-    -- (immediately swapped for collateral and consumed), but we enforce the cap to prevent
-    -- unbounded issuance.
-    choice AdjustLeverage : ContractId Vault
+    -- FIX DL-C2 / DL-C03: Requires MUSDSupplyService CID for supply-cap-tracked minting.
+    -- Enforces global mUSD supply cap via centralized supply service.
+    choice AdjustLeverage : (ContractId Vault, ContractId MUSDSupplyService)
       with
         depositAmount : Money
         borrowAmount : Money
         poolCid : ContractId LiquidityPool
         oracleCid : ContractId PriceOracle
-        musdIssuer : Party          -- Issuer for minting mUSD
+        supplyServiceCid : ContractId MUSDSupplyService  -- FIX DL-C03: Supply cap tracking
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
@@ -421,46 +484,39 @@ template Vault
           requester = owner
           maxStaleness = hours 1
 
-        -- Recursive leverage loop (FIX C-01: mint actual mUSD before swap)
-        -- FIX DL-C2: Track cumulative minted amount and enforce cap
-        let loopFn (col, debt, pCid, totalMinted) _ = do
+        -- Recursive leverage loop (FIX C-01: mint via SupplyService for supply tracking)
+        let loopFn (col, debt, pCid, svcCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
               let borrowable = maxDebt - debt
               if borrowable < 1.0
-                then return (col, debt, pCid, totalMinted)
+                then return (col, debt, pCid, svcCid)
                 else do
-                  -- FIX DL-C2: Enforce supply cap on cumulative minting
-                  let cappedBorrow = min borrowable (maxBorrowable - totalMinted)
-                  if cappedBorrow < 1.0
-                    then return (col, debt, pCid, totalMinted)
-                    else do
-                      -- FIX C-01: Create actual MintedMUSD token for the borrow
-                      musdCid <- create MintedMUSD with
-                        issuer = musdIssuer
-                        owner = owner
-                        amount = cappedBorrow
-                        blacklisted = False
-                        agreementHash = agreementHash
-                        agreementUri = agreementUri
-                        observers = []
-                      -- Swap actual mUSD token for collateral
-                      (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
-                        musdCid = musdCid
-                        receiver = owner
-                      return (col + colOut, debt + cappedBorrow, newPoolCid, totalMinted + cappedBorrow)
+                  -- FIX DL-C03: Mint via MUSDSupplyService for supply cap enforcement
+                  (newSvcCid, musdCid) <- exercise svcCid SupplyService_VaultMint with
+                    borrower = owner
+                    borrowAmount = borrowable
+                    agreementHash = agreementHash
+                    agreementUri = agreementUri
+                  -- Swap actual mUSD token for collateral
+                  (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
+                    musdCid = musdCid
+                    receiver = owner
+                  return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
 
-        (finalCol, finalDebt, _, _) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, 0.0) [1..loops]
+        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, supplyServiceCid) [1..loops]
 
         -- Health check
         let finalValue = finalCol * price
         assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
 
         now <- getTime
-        create this with
+        vaultCid <- create this with
           collateralAmount = finalCol
           principalDebt = finalDebt
           lastInterestUpdate = now
+        
+        return (vaultCid, finalSvcCid)
 
     -- | Repay debt
     choice Vault_Repay : ContractId Vault
@@ -563,8 +619,9 @@ template Vault
           accruedInterest = 0.0
           lastInterestUpdate = now
         
-        -- Create immutable receipt
+        -- Create immutable receipt (FIX H-02: operator signs the receipt)
         receipt <- create LiquidationReceipt with
+          operator  -- FIX H-02: Use vault's operator as receipt signer
           vaultOwner = owner
           liquidator
           debtRepaid = actualRepay
@@ -637,9 +694,12 @@ template VaultManager
 -- ============================================================
 
 -- | LiquidationReceipt - Immutable audit trail per liquidation.
--- FIX C-02: Both vaultOwner and liquidator are signatories for authenticity
+-- FIX H-02: Changed to operator-signed pattern to make receipt creatable
+-- The operator (protocol) signs the receipt, with both vaultOwner and liquidator as observers
+-- This allows the receipt to be created within the Vault.Liquidate choice context
 template LiquidationReceipt
   with
+    operator : Party          -- FIX H-02: Protocol operator signs
     vaultOwner : Party
     liquidator : Party
     debtRepaid : Money
@@ -652,8 +712,8 @@ template LiquidationReceipt
     isFullLiquidation : Bool
     timestamp : Time
   where
-    signatory vaultOwner, liquidator  -- FIX C-02: Both parties sign
-    observer ([] : [Party])  -- No observers needed, both parties are signatories
+    signatory operator  -- FIX H-02: Only operator signs (can create in Vault context)
+    observer vaultOwner, liquidator  -- Both parties can see the receipt
 
 -- ============================================================
 --                     7. LIQUIDATION ORDER
@@ -742,18 +802,26 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
-    -- FIX DL-C3: Changed controller from user to operator. Only the operator can trigger
-    -- minting after verifying the deposit externally (e.g., via USDC deposit confirmation).
+    -- FIX DL-C3 / H-01: Requires actual CantonUSDC token to verify deposit.
     -- Previously any user could claim arbitrary depositAmount with no proof of deposit.
     choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
-        depositAmount : Money
-      controller operator
+        depositCid : ContractId CantonUSDC  -- FIX H-01: Require actual token
+      controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
+        
+        -- FIX H-01: Fetch and verify the deposit token
+        deposit <- fetch depositCid
+        assertMsg "DEPOSIT_OWNER_MISMATCH" (deposit.owner == user)
+        let depositAmount = deposit.amount
+        
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
+        
+        -- FIX H-01: Archive (consume) the deposit token
+        archive depositCid
         
         let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
         let netAmount = depositAmount - feeAmount
@@ -1112,8 +1180,9 @@ template BridgeService
       && totalBridgedOut >= 0.0
       && lastNonce >= 0
 
-    -- | FIX C-4: Receive mUSD from Ethereum via proposal pattern.
+    -- | FIX C-4 / DL-C02: Receive mUSD from Ethereum via proposal pattern.
     -- Creates a BridgeInMintProposal that recipient must accept to become MintedMUSD signatory.
+    -- Added validator membership verification for signer authorization.
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId BridgeInMintProposal)
       with
         attestationCid : ContractId AttestationRequest
@@ -1128,6 +1197,10 @@ template BridgeService
         attestation <- fetch attestationCid
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+
+        -- FIX DL-C02: Verify signers are authorized validators
+        let sigParties = Set.toList attestation.collectedSignatures
+        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
 
         -- Verify sufficient signatures
         let sigCount = Set.size attestation.collectedSignatures
