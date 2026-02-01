@@ -204,12 +204,14 @@ contract TreasuryV2 is
 
     /**
      * @notice Total value across reserve + all strategies
+     * @dev Loops over bounded, admin-controlled strategies array (max ~10 strategies)
      */
     function totalValue() public view returns (uint256) {
         uint256 total = reserveBalance();
 
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
+                // slither-disable-next-line calls-loop
                 total += IStrategy(strategies[i].strategy).totalValue();
             }
         }
@@ -274,6 +276,7 @@ contract TreasuryV2 is
             _targetBps[i] = strategies[i].targetBps;
 
             if (total > 0 && strategies[i].active) {
+                // slither-disable-next-line calls-loop
                 uint256 stratValue = IStrategy(strategies[i].strategy).totalValue();
                 currentBps[i] = (stratValue * BPS) / total;
             }
@@ -511,6 +514,7 @@ contract TreasuryV2 is
                 address strat = strategies[i].strategy;
                 asset.forceApprove(strat, share);
 
+                // slither-disable-next-line calls-loop
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
                     // FIX H-04: Clear approval after successful deposit to prevent dangling approvals
@@ -538,6 +542,7 @@ contract TreasuryV2 is
         uint256 lastActiveIdx = type(uint256).max;
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
+                // slither-disable-next-line calls-loop
                 totalStratValue += IStrategy(strategies[i].strategy).totalValue();
                 lastActiveIdx = i;
             }
@@ -551,6 +556,7 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // slither-disable-next-line calls-loop
             uint256 stratValue = IStrategy(strat).totalValue();
 
             if (stratValue == 0) continue;
@@ -566,6 +572,7 @@ contract TreasuryV2 is
             if (toWithdraw > stratValue) toWithdraw = stratValue;
 
             if (toWithdraw > 0) {
+                // slither-disable-next-line calls-loop
                 try IStrategy(strat).withdraw(toWithdraw) returns (uint256 withdrawn) {
                     totalWithdrawn += withdrawn;
                     remaining = remaining > withdrawn ? remaining - withdrawn : 0;
@@ -775,11 +782,13 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // slither-disable-next-line calls-loop
             uint256 currentValue = IStrategy(strat).totalValue();
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue > targetValue) {
                 uint256 excess = currentValue - targetValue;
+                // slither-disable-next-line calls-loop
                 try IStrategy(strat).withdraw(excess) {} catch {}
             }
         }
@@ -793,6 +802,7 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // slither-disable-next-line calls-loop
             uint256 currentValue = IStrategy(strat).totalValue();
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
@@ -801,6 +811,7 @@ contract TreasuryV2 is
                 uint256 toDeposit = deficit < available ? deficit : available;
 
                 asset.forceApprove(strat, toDeposit);
+                // slither-disable-next-line calls-loop
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
                 } catch {}
@@ -817,10 +828,12 @@ contract TreasuryV2 is
 
     /**
      * @notice Emergency withdraw all from all strategies
+     * @dev Loops over bounded, admin-controlled strategies array
      */
     function emergencyWithdrawAll() external onlyRole(GUARDIAN_ROLE) {
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
+                // slither-disable-next-line calls-loop
                 try IStrategy(strategies[i].strategy).withdrawAll() {} catch {}
             }
         }

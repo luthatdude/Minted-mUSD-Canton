@@ -275,6 +275,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
         // Approve and deposit to strategy
         usdc.forceApprove(defaultStrategy, amount);
 
+        // slither-disable-next-line reentrancy-benign
         try IStrategy(defaultStrategy).deposit(amount) returns (uint256 deposited) {
             deployedToStrategies += deposited;
             strategyDeployments[defaultStrategy] += deposited;
