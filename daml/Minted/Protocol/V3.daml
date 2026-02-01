@@ -54,6 +54,57 @@ template CantonUSDC
     ensure amount > 0.0
 
 -- ============================================================
+--                     0b. MUSD SUPPLY SERVICE (Supply Cap Tracking)
+-- ============================================================
+
+-- | MUSDSupplyService - Global supply cap tracking for vault borrows.
+-- FIX DL-C03: Ensures Vault.AdjustLeverage respects global supply limits.
+template MUSDSupplyService
+  with
+    operator : Party
+    supplyCap : Money
+    currentSupply : Money
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure supplyCap >= currentSupply
+
+    -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
+    -- FIX DL-C03: This enables vault leverage to respect global supply caps
+    choice SupplyService_VaultMint : (ContractId MUSDSupplyService, ContractId MintedMUSD)
+      with
+        borrower : Party
+        borrowAmount : Money
+        agreementHash : Text
+        agreementUri : Text
+      controller operator
+      do
+        assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = borrower
+          amount = borrowAmount
+          blacklisted = False
+          agreementHash = agreementHash
+          agreementUri = agreementUri
+          observers = []
+        newService <- create this with
+          currentSupply = currentSupply + borrowAmount
+        return (newService, musdCid)
+
+    -- | Update the supply cap (admin only)
+    choice SupplyService_UpdateCap : ContractId MUSDSupplyService
+      with
+        newCap : Money
+      controller operator
+      do
+        assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        create this with supplyCap = newCap
+
+-- ============================================================
 --                     1. MINTED MUSD TOKEN
 -- ============================================================
 
@@ -384,13 +435,14 @@ template Vault
 
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
-    choice AdjustLeverage : ContractId Vault
+    -- FIX DL-C03: Now requires MUSDSupplyService CID for supply-cap-tracked minting
+    choice AdjustLeverage : (ContractId Vault, ContractId MUSDSupplyService)
       with
         depositAmount : Money
         borrowAmount : Money
         poolCid : ContractId LiquidityPool
         oracleCid : ContractId PriceOracle
-        musdIssuer : Party          -- Issuer for minting mUSD
+        supplyServiceCid : ContractId MUSDSupplyService  -- FIX DL-C03: Supply cap tracking
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
@@ -406,40 +458,39 @@ template Vault
           requester = owner
           maxStaleness = hours 1
         
-        -- Recursive leverage loop (FIX C-01: mint actual mUSD before swap)
-        let loopFn (col, debt, pCid) _ = do
+        -- Recursive leverage loop (FIX C-01: mint via SupplyService for supply tracking)
+        let loopFn (col, debt, pCid, svcCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
               let borrowable = maxDebt - debt
               if borrowable < 1.0 
-                then return (col, debt, pCid)
+                then return (col, debt, pCid, svcCid)
                 else do
-                  -- FIX C-01: Create actual MintedMUSD token for the borrow
-                  musdCid <- create MintedMUSD with
-                    issuer = musdIssuer
-                    owner = owner
-                    amount = borrowable
-                    blacklisted = False
+                  -- FIX DL-C03: Mint via MUSDSupplyService for supply cap enforcement
+                  (newSvcCid, musdCid) <- exercise svcCid SupplyService_VaultMint with
+                    borrower = owner
+                    borrowAmount = borrowable
                     agreementHash = agreementHash
                     agreementUri = agreementUri
-                    observers = []
                   -- Swap actual mUSD token for collateral
                   (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
                     musdCid = musdCid
                     receiver = owner
-                  return (col + colOut, debt + borrowable, newPoolCid)
+                  return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
         
-        (finalCol, finalDebt, _) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid) [1..loops]
+        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, supplyServiceCid) [1..loops]
         
         -- Health check
         let finalValue = finalCol * price
         assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
         
         now <- getTime
-        create this with
+        vaultCid <- create this with
           collateralAmount = finalCol
           principalDebt = finalDebt
           lastInterestUpdate = now
+        
+        return (vaultCid, finalSvcCid)
 
     -- | Repay debt
     choice Vault_Repay : ContractId Vault
@@ -1095,6 +1146,7 @@ template BridgeService
       && lastNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
+    -- FIX DL-C02: Added validator membership verification
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
       with
         attestationCid : ContractId AttestationRequest
@@ -1109,6 +1161,10 @@ template BridgeService
         attestation <- fetch attestationCid
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+        
+        -- FIX DL-C02: Verify signers are authorized validators
+        let sigParties = Set.toList attestation.collectedSignatures
+        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
         
         -- Verify sufficient signatures
         let sigCount = Set.size attestation.collectedSignatures
