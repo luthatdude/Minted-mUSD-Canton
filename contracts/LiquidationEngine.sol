@@ -244,7 +244,9 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause liquidations
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    /// @dev FIX C-02: Requires DEFAULT_ADMIN_ROLE for separation of duties
+    /// This ensures a compromised PAUSER cannot immediately re-enable liquidations
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 }

@@ -274,26 +274,34 @@ template SupplyCapAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : SupplyCapPayload
+    signedValidators : [Party]  -- FIX C-01: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
     ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
 
-    nonconsuming choice SupplyCap_Sign : ContractId SupplyCapSignature
+    -- FIX C-01: Changed to consuming choice to prevent double-signing
+    choice SupplyCap_Sign : (ContractId SupplyCapAttestation, ContractId SupplyCapSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX C-01: Prevent double-signing
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        create SupplyCapSignature with
+        sig <- create SupplyCapSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+        
+        -- FIX C-01: Update attestation with new signed validator
+        newAttestation <- create this with signedValidators = validator :: signedValidators
+        return (newAttestation, sig)
 
     -- Finalize: archives attestation, returns the verified global state
     -- FIX DL-H3: Derive requiredSignatures from validatorGroup size (majority quorum)
@@ -353,6 +361,7 @@ template YieldAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : YieldPayload
+    signedValidators : [Party]  -- FIX C-02: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
@@ -360,20 +369,27 @@ template YieldAttestation
     -- Treasury assets must be >= mUSD supply (no undercollateralization)
     ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
 
-    nonconsuming choice Yield_Sign : ContractId YieldSignature
+    -- FIX C-02: Changed to consuming choice to prevent double-signing
+    choice Yield_Sign : (ContractId YieldAttestation, ContractId YieldSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- FIX C-02: Prevent double-signing
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        create YieldSignature with
+        sig <- create YieldSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+        
+        -- FIX C-02: Update attestation with new signed validator
+        newAttestation <- create this with signedValidators = validator :: signedValidators
+        return (newAttestation, sig)
 
     -- Finalize: returns verified yield data for smUSD sync
     -- FIX DL-H4: Derive requiredSignatures from validatorGroup size (majority quorum)
