@@ -454,9 +454,10 @@ template CantonDirectMintService
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
-    -- USDCx is already backed 1:1 by USDC in xReserve on Ethereum, so no additional
-    -- bridge-out is needed. The USDCx is simply transferred to the protocol operator.
-    choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD)
+    -- FIX: USDCx must be bridged to Ethereum Treasury so it can earn yield via
+    -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
+    -- and deposits into TreasuryV2.
+    choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
       with
         user : Party
         usdcxCid : ContractId USDCx
@@ -492,8 +493,8 @@ template CantonDirectMintService
         let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
         assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
 
-        -- Transfer USDCx to operator (protocol holds the backing)
-        -- No bridge-out needed - USDCx is already backed in xReserve on Ethereum
+        -- Transfer USDCx to operator (staging for bridge-out)
+        -- The operator holds it temporarily until bridge confirms
         usdcxProposal <- exercise usdcxCid USDCx_Transfer with newOwner = operator
         exercise usdcxProposal USDCxTransferProposal_Accept
 
@@ -505,15 +506,31 @@ template CantonDirectMintService
           agreementHash = mpaHash
           agreementUri = mpaUri
 
-        -- Update service state (no bridge request needed for USDCx)
+        -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
+        -- The relay will:
+        --   1. Redeem USDCx via xReserve → receive USDC on Ethereum
+        --   2. Deposit USDC into TreasuryV2 for yield generation
+        bridgeReq <- create BridgeOutRequest with
+          operator = operator
+          user = user
+          amount = usdcx.amount  -- Bridge the full USDCx amount (including fee portion)
+          targetChainId = targetChainId
+          targetTreasury = targetTreasury
+          nonce = nextNonce
+          createdAt = now
+          status = "pending"
+          validators = validators
+
+        -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
           accumulatedFees = accumulatedFees + feeAmount
+          nextNonce = nextNonce + 1
           dailyMinted = resetMinted + netAmount
           dailyBurned = resetBurned
           lastRateLimitReset = resetTime
 
-        return (newService, musdCid)
+        return (newService, musdCid, bridgeReq)
 
     -- | Redeem: User burns Canton mUSD → needs USDC bridged back from Ethereum
     -- This is a two-phase process:
