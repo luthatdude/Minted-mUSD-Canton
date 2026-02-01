@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
@@ -48,9 +48,18 @@ interface IWormholeTokenBridge {
  * @title DepositRouter
  * @notice Routes USDC deposits from L2 chains to Ethereum Treasury via Wormhole
  * @dev Deploy this on Base, Arbitrum, and other L2s to accept deposits
+ * @dev FIX SC-H01: Migrated from Ownable to AccessControl for role separation
  */
-contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
+contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
+
+    // ============ Roles ============
+    
+    /// @notice Role for pausing the contract (emergency response)
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    
+    /// @notice Role for administrative functions (config changes)
+    bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
 
     // ============ Constants ============
     
@@ -137,13 +146,15 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
         address _tokenBridge,
         address _treasuryAddress,
         address _directMintAddress,
-        uint256 _feeBps
-    ) Ownable(msg.sender) {
+        uint256 _feeBps,
+        address _admin
+    ) {
         if (_usdc == address(0)) revert InvalidAddress();
         if (_wormholeRelayer == address(0)) revert InvalidAddress();
         if (_tokenBridge == address(0)) revert InvalidAddress();
         if (_treasuryAddress == address(0)) revert InvalidAddress();
         if (_directMintAddress == address(0)) revert InvalidAddress();
+        if (_admin == address(0)) revert InvalidAddress();
         if (_feeBps > 500) revert FeeTooHigh(); // Max 5%
         
         usdc = IERC20(_usdc);
@@ -152,6 +163,11 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
         treasuryAddress = _treasuryAddress;
         directMintAddress = _directMintAddress;
         feeBps = _feeBps;
+        
+        // FIX SC-H01: Set up role hierarchy
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(ROUTER_ADMIN_ROLE, _admin);
+        _grantRole(PAUSER_ROLE, _admin);
     }
 
     // ============ External Functions ============
@@ -223,7 +239,7 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
      * @notice Update the treasury address
      * @param newTreasury New treasury address on Ethereum
      */
-    function setTreasury(address newTreasury) external onlyOwner {
+    function setTreasury(address newTreasury) external onlyRole(ROUTER_ADMIN_ROLE) {
         if (newTreasury == address(0)) revert InvalidAddress();
         address old = treasuryAddress;
         treasuryAddress = newTreasury;
@@ -234,7 +250,7 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
      * @notice Update the DirectMint address
      * @param newDirectMint New DirectMint address on Ethereum
      */
-    function setDirectMint(address newDirectMint) external onlyOwner {
+    function setDirectMint(address newDirectMint) external onlyRole(ROUTER_ADMIN_ROLE) {
         if (newDirectMint == address(0)) revert InvalidAddress();
         address old = directMintAddress;
         directMintAddress = newDirectMint;
@@ -245,7 +261,7 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
      * @notice Update the protocol fee
      * @param newFeeBps New fee in basis points
      */
-    function setFee(uint256 newFeeBps) external onlyOwner {
+    function setFee(uint256 newFeeBps) external onlyRole(ROUTER_ADMIN_ROLE) {
         if (newFeeBps > 500) revert FeeTooHigh();
         uint256 old = feeBps;
         feeBps = newFeeBps;
@@ -256,7 +272,7 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
      * @notice Withdraw accumulated fees
      * @param to Address to receive fees
      */
-    function withdrawFees(address to) external onlyOwner {
+    function withdrawFees(address to) external onlyRole(ROUTER_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         uint256 amount = accumulatedFees;
         accumulatedFees = 0;
@@ -265,16 +281,16 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Pause deposits
+     * @notice Pause deposits (FIX SC-H01: Requires PAUSER_ROLE)
      */
-    function pause() external onlyOwner {
+    function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
     
     /**
-     * @notice Unpause deposits
+     * @notice Unpause deposits (FIX SC-H01: Requires DEFAULT_ADMIN_ROLE for separation of duties)
      */
-    function unpause() external onlyOwner {
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
     
@@ -284,7 +300,7 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
      * @param to Recipient address
      * @param amount Amount to withdraw
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner {
+    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         if (token == address(0)) {
             (bool success, ) = to.call{value: amount}("");
