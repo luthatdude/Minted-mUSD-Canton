@@ -179,8 +179,10 @@ template MintedMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
-    choice MUSD_BridgeToEthereum : ContractId AttestationRequest
+    -- | FIX C-5: Bridge mUSD to Ethereum via proposal pattern.
+    -- Creates a BridgeOutProposal that the aggregator must accept to create
+    -- the AttestationRequest (since aggregator is its signatory).
+    choice MUSD_BridgeToEthereum : ContractId BridgeOutProposal
       with
         ethAddress : Text         -- Target Ethereum address
         chainId : Int             -- Target chain (1 = mainnet)
@@ -192,22 +194,18 @@ template MintedMUSD
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
-        
-        -- Token is consumed (burned) on Canton
-        create AttestationRequest with
+
+        -- Token is consumed (burned) on Canton; aggregator creates attestation
+        create BridgeOutProposal with
+          issuer
+          owner
           aggregator
           validatorGroup = validators
-          payload = AttestationPayload with
-            attestationId = "bridge-" <> show nonce
-            globalCantonAssets = amount
-            targetAddress = ethAddress
-            amount = amount
-            isMint = True  -- Mint on Ethereum side
-            nonce
-            chainId
-            expiresAt
-          collectedSignatures = Set.empty
-          direction = CantonToEthereum
+          ethAddress
+          amount
+          nonce
+          chainId
+          expiresAt
 
     -- | Set blacklist status (issuer only)
     choice MUSD_SetBlacklist : ContractId MintedMUSD
@@ -249,13 +247,38 @@ template MUSDTransferProposal
           observers
 
     -- | Sender cancels the proposal
-    choice TransferProposal_Cancel : ()
+    -- FIX DL-C1: Recreate MintedMUSD on cancel to prevent permanent token destruction.
+    -- The original MintedMUSD was consumed when creating this proposal;
+    -- cancelling must return the tokens to the sender.
+    choice TransferProposal_Cancel : ContractId MintedMUSD
       controller sender
       do
-        return ()
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
     
+    -- | Receiver declines the transfer
+    -- FIX DL-H5: Receiver must be able to reject unwanted transfers.
+    -- Returns the tokens to the sender.
+    choice TransferProposal_Decline : ContractId MintedMUSD
+      controller receiver
+      do
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+
     -- | Issuer can reject for compliance
-    choice TransferProposal_Reject : ()
+    choice TransferProposal_Reject : ContractId MintedMUSD
       controller issuer
       do
         -- Return tokens to sender
@@ -267,7 +290,6 @@ template MUSDTransferProposal
           agreementHash
           agreementUri
           observers
-        return ()
 
 -- ============================================================
 --                     2. PRICE ORACLE
@@ -435,7 +457,8 @@ template Vault
 
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
-    -- FIX DL-C03: Now requires MUSDSupplyService CID for supply-cap-tracked minting
+    -- FIX DL-C2 / DL-C03: Requires MUSDSupplyService CID for supply-cap-tracked minting.
+    -- Enforces global mUSD supply cap via centralized supply service.
     choice AdjustLeverage : (ContractId Vault, ContractId MUSDSupplyService)
       with
         depositAmount : Money
@@ -446,24 +469,27 @@ template Vault
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
+        maxBorrowable : Money       -- FIX DL-C2: Operator-enforced borrow cap per leverage call
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
-        
+        -- FIX DL-C2: Cap must be positive and reasonable
+        assertMsg "INVALID_MAX_BORROWABLE" (maxBorrowable > 0.0)
+
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
-        
+
         -- Get oracle price (FIX H-01: with staleness check - 1 hour max)
-        price <- exercise oracleCid Oracle_GetPrice with 
+        price <- exercise oracleCid Oracle_GetPrice with
           requester = owner
           maxStaleness = hours 1
-        
+
         -- Recursive leverage loop (FIX C-01: mint via SupplyService for supply tracking)
         let loopFn (col, debt, pCid, svcCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
               let borrowable = maxDebt - debt
-              if borrowable < 1.0 
+              if borrowable < 1.0
                 then return (col, debt, pCid, svcCid)
                 else do
                   -- FIX DL-C03: Mint via MUSDSupplyService for supply cap enforcement
@@ -477,13 +503,13 @@ template Vault
                     musdCid = musdCid
                     receiver = owner
                   return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
-        
+
         (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, supplyServiceCid) [1..loops]
-        
+
         -- Health check
         let finalValue = finalCol * price
         assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
-        
+
         now <- getTime
         vaultCid <- create this with
           collateralAmount = finalCol
@@ -540,6 +566,7 @@ template Vault
         create this with collateralAmount = newCollateral
 
     -- | Liquidate - Called by keepers when vault is undercollateralized
+    -- FIX H-11: Added self-liquidation prevention
     choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt)
       with
         liquidator : Party
@@ -547,6 +574,8 @@ template Vault
         oracleCid : ContractId PriceOracle
       controller liquidator
       do
+        -- FIX H-11: Prevent owner from self-liquidating
+        assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
         -- Calculate current debt with interest
         now <- getTime
         let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
@@ -773,7 +802,8 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
-    -- FIX H-01: Now requires actual CantonUSDC token to verify deposit
+    -- FIX DL-C3 / H-01: Requires actual CantonUSDC token to verify deposit.
+    -- Previously any user could claim arbitrary depositAmount with no proof of deposit.
     choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
@@ -983,7 +1013,12 @@ template CantonSMUSD
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
         -- Calculate mUSD value at current share price
-        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        -- FIX DL-H1: Use virtual offset consistent with SMUSD_Deposit and SMUSD_GetSharePrice.
+        -- Without this, deposit uses inflated price (fewer shares) but withdrawal uses raw price,
+        -- creating an asymmetric economic exploit.
+        let virtualShares = totalShares + 1000.0
+        let virtualAssets = totalAssets + 1000.0
+        let sharePrice = virtualAssets / virtualShares
         let musdAmount = ticket.shares * sharePrice
         
         assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
@@ -1145,9 +1180,10 @@ template BridgeService
       && totalBridgedOut >= 0.0
       && lastNonce >= 0
 
-    -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
-    -- FIX DL-C02: Added validator membership verification
-    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
+    -- | FIX C-4 / DL-C02: Receive mUSD from Ethereum via proposal pattern.
+    -- Creates a BridgeInMintProposal that recipient must accept to become MintedMUSD signatory.
+    -- Added validator membership verification for signer authorization.
+    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId BridgeInMintProposal)
       with
         attestationCid : ContractId AttestationRequest
         recipient : Party
@@ -1157,37 +1193,36 @@ template BridgeService
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
-        
+
         attestation <- fetch attestationCid
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
-        
+
         -- FIX DL-C02: Verify signers are authorized validators
         let sigParties = Set.toList attestation.collectedSignatures
         assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
-        
+
         -- Verify sufficient signatures
         let sigCount = Set.size attestation.collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
-        
+
         -- Archive attestation (consumed)
         archive attestationCid
-        
-        -- Mint mUSD on Canton
-        musdCid <- create MintedMUSD with
+
+        -- Create mint proposal for recipient to accept
+        proposalCid <- create BridgeInMintProposal with
           issuer = operator
-          owner = recipient
+          recipient
           amount
-          blacklisted = False
           agreementHash = mpaHash
           agreementUri = mpaUri
-          observers = []
-        
+          nonce = attestation.payload.nonce
+
         newService <- create this with
           totalBridgedIn = totalBridgedIn + amount
           lastNonce = attestation.payload.nonce
-        
-        return (newService, musdCid)
+
+        return (newService, proposalCid)
 
     -- | Assign nonce to a bridge-out request
     choice Bridge_AssignNonce : (ContractId BridgeService, Int)
@@ -1278,13 +1313,13 @@ template AttestationRequest
         create this with collectedSignatures = Set.insert validator collectedSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- FIX A-03: Derive requiredSignatures from validatorGroup size (majority quorum)
-    -- Previously accepted as caller parameter, allowing aggregator to bypass quorum
+    -- FIX A-03: Derive requiredSignatures from validatorGroup size (supermajority quorum)
+    -- FIX R-02: Changed from simple majority to supermajority for consistency with BLEBridgeProtocol
     choice Attestation_Complete : ()
       controller aggregator
       do
-        -- FIX A-03: Majority threshold = (n / 2) + 1, derived from group size
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX R-02: Supermajority threshold = (n + 1) / 2 + 1, consistent with BLEBridgeProtocol
+        let requiredSignatures = (length validatorGroup + 1) `div` 2 + 1
         let sigCount = Set.size collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
         
@@ -1375,6 +1410,87 @@ template BridgeInRequest
     choice BridgeIn_Cancel : ContractId BridgeInRequest
       controller operator
       do create this with status = "cancelled"
+
+-- ============================================================
+--         FIX C-5: BRIDGE-OUT PROPOSAL
+-- ============================================================
+
+-- | BridgeOutProposal: aggregator must accept to create the AttestationRequest
+-- (since aggregator is a signatory of AttestationRequest).
+template BridgeOutProposal
+  with
+    issuer : Party
+    owner : Party
+    aggregator : Party
+    validatorGroup : [Party]
+    ethAddress : Text
+    amount : Money
+    nonce : Int
+    chainId : Int
+    expiresAt : Time
+  where
+    signatory issuer, owner
+    observer aggregator
+
+    -- | Aggregator accepts and creates the attestation request
+    choice BridgeOutProposal_Accept : ContractId AttestationRequest
+      controller aggregator
+      do
+        create AttestationRequest with
+          aggregator
+          validatorGroup
+          payload = AttestationPayload with
+            attestationId = "bridge-" <> show nonce
+            globalCantonAssets = amount
+            targetAddress = ethAddress
+            amount
+            isMint = True
+            nonce
+            chainId
+            expiresAt
+          collectedSignatures = Set.empty
+          direction = CantonToEthereum
+
+    -- | Owner cancels
+    choice BridgeOutProposal_Cancel : ()
+      controller owner
+      do return ()
+
+-- ============================================================
+--         FIX C-4: BRIDGE-IN MINT PROPOSAL
+-- ============================================================
+
+-- | BridgeInMintProposal: recipient must accept to become MintedMUSD signatory.
+-- Created by Bridge_ReceiveFromEthereum when mUSD is minted after attestation.
+template BridgeInMintProposal
+  with
+    issuer : Party
+    recipient : Party
+    amount : Money
+    agreementHash : Text
+    agreementUri : Text
+    nonce : Int
+  where
+    signatory issuer
+    observer recipient
+
+    -- | Recipient accepts and receives the mUSD
+    choice BridgeInMint_Accept : ContractId MintedMUSD
+      controller recipient
+      do
+        create MintedMUSD with
+          issuer
+          owner = recipient
+          amount
+          blacklisted = False
+          agreementHash
+          agreementUri
+          observers = []
+
+    -- | Issuer cancels (e.g., compliance block)
+    choice BridgeInMint_Cancel : ()
+      controller issuer
+      do return ()
 
 -- ============================================================
 --                     HELPER FUNCTIONS

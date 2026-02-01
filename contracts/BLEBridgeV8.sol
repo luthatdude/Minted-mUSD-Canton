@@ -80,6 +80,9 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event NavOracleUpdated(address indexed oracle, uint256 maxDeviationBps, bool enabled);
     event EmergencyPause(address indexed triggeredBy, string reason);
     event AttestationInvalidated(bytes32 indexed id, string reason);
+    /// FIX M-13: Events for admin parameter changes
+    event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
+    event DailyMintLimitUpdated(uint256 oldLimit, uint256 newLimit);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -120,14 +123,20 @@ contract BLEBridgeV8 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         emit MUSDTokenUpdated(oldToken, _musdToken);
     }
 
+    /// FIX M-13: Emit event on min signatures change
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minSigs > 0, "INVALID_MIN_SIGS");
+        uint256 oldMinSigs = minSignatures;
         minSignatures = _minSigs;
+        emit MinSignaturesUpdated(oldMinSigs, _minSigs);
     }
 
+    /// FIX M-13: Emit event on daily mint limit change
     function setDailyMintLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_limit > 0, "INVALID_LIMIT");
+        uint256 oldLimit = dailyMintLimit;
         dailyMintLimit = _limit;
+        emit DailyMintLimitUpdated(oldLimit, _limit);
     }
 
     /// @notice Configure the NAV oracle for external collateral verification

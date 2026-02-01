@@ -126,6 +126,10 @@ contract TreasuryV2 is
     /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
+    /// FIX M-4: Events for admin parameter changes
+    event FeeConfigUpdated(uint256 oldFeeBps, uint256 newFeeBps, address oldRecipient, address newRecipient);
+    event ReserveBpsUpdated(uint256 oldBps, uint256 newBps);
+    event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -803,7 +807,12 @@ contract TreasuryV2 is
                 asset.forceApprove(strat, toDeposit);
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
-                } catch {}
+                    // FIX M-8: Clear dangling approval after deposit
+                    asset.forceApprove(strat, 0);
+                } catch {
+                    // FIX M-8: Clear dangling approval on failure
+                    asset.forceApprove(strat, 0);
+                }
             }
         }
 
@@ -843,6 +852,7 @@ contract TreasuryV2 is
     /**
      * @notice Update fee configuration
      */
+    /// FIX M-4: Emit event on fee config change
     function setFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
@@ -852,23 +862,32 @@ contract TreasuryV2 is
 
         _accrueFees(); // Accrue with old rate first
 
+        uint256 oldFeeBps = fees.performanceFeeBps;
+        address oldRecipient = fees.feeRecipient;
         fees.performanceFeeBps = _performanceFeeBps;
         fees.feeRecipient = _feeRecipient;
+        emit FeeConfigUpdated(oldFeeBps, _performanceFeeBps, oldRecipient, _feeRecipient);
     }
 
     /**
      * @notice Update reserve percentage
      */
+    /// FIX M-4: Emit event on reserve change
     function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+        uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
+        emit ReserveBpsUpdated(oldBps, _reserveBps);
     }
 
     /**
      * @notice Update minimum auto-allocate amount
      */
+    /// FIX M-4: Emit event on min auto-allocate change
     function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
+        emit MinAutoAllocateUpdated(oldAmount, _minAmount);
     }
 
     /**
