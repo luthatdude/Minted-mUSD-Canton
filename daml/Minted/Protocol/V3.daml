@@ -614,7 +614,7 @@ template LiquidationReceipt
     timestamp : Time
   where
     signatory vaultOwner, liquidator  -- FIX C-02: Both parties sign
-    observer []  -- No observers needed, both parties are signatories
+    observer ([] : [Party])  -- No observers needed, both parties are signatories
 
 -- ============================================================
 --                     7. LIQUIDATION ORDER
