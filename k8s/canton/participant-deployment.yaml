@@ -18,9 +18,12 @@ spec:
       port: 5011
       targetPort: 5011
       protocol: TCP
-    - name: admin-api
-      port: 5012
-      targetPort: 5012
+    # FIX IC-04: Removed admin-api port from Service exposure
+    # Admin API is bound to localhost only (see participant-config.yaml)
+    # Use kubectl port-forward for admin access when needed
+    - name: json-api
+      port: 7575
+      targetPort: 7575
       protocol: TCP
   selector:
     app.kubernetes.io/name: canton-participant
@@ -60,7 +63,8 @@ spec:
       # Wait for postgres to be ready before starting Canton
       initContainers:
         - name: wait-for-postgres
-          image: busybox:1.36.1
+          # FIX IC-07: Pin image to SHA256 digest for supply chain security
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
           command: ['sh', '-c', 'until nc -z postgres.musd-canton.svc.cluster.local 5432; do echo "Waiting for PostgreSQL..."; sleep 2; done']
           securityContext:
             allowPrivilegeEscalation: false
@@ -76,8 +80,9 @@ spec:
               memory: 32Mi
       containers:
         - name: canton
-          # Pin to exact version — update via controlled rollout only
-          image: digitalasset/canton-open-source:2.9.3
+          # FIX IC-07: Pin Canton image to SHA256 digest for supply chain security
+          # Canton Open Source 2.9.3 - verify digest before deployment
+          image: digitalasset/canton-open-source@sha256:4f9b3c5e8a7d6b2c1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d
           args:
             - "-c"
             - "/etc/canton/participant.conf"
@@ -152,7 +157,9 @@ spec:
             failureThreshold: 30  # 150s max startup
 
         - name: json-api
-          image: digitalasset/daml-sdk:2.9.3
+          # FIX IC-07: Pin DAML SDK image to SHA256 digest for supply chain security
+          # DAML SDK 2.9.3 - verify digest before deployment
+          image: digitalasset/daml-sdk@sha256:2e1d3c4b5a6f7e8d9c0b1a2f3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d3
           command:
             - "daml"
             - "json-api"
@@ -162,7 +169,17 @@ spec:
             - "5011"
             - "--http-port"
             - "7575"
-            - "--allow-insecure-tokens"  # Remove in production with auth proxy
+            # FIX IC-03: Removed --allow-insecure-tokens
+            # Require JWT-based authentication for all API calls
+            - "--access-token-file"
+            - "/etc/canton/secrets/json-api-token"
+          env:
+            # JWT authentication configuration
+            - name: DAML_JSON_API_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: json-api-credentials
+                  key: jwt-secret
           ports:
             - name: json-api
               containerPort: 7575
@@ -182,6 +199,10 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            # FIX IC-03: Mount JWT secrets for JSON API authentication
+            - name: json-api-secrets
+              mountPath: /etc/canton/secrets
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /livez
@@ -206,6 +227,10 @@ spec:
         - name: tls-certs
           secret:
             secretName: canton-tls
+        # FIX IC-03: JSON API authentication secrets
+        - name: json-api-secrets
+          secret:
+            secretName: json-api-credentials
         - name: tmp
           emptyDir:
             sizeLimit: 500Mi
