@@ -132,7 +132,7 @@ template MUSDSupplyService
         
         -- FIX DL-C01: Check if this is a large mint requiring pre-approval
         let isLargeMint = borrowAmount >= largeMintThreshold
-        let hasApproval = any (\(p, amt) -> p == borrower && amt >= borrowAmount) pendingLargeMints
+        let hasApproval = Prelude.any (\(p, amt) -> p == borrower && amt >= borrowAmount) pendingLargeMints
         assertMsg "LARGE_MINT_REQUIRES_GOVERNANCE_APPROVAL" (not isLargeMint || hasApproval)
         
         musdCid <- create MintedMUSD with
