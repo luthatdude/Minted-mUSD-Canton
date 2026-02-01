@@ -96,20 +96,29 @@ template CollateralDepositProof
 
 -- | MUSDSupplyService - Global supply cap tracking for vault borrows.
 -- FIX DL-C03: Ensures Vault.AdjustLeverage respects global supply limits.
+-- FIX DL-C01: Added governance co-signer for institutional-grade access control.
+--   - Large mints (above largeMintThreshold) require governance pre-approval
+--   - Supply cap updates require governance approval
+--   - Operator handles day-to-day operations within approved limits
 template MUSDSupplyService
   with
-    operator : Party
+    operator : Party              -- Day-to-day operator (e.g., relay service)
+    governance : Party            -- FIX DL-C01: Governance multi-sig/DAO
     supplyCap : Money
     currentSupply : Money
+    largeMintThreshold : Money    -- FIX DL-C01: Mints above this require approval
+    pendingLargeMints : [(Party, Money)]  -- FIX DL-C01: Pre-approved large mints
     observers : [Party]
   where
-    signatory operator
+    signatory operator, governance  -- FIX DL-C01: Both must sign
     observer observers
 
     ensure supplyCap >= currentSupply
+        && largeMintThreshold > 0.0
 
     -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
     -- FIX DL-C03: This enables vault leverage to respect global supply caps
+    -- FIX DL-C01: Large mints require pre-approval from governance
     choice SupplyService_VaultMint : (ContractId MUSDSupplyService, ContractId MintedMUSD)
       with
         borrower : Party
@@ -120,6 +129,12 @@ template MUSDSupplyService
       do
         assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)
+        
+        -- FIX DL-C01: Check if this is a large mint requiring pre-approval
+        let isLargeMint = borrowAmount >= largeMintThreshold
+        let hasApproval = Prelude.any (\(p, amt) -> p == borrower && amt >= borrowAmount) pendingLargeMints
+        assertMsg "LARGE_MINT_REQUIRES_GOVERNANCE_APPROVAL" (not isLargeMint || hasApproval)
+        
         musdCid <- create MintedMUSD with
           issuer = operator
           owner = borrower
@@ -128,18 +143,56 @@ template MUSDSupplyService
           agreementHash = agreementHash
           agreementUri = agreementUri
           observers = []
+        
+        -- FIX DL-C01: Consume the approval if used
+        let newPendingMints = if isLargeMint && hasApproval
+              then filter (\(p, _) -> p /= borrower) pendingLargeMints
+              else pendingLargeMints
+        
         newService <- create this with
           currentSupply = currentSupply + borrowAmount
+          pendingLargeMints = newPendingMints
         return (newService, musdCid)
 
-    -- | Update the supply cap (admin only)
+    -- | FIX DL-C01: Governance pre-approves a large mint for a specific borrower
+    -- This allows governance to authorize large mints in advance
+    choice SupplyService_ApproveLargeMint : ContractId MUSDSupplyService
+      with
+        borrower : Party
+        maxAmount : Money
+      controller governance
+      do
+        assertMsg "AMOUNT_MUST_BE_POSITIVE" (maxAmount > 0.0)
+        assertMsg "AMOUNT_BELOW_THRESHOLD" (maxAmount >= largeMintThreshold)
+        create this with
+          pendingLargeMints = (borrower, maxAmount) :: pendingLargeMints
+
+    -- | FIX DL-C01: Revoke a pending large mint approval
+    choice SupplyService_RevokeLargeMint : ContractId MUSDSupplyService
+      with
+        borrower : Party
+      controller governance
+      do
+        create this with
+          pendingLargeMints = filter (\(p, _) -> p /= borrower) pendingLargeMints
+
+    -- | Update the supply cap (FIX DL-C01: requires governance, not just operator)
     choice SupplyService_UpdateCap : ContractId MUSDSupplyService
       with
         newCap : Money
-      controller operator
+      controller governance  -- FIX DL-C01: Only governance can update cap
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         create this with supplyCap = newCap
+
+    -- | FIX DL-C01: Update the large mint threshold (governance only)
+    choice SupplyService_UpdateThreshold : ContractId MUSDSupplyService
+      with
+        newThreshold : Money
+      controller governance
+      do
+        assertMsg "THRESHOLD_MUST_BE_POSITIVE" (newThreshold > 0.0)
+        create this with largeMintThreshold = newThreshold
 
 -- ============================================================
 --                     1. MINTED MUSD TOKEN

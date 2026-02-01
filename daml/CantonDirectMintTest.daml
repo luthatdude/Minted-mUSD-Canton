@@ -483,8 +483,10 @@ endToEndFlowTest = script do
     createCmd CantonStakingService with
       operator
       totalShares = 0.000000000000000000
-      totalAssets = 0.000000000000000000
-      lastYieldEpoch = 0
+      globalSharePrice = 1.000000000000000000  -- 1:1 initial share price
+      globalTotalAssets = 0.000000000000000000
+      globalTotalShares = 0.000000000000000000
+      lastSyncEpoch = 0
       cooldownSeconds = 0  -- No cooldown for test
       minDeposit = 1.000000000000000000
       paused = False
@@ -676,8 +678,8 @@ usdcxMintFlowTest = script do
       mpaUri = "https://musd-stablecoin.com/legal/mpa-v1.pdf"
       authorizedMinters = [alice]
 
-  -- Alice mints mUSD with USDCx (no bridge-out needed)
-  (newServiceCid, musdCid) <- submit alice do
+  -- Alice mints mUSD with USDCx (now emits BridgeOutRequest for Treasury yield)
+  (newServiceCid, musdCid, _bridgeOutRequestCid) <- submit alice do
     exerciseCmd serviceCid DirectMint_MintWithUSDCx with
       user = alice
       usdcxCid = usdcxCid
@@ -687,7 +689,7 @@ usdcxMintFlowTest = script do
     exerciseCmd musdCid CantonMUSD_Split with
       splitAmount = 1000.000000000000000000
 
-  debug "USDCx mint flow test passed - mUSD minted from xReserve bridged USDC, no bridge-out needed"
+  debug "USDCx mint flow test passed - mUSD minted from xReserve bridged USDC, BridgeOutRequest emitted for Treasury yield"
   pure ()
 
 
