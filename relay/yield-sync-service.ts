@@ -1,21 +1,22 @@
 /**
- * Minted Protocol - Yield Sync Service
+ * Minted Protocol - Yield Sync Service (Unified Cross-Chain)
  *
- * Synchronizes yield from Ethereum TreasuryV2 to Canton smUSD staking service.
- * This allows Canton smUSD holders to receive yield generated on Ethereum.
+ * Synchronizes GLOBAL SHARE PRICE between Ethereum and Canton for equal yield distribution.
+ * All smUSD holders on both chains receive the same yield rate.
  *
  * Architecture:
  *   - Canton MMF ($50B) acts as collateral reference for minting capacity
  *   - Ethereum TreasuryV2 generates yield via Pendle/Morpho/Sky strategies
- *   - This service bridges yield data back to Canton for smUSD share price updates
+ *   - This service ensures UNIFIED share price across both chains
  *
- * Flow:
- *   1. Poll TreasuryV2.totalValue() on Ethereum
- *   2. Calculate yield delta since last sync
- *   3. Create YieldAttestation on Canton
- *   4. Validators sign the attestation (anonymous/automatic)
- *   5. Finalize attestation → call SyncYield on CantonStakingService
- *   6. smUSD share price increases → holders profit on unstake
+ * Unified Share Price Model:
+ *   globalSharePrice = TreasuryV2.totalValue() / (ethShares + cantonShares)
+ *
+ * Bidirectional Sync Flow:
+ *   1. Read Canton totalShares → sync to Ethereum SMUSD.syncCantonShares()
+ *   2. Read Ethereum SMUSD.globalSharePrice() (includes Treasury yield)
+ *   3. Sync global share price to Canton via SyncGlobalSharePrice
+ *   4. Both chains now have identical share price → equal yield for all stakers
  */
 
 import { ethers } from "ethers";
@@ -31,6 +32,8 @@ interface YieldSyncConfig {
   // Ethereum
   ethereumRpcUrl: string;
   treasuryAddress: string;
+  smusdAddress: string;        // NEW: SMUSD contract for global share price
+  bridgePrivateKey: string;    // NEW: Private key with BRIDGE_ROLE
 
   // Canton
   cantonHost: string;
@@ -50,6 +53,8 @@ interface YieldSyncConfig {
 const DEFAULT_CONFIG: YieldSyncConfig = {
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
+  smusdAddress: process.env.SMUSD_ADDRESS || "",
+  bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
 
   cantonHost: process.env.CANTON_HOST || "localhost",
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
@@ -64,7 +69,7 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
 };
 
 // ============================================================
-//                     TREASURY ABI
+//                     CONTRACT ABIs
 // ============================================================
 
 const TREASURY_ABI = [
@@ -94,6 +99,61 @@ const TREASURY_ABI = [
     "name": "deployedToStrategies",
     "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
     "stateMutability": "view",
+    "type": "function"
+  },
+];
+
+const SMUSD_ABI = [
+  {
+    "inputs": [],
+    "name": "globalSharePrice",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "globalTotalShares",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "globalTotalAssets",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "ethereumTotalShares",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "cantonTotalShares",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "lastCantonSyncEpoch",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "_cantonShares", "type": "uint256" },
+      { "internalType": "uint256", "name": "epoch", "type": "uint256" }
+    ],
+    "name": "syncCantonShares",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
 ];
@@ -130,12 +190,14 @@ interface YieldSignature {
   nonce: string;
 }
 
-// Matches CantonSMUSD.CantonStakingService
+// Matches CantonSMUSD.CantonStakingService (updated for unified yield)
 interface CantonStakingService {
   operator: string;
   totalShares: string;
-  totalAssets: string;
-  lastYieldEpoch: string;
+  globalSharePrice: string;     // UNIFIED: Global share price from Ethereum
+  globalTotalAssets: string;    // Total assets across both chains
+  globalTotalShares: string;    // Total shares across both chains
+  lastSyncEpoch: string;
   cooldownSeconds: string;
   minDeposit: string;
   paused: boolean;
@@ -145,18 +207,21 @@ interface CantonStakingService {
 }
 
 // ============================================================
-//                     YIELD SYNC SERVICE
+//                     YIELD SYNC SERVICE (UNIFIED)
 // ============================================================
 
 class YieldSyncService {
   private config: YieldSyncConfig;
   private provider: ethers.JsonRpcProvider;
+  private wallet: ethers.Wallet;
   private treasury: ethers.Contract;
+  private smusd: ethers.Contract;
   private ledger: Ledger;
   private isRunning: boolean = false;
 
   // State tracking
   private lastSyncedTotalValue: bigint = BigInt(0);
+  private lastGlobalSharePrice: bigint = BigInt(0);
   private currentEpoch: number;
   private nonce: number = 1;
 
@@ -164,12 +229,20 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
-    // Ethereum connection
+    // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
+    this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
+    
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
       TREASURY_ABI,
       this.provider
+    );
+    
+    this.smusd = new ethers.Contract(
+      config.smusdAddress,
+      SMUSD_ABI,
+      this.wallet  // Signing wallet for syncCantonShares()
     );
 
     // Canton connection (TLS by default)
@@ -181,11 +254,12 @@ class YieldSyncService {
       wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
     });
 
-    console.log("[YieldSync] Initialized");
+    console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
     console.log(`[YieldSync] Treasury: ${config.treasuryAddress}`);
+    console.log(`[YieldSync] SMUSD: ${config.smusdAddress}`);
+    console.log(`[YieldSync] Bridge wallet: ${this.wallet.address}`);
     console.log(`[YieldSync] Canton: ${config.cantonHost}:${config.cantonPort}`);
     console.log(`[YieldSync] Operator: ${config.cantonParty}`);
-    console.log(`[YieldSync] Validators: ${config.validatorParties.length}`);
     console.log(`[YieldSync] Sync interval: ${config.syncIntervalMs}ms`);
   }
 
@@ -193,7 +267,7 @@ class YieldSyncService {
    * Start the yield sync service
    */
   async start(): Promise<void> {
-    console.log("[YieldSync] Starting...");
+    console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 
     // Initialize last synced value
@@ -202,7 +276,7 @@ class YieldSyncService {
     // Main sync loop
     while (this.isRunning) {
       try {
-        await this.syncYield();
+        await this.syncUnifiedYield();
       } catch (err) {
         console.error("[YieldSync] Error in sync cycle:", err);
       }
@@ -220,14 +294,17 @@ class YieldSyncService {
   }
 
   /**
-   * Initialize state from Canton
+   * Initialize state from both chains
    */
   private async initializeState(): Promise<void> {
-    console.log("[YieldSync] Initializing state...");
+    console.log("[YieldSync] Initializing unified state...");
 
-    // Get current Treasury value from Ethereum
+    // Get current values from Ethereum
     const currentTotalValue = await this.treasury.totalValue();
     this.lastSyncedTotalValue = BigInt(currentTotalValue.toString());
+    
+    const currentSharePrice = await this.smusd.globalSharePrice();
+    this.lastGlobalSharePrice = BigInt(currentSharePrice.toString());
 
     // Get last epoch from Canton staking service
     const stakingServices = await (this.ledger.query as any)(
@@ -236,18 +313,117 @@ class YieldSyncService {
     );
 
     if (stakingServices.length > 0) {
-      this.currentEpoch = parseInt(stakingServices[0].payload.lastYieldEpoch, 10) + 1;
+      this.currentEpoch = parseInt(stakingServices[0].payload.lastSyncEpoch || "0", 10) + 1;
       console.log(`[YieldSync] Resuming from epoch ${this.currentEpoch}`);
-      console.log(`[YieldSync] Canton totalAssets: ${stakingServices[0].payload.totalAssets}`);
+      console.log(`[YieldSync] Canton totalShares: ${stakingServices[0].payload.totalShares}`);
+      console.log(`[YieldSync] Canton globalSharePrice: ${stakingServices[0].payload.globalSharePrice}`);
     } else {
       console.log(`[YieldSync] No staking service found, starting fresh at epoch ${this.currentEpoch}`);
     }
 
     console.log(`[YieldSync] Ethereum Treasury value: $${this.formatUsdc(currentTotalValue)}`);
+    console.log(`[YieldSync] Ethereum globalSharePrice: ${currentSharePrice}`);
   }
 
   /**
-   * Main sync logic
+   * UNIFIED sync logic - bidirectional share price synchronization
+   */
+  private async syncUnifiedYield(): Promise<void> {
+    console.log(`\n[YieldSync] ═══════════════════════════════════════════`);
+    console.log(`[YieldSync] EPOCH ${this.currentEpoch} - UNIFIED YIELD SYNC`);
+    console.log(`[YieldSync] ═══════════════════════════════════════════`);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 1: Read Canton shares and sync to Ethereum
+    // ═══════════════════════════════════════════════════════════════════
+    console.log(`\n[YieldSync] Step 1: Syncing Canton shares → Ethereum...`);
+    
+    const stakingServices = await (this.ledger.query as any)(
+      "CantonSMUSD:CantonStakingService",
+      { operator: this.config.cantonParty }
+    );
+
+    if (stakingServices.length === 0) {
+      console.log(`[YieldSync] No Canton staking service found, skipping`);
+      return;
+    }
+
+    const cantonService = stakingServices[0];
+    const cantonShares = this.parseNumeric18(cantonService.payload.totalShares);
+    console.log(`[YieldSync] Canton totalShares: ${cantonShares}`);
+
+    // Sync Canton shares to Ethereum SMUSD
+    const lastEthEpoch = await this.smusd.lastCantonSyncEpoch();
+    if (this.currentEpoch > Number(lastEthEpoch)) {
+      console.log(`[YieldSync] Calling SMUSD.syncCantonShares(${cantonShares}, ${this.currentEpoch})...`);
+      const tx = await this.smusd.syncCantonShares(cantonShares, this.currentEpoch);
+      await tx.wait();
+      console.log(`[YieldSync] ✅ Canton shares synced to Ethereum (tx: ${tx.hash})`);
+    } else {
+      console.log(`[YieldSync] Ethereum already synced for epoch ${this.currentEpoch}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 2: Read global share price from Ethereum (now includes Canton shares)
+    // ═══════════════════════════════════════════════════════════════════
+    console.log(`\n[YieldSync] Step 2: Reading global share price from Ethereum...`);
+    
+    const globalSharePrice = BigInt((await this.smusd.globalSharePrice()).toString());
+    const globalTotalAssets = BigInt((await this.smusd.globalTotalAssets()).toString());
+    const globalTotalShares = BigInt((await this.smusd.globalTotalShares()).toString());
+    const ethShares = BigInt((await this.smusd.ethereumTotalShares()).toString());
+
+    console.log(`[YieldSync] globalTotalAssets: $${this.formatUsdc(globalTotalAssets)}`);
+    console.log(`[YieldSync] globalTotalShares: ${globalTotalShares} (ETH: ${ethShares}, Canton: ${cantonShares})`);
+    console.log(`[YieldSync] globalSharePrice: ${globalSharePrice}`);
+
+    // Check if share price increased (yield generated)
+    if (globalSharePrice <= this.lastGlobalSharePrice) {
+      console.log(`[YieldSync] No yield increase detected, skipping Canton sync`);
+      return;
+    }
+
+    const sharePriceIncrease = globalSharePrice - this.lastGlobalSharePrice;
+    console.log(`[YieldSync] Share price increase: ${sharePriceIncrease}`);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 3: Sync global share price to Canton
+    // ═══════════════════════════════════════════════════════════════════
+    console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
+
+    await (this.ledger.exercise as any)(
+      "CantonSMUSD:CantonStakingService",
+      cantonService.contractId,
+      "SyncGlobalSharePrice",
+      {
+        newGlobalSharePrice: this.toNumeric18(globalSharePrice),
+        newGlobalTotalAssets: this.toNumeric18(globalTotalAssets),
+        newGlobalTotalShares: this.toNumeric18(globalTotalShares),
+        epochNumber: this.currentEpoch.toString(),
+      }
+    );
+
+    console.log(`[YieldSync] ✅ Global share price synced to Canton!`);
+
+    // ═══════════════════════════════════════════════════════════════════
+    // STEP 4: Update state and log summary
+    // ═══════════════════════════════════════════════════════════════════
+    this.lastSyncedTotalValue = globalTotalAssets;
+    this.lastGlobalSharePrice = globalSharePrice;
+    this.currentEpoch++;
+
+    console.log(`\n[YieldSync] ═══════════════════════════════════════════`);
+    console.log(`[YieldSync] ✅ UNIFIED YIELD SYNC COMPLETE!`);
+    console.log(`[YieldSync] ═══════════════════════════════════════════`);
+    console.log(`[YieldSync] All stakers on BOTH chains now have:`);
+    console.log(`[YieldSync]   - Same share price: ${globalSharePrice}`);
+    console.log(`[YieldSync]   - Equal yield rate`);
+    console.log(`[YieldSync] Next sync in ${this.config.syncIntervalMs / 1000}s`);
+  }
+
+  /**
+   * Legacy sync logic (for backwards compatibility)
+   * @deprecated Use syncUnifiedYield instead
    */
   private async syncYield(): Promise<void> {
     // 1. Get current Treasury value from Ethereum
@@ -478,6 +654,17 @@ class YieldSyncService {
     return `${intPart}.${fracPart.toString().padStart(18, "0")}`;
   }
 
+  private parseNumeric18(value: string): bigint {
+    // Convert DAML Numeric 18 string to BigInt (in 6 decimal USDC units)
+    const parts = value.split(".");
+    const intPart = BigInt(parts[0] || "0");
+    const fracPart = parts[1] || "0";
+    // Take first 6 decimal places for USDC
+    const fracUsdc = fracPart.padEnd(6, "0").substring(0, 6);
+    const scale6 = BigInt("1000000");
+    return intPart * scale6 + BigInt(fracUsdc);
+  }
+
   private formatUsdc(value: bigint): string {
     const million = BigInt(1000000);
     const intPart = value / million;
@@ -503,11 +690,16 @@ class YieldSyncService {
 
 async function main() {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("     MINTED PROTOCOL - YIELD SYNC SERVICE");
+  console.log("     MINTED PROTOCOL - UNIFIED YIELD SYNC SERVICE");
   console.log("═══════════════════════════════════════════════════════════");
   console.log("");
-  console.log("  Syncs yield from Ethereum Treasury → Canton smUSD");
-  console.log("  Canton MMF ($50B) provides minting capacity reference");
+  console.log("  UNIFIED CROSS-CHAIN YIELD DISTRIBUTION");
+  console.log("");
+  console.log("  This service ensures equal yield for ALL stakers:");
+  console.log("    1. Reads Canton shares → syncs to Ethereum SMUSD");
+  console.log("    2. Calculates global share price from Treasury");
+  console.log("    3. Syncs global share price → Canton");
+  console.log("    4. Both chains have IDENTICAL share price!");
   console.log("");
   console.log("═══════════════════════════════════════════════════════════");
   console.log("");
@@ -516,11 +708,11 @@ async function main() {
   if (!DEFAULT_CONFIG.treasuryAddress) {
     throw new Error("TREASURY_ADDRESS environment variable required");
   }
+  if (!DEFAULT_CONFIG.smusdAddress) {
+    throw new Error("SMUSD_ADDRESS environment variable required");
+  }
   if (!DEFAULT_CONFIG.cantonParty) {
     throw new Error("CANTON_PARTY environment variable required");
-  }
-  if (DEFAULT_CONFIG.validatorParties.length === 0) {
-    throw new Error("VALIDATOR_PARTIES environment variable required (comma-separated)");
   }
 
   const service = new YieldSyncService(DEFAULT_CONFIG);

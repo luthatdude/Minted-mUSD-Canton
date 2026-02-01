@@ -98,7 +98,8 @@ services:
 
   # ============================================================
   # YIELD SYNC SERVICE
-  # Syncs yield from Ethereum Treasury to Canton smUSD
+  # Unified cross-chain yield distribution
+  # Syncs global share price between Ethereum SMUSD and Canton
   # ============================================================
   yield-sync:
     build:
@@ -112,12 +113,13 @@ services:
       - CANTON_PARTY=${CANTON_PARTY}
       - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
-      - VALIDATOR_PARTIES=${VALIDATOR_PARTIES}
+      - SMUSD_ADDRESS=${SMUSD_ADDRESS}
       - YIELD_SYNC_INTERVAL_MS=${YIELD_SYNC_INTERVAL_MS:-3600000}
       - MIN_YIELD_THRESHOLD=${MIN_YIELD_THRESHOLD:-1000000000}
       - NODE_ENV=production
     secrets:
       - canton_token
+      - relayer_private_key
     restart: unless-stopped
     read_only: true
     tmpfs:
