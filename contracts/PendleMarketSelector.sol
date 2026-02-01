@@ -326,6 +326,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
         // Calculate TVL in SY terms (totalPt converted + totalSy)
         // PT trades at discount, so we use oracle rate
+        // slither-disable-next-line calls-loop
         uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);
         uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;
         uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));

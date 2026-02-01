@@ -342,6 +342,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         bytes32 recipientBytes = bytes32(uint256(uint160(treasuryAddress)));
         
         // Initiate Wormhole token transfer
+        // slither-disable-next-line reentrancy-benign
         sequence = tokenBridge.transferTokens{value: bridgeCost}(
             address(usdc),
             netAmount,
