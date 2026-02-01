@@ -82,6 +82,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(PAUSER_ROLE, msg.sender);
         _grantRole(FEE_MANAGER_ROLE, msg.sender);
 
+        // Default fees (100 bps = 1%)
+        mintFeeBps = 100;
+
         // Default limits
         minMintAmount = 1e6;          // 1 USDC
         maxMintAmount = 1_000_000e6;  // 1M USDC
