@@ -397,7 +397,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause borrowing and repayments
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    /// FIX H-01: Require DEFAULT_ADMIN_ROLE for separation of duties
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 }

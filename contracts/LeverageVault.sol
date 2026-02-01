@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -62,10 +63,12 @@ interface IBorrowModule {
 /// @notice Automatic multi-loop leverage with integrated Uniswap V3 swaps.
 ///         Users can open leveraged positions in a single transaction.
 /// @dev Integrates with CollateralVault, BorrowModule, and Uniswap V3.
-contract LeverageVault is AccessControl, ReentrancyGuard {
+/// FIX H-03: Added Pausable for emergency controls
+contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant LEVERAGE_ADMIN_ROLE = keccak256("LEVERAGE_ADMIN_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     // ============================================================
     //                  IMMUTABLES
@@ -185,6 +188,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
     }
 
     // ============================================================
@@ -204,7 +208,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
         uint256 initialAmount,
         uint256 targetLeverageX10,
         uint256 maxLoopsOverride
-    ) external nonReentrant returns (
+    ) external nonReentrant whenNotPaused returns (
         uint256 totalCollateral,
         uint256 totalDebt,
         uint256 loopsExecuted
@@ -646,5 +650,19 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
 
         emit LeverageClosed(user, collateralToken, remainingCollateral, debtToRepay, 0);
         delete positions[user];
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS (FIX H-03)
+    // ============================================================
+
+    /// @notice Pause all leverage operations
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause leverage operations (requires admin for separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }
