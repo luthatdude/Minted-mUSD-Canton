@@ -630,6 +630,7 @@ contract TreasuryV2 is
         _accrueFees();
 
         uint256 toClaim = fees.accruedFees;
+        // slither-disable-next-line incorrect-equality
         if (toClaim == 0) return;
 
         // FIX I-05: Only deduct what is actually sent, not the full claim amount.
@@ -775,6 +776,7 @@ contract TreasuryV2 is
         _accrueFees();
 
         uint256 total = totalValue();
+        // slither-disable-next-line incorrect-equality
         if (total == 0) return;
 
         // First pass: withdraw from over-allocated strategies

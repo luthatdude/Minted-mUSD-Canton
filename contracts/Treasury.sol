@@ -92,6 +92,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Amount deployable after reserving buffer
     function deployableAmount() public view returns (uint256) {
         uint256 total = usdc.balanceOf(address(this)) + deployedToStrategies;
+        // slither-disable-next-line incorrect-equality
         if (total == 0) return 0;
 
         uint256 targetReserve = (total * reserveBufferBps) / 10000;
@@ -252,6 +253,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Deploy to default strategy
+    // slither-disable-next-line incorrect-equality
     function _deployToDefaultStrategy(uint256 amount) internal returns (bool) {
         if (amount == 0 || defaultStrategy == address(0)) return false;
 
@@ -260,6 +262,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
 
         // Check max deployment limit
         uint256 totalAssets = availableReserves() + deployedToStrategies;
+        // slither-disable-next-line incorrect-equality
         if (totalAssets == 0) return false;
 
         uint256 newDeployed = deployedToStrategies + amount;
@@ -270,6 +273,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
             amount = maxAllowed - deployedToStrategies;
         }
 
+        // slither-disable-next-line incorrect-equality
         if (amount == 0) return false;
 
         // Approve and deposit to strategy
@@ -292,6 +296,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
         if (defaultStrategy == address(0)) return 0;
 
         uint256 strategyBalance = strategyDeployments[defaultStrategy];
+        // slither-disable-next-line incorrect-equality
         if (strategyBalance == 0) return 0;
 
         uint256 toWithdraw = amount > strategyBalance ? strategyBalance : amount;

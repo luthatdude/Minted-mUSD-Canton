@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 /**
  * @title MockTokenBridge
  * @notice Mock Wormhole Token Bridge for testing
+ * @dev Test-only contract, locked ether is acceptable
  */
+// slither-disable-next-line locked-ether
 contract MockTokenBridge {
     uint64 private _sequence;
 
