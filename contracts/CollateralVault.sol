@@ -8,11 +8,13 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /// @title CollateralVault
 /// @notice Holds collateral deposits for the borrowing system.
 ///         BorrowModule and LiquidationEngine interact with this vault.
-contract CollateralVault is AccessControl, ReentrancyGuard {
+/// FIX M-12: Added Pausable for emergency halt of deposit/withdraw operations
+contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant BORROW_MODULE_ROLE = keccak256("BORROW_MODULE_ROLE");
@@ -121,7 +123,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     /// @notice Deposit collateral
     /// @param token The collateral token address
     /// @param amount Amount to deposit
-    function deposit(address token, uint256 amount) external nonReentrant {
+    function deposit(address token, uint256 amount) external nonReentrant whenNotPaused {
         require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
         require(amount > 0, "INVALID_AMOUNT");
 
@@ -226,5 +228,14 @@ contract CollateralVault is AccessControl, ReentrancyGuard {
     ) {
         CollateralConfig storage c = collateralConfigs[token];
         return (c.enabled, c.collateralFactorBps, c.liquidationThresholdBps, c.liquidationPenaltyBps);
+    }
+
+    /// FIX M-12: Emergency pause for collateral operations
+    function pause() external onlyRole(VAULT_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }

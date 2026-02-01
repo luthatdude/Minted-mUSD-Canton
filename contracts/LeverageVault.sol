@@ -305,11 +305,15 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repay(debtToRepay);
 
-            // Refund excess mUSD if any
+            // FIX C-4: Refund excess mUSD — if swap fails, transfer mUSD directly to user
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // Swap excess mUSD back to collateral (received to this contract)
-                _swapMusdToCollateral(collateralToken, excessMusd);
+                // Try to swap excess mUSD back to collateral
+                uint256 collateralBack = _swapMusdToCollateral(collateralToken, excessMusd);
+                if (collateralBack == 0) {
+                    // Swap failed — send excess mUSD directly to user instead of locking
+                    IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
+                }
             }
         }
 
@@ -441,7 +445,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard {
                 tokenOut: collateralToken,
                 fee: poolFee,
                 recipient: address(this),
-                deadline: block.timestamp + 300, // 5 min deadline
+                deadline: block.timestamp, // FIX M-6: Use current block timestamp (caller controls via tx deadline)
                 amountIn: musdAmount,
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0

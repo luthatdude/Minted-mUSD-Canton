@@ -252,7 +252,8 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         _pause();
     }
 
-    function unpause() external onlyRole(PAUSER_ROLE) {
+    /// FIX M-2: Unpause requires admin (separation of duties, matches DirectMintV2)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 

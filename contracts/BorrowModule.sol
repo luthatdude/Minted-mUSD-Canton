@@ -6,6 +6,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -31,7 +32,8 @@ interface IMUSDMint {
 /// @notice Manages debt positions for overcollateralized mUSD borrowing.
 ///         Users deposit collateral in CollateralVault, then borrow mUSD here.
 ///         Interest accrues per-second on outstanding debt.
-contract BorrowModule is AccessControl, ReentrancyGuard {
+/// FIX M-12: Added Pausable for emergency halt of borrowing operations
+contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
@@ -95,7 +97,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
 
     /// @notice Borrow mUSD against deposited collateral
     /// @param amount Amount of mUSD to borrow (18 decimals)
-    function borrow(uint256 amount) external nonReentrant {
+    function borrow(uint256 amount) external nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
         // Accrue interest first
@@ -383,5 +385,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard {
         require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
         emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
+    }
+
+    /// FIX M-12: Emergency pause for lending operations
+    function pause() external onlyRole(BORROW_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }

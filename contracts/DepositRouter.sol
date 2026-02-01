@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// FIX L-4: Aligned pragma with rest of codebase
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -201,11 +202,20 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
     
     /**
      * @notice Check if a deposit has been completed
+     * @dev FIX M-5: Deposit completion happens on destination chain (TreasuryReceiver).
+     * This function checks a locally-tracked flag. Use off-chain VAA status for truth.
      * @param sequence Wormhole sequence number
      * @return completed Whether the deposit is complete
      */
     function isDepositComplete(uint64 sequence) external view returns (bool completed) {
         return pendingDeposits[sequence].completed;
+    }
+
+    /// @notice FIX M-5: Mark deposit as completed (callable by owner after Wormhole confirmation)
+    function markDepositComplete(uint64 sequence) external onlyOwner {
+        require(pendingDeposits[sequence].depositor != address(0), "DEPOSIT_NOT_FOUND");
+        require(!pendingDeposits[sequence].completed, "ALREADY_COMPLETED");
+        pendingDeposits[sequence].completed = true;
     }
     
     /**
@@ -316,8 +326,8 @@ contract DepositRouter is Ownable, ReentrancyGuard, Pausable {
         // Accumulate fees
         accumulatedFees += fee;
         
-        // Approve token bridge
-        usdc.approve(address(tokenBridge), netAmount);
+        // FIX H-7: Use forceApprove for USDT-safety and consistency
+        usdc.forceApprove(address(tokenBridge), netAmount);
         
         // Increment nonce
         _nonce++;

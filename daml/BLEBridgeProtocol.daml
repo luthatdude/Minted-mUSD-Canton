@@ -274,26 +274,32 @@ template SupplyCapAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : SupplyCapPayload
+    signedValidators : [Party]  -- FIX H-4: Track signed validators for consuming choice
   where
     signatory aggregator
     observer validatorGroup
 
     ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
 
-    nonconsuming choice SupplyCap_Sign : ContractId SupplyCapSignature
+    -- FIX H-4: Made consuming to prevent duplicate signatures (matches BridgeIn/BridgeOut pattern)
+    choice SupplyCap_Sign : (ContractId SupplyCapAttestation, ContractId SupplyCapSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        assertMsg "ALREADY_SIGNED" (validator `notElem` signedValidators)
 
-        create SupplyCapSignature with
+        sig <- create SupplyCapSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+
+        newAtt <- create this with signedValidators = validator :: signedValidators
+        return (newAtt, sig)
 
     -- Finalize: archives attestation, returns the verified global state
     -- FIX DL-H3: Derive requiredSignatures from validatorGroup size (majority quorum)
@@ -308,9 +314,10 @@ template SupplyCapAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        -- FIX H-4: Validate by nonce (contract ID changes on each consuming sign)
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -353,6 +360,7 @@ template YieldAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : YieldPayload
+    signedValidators : [Party]  -- FIX H-5: Track signed validators for consuming choice
   where
     signatory aggregator
     observer validatorGroup
@@ -360,20 +368,25 @@ template YieldAttestation
     -- Treasury assets must be >= mUSD supply (no undercollateralization)
     ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
 
-    nonconsuming choice Yield_Sign : ContractId YieldSignature
+    -- FIX H-5: Made consuming to prevent duplicate signatures (matches BridgeIn/BridgeOut pattern)
+    choice Yield_Sign : (ContractId YieldAttestation, ContractId YieldSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        assertMsg "ALREADY_SIGNED" (validator `notElem` signedValidators)
 
-        create YieldSignature with
+        sig <- create YieldSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+
+        newAtt <- create this with signedValidators = validator :: signedValidators
+        return (newAtt, sig)
 
     -- Finalize: returns verified yield data for smUSD sync
     -- FIX DL-H4: Derive requiredSignatures from validatorGroup size (majority quorum)
@@ -388,9 +401,10 @@ template YieldAttestation
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        let reqIds = map (.requestCid) sigs
+        let sigNonces = map (.nonce) sigs
 
-        assertMsg "SIGNATURE_REQUEST_MISMATCH" (all (== self) reqIds)
+        -- FIX H-5: Validate by nonce (contract ID changes on each consuming sign)
+        assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 

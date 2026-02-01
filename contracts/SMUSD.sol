@@ -54,6 +54,8 @@ contract SMUSD is ERC4626, AccessControl {
     }
 
     // FIX S-01: Propagate cooldown on transfer to prevent bypass
+    // FIX M-3: Only propagate cooldown for substantial transfers (>= 1% of receiver balance)
+    // to prevent griefing via dust transfers resetting cooldown
     function _update(address from, address to, uint256 value) internal override {
         // Skip cooldown propagation for mint (from == 0) and burn (to == 0)
         if (from != address(0) && to != address(0)) {
@@ -61,8 +63,13 @@ contract SMUSD is ERC4626, AccessControl {
             uint256 fromCooldown = lastDeposit[from];
             uint256 toCooldown = lastDeposit[to];
 
-            // Receiver inherits the later (more restrictive) cooldown
-            if (fromCooldown > toCooldown) {
+            // FIX M-3: Only propagate cooldown if transfer is significant
+            // (at least 1% of the receiver's existing balance, or receiver has 0)
+            uint256 recipientBalance = balanceOf(to);
+            bool isSignificantTransfer = recipientBalance == 0 || value >= recipientBalance / 100;
+
+            // Receiver inherits the later (more restrictive) cooldown only for significant transfers
+            if (fromCooldown > toCooldown && isSignificantTransfer) {
                 lastDeposit[to] = fromCooldown;
                 emit CooldownUpdated(to, fromCooldown);
             }

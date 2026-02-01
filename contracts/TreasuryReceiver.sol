@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// FIX L-4: Aligned pragma with rest of codebase
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -79,6 +80,10 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
+
+    /// @notice FIX C-5: Pending mints for users whose mintFor failed
+    /// Maps recipient => claimable USDC amount (held in this contract)
+    mapping(address => uint256) public pendingMints;
     
     /// @notice Wormhole chain IDs
     uint16 public constant BASE_CHAIN_ID = 30;
@@ -102,6 +107,8 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event PendingMintClaimed(address indexed recipient, uint256 usdcAmount);
+    event PendingMintRetried(address indexed recipient, uint256 usdcAmount, uint256 musdMinted);
 
     // ============ Errors ============
     
@@ -168,9 +175,10 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
-            // If minting fails, forward to treasury as fallback (funds not lost)
+            // FIX C-5: If minting fails, hold USDC for user to claim/retry
+            // instead of sending to treasury where user can never recover
             usdc.forceApprove(directMint, 0);
-            usdc.safeTransfer(treasury, received);
+            pendingMints[recipient] += received;
             emit MintFallbackToTreasury(recipient, received, vm.hash);
         }
         
@@ -244,5 +252,27 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
+    }
+
+    // ============ FIX C-5: Pending Mint Recovery ============
+
+    /// @notice Claim pending USDC back (if mint failed during bridge receipt)
+    function claimPendingMint() external nonReentrant {
+        uint256 amount = pendingMints[msg.sender];
+        require(amount > 0, "NO_PENDING_MINT");
+        pendingMints[msg.sender] = 0;
+        usdc.safeTransfer(msg.sender, amount);
+        emit PendingMintClaimed(msg.sender, amount);
+    }
+
+    /// @notice Retry minting mUSD from a previously failed mint
+    function retryPendingMint() external nonReentrant {
+        uint256 amount = pendingMints[msg.sender];
+        require(amount > 0, "NO_PENDING_MINT");
+        pendingMints[msg.sender] = 0;
+
+        usdc.forceApprove(directMint, amount);
+        uint256 musdMinted = IDirectMint(directMint).mintFor(msg.sender, amount);
+        emit PendingMintRetried(msg.sender, amount, musdMinted);
     }
 }

@@ -6,6 +6,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -47,7 +48,8 @@ interface IMUSDBurn {
 /// @notice Liquidates undercollateralized borrowing positions.
 ///         Liquidators repay a portion of the debt in mUSD and receive
 ///         the borrower's collateral at a discount (liquidation penalty).
-contract LiquidationEngine is AccessControl, ReentrancyGuard {
+/// FIX M-12: Added Pausable for emergency halt of liquidation operations
+contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant ENGINE_ADMIN_ROLE = keccak256("ENGINE_ADMIN_ROLE");
@@ -106,7 +108,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         address borrower,
         address collateralToken,
         uint256 debtToRepay
-    ) external nonReentrant {
+    ) external nonReentrant whenNotPaused {
         require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
         require(debtToRepay > 0, "INVALID_AMOUNT");
 
@@ -226,5 +228,14 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
         emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
+    }
+
+    /// FIX M-12: Emergency pause for liquidation operations
+    function pause() external onlyRole(ENGINE_ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }

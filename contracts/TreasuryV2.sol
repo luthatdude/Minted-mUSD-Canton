@@ -122,6 +122,10 @@ contract TreasuryV2 is
     /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
+    // FIX M-4: Events for admin config changes
+    event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
+    event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
+    event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -691,9 +695,10 @@ contract TreasuryV2 is
 
         uint256 idx = strategyIndex[strategy];
 
-        // Withdraw all from strategy
+        // FIX H-2: Withdraw all — revert if fails (prevents removing strategy
+        // while its funds are stuck, which would cause accounting loss)
         if (strategies[idx].active) {
-            try IStrategy(strategy).withdrawAll() {} catch {}
+            IStrategy(strategy).withdrawAll();
         }
 
         // Deactivate (don't delete to preserve indices)
@@ -786,7 +791,10 @@ contract TreasuryV2 is
                 asset.forceApprove(strat, toDeposit);
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
-                } catch {}
+                } catch {
+                    // FIX H-3: Clear dangling approval on deposit failure
+                    asset.forceApprove(strat, 0);
+                }
             }
         }
 
@@ -837,6 +845,7 @@ contract TreasuryV2 is
 
         fees.performanceFeeBps = _performanceFeeBps;
         fees.feeRecipient = _feeRecipient;
+        emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
     }
 
     /**
@@ -844,14 +853,18 @@ contract TreasuryV2 is
      */
     function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+        uint256 oldReserveBps = reserveBps;
         reserveBps = _reserveBps;
+        emit ReserveBpsUpdated(oldReserveBps, _reserveBps);
     }
 
     /**
      * @notice Update minimum auto-allocate amount
      */
     function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
+        emit MinAutoAllocateUpdated(oldAmount, _minAmount);
     }
 
     /**

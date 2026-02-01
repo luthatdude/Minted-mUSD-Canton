@@ -92,6 +92,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event RateLimitReset(uint256 timestamp);
     event DailyCapIncreaseLimitUpdated(uint256 oldLimit, uint256 newLimit);
     event RateLimitedCapIncrease(uint256 requestedIncrease, uint256 allowedIncrease, uint256 remainingLimit);
+    // FIX H-1: Event for when supply cap update is skipped due to totalSupply > newCap
+    event SupplyCapUpdateSkipped(uint256 oldCap, uint256 attemptedCap, uint256 attestedAssets);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -290,8 +292,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             // FIX M-04: Do NOT floor at currentSupply when cap drops.
             // If assets decreased, the cap should reflect reality (no new minting).
             // Existing tokens remain but the cap correctly signals undercollateralization.
-            musdToken.setSupplyCap(newCap);
-            emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+            // FIX H-1: Guard against revert when newCap < totalSupply
+            // MUSD.setSupplyCap reverts with CAP_BELOW_SUPPLY if newCap < totalSupply()
+            // This prevents bridge liveness failure if other minters increase totalSupply
+            try musdToken.setSupplyCap(newCap) {
+                emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+            } catch {
+                // Cap below current supply — skip cap update but still emit for monitoring
+                emit SupplyCapUpdateSkipped(oldCap, newCap, _attestedAssets);
+            }
         }
     }
 

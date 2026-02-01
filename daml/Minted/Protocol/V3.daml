@@ -67,14 +67,23 @@ template MintedMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    -- | Transfer mUSD to another party
-    choice MUSD_Transfer : ContractId MintedMUSD
+    -- | FIX C-1: Transfer via proposal pattern to respect dual-signatory model.
+    -- Creates a transfer proposal that newOwner must accept.
+    choice MUSD_Transfer : ContractId MintedMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
-        create this with owner = newOwner
+        create MintedMUSDTransferProposal with
+          issuer
+          currentOwner = owner
+          newOwner
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
 
     -- | Split into two contracts
     choice MUSD_Split : (ContractId MintedMUSD, ContractId MintedMUSD)
@@ -103,8 +112,10 @@ template MintedMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
-    choice MUSD_BridgeToEthereum : ContractId AttestationRequest
+    -- | FIX C-3: Bridge mUSD to Ethereum - burns Canton token and creates a bridge-out
+    -- proposal. The aggregator must then create the AttestationRequest (since
+    -- aggregator is its signatory and must consent).
+    choice MUSD_BridgeToEthereum : ContractId BridgeOutProposal
       with
         ethAddress : Text         -- Target Ethereum address
         chainId : Int             -- Target chain (1 = mainnet)
@@ -116,22 +127,18 @@ template MintedMUSD
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
-        
-        -- Token is consumed (burned) on Canton
-        create AttestationRequest with
+
+        -- Token is consumed (burned) on Canton; aggregator creates attestation
+        create BridgeOutProposal with
+          issuer
+          owner
           aggregator
           validatorGroup = validators
-          payload = AttestationPayload with
-            attestationId = "bridge-" <> show nonce
-            globalCantonAssets = amount
-            targetAddress = ethAddress
-            amount = amount
-            isMint = True  -- Mint on Ethereum side
-            nonce
-            chainId
-            expiresAt
-          collectedSignatures = Set.empty
-          direction = CantonToEthereum
+          ethAddress
+          amount
+          nonce
+          chainId
+          expiresAt
 
     -- | Set blacklist status (issuer only)
     choice MUSD_SetBlacklist : ContractId MintedMUSD
@@ -839,12 +846,19 @@ template CooldownTicket
 
     ensure shares > 0.0
 
-    -- | Transfer ticket to another party
-    choice Ticket_Transfer : ContractId CooldownTicket
+    -- | FIX C-2: Transfer via proposal pattern to respect dual-signatory model.
+    choice Ticket_Transfer : ContractId CooldownTicketTransferProposal
       with
         newOwner : Party
       controller owner
-      do create this with owner = newOwner
+      do create CooldownTicketTransferProposal with
+           operator
+           currentOwner = owner
+           newOwner
+           shares
+           entrySharePrice
+           stakedAt
+           cooldownSeconds
 
     -- | Split ticket
     choice Ticket_Split : (ContractId CooldownTicket, ContractId CooldownTicket)
@@ -1102,6 +1116,148 @@ template BridgeInRequest
     choice BridgeIn_Cancel : ContractId BridgeInRequest
       controller operator
       do create this with status = "cancelled"
+
+-- ============================================================
+--         FIX C-1: MUSD TRANSFER PROPOSAL
+-- ============================================================
+
+-- | Transfer proposal: newOwner must accept to become signatory.
+template MintedMUSDTransferProposal
+  with
+    issuer : Party
+    currentOwner : Party
+    newOwner : Party
+    amount : Money
+    blacklisted : Bool
+    agreementHash : Text
+    agreementUri : Text
+    observers : [Party]
+  where
+    signatory issuer, currentOwner
+    observer newOwner
+
+    -- | New owner accepts the transfer
+    choice MUSDTransfer_Accept : ContractId MintedMUSD
+      controller newOwner
+      do
+        create MintedMUSD with
+          issuer
+          owner = newOwner
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+
+    -- | Current owner cancels the proposal
+    choice MUSDTransfer_Cancel : ()
+      controller currentOwner
+      do return ()
+
+    -- | New owner rejects the proposal — re-create token for current owner
+    choice MUSDTransfer_Reject : ContractId MintedMUSD
+      controller newOwner
+      do
+        create MintedMUSD with
+          issuer
+          owner = currentOwner
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+
+-- ============================================================
+--         FIX C-2: COOLDOWN TICKET TRANSFER PROPOSAL
+-- ============================================================
+
+-- | Transfer proposal for CooldownTicket: newOwner must accept.
+template CooldownTicketTransferProposal
+  with
+    operator : Party
+    currentOwner : Party
+    newOwner : Party
+    shares : Money
+    entrySharePrice : Money
+    stakedAt : Time
+    cooldownSeconds : Int
+  where
+    signatory operator, currentOwner
+    observer newOwner
+
+    -- | New owner accepts the ticket transfer
+    choice TicketTransfer_Accept : ContractId CooldownTicket
+      controller newOwner
+      do
+        create CooldownTicket with
+          operator
+          owner = newOwner
+          shares
+          entrySharePrice
+          stakedAt
+          cooldownSeconds
+
+    -- | Current owner cancels
+    choice TicketTransfer_Cancel : ()
+      controller currentOwner
+      do return ()
+
+    -- | New owner rejects — re-create ticket for current owner
+    choice TicketTransfer_Reject : ContractId CooldownTicket
+      controller newOwner
+      do
+        create CooldownTicket with
+          operator
+          owner = currentOwner
+          shares
+          entrySharePrice
+          stakedAt
+          cooldownSeconds
+
+-- ============================================================
+--         FIX C-3: BRIDGE-OUT PROPOSAL
+-- ============================================================
+
+-- | BridgeOutProposal: aggregator must accept to create the AttestationRequest
+-- (since aggregator is a signatory of AttestationRequest).
+template BridgeOutProposal
+  with
+    issuer : Party
+    owner : Party
+    aggregator : Party
+    validatorGroup : [Party]
+    ethAddress : Text
+    amount : Money
+    nonce : Int
+    chainId : Int
+    expiresAt : Time
+  where
+    signatory issuer, owner
+    observer aggregator
+
+    -- | Aggregator accepts and creates the attestation request
+    choice BridgeOutProposal_Accept : ContractId AttestationRequest
+      controller aggregator
+      do
+        create AttestationRequest with
+          aggregator
+          validatorGroup
+          payload = AttestationPayload with
+            attestationId = "bridge-" <> show nonce
+            globalCantonAssets = amount
+            targetAddress = ethAddress
+            amount
+            isMint = True
+            nonce
+            chainId
+            expiresAt
+          collectedSignatures = Set.empty
+          direction = CantonToEthereum
+
+    -- | Owner cancels (if aggregator hasn't accepted yet)
+    choice BridgeOutProposal_Cancel : ()
+      controller owner
+      do return ()
 
 -- ============================================================
 --                     HELPER FUNCTIONS
