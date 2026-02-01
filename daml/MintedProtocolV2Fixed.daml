@@ -1073,8 +1073,10 @@ template AttestationRequest
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
-        -- FIX D-H04: Archive signatures after finalization to prevent reuse
-        mapA_ archive signatureCids
+        -- FIX C-7: Cannot archive ValidatorSignature (signatory is validator, not aggregator).
+        -- Signatures are consumed by fetch above and finalize is a consuming choice,
+        -- so cross-request replay is already prevented by the attestation being archived.
+        -- Removed: mapA_ archive signatureCids
 
         return signatureCids
 

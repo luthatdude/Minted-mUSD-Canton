@@ -79,7 +79,10 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
-    
+
+    /// @notice FIX H-4: Pending mints for users whose mintFor failed
+    mapping(address => uint256) public pendingMints;
+
     /// @notice Wormhole chain IDs
     uint16 public constant BASE_CHAIN_ID = 30;
     uint16 public constant ARBITRUM_CHAIN_ID = 23;
@@ -102,6 +105,8 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
     // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event PendingMintClaimed(address indexed recipient, uint256 usdcAmount);
+    event PendingMintRetried(address indexed recipient, uint256 usdcAmount, uint256 musdMinted);
 
     // ============ Errors ============
     
@@ -168,9 +173,9 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
-            // If minting fails, forward to treasury as fallback (funds not lost)
+            // FIX H-4: Store failed mints for user to claim/retry
             usdc.forceApprove(directMint, 0);
-            usdc.safeTransfer(treasury, received);
+            pendingMints[recipient] += received;
             emit MintFallbackToTreasury(recipient, received, vm.hash);
         }
         
@@ -235,6 +240,38 @@ contract TreasuryReceiver is Ownable, ReentrancyGuard {
         emit TreasuryUpdated(old, newTreasury);
     }
     
+    // ============ Pending Mint Recovery (FIX H-4) ============
+
+    /**
+     * @notice Claim pending USDC from a failed mint (sends USDC directly to caller)
+     */
+    function claimPendingMint() external nonReentrant {
+        uint256 amount = pendingMints[msg.sender];
+        require(amount > 0, "NO_PENDING_MINT");
+        pendingMints[msg.sender] = 0;
+        usdc.safeTransfer(msg.sender, amount);
+        emit PendingMintClaimed(msg.sender, amount);
+    }
+
+    /**
+     * @notice Retry a failed mint — attempts DirectMint again
+     */
+    function retryPendingMint() external nonReentrant {
+        uint256 amount = pendingMints[msg.sender];
+        require(amount > 0, "NO_PENDING_MINT");
+        pendingMints[msg.sender] = 0;
+
+        usdc.forceApprove(directMint, amount);
+        try IDirectMint(directMint).mintFor(msg.sender, amount) returns (uint256 musdMinted) {
+            emit PendingMintRetried(msg.sender, amount, musdMinted);
+        } catch {
+            // Re-store if retry also fails
+            usdc.forceApprove(directMint, 0);
+            pendingMints[msg.sender] = amount;
+            revert MintFailed();
+        }
+    }
+
     /**
      * @notice Emergency withdrawal
      * @param token Token to withdraw

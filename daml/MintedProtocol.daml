@@ -37,12 +37,21 @@ template Asset
     -- FIX D-C11: Require strictly positive amounts
     ensure amount > 0.0
 
-    choice Asset_Transfer : AssetId
+    -- FIX C-6: Transfer via proposal pattern to respect dual-signatory model.
+    -- newOwner must accept to become signatory.
+    choice Asset_Transfer : ContractId AssetTransferProposal
       with
         newOwner : Party
       controller owner
       do
-        create this with owner = newOwner
+        assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        create AssetTransferProposal with
+          issuer
+          currentOwner = owner
+          newOwner
+          symbol
+          amount
+          observers
 
     choice Asset_Split : (AssetId, AssetId)
       with
@@ -67,6 +76,43 @@ template Asset
         assertMsg "Issuers must match" $ other.issuer == issuer
         archive otherCid
         create this with amount = amount + other.amount
+
+-- | FIX C-6: Asset transfer proposal for dual-signatory compliance.
+template AssetTransferProposal
+  with
+    issuer : Party
+    currentOwner : Party
+    newOwner : Party
+    symbol : Text
+    amount : Decimal
+    observers : [Party]
+  where
+    signatory issuer, currentOwner
+    observer newOwner
+
+    choice AssetTransfer_Accept : AssetId
+      controller newOwner
+      do
+        create Asset with
+          issuer
+          owner = newOwner
+          symbol
+          amount
+          observers
+
+    choice AssetTransfer_Cancel : ()
+      controller currentOwner
+      do return ()
+
+    choice AssetTransfer_Reject : AssetId
+      controller newOwner
+      do
+        create Asset with
+          issuer
+          owner = currentOwner
+          symbol
+          amount
+          observers
 
 -- | Trusted source for asset prices
 template PriceOracle

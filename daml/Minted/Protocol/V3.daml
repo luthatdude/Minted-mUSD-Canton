@@ -113,8 +113,10 @@ template MintedMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
-    choice MUSD_BridgeToEthereum : ContractId AttestationRequest
+    -- | FIX C-5: Bridge mUSD to Ethereum via proposal pattern.
+    -- Creates a BridgeOutProposal that the aggregator must accept to create
+    -- the AttestationRequest (since aggregator is its signatory).
+    choice MUSD_BridgeToEthereum : ContractId BridgeOutProposal
       with
         ethAddress : Text         -- Target Ethereum address
         chainId : Int             -- Target chain (1 = mainnet)
@@ -126,22 +128,18 @@ template MintedMUSD
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
-        
-        -- Token is consumed (burned) on Canton
-        create AttestationRequest with
+
+        -- Token is consumed (burned) on Canton; aggregator creates attestation
+        create BridgeOutProposal with
+          issuer
+          owner
           aggregator
           validatorGroup = validators
-          payload = AttestationPayload with
-            attestationId = "bridge-" <> show nonce
-            globalCantonAssets = amount
-            targetAddress = ethAddress
-            amount = amount
-            isMint = True  -- Mint on Ethereum side
-            nonce
-            chainId
-            expiresAt
-          collectedSignatures = Set.empty
-          direction = CantonToEthereum
+          ethAddress
+          amount
+          nonce
+          chainId
+          expiresAt
 
     -- | Set blacklist status (issuer only)
     choice MUSD_SetBlacklist : ContractId MintedMUSD
@@ -474,6 +472,7 @@ template Vault
         create this with collateralAmount = newCollateral
 
     -- | Liquidate - Called by keepers when vault is undercollateralized
+    -- FIX H-11: Added self-liquidation prevention
     choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt)
       with
         liquidator : Party
@@ -481,6 +480,8 @@ template Vault
         oracleCid : ContractId PriceOracle
       controller liquidator
       do
+        -- FIX H-11: Prevent owner from self-liquidating
+        assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
         -- Calculate current debt with interest
         now <- getTime
         let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
@@ -1065,8 +1066,9 @@ template BridgeService
       && totalBridgedOut >= 0.0
       && lastNonce >= 0
 
-    -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
-    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
+    -- | FIX C-4: Receive mUSD from Ethereum via proposal pattern.
+    -- Creates a BridgeInMintProposal that recipient must accept to become MintedMUSD signatory.
+    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId BridgeInMintProposal)
       with
         attestationCid : ContractId AttestationRequest
         recipient : Party
@@ -1076,33 +1078,32 @@ template BridgeService
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
-        
+
         attestation <- fetch attestationCid
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
-        
+
         -- Verify sufficient signatures
         let sigCount = Set.size attestation.collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
-        
+
         -- Archive attestation (consumed)
         archive attestationCid
-        
-        -- Mint mUSD on Canton
-        musdCid <- create MintedMUSD with
+
+        -- Create mint proposal for recipient to accept
+        proposalCid <- create BridgeInMintProposal with
           issuer = operator
-          owner = recipient
+          recipient
           amount
-          blacklisted = False
           agreementHash = mpaHash
           agreementUri = mpaUri
-          observers = []
-        
+          nonce = attestation.payload.nonce
+
         newService <- create this with
           totalBridgedIn = totalBridgedIn + amount
           lastNonce = attestation.payload.nonce
-        
-        return (newService, musdCid)
+
+        return (newService, proposalCid)
 
     -- | Assign nonce to a bridge-out request
     choice Bridge_AssignNonce : (ContractId BridgeService, Int)
@@ -1290,6 +1291,87 @@ template BridgeInRequest
     choice BridgeIn_Cancel : ContractId BridgeInRequest
       controller operator
       do create this with status = "cancelled"
+
+-- ============================================================
+--         FIX C-5: BRIDGE-OUT PROPOSAL
+-- ============================================================
+
+-- | BridgeOutProposal: aggregator must accept to create the AttestationRequest
+-- (since aggregator is a signatory of AttestationRequest).
+template BridgeOutProposal
+  with
+    issuer : Party
+    owner : Party
+    aggregator : Party
+    validatorGroup : [Party]
+    ethAddress : Text
+    amount : Money
+    nonce : Int
+    chainId : Int
+    expiresAt : Time
+  where
+    signatory issuer, owner
+    observer aggregator
+
+    -- | Aggregator accepts and creates the attestation request
+    choice BridgeOutProposal_Accept : ContractId AttestationRequest
+      controller aggregator
+      do
+        create AttestationRequest with
+          aggregator
+          validatorGroup
+          payload = AttestationPayload with
+            attestationId = "bridge-" <> show nonce
+            globalCantonAssets = amount
+            targetAddress = ethAddress
+            amount
+            isMint = True
+            nonce
+            chainId
+            expiresAt
+          collectedSignatures = Set.empty
+          direction = CantonToEthereum
+
+    -- | Owner cancels
+    choice BridgeOutProposal_Cancel : ()
+      controller owner
+      do return ()
+
+-- ============================================================
+--         FIX C-4: BRIDGE-IN MINT PROPOSAL
+-- ============================================================
+
+-- | BridgeInMintProposal: recipient must accept to become MintedMUSD signatory.
+-- Created by Bridge_ReceiveFromEthereum when mUSD is minted after attestation.
+template BridgeInMintProposal
+  with
+    issuer : Party
+    recipient : Party
+    amount : Money
+    agreementHash : Text
+    agreementUri : Text
+    nonce : Int
+  where
+    signatory issuer
+    observer recipient
+
+    -- | Recipient accepts and receives the mUSD
+    choice BridgeInMint_Accept : ContractId MintedMUSD
+      controller recipient
+      do
+        create MintedMUSD with
+          issuer
+          owner = recipient
+          amount
+          blacklisted = False
+          agreementHash
+          agreementUri
+          observers = []
+
+    -- | Issuer cancels (e.g., compliance block)
+    choice BridgeInMint_Cancel : ()
+      controller issuer
+      do return ()
 
 -- ============================================================
 --                     HELPER FUNCTIONS

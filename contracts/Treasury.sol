@@ -267,12 +267,18 @@ contract Treasury is AccessControl, ReentrancyGuard {
         if (amount == 0) return false;
 
         // Approve and deposit to strategy
+        // FIX H-1: Verify actual balance change instead of trusting strategy return value
+        uint256 balanceBefore = usdc.balanceOf(address(this));
         usdc.forceApprove(defaultStrategy, amount);
 
         try IStrategy(defaultStrategy).deposit(amount) returns (uint256 deposited) {
-            deployedToStrategies += deposited;
-            strategyDeployments[defaultStrategy] += deposited;
-            emit AutoDeployed(defaultStrategy, deposited);
+            uint256 balanceAfter = usdc.balanceOf(address(this));
+            uint256 actualDeployed = balanceBefore - balanceAfter;
+            // Use the smaller of reported vs actual to prevent corrupt accounting
+            uint256 tracked = actualDeployed < deposited ? actualDeployed : deposited;
+            deployedToStrategies += tracked;
+            strategyDeployments[defaultStrategy] += tracked;
+            emit AutoDeployed(defaultStrategy, tracked);
             return true;
         } catch {
             usdc.forceApprove(defaultStrategy, 0);

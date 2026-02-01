@@ -32,22 +32,25 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         _grantRole(PAUSER_ROLE, msg.sender);
     }
 
-    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party deposit.
-    // A depositor can always set their own cooldown, and depositing on behalf of someone
-    // correctly locks the receiver's withdrawal window.
-    // FIX: Added nonReentrant and whenNotPaused for security
+    // FIX S-H01: Set cooldown for receiver on deposit to prevent flash-deposit-withdraw.
+    // FIX M-2: Only reset cooldown when depositing for yourself to prevent griefing.
+    // Third-party deposits (receiver != msg.sender) don't reset cooldown, preventing
+    // attackers from depositing dust to perpetually extend a victim's withdrawal lock.
+    // Transfer-based cooldown propagation in _update() still prevents share-transfer bypasses.
     function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
-        lastDeposit[receiver] = block.timestamp;
-        emit CooldownUpdated(receiver, block.timestamp);
+        if (receiver == msg.sender) {
+            lastDeposit[receiver] = block.timestamp;
+            emit CooldownUpdated(receiver, block.timestamp);
+        }
         return super.deposit(assets, receiver);
     }
 
-    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
-    // Matches deposit() behavior — any path that increases shares must reset cooldown.
-    // FIX: Added nonReentrant and whenNotPaused for security
+    // FIX S-H01 + M-2: Same cooldown-only-for-self pattern as deposit().
     function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
-        lastDeposit[receiver] = block.timestamp;
-        emit CooldownUpdated(receiver, block.timestamp);
+        if (receiver == msg.sender) {
+            lastDeposit[receiver] = block.timestamp;
+            emit CooldownUpdated(receiver, block.timestamp);
+        }
         return super.mint(shares, receiver);
     }
 

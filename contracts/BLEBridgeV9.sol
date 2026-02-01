@@ -290,8 +290,16 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             // FIX M-04: Do NOT floor at currentSupply when cap drops.
             // If assets decreased, the cap should reflect reality (no new minting).
             // Existing tokens remain but the cap correctly signals undercollateralization.
-            musdToken.setSupplyCap(newCap);
-            emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+            // FIX H-5: Wrap in try/catch so attestation processing succeeds even if
+            // setSupplyCap reverts (e.g., mUSD token paused or cap below totalSupply).
+            // This prevents supply cap liveness failure from blocking all attestations.
+            try musdToken.setSupplyCap(newCap) {
+                emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
+            } catch {
+                // Cap update failed — attestation still records the assets
+                // but supply cap remains unchanged until next successful update
+                newCap = oldCap;
+            }
         }
     }
 

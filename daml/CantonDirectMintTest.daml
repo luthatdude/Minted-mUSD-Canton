@@ -323,6 +323,8 @@ supplyCapSyncTest = script do
   let validators = [validator1, validator2, validator3]
   now <- getTime
 
+  let expiresAt = addRelTime now (hours 1)
+
   let payload = SupplyCapPayload with
         attestationId = "SCAP-001"
         cantonMUSDSupply = 5000000.000000000000000000
@@ -331,30 +333,33 @@ supplyCapSyncTest = script do
         globalBackingUSDC = 8500000.000000000000000000  -- Overcollateralized
         nonce = 1
         timestamp = now
+        expiresAt  -- FIX M-29: Added expiration
 
   attCid <- submit aggregator do
     createCmd SupplyCapAttestation with
       aggregator
       validatorGroup = validators
       payload
+      signedValidators = []  -- FIX M-26: Initialize empty
 
-  sig1 <- submit validator1 do
+  -- FIX M-26: SupplyCap_Sign is now consuming, returns (newAtt, sig)
+  (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid SupplyCap_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2 <- submit validator2 do
-    exerciseCmd attCid SupplyCap_Sign with
+  (attCid3, sig2) <- submit validator2 do
+    exerciseCmd attCid2 SupplyCap_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3 <- submit validator3 do
-    exerciseCmd attCid SupplyCap_Sign with
+  (attCid4, sig3) <- submit validator3 do
+    exerciseCmd attCid3 SupplyCap_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   verifiedPayload <- submit aggregator do
-    exerciseCmd attCid SupplyCap_Finalize with
+    exerciseCmd attCid4 SupplyCap_Finalize with
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Supply cap sync verified: total=" <> show verifiedPayload.totalGlobalSupply
@@ -377,6 +382,8 @@ yieldAttestationTest = script do
   let validators = [validator1, validator2, validator3]
   now <- getTime
 
+  let expiresAt = addRelTime now (hours 1)
+
   let payload = YieldPayload with
         attestationId = "YIELD-001"
         totalTreasuryAssets = 10500000.000000000000000000  -- 10.5M (yield on 10M)
@@ -385,30 +392,33 @@ yieldAttestationTest = script do
         epochNumber = 1
         timestamp = now
         nonce = 1
+        expiresAt  -- FIX M-29: Added expiration
 
   attCid <- submit aggregator do
     createCmd YieldAttestation with
       aggregator
       validatorGroup = validators
       payload
+      signedValidators = []  -- FIX M-27: Initialize empty
 
-  sig1 <- submit validator1 do
+  -- FIX M-27: Yield_Sign is now consuming, returns (newAtt, sig)
+  (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid Yield_Sign with
       validator = validator1
       ecdsaSignature = "0xsig1"
 
-  sig2 <- submit validator2 do
-    exerciseCmd attCid Yield_Sign with
+  (attCid3, sig2) <- submit validator2 do
+    exerciseCmd attCid2 Yield_Sign with
       validator = validator2
       ecdsaSignature = "0xsig2"
 
-  sig3 <- submit validator3 do
-    exerciseCmd attCid Yield_Sign with
+  (attCid4, sig3) <- submit validator3 do
+    exerciseCmd attCid3 Yield_Sign with
       validator = validator3
       ecdsaSignature = "0xsig3"
 
   verifiedYield <- submit aggregator do
-    exerciseCmd attCid Yield_Finalize with
+    exerciseCmd attCid4 Yield_Finalize with
       signatureCids = [sig1, sig2, sig3]
 
   debug $ "Yield attestation verified: accrued=" <> show verifiedYield.yieldAccrued

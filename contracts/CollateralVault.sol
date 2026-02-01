@@ -10,6 +10,12 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
+/// FIX M-22: Interface for health factor checks
+interface IBorrowModuleHealthCheck {
+    function healthFactor(address user) external view returns (uint256);
+    function totalDebt(address user) external view returns (uint256);
+}
+
 /// @title CollateralVault
 /// @notice Holds collateral deposits for the borrowing system.
 ///         BorrowModule and LiquidationEngine interact with this vault.
@@ -21,6 +27,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// FIX M-22: Optional BorrowModule reference for post-withdrawal health checks
+    IBorrowModuleHealthCheck public borrowModule;
 
     struct CollateralConfig {
         bool enabled;
@@ -186,6 +195,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Withdraw collateral on behalf of a user (for LeverageVault close position)
     /// @dev Only callable by contracts with LEVERAGE_VAULT_ROLE
+    /// FIX M-22: Post-withdrawal health check to prevent undercollateralized positions
     /// @param user The user whose collateral to withdraw
     /// @param token The collateral token
     /// @param amount Amount to withdraw
@@ -201,6 +211,15 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
         deposits[user][token] -= amount;
         IERC20(token).safeTransfer(recipient, amount);
+
+        // FIX M-22: If borrowModule is set and user has debt, verify health factor
+        if (address(borrowModule) != address(0)) {
+            uint256 debt = borrowModule.totalDebt(user);
+            if (debt > 0) {
+                uint256 hf = borrowModule.healthFactor(user);
+                require(hf >= 10000, "HEALTH_FACTOR_TOO_LOW");
+            }
+        }
 
         emit Withdrawn(user, token, amount);
     }
@@ -228,6 +247,11 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     ) {
         CollateralConfig storage c = collateralConfigs[token];
         return (c.enabled, c.collateralFactorBps, c.liquidationThresholdBps, c.liquidationPenaltyBps);
+    }
+
+    /// FIX M-22: Set the BorrowModule reference for health checks in withdrawFor
+    function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
+        borrowModule = IBorrowModuleHealthCheck(_borrowModule);
     }
 
     // ============================================================
