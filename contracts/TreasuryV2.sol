@@ -831,12 +831,18 @@ contract TreasuryV2 is
     /**
      * @notice Emergency withdraw all from all strategies
      * @dev Loops over bounded, admin-controlled strategies array
+     *      FIX H-01: Emits StrategyWithdrawFailed on failures instead of silent catch
      */
     function emergencyWithdrawAll() external onlyRole(GUARDIAN_ROLE) {
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
+                address strategyAddr = strategies[i].strategy;
                 // slither-disable-next-line calls-loop
-                try IStrategy(strategies[i].strategy).withdrawAll() {} catch {}
+                try IStrategy(strategyAddr).withdrawAll() {} 
+                catch (bytes memory reason) {
+                    // FIX H-01: Emit failure event instead of silent catch
+                    emit StrategyWithdrawFailed(strategyAddr, 0, reason);
+                }
             }
         }
 
