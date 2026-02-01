@@ -38,6 +38,9 @@ interface ValidatorConfig {
 
   // Ethereum (for address derivation)
   ethereumAddress: string;  // Validator's Ethereum address
+  // FIX RLY-C2: Whitelisted bridge contract and chain ID to validate attestations against
+  bridgeContractAddress: string;
+  allowedChainId: string;
 
   // Operational
   pollIntervalMs: number;
@@ -56,6 +59,9 @@ const DEFAULT_CONFIG: ValidatorConfig = {
   kmsKeyId: process.env.KMS_KEY_ID || "",
 
   ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
+  // FIX RLY-C2: Bridge contract address and chain ID for attestation validation
+  bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
+  allowedChainId: process.env.ALLOWED_CHAIN_ID || "1",
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
   minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
@@ -189,6 +195,19 @@ class ValidatorNode {
       const expiresAt = new Date(payload.expiresAt);
       if (expiresAt <= new Date()) {
         console.log(`[Validator] Attestation ${attestationId} expired, skipping`);
+        continue;
+      }
+
+      // FIX RLY-C2: Verify target address and chain ID match our whitelisted config.
+      // Without this, a compromised aggregator could forge attestations directing mints
+      // to attacker-controlled addresses or rogue bridge contracts.
+      if (this.config.bridgeContractAddress &&
+          payload.targetAddress.toLowerCase() !== this.config.bridgeContractAddress.toLowerCase()) {
+        console.warn(`[Validator] Attestation ${attestationId} has unexpected targetAddress ${payload.targetAddress}, expected ${this.config.bridgeContractAddress}. Skipping.`);
+        continue;
+      }
+      if (this.config.allowedChainId && payload.chainId !== this.config.allowedChainId) {
+        console.warn(`[Validator] Attestation ${attestationId} has unexpected chainId ${payload.chainId}, expected ${this.config.allowedChainId}. Skipping.`);
         continue;
       }
 

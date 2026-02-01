@@ -162,7 +162,11 @@ spec:
             - "5011"
             - "--http-port"
             - "7575"
-            - "--allow-insecure-tokens"  # Remove in production with auth proxy
+            # FIX INF-C1: Removed --allow-insecure-tokens. Production deployments must
+            # configure JWT authentication. The auth proxy or Canton's built-in JWT
+            # validation must be used to ensure party-level access control.
+            - "--access-token-file"
+            - "/etc/canton/tls/json-api-token"
           ports:
             - name: json-api
               containerPort: 7575

@@ -33,6 +33,7 @@ interface IBorrowModule {
     function totalDebt(address user) external view returns (uint256);
     function healthFactor(address user) external view returns (uint256);
     function reduceDebt(address user, uint256 amount) external;
+    function paused() external view returns (bool); // FIX SC-C1: Check BorrowModule pause state
 }
 
 interface IPriceOracleLiq {
@@ -113,6 +114,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         address collateralToken,
         uint256 debtToRepay
     ) external nonReentrant whenNotPaused {
+        // FIX SC-C1: Prevent liquidation while BorrowModule is paused.
+        // When BorrowModule is paused, users cannot repay() or add collateral,
+        // so allowing liquidations would seize collateral from defenseless positions.
+        require(!borrowModule.paused(), "BORROW_MODULE_PAUSED");
         require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
         require(debtToRepay > 0, "INVALID_AMOUNT");
         // FIX M-20: Prevent dust liquidations that waste gas and spam events

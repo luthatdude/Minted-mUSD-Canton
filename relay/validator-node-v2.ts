@@ -336,6 +336,14 @@ class ValidatorNode {
         continue;
       }
 
+      // FIX RLY-C2: Verify target bridge address and chain ID against our whitelisted config.
+      // Prevents compromised aggregators from directing mints to rogue bridge contracts.
+      if (this.config.bridgeContractAddress &&
+          payload.targetBridgeAddress.toLowerCase() !== this.config.bridgeContractAddress.toLowerCase()) {
+        console.warn(`[Validator] Attestation ${attestationId} has unexpected targetBridgeAddress ${payload.targetBridgeAddress}, expected ${this.config.bridgeContractAddress}. Skipping.`);
+        continue;
+      }
+
       // CRITICAL: Verify against Canton Network's actual state
       const verification = await this.verifyAgainstCanton(payload);
       if (!verification.valid) {

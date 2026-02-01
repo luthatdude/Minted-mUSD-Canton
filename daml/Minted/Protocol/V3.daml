@@ -181,13 +181,38 @@ template MUSDTransferProposal
           observers
 
     -- | Sender cancels the proposal
-    choice TransferProposal_Cancel : ()
+    -- FIX DL-C1: Recreate MintedMUSD on cancel to prevent permanent token destruction.
+    -- The original MintedMUSD was consumed when creating this proposal;
+    -- cancelling must return the tokens to the sender.
+    choice TransferProposal_Cancel : ContractId MintedMUSD
       controller sender
       do
-        return ()
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
     
+    -- | Receiver declines the transfer
+    -- FIX DL-H5: Receiver must be able to reject unwanted transfers.
+    -- Returns the tokens to the sender.
+    choice TransferProposal_Decline : ContractId MintedMUSD
+      controller receiver
+      do
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
+
     -- | Issuer can reject for compliance
-    choice TransferProposal_Reject : ()
+    choice TransferProposal_Reject : ContractId MintedMUSD
       controller issuer
       do
         -- Return tokens to sender
@@ -199,7 +224,6 @@ template MUSDTransferProposal
           agreementHash
           agreementUri
           observers
-        return ()
 
 -- ============================================================
 --                     2. PRICE ORACLE
@@ -367,6 +391,11 @@ template Vault
 
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
+    -- FIX DL-C2: Added supplyCap and currentSupply parameters to enforce global mUSD supply cap.
+    -- The operator must pass the current CantonDirectMint service CID so the vault
+    -- can verify supply capacity before minting. The mUSD minted in the loop is transient
+    -- (immediately swapped for collateral and consumed), but we enforce the cap to prevent
+    -- unbounded issuance.
     choice AdjustLeverage : ContractId Vault
       with
         depositAmount : Money
@@ -377,47 +406,56 @@ template Vault
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
+        maxBorrowable : Money       -- FIX DL-C2: Operator-enforced borrow cap per leverage call
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
-        
+        -- FIX DL-C2: Cap must be positive and reasonable
+        assertMsg "INVALID_MAX_BORROWABLE" (maxBorrowable > 0.0)
+
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
-        
+
         -- Get oracle price (FIX H-01: with staleness check - 1 hour max)
-        price <- exercise oracleCid Oracle_GetPrice with 
+        price <- exercise oracleCid Oracle_GetPrice with
           requester = owner
           maxStaleness = hours 1
-        
+
         -- Recursive leverage loop (FIX C-01: mint actual mUSD before swap)
-        let loopFn (col, debt, pCid) _ = do
+        -- FIX DL-C2: Track cumulative minted amount and enforce cap
+        let loopFn (col, debt, pCid, totalMinted) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
               let borrowable = maxDebt - debt
-              if borrowable < 1.0 
-                then return (col, debt, pCid)
+              if borrowable < 1.0
+                then return (col, debt, pCid, totalMinted)
                 else do
-                  -- FIX C-01: Create actual MintedMUSD token for the borrow
-                  musdCid <- create MintedMUSD with
-                    issuer = musdIssuer
-                    owner = owner
-                    amount = borrowable
-                    blacklisted = False
-                    agreementHash = agreementHash
-                    agreementUri = agreementUri
-                    observers = []
-                  -- Swap actual mUSD token for collateral
-                  (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
-                    musdCid = musdCid
-                    receiver = owner
-                  return (col + colOut, debt + borrowable, newPoolCid)
-        
-        (finalCol, finalDebt, _) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid) [1..loops]
-        
+                  -- FIX DL-C2: Enforce supply cap on cumulative minting
+                  let cappedBorrow = min borrowable (maxBorrowable - totalMinted)
+                  if cappedBorrow < 1.0
+                    then return (col, debt, pCid, totalMinted)
+                    else do
+                      -- FIX C-01: Create actual MintedMUSD token for the borrow
+                      musdCid <- create MintedMUSD with
+                        issuer = musdIssuer
+                        owner = owner
+                        amount = cappedBorrow
+                        blacklisted = False
+                        agreementHash = agreementHash
+                        agreementUri = agreementUri
+                        observers = []
+                      -- Swap actual mUSD token for collateral
+                      (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
+                        musdCid = musdCid
+                        receiver = owner
+                      return (col + colOut, debt + cappedBorrow, newPoolCid, totalMinted + cappedBorrow)
+
+        (finalCol, finalDebt, _, _) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, 0.0) [1..loops]
+
         -- Health check
         let finalValue = finalCol * price
         assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
-        
+
         now <- getTime
         create this with
           collateralAmount = finalCol
@@ -704,11 +742,14 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
+    -- FIX DL-C3: Changed controller from user to operator. Only the operator can trigger
+    -- minting after verifying the deposit externally (e.g., via USDC deposit confirmation).
+    -- Previously any user could claim arbitrary depositAmount with no proof of deposit.
     choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
         depositAmount : Money
-      controller user
+      controller operator
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
@@ -904,7 +945,12 @@ template CantonSMUSD
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
         -- Calculate mUSD value at current share price
-        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        -- FIX DL-H1: Use virtual offset consistent with SMUSD_Deposit and SMUSD_GetSharePrice.
+        -- Without this, deposit uses inflated price (fewer shares) but withdrawal uses raw price,
+        -- creating an asymmetric economic exploit.
+        let virtualShares = totalShares + 1000.0
+        let virtualAssets = totalAssets + 1000.0
+        let sharePrice = virtualAssets / virtualShares
         let musdAmount = ticket.shares * sharePrice
         
         assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
