@@ -375,6 +375,9 @@ template Vault
         borrowAmount : Money
         poolCid : ContractId LiquidityPool
         oracleCid : ContractId PriceOracle
+        musdIssuer : Party          -- Issuer for minting mUSD
+        agreementHash : Text        -- Required for MintedMUSD
+        agreementUri : Text         -- Required for MintedMUSD
         loops : Int
       controller owner
       do
@@ -388,7 +391,7 @@ template Vault
           requester = owner
           maxStaleness = hours 1
         
-        -- Recursive leverage loop
+        -- Recursive leverage loop (FIX C-01: mint actual mUSD before swap)
         let loopFn (col, debt, pCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
@@ -396,9 +399,18 @@ template Vault
               if borrowable < 1.0 
                 then return (col, debt, pCid)
                 else do
-                  -- Swap borrowed mUSD for more collateral
+                  -- FIX C-01: Create actual MintedMUSD token for the borrow
+                  musdCid <- create MintedMUSD with
+                    issuer = musdIssuer
+                    owner = owner
+                    amount = borrowable
+                    blacklisted = False
+                    agreementHash = agreementHash
+                    agreementUri = agreementUri
+                    observers = []
+                  -- Swap actual mUSD token for collateral
                   (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
-                    musdAmount = borrowable
+                    musdCid = musdCid
                     receiver = owner
                   return (col + colOut, debt + borrowable, newPoolCid)
         
