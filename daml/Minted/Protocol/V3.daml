@@ -54,6 +54,43 @@ template CantonUSDC
     ensure amount > 0.0
 
 -- ============================================================
+--                     0c. COLLATERAL DEPOSIT PROOF
+-- ============================================================
+
+-- | CollateralDepositProof - Verifies external collateral deposits for pool swaps.
+-- FIX DC-03: Added to prevent Swap_Collateral_For_mUSD from creating mUSD without
+-- actual backing. The relay or validator must create this proof after verifying
+-- the on-chain deposit event (e.g., ERC20 transfer to bridge contract).
+template CollateralDepositProof
+  with
+    verifier : Party             -- Validator that verified the deposit
+    depositor : Party            -- User who made the deposit
+    collateralSymbol : Text      -- e.g., "WBTC", "ETH"
+    amount : Money               -- Amount deposited (in collateral units)
+    ethTxHash : Text             -- Ethereum transaction hash for audit trail
+    blockNumber : Int            -- Block number where deposit occurred
+    blockTimestamp : Time        -- When deposit was confirmed
+    used : Bool                  -- Whether this proof has been consumed
+  where
+    signatory verifier
+    observer depositor
+
+    ensure amount > 0.0
+        && T.length ethTxHash == 66  -- "0x" + 64 hex chars
+        && blockNumber > 0
+        && not used
+
+    -- | Consume this proof in a pool swap (one-time use)
+    choice CollateralProof_Consume : ContractId CollateralDepositProof
+      with
+        consumer : Party
+      controller verifier  -- Only verifier can mark as consumed
+      do
+        assertMsg "WRONG_DEPOSITOR" (consumer == depositor)
+        assertMsg "ALREADY_USED" (not used)
+        create this with used = True
+
+-- ============================================================
 --                     0b. MUSD SUPPLY SERVICE (Supply Cap Tracking)
 -- ============================================================
 
@@ -360,19 +397,31 @@ template LiquidityPool
         return (newPool, collateralOut)
 
     -- | Swap collateral for mUSD
-    -- Note: For collateral tokens, we trust the operator to verify external deposits
-    choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money)
+    -- FIX DC-03: Requires CollateralDepositProof to prevent unbacked mUSD creation.
+    -- The proof must be created by a validator after verifying the on-chain deposit.
+    choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money, ContractId CollateralDepositProof)
       with
-        collateralAmount : Money
+        depositProofCid : ContractId CollateralDepositProof  -- FIX DC-03: Proof of deposit
         receiver : Party
-      controller operator  -- FIX: Operator must verify collateral deposit externally
+      controller operator
       do
+        -- FIX DC-03: Fetch and validate the deposit proof
+        proof <- fetch depositProofCid
+        assertMsg "PROOF_ALREADY_USED" (not proof.used)
+        assertMsg "WRONG_DEPOSITOR" (proof.depositor == receiver)
+        assertMsg "WRONG_COLLATERAL" (proof.collateralSymbol == quoteSymbol)
+
+        let collateralAmount = proof.amount
         let musdOut = collateralAmount * exchangeRate
         assertMsg "INSUFFICIENT_LIQUIDITY" (baseReserve >= musdOut)
+
+        -- Consume the proof (mark as used)
+        consumedProof <- exercise depositProofCid CollateralProof_Consume with consumer = receiver
+
         newPool <- create this with
           baseReserve = baseReserve - musdOut
           quoteReserve = quoteReserve + collateralAmount
-        return (newPool, musdOut)
+        return (newPool, musdOut, consumedProof)
 
 -- ============================================================
 --                     4. VAULT (CDP)
@@ -1278,13 +1327,16 @@ template AttestationRequest
         create this with collectedSignatures = Set.insert validator collectedSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- FIX A-03: Derive requiredSignatures from validatorGroup size (majority quorum)
-    -- Previously accepted as caller parameter, allowing aggregator to bypass quorum
+    -- FIX DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
+    -- Previously used 50%+1, which is insufficient for BFT guarantees
     choice Attestation_Complete : ()
       controller aggregator
       do
-        -- FIX A-03: Majority threshold = (n / 2) + 1, derived from group size
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX DC-06: Supermajority threshold = ceil(2/3 * n)
+        -- For 5 validators: ceil(3.33) = 4 required (80%)
+        -- For 7 validators: ceil(4.67) = 5 required (71%)
+        let n = length validatorGroup
+        let requiredSignatures = (n * 2 + 2) / 3  -- ceil(2n/3) using integer arithmetic
         let sigCount = Set.size collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
         
