@@ -195,6 +195,28 @@ template IssuerRole
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         create this with supplyCap = newCap
 
+    -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
+    -- FIX DL-C03: This enables vault leverage to respect global supply caps
+    choice Vault_Borrow : (ContractId IssuerRole, ContractId MUSD)
+      with
+        borrower : Party
+        borrowAmount : Decimal
+        mpaHash : Text
+        mpaUri : Text
+      controller issuer, borrower
+      do
+        assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)
+        musdCid <- create MUSD with
+          provider = issuer
+          owner = borrower
+          amount = borrowAmount
+          currency = "USD"
+          observers = []
+        newRole <- create this with
+          currentSupply = currentSupply + borrowAmount
+        return (newRole, musdCid)
+
     -- | Add observer to the IssuerRole (for proposal workflows)
     choice IssuerRole_AddObserver : ContractId IssuerRole
       with

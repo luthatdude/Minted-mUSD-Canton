@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { ethers } from "ethers";
 import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
@@ -24,15 +24,30 @@ export function LiquidationsPage() {
 
   const { liquidation, borrow, musd } = contracts;
 
+  // FIX FE-H02: Validate addresses before use
+  const isValidBorrower = useMemo(() => {
+    return borrower.length > 0 && ethers.isAddress(borrower);
+  }, [borrower]);
+
+  const isValidCollateral = useMemo(() => {
+    return collateralToken.length > 0 && ethers.isAddress(collateralToken);
+  }, [collateralToken]);
+
+  const borrowerError = borrower.length > 0 && !isValidBorrower ? "Invalid address format" : null;
+  const collateralError = collateralToken.length > 0 && !isValidCollateral ? "Invalid address format" : null;
+
   async function handleCheck() {
-    if (!liquidation || !borrow || !borrower) return;
+    // FIX FE-H02: Validate addresses before contract calls
+    if (!liquidation || !borrow || !isValidBorrower) {
+      return;
+    }
     try {
       const [liquidatable, hf] = await Promise.all([
         liquidation.isLiquidatable(borrower),
         borrow.healthFactor(borrower).catch(() => ethers.MaxUint256),
       ]);
       let seizeEstimate = 0n;
-      if (liquidatable && collateralToken && debtAmount && parseFloat(debtAmount) > 0) {
+      if (liquidatable && isValidCollateral && debtAmount && parseFloat(debtAmount) > 0) {
         const parsed = ethers.parseUnits(debtAmount, MUSD_DECIMALS);
         seizeEstimate = await liquidation.estimateSeize(borrower, collateralToken, parsed);
       }
@@ -43,16 +58,27 @@ export function LiquidationsPage() {
   }
 
   async function handleLiquidate() {
-    if (!liquidation || !musd || !address || !borrower || !collateralToken) return;
+    // FIX FE-H02: Validate all addresses before contract calls
+    if (!liquidation || !musd || !address || !isValidBorrower || !isValidCollateral) {
+      return;
+    }
     const parsed = ethers.parseUnits(debtAmount, MUSD_DECIMALS);
-    await tx.send(async () => {
-      const allowance = await musd.allowance(address, CONTRACTS.LiquidationEngine);
-      if (allowance < parsed) {
-        const approveTx = await musd.approve(CONTRACTS.LiquidationEngine, parsed);
-        await approveTx.wait();
+    
+    // FIX FE-H01: Use simulation before actual transaction
+    await tx.send(
+      async () => {
+        const allowance = await musd.allowance(address, CONTRACTS.LiquidationEngine);
+        if (allowance < parsed) {
+          const approveTx = await musd.approve(CONTRACTS.LiquidationEngine, parsed);
+          await approveTx.wait();
+        }
+        return liquidation.liquidate(borrower, collateralToken, parsed);
+      },
+      // Simulation function to check if liquidation would succeed
+      async () => {
+        await liquidation.liquidate.staticCall(borrower, collateralToken, parsed);
       }
-      return liquidation.liquidate(borrower, collateralToken, parsed);
-    });
+    );
   }
 
   if (!isConnected) {
@@ -73,22 +99,24 @@ export function LiquidationsPage() {
           <label className="label">Borrower Address</label>
           <input
             type="text"
-            className="input"
+            className={`input ${borrowerError ? 'border-red-500' : ''}`}
             placeholder="0x..."
             value={borrower}
             onChange={(e) => setBorrower(e.target.value)}
           />
+          {borrowerError && <p className="text-xs text-red-400 mt-1">{borrowerError}</p>}
         </div>
 
         <div>
           <label className="label">Collateral Token Address</label>
           <input
             type="text"
-            className="input"
+            className={`input ${collateralError ? 'border-red-500' : ''}`}
             placeholder="0x... (WETH, WBTC, etc.)"
             value={collateralToken}
             onChange={(e) => setCollateralToken(e.target.value)}
           />
+          {collateralError && <p className="text-xs text-red-400 mt-1">{collateralError}</p>}
         </div>
 
         <div>
@@ -102,7 +130,11 @@ export function LiquidationsPage() {
           />
         </div>
 
-        <button onClick={handleCheck} className="btn-secondary w-full">
+        <button 
+          onClick={handleCheck} 
+          className="btn-secondary w-full"
+          disabled={!isValidBorrower}
+        >
           Check Liquidation
         </button>
 
