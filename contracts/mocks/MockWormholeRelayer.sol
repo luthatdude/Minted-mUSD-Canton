@@ -4,7 +4,9 @@ pragma solidity ^0.8.20;
 /**
  * @title MockWormholeRelayer
  * @notice Mock contract for testing DepositRouter
+ * @dev Test-only contract, locked ether is acceptable
  */
+// slither-disable-next-line locked-ether
 contract MockWormholeRelayer {
     uint64 private _sequence;
 

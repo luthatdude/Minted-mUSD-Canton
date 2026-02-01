@@ -1,0 +1,27 @@
+{
+  "detectors_to_exclude": [
+    "naming-convention",
+    "pragma",
+    "solc-version",
+    "missing-inheritance",
+    "unindexed-event-address",
+    "unused-state",
+    "cache-array-length",
+    "immutable-states",
+    "dead-code",
+    "cyclomatic-complexity",
+    "costly-loop",
+    "timestamp",
+    "low-level-calls",
+    "shadowing-local",
+    "events-maths",
+    "missing-zero-check"
+  ],
+  "filter_paths": [
+    "node_modules",
+    "contracts/mocks"
+  ],
+  "exclude_informational": true,
+  "exclude_low": true,
+  "exclude_optimization": true
+}

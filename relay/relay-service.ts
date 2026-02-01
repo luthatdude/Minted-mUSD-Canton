@@ -312,6 +312,19 @@ class RelayService {
     const attestationId = payload.attestationId;
 
     try {
+      // FIX IC-02: Validate chain ID matches connected network to prevent cross-chain replay
+      const network = await this.provider.getNetwork();
+      const expectedChainId = network.chainId;
+      const payloadChainId = BigInt(payload.chainId);
+
+      if (payloadChainId !== expectedChainId) {
+        console.error(
+          `[Relay] CRITICAL: Chain ID mismatch! Payload: ${payloadChainId}, Network: ${expectedChainId}`
+        );
+        console.error(`[Relay] Rejecting attestation ${attestationId} - possible cross-chain replay attack`);
+        throw new Error(`CHAIN_ID_MISMATCH: expected ${expectedChainId}, got ${payloadChainId}`);
+      }
+
       // Convert attestation ID to bytes32
       const idBytes32 = ethers.id(attestationId);
 
@@ -418,36 +431,68 @@ class RelayService {
 
   /**
    * Format validator signatures for Ethereum
+   * FIX IC-08: Pre-verify signatures using ecrecover before submitting to chain
    */
   private async formatSignatures(
     validatorSigs: ValidatorSignature[],
     messageHash: string
   ): Promise<string[]> {
     const formatted: string[] = [];
+    // FIX IC-08: Use Ethereum-signed message hash for ecrecover validation
+    const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
 
     for (const sig of validatorSigs) {
       try {
+        let rsvSignature: string;
+
         // FIX M-19: Validate RSV format more strictly (check hex content + v value)
         if (sig.ecdsaSignature.startsWith("0x") && sig.ecdsaSignature.length === 132) {
           // Verify it's valid hex and has a valid v value (1b or 1c = 27 or 28)
           const vByte = sig.ecdsaSignature.slice(130, 132).toLowerCase();
           if (/^[0-9a-f]+$/.test(sig.ecdsaSignature.slice(2)) &&
               (vByte === "1b" || vByte === "1c")) {
-            formatted.push(sig.ecdsaSignature);
+            rsvSignature = sig.ecdsaSignature;
           } else {
             console.warn(`[Relay] Invalid RSV signature from ${sig.validator}: bad v value`);
+            continue;
           }
         }
         // If signature is DER encoded (from AWS KMS)
         else {
           const derBuffer = Buffer.from(sig.ecdsaSignature.replace("0x", ""), "hex");
-          const rsvSig = formatKMSSignature(
+          rsvSignature = formatKMSSignature(
             derBuffer,
             messageHash,
             sig.validator  // Validator's Ethereum address
           );
-          formatted.push(rsvSig);
         }
+
+        // FIX IC-08: Pre-verify signature using ecrecover before including
+        // This catches invalid signatures before wasting gas on-chain
+        try {
+          const recoveredAddress = ethers.recoverAddress(ethSignedHash, rsvSignature);
+          const expectedAddress = sig.validator.toLowerCase();
+
+          if (recoveredAddress.toLowerCase() !== expectedAddress) {
+            console.error(
+              `[Relay] CRITICAL: Signature from ${sig.validator} recovers to ${recoveredAddress}`
+            );
+            console.error(`[Relay] Rejecting invalid signature - possible attack or key mismatch`);
+            continue;  // Skip this signature
+          }
+
+          // Signature verified - add to formatted list
+          formatted.push(rsvSignature);
+          console.log(`[Relay] Verified signature from ${sig.validator}`);
+
+        } catch (recoverError) {
+          console.error(
+            `[Relay] Failed to recover address from signature by ${sig.validator}:`,
+            recoverError
+          );
+          continue;  // Skip malformed signatures
+        }
+
       } catch (error) {
         console.warn(`[Relay] Failed to format signature from ${sig.validator}:`, error);
       }

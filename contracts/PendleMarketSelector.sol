@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title PendleMarketSelector
  * @notice Selects optimal Pendle PT market based on TVL and implied yield
  * @dev Used by PendleStrategyV2 to auto-select best market for deposits
+ * @dev FIX C-01: Migrated from OwnableUpgradeable to AccessControlUpgradeable
  *
  * Selection Criteria:
  *   1. Filter: Only markets with underlying = target asset (e.g., USDC-based)
@@ -48,7 +49,17 @@ interface ISY {
     function exchangeRate() external view returns (uint256);
 }
 
-contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
+contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ROLES (FIX C-01)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Role for managing market whitelist
+    bytes32 public constant MARKET_ADMIN_ROLE = keccak256("MARKET_ADMIN_ROLE");
+
+    /// @notice Role for updating selector parameters
+    bytes32 public constant PARAMS_ADMIN_ROLE = keccak256("PARAMS_ADMIN_ROLE");
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -138,9 +149,14 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 
-    function initialize(address _owner) external initializer {
-        __Ownable_init(_owner);
+    function initialize(address _admin) external initializer {
+        __AccessControl_init();
         __UUPSUpgradeable_init();
+
+        // FIX C-01: Set up role hierarchy
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(MARKET_ADMIN_ROLE, _admin);
+        _grantRole(PARAMS_ADMIN_ROLE, _admin);
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -310,6 +326,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
 
         // Calculate TVL in SY terms (totalPt converted + totalSy)
         // PT trades at discount, so we use oracle rate
+        // slither-disable-next-line calls-loop
         uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);
         uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;
         uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));
@@ -343,7 +360,9 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      *      APY = (1 + rate_to_expiry)^(365/days_to_expiry) - 1
      *      Simplified using: ln(APY + 1) ≈ lnImpliedRate * 365 / days_to_expiry
      */
+    // slither-disable-next-line divide-before-multiply
     function _lnRateToAPY(uint256 lnImpliedRate, uint256 timeToExpiry) internal pure returns (uint256) {
+        // slither-disable-next-line incorrect-equality
         if (timeToExpiry == 0) return 0;
 
         // Annualize the ln rate
@@ -400,7 +419,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      * @param market Market address
      * @param category Asset category (e.g., "USD", "ETH")
      */
-    function whitelistMarket(address market, string calldata category) external onlyOwner {
+    function whitelistMarket(address market, string calldata category) external onlyRole(MARKET_ADMIN_ROLE) {
         // FIX L-07: Validate market address
         require(market != address(0), "ZERO_ADDRESS");
         if (!isWhitelisted[market]) {
@@ -420,7 +439,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
     function whitelistMarkets(
         address[] calldata markets,
         string[] calldata categories
-    ) external onlyOwner {
+    ) external onlyRole(MARKET_ADMIN_ROLE) {
         require(markets.length == categories.length, "Length mismatch");
 
         for (uint256 i = 0; i < markets.length; i++) {
@@ -438,7 +457,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      * @notice Remove a market from whitelist
      * @param market Market address
      */
-    function removeMarket(address market) external onlyOwner {
+    function removeMarket(address market) external onlyRole(MARKET_ADMIN_ROLE) {
         if (!isWhitelisted[market]) revert MarketNotWhitelisted();
 
         isWhitelisted[market] = false;
@@ -465,7 +484,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
         uint256 _minApyBps,
         uint256 _tvlWeight,
         uint256 _apyWeight
-    ) external onlyOwner {
+    ) external onlyRole(PARAMS_ADMIN_ROLE) {
         if (_tvlWeight + _apyWeight != BPS) revert InvalidWeights();
 
         minTimeToExpiry = _minTimeToExpiry;
@@ -495,8 +514,8 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
     // UPGRADEABILITY
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX H-02: UUPS upgrade authorization
-    function _authorizeUpgrade(address) internal override onlyOwner {}
+    /// @notice FIX C-01: UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
+    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
     /// @dev FIX H-02: Storage gap for future upgrades
     uint256[40] private __gap;

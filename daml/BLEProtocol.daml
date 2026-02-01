@@ -127,10 +127,11 @@ template AttestationRequest
         signatureCids: [ContractId ValidatorSignature]
       controller aggregator
       do
-        -- FIX C-12: Derive quorum from validator group size (supermajority).
-        -- FIX H-3: Intentionally SUPERMAJORITY (>50%+1) for stronger security:
-        --   5 validators -> 4 required (80%), 7 validators -> 5 required (71%)
-        let requiredSignatures = (length validatorGroup + 1) / 2 + 1
+        -- FIX DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
+        -- For 5 validators: ceil(3.33) = 4 required (80%)
+        -- For 7 validators: ceil(4.67) = 5 required (71%)
+        let n = length validatorGroup
+        let requiredSignatures = (n * 2 + 2) / 3  -- ceil(2n/3) using integer arithmetic
         -- Verify we have enough signatures
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
