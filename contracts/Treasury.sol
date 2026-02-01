@@ -8,13 +8,15 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./interfaces/IStrategy.sol";
 
 /// @title Treasury
 /// @notice Custodies USDC backing for mUSD. Auto-deploys to yield strategies on deposit.
 /// @dev Only DirectMint and authorized strategies can deposit/withdraw.
 ///      When USDC arrives (from mint or bridge-in), it's auto-deployed to the default strategy.
-contract Treasury is AccessControl, ReentrancyGuard {
+/// @dev FIX H-01: Added Pausable for emergency controls
+contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");      // DirectMint contract
@@ -22,6 +24,7 @@ contract Treasury is AccessControl, ReentrancyGuard {
     bytes32 public constant TREASURY_ADMIN_ROLE = keccak256("TREASURY_ADMIN_ROLE");
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");      // Keeper/bot for auto-deploy
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");      // Bridge contract
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");      // FIX H-01: Pause authority
 
     IERC20 public immutable usdc;
 
@@ -105,7 +108,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice Deposit USDC into treasury (called by DirectMint on user deposit)
     /// @param from The address to pull USDC from (must have approved Treasury)
     /// @param amount Amount of USDC to deposit
-    function deposit(address from, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant {
+    /// @dev FIX H-01: Added whenNotPaused for emergency controls
+    function deposit(address from, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
         usdc.safeTransferFrom(from, address(this), amount);
         emit Deposited(from, amount);
@@ -117,7 +121,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice Deposit USDC from bridge (Canton → Ethereum backing)
     /// @param from The address to pull USDC from
     /// @param amount Amount of USDC bridged in
-    function depositFromBridge(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) nonReentrant {
+    /// @dev FIX H-01: Added whenNotPaused for emergency controls
+    function depositFromBridge(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
         usdc.safeTransferFrom(from, address(this), amount);
 
@@ -128,7 +133,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice Withdraw USDC from treasury (called by DirectMint on user redemption)
     /// @param to The address to send USDC to
     /// @param amount Amount of USDC to withdraw
-    function withdraw(address to, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant {
+    /// @dev FIX H-01: Added whenNotPaused for emergency controls
+    function withdraw(address to, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
         // If not enough in reserve, pull from strategy
@@ -322,5 +328,20 @@ contract Treasury is AccessControl, ReentrancyGuard {
 
         uint256 deployable = deployableAmount();
         return (deployable >= autoDeployThreshold, deployable);
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS (FIX H-01)
+    // ============================================================
+
+    /// @notice Pause all deposits and withdrawals
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause all deposits and withdrawals
+    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
     }
 }
