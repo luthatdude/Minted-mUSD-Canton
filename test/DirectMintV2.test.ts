@@ -95,6 +95,9 @@ describe("DirectMintV2", function () {
 
   describe("Minting", function () {
     it("Should mint mUSD for USDC at 1:1 ratio (no fees)", async function () {
+      // Reset fees to 0 for this test (default is 1%)
+      await directMint.setFees(0, 0);
+
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedMusd = ethers.parseUnits("1000", MUSD_DECIMALS); // 1000 mUSD
 
@@ -170,9 +173,14 @@ describe("DirectMintV2", function () {
     });
 
     it("Should redeem mUSD for USDC at 1:1 ratio (no fees)", async function () {
+      // Reset fees to 0 for this test (default mint fee is 1%)
+      await directMint.setFees(0, 0);
+
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const expectedUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
 
+      // User has 9900 mUSD from beforeEach (10000 USDC - 1% fee = 9900 mUSD minted)
+      const userMusdBefore = await musd.balanceOf(user.address);
       const userUsdcBefore = await usdc.balanceOf(user.address);
 
       await expect(directMint.connect(user).redeem(musdAmount))
@@ -180,7 +188,7 @@ describe("DirectMintV2", function () {
 
       const userUsdcAfter = await usdc.balanceOf(user.address);
       expect(userUsdcAfter - userUsdcBefore).to.equal(expectedUsdc);
-      expect(await musd.balanceOf(user.address)).to.equal(ethers.parseEther("9000")); // 10k - 1k
+      expect(await musd.balanceOf(user.address)).to.equal(userMusdBefore - musdAmount);
     });
 
     it("Should apply redeem fee correctly", async function () {
