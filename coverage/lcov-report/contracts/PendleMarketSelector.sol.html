@@ -22,7 +22,7 @@
       <div class='fl pad1y space-right2'>
         <span class="strong">0% </span>
         <span class="quiet">Statements</span>
-        <span class='fraction'>0/90</span>
+        <span class='fraction'>0/93</span>
       </div>
       <div class='fl pad1y space-right2'>
         <span class="strong">0% </span>
@@ -37,7 +37,7 @@
       <div class='fl pad1y space-right2'>
         <span class="strong">0% </span>
         <span class="quiet">Lines</span>
-        <span class='fraction'>0/111</span>
+        <span class='fraction'>0/114</span>
       </div>
     </div>
   </div>
@@ -546,7 +546,26 @@
 501
 502
 503
-504</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523</td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -600,6 +619,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -685,8 +715,13 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -858,6 +893,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -883,6 +919,8 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1052,13 +1090,14 @@
 <span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 &nbsp;
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 &nbsp;
 /**
  * @title PendleMarketSelector
  * @notice Selects optimal Pendle PT market based on TVL and implied yield
  * @dev Used by PendleStrategyV2 to auto-select best market for deposits
+ * @dev FIX C-01: Migrated from OwnableUpgradeable to AccessControlUpgradeable
  *
  * Selection Criteria:
  *   1. Filter: Only markets with underlying = target asset (e.g., USDC-based)
@@ -1099,7 +1138,17 @@ interface ISY {
     function exchangeRate() external view returns (uint256);
 }
 &nbsp;
-contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
+contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
+&nbsp;
+    // ═══════════════════════════════════════════════════════════════════════
+    // ROLES (FIX C-01)
+    // ═══════════════════════════════════════════════════════════════════════
+&nbsp;
+    /// @notice Role for managing market whitelist
+    bytes32 public constant MARKET_ADMIN_ROLE = keccak256("MARKET_ADMIN_ROLE");
+&nbsp;
+    /// @notice Role for updating selector parameters
+    bytes32 public constant PARAMS_ADMIN_ROLE = keccak256("PARAMS_ADMIN_ROLE");
 &nbsp;
     /// @custom:oz-upgrades-unsafe-allow constructor
 <span class="fstat-no" title="function not covered" >    constructor() {</span>
@@ -1189,9 +1238,14 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 &nbsp;
-<span class="fstat-no" title="function not covered" >    function initialize(address _owner) external initializer {</span>
-<span class="cstat-no" title="statement not covered" >        __Ownable_init(_owner)</span>;
+<span class="fstat-no" title="function not covered" >    function initialize(address _admin) external initializer {</span>
+<span class="cstat-no" title="statement not covered" >        __AccessControl_init()</span>;
 <span class="cstat-no" title="statement not covered" >        __UUPSUpgradeable_init()</span>;
+&nbsp;
+        // FIX C-01: Set up role hierarchy
+<span class="cstat-no" title="statement not covered" >        _grantRole(DEFAULT_ADMIN_ROLE, _admin)</span>;
+<span class="cstat-no" title="statement not covered" >        _grantRole(MARKET_ADMIN_ROLE, _admin)</span>;
+<span class="cstat-no" title="statement not covered" >        _grantRole(PARAMS_ADMIN_ROLE, _admin)</span>;
 &nbsp;
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -1361,6 +1415,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
 &nbsp;
         // Calculate TVL in SY terms (totalPt converted + totalSy)
         // PT trades at discount, so we use oracle rate
+        // slither-disable-next-line calls-loop
 <span class="cstat-no" title="statement not covered" >        uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);</span>
 <span class="cstat-no" title="statement not covered" >        uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;</span>
 <span class="cstat-no" title="statement not covered" >        uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));</span>
@@ -1394,7 +1449,9 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      *      APY = (1 + rate_to_expiry)^(365/days_to_expiry) - 1
      *      Simplified using: ln(APY + 1) ≈ lnImpliedRate * 365 / days_to_expiry
      */
+    // slither-disable-next-line divide-before-multiply
 <span class="fstat-no" title="function not covered" >    function _lnRateToAPY(uint256 lnImpliedRate, uint256 timeToExpiry) internal pure returns (uint256) {</span>
+        // slither-disable-next-line incorrect-equality
 <span class="cstat-no" title="statement not covered" >        if (timeToExpiry == 0) <span class="cstat-no" title="statement not covered" >return 0;</span></span>
 &nbsp;
         // Annualize the ln rate
@@ -1451,7 +1508,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      * @param market Market address
      * @param category Asset category (e.g., "USD", "ETH")
      */
-<span class="fstat-no" title="function not covered" >    function whitelistMarket(address market, string calldata category) external onlyOwner {</span>
+<span class="fstat-no" title="function not covered" >    function whitelistMarket(address market, string calldata category) external onlyRole(MARKET_ADMIN_ROLE) {</span>
         // FIX L-07: Validate market address
 <span class="cstat-no" title="statement not covered" >        require(market != address(0), "ZERO_ADDRESS")</span>;
 <span class="cstat-no" title="statement not covered" >        if (!isWhitelisted[market]) {</span>
@@ -1471,7 +1528,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
 <span class="fstat-no" title="function not covered" >    function whitelistMarkets(</span>
         address[] calldata markets,
         string[] calldata categories
-    ) external onlyOwner {
+    ) external onlyRole(MARKET_ADMIN_ROLE) {
 <span class="cstat-no" title="statement not covered" >        require(markets.length == categories.length, "Length mismatch")</span>;
 &nbsp;
 <span class="cstat-no" title="statement not covered" >        for (uint256 i = 0; i &lt; markets.length; i++) {</span>
@@ -1489,7 +1546,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
      * @notice Remove a market from whitelist
      * @param market Market address
      */
-<span class="fstat-no" title="function not covered" >    function removeMarket(address market) external onlyOwner {</span>
+<span class="fstat-no" title="function not covered" >    function removeMarket(address market) external onlyRole(MARKET_ADMIN_ROLE) {</span>
 <span class="cstat-no" title="statement not covered" >        if (!isWhitelisted[market]) revert MarketNotWhitelisted();</span>
 &nbsp;
         isWhitelisted[market] = false;
@@ -1516,7 +1573,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
         uint256 _minApyBps,
         uint256 _tvlWeight,
         uint256 _apyWeight
-    ) external onlyOwner {
+    ) external onlyRole(PARAMS_ADMIN_ROLE) {
 <span class="cstat-no" title="statement not covered" >        if (_tvlWeight + _apyWeight != BPS) revert InvalidWeights();</span>
 &nbsp;
         minTimeToExpiry = _minTimeToExpiry;
@@ -1546,8 +1603,8 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
     // UPGRADEABILITY
     // ═══════════════════════════════════════════════════════════════════════
 &nbsp;
-    /// @notice FIX H-02: UUPS upgrade authorization
-<span class="fstat-no" title="function not covered" >    function _authorizeUpgrade(address) internal override onlyOwner {}</span>
+    /// @notice FIX C-01: UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
+<span class="fstat-no" title="function not covered" >    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}</span>
 &nbsp;
     /// @dev FIX H-02: Storage gap for future upgrades
     uint256[40] private __gap;
@@ -1558,7 +1615,7 @@ contract PendleMarketSelector is OwnableUpgradeable, UUPSUpgradeable {
 </div><!-- /wrapper -->
 <div class='footer quiet pad2 space-top1 center small'>
   Code coverage
-  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sat Jan 31 2026 17:52:22 GMT-0500 (Eastern Standard Time)
+  generated by <a href="http://istanbul-js.org/" target="_blank">istanbul</a> at Sun Feb 01 2026 18:45:31 GMT-0500 (Eastern Standard Time)
 </div>
 </div>
 <script src="../prettify.js"></script>
