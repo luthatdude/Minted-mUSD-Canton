@@ -136,17 +136,15 @@ View functions: `getNetDailyCapIncrease()`, `getRemainingDailyCapLimit()`
 
 | Template | File | Description |
 |----------|------|-------------|
-| `MUSD` | `MintedProtocolV2Fixed.daml` | mUSD token with `agreement` clause embedding MPA hash + URI. Split/Merge/Transfer/Burn. |
+| `MintedMUSD` | `Minted/Protocol/V3.daml` | mUSD token with `agreement` clause embedding MPA hash + URI. Split/Merge/Transfer/Burn. |
 | `CantonMUSD` | `CantonDirectMint.daml` | Canton-side mUSD with MPA agreement clause. Transfer/Split/Merge/Burn. |
 | `CantonUSDC` | `CantonDirectMint.daml` | USDC deposit representation on Canton. |
-| `Collateral` | `MintedProtocolV2Fixed.daml` | Generic collateral token with transfer-via-proposal pattern. |
-| `USDC` | `MintedProtocolV2Fixed.daml` | USDC token with transfer-via-proposal pattern. |
+| `MUSDSupplyService` | `Minted/Protocol/V3.daml` | Supply cap tracking with governance-controlled large mint approvals. |
 
 ### Mint / Redeem
 
 | Template | File | Key Features |
 |----------|------|-------------|
-| `DirectMintService` | `MintedProtocolV2Fixed.daml` | Mint/Redeem with fees, supply cap, 24h rate limiting, MPA propagation. |
 | `CantonDirectMintService` | `CantonDirectMint.daml` | Canton mint + auto BridgeOutRequest. 24h rate limiting, compliance hooks, MPA propagation. |
 
 Rate limiting on both services:
@@ -245,10 +243,10 @@ Next.js 14 / TypeScript / Tailwind CSS with dual-chain toggle in `frontend/`.
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `test/BLEProtocol.test.ts` | 27 | BLEBridgeV9 attestation, multi-sig, supply cap, nonce, emergency, rate limiting |
+| `test/BLEBridgeV9.test.ts` | 27 | BLEBridgeV9 attestation, multi-sig, supply cap, nonce, emergency, rate limiting |
 | `test/TreasuryV2.test.ts` | 33 | Treasury strategies, yield recording, withdrawals, edge cases |
-| `daml/Test.daml` | 11 | Canton bridge attestation flow, institutional equity, MintedMUSD operations |
-| `daml/CantonDirectMintTest.daml` | 9 | DirectMint, redeem, bridge-out, supply cap sync, staking, yield, end-to-end |
+| `test/DirectMintV2.test.ts` | 45 | DirectMint mint/redeem, fees, limits, edge cases |
+| `daml/NegativeTests.daml` | 13 | Adversarial tests: unauthorized actions, compliance, double-spend |
 
 Run tests:
 ```bash
@@ -262,27 +260,33 @@ cd daml && daml test       # DAML
 ├── .github/workflows/
 │   └── ci.yml                           # CI: Solidity, DAML, Docker, Slither, Trivy, kubeval
 ├── contracts/                           # Solidity contracts (15 files)
-│   ├── BLEBridgeV8.sol                  # Bridge V8 (predecessor, with daily mint limit)
 │   ├── BLEBridgeV9.sol                  # Bridge V9 (supply cap model, 24h rate limiting)
 │   ├── MUSD.sol                         # ERC-20 mUSD token
 │   ├── SMUSD.sol                        # ERC-4626 staking vault
-│   ├── DirectMint.sol / DirectMintV2.sol
-│   ├── Treasury.sol / TreasuryV2.sol
+│   ├── DirectMintV2.sol                 # UUPS upgradeable mint/redeem
+│   ├── TreasuryV2.sol                   # UUPS upgradeable treasury with strategies
 │   ├── CollateralVault.sol / BorrowModule.sol / LiquidationEngine.sol
 │   ├── PriceOracle.sol / PendleMarketSelector.sol
+│   ├── strategies/                      # Yield strategies
+│   │   ├── PendleStrategyV2.sol         # Pendle PT with auto-rollover
+│   │   └── MorphoLoopStrategy.sol       # Leveraged Morpho lending
 │   ├── interfaces/IStrategy.sol
 │   └── mocks/                           # MockERC20, MockAggregatorV3, MockStrategy
 ├── daml/                                # Canton DAML templates
-│   ├── MintedProtocolV2Fixed.daml       # Audited protocol (MUSD, Vault, Staking, Oracle, Bridge)
+│   ├── Minted/Protocol/V3.daml          # Core protocol (MintedMUSD, Vault, Oracle, Bridge)
 │   ├── CantonDirectMint.daml            # Canton mint service + bridge requests
 │   ├── CantonSMUSD.daml                 # Canton staking vault (share-price model)
 │   ├── Compliance.daml                  # Blacklist/freeze registry with compliance hooks
+│   ├── Governance.daml                  # Multi-sig governance framework
+│   ├── Upgrade.daml                     # Contract upgrade and data migration
+│   ├── NegativeTests.daml               # Adversarial test suite (13 tests)
 │   ├── BLEBridgeProtocol.daml           # Bridge protocol types
 │   ├── BLEProtocol.daml                 # Bridge protocol
 │   ├── MintedMUSD.daml                  # Standalone mUSD asset module
-│   ├── CantonDirectMintTest.daml        # Integration tests (9 tests)
-│   ├── Test.daml                        # Integration tests (11 tests)
 │   └── daml.yaml                        # DAML project config
+├── archive/                             # Deprecated/superseded code (excluded from audit)
+│   ├── contracts/                       # V1 non-upgradeable contracts
+│   └── daml/                            # Legacy DAML templates
 ├── frontend/                            # Next.js 14 / TypeScript / Tailwind
 │   ├── src/abis/                        # Ethereum contract ABIs (10 files)
 │   ├── src/components/canton/           # Canton-mode UI components (7)
@@ -380,7 +384,7 @@ NEXT_PUBLIC_CANTON_TOKEN=<JWT_TOKEN>
 ### Prerequisites
 
 - Node.js 20+
-- DAML SDK 2.9.3
+- DAML SDK 2.10.3
 - Docker (for relay service)
 - kubectl (for K8s deployment)
 
@@ -438,6 +442,15 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 | BLEBridgeV9 | 24h rolling window on supply cap increases (`dailyCapIncreaseLimit`) |
 | CantonDirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
 | DirectMintService | 24h rolling window on net mint volume (`dailyMintLimit`) |
+
+## Security Documentation
+
+| Document | Description |
+|----------|-------------|
+| [SECURITY.md](SECURITY.md) | Security policy, assumptions, vulnerability disclosure process |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | Formal threat model with attack trees and STRIDE analysis |
+| [SECURITY_AUDIT.md](SECURITY_AUDIT.md) | Comprehensive audit checklist and findings |
+| [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | State machines and flow diagrams (Mermaid) |
 
 ## License
 
