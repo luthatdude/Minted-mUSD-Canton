@@ -886,7 +886,9 @@ The protocol includes **17 DAML contract files** running on the Canton Network, 
 | Module | File | Templates | Audit Priority |
 |--------|------|-----------|----------------|
 | Minted.Protocol.V3 | `daml/Minted/Protocol/V3.daml` | MintedMUSD, PriceOracle, LiquidityPool, Vault, VaultManager, LiquidationReceipt, LiquidationOrder, CantonDirectMint, CantonSMUSD, CooldownTicket, BridgeService, AttestationRequest, BridgeOutRequest, BridgeInRequest | **P0** |
-| MintedProtocolV2Fixed | `daml/MintedProtocolV2Fixed.daml` | MUSD, Collateral, USDC, PriceOracle, DirectMintService, StakingService, Vault, LiquidationEngine, LiquidityPool, LeverageManager, IssuerRole, AttestationRequest, ValidatorSignature + Transfer Proposals | **P0** |
+| Compliance | `daml/Compliance.daml` | BlacklistRegistry, FreezeRegistry, ComplianceHooks | **P0** |
+| Governance | `daml/Governance.daml` | GovernanceConfig, Proposal, Vote, ProposalExecutor | **P1** |
+| Upgrade | `daml/Upgrade.daml` | UpgradeProposal, TemplateRegistry, MigrationBatch | **P1** |
 
 #### Legacy / Reference Contracts
 
@@ -902,8 +904,7 @@ The protocol includes **17 DAML contract files** running on the Canton Network, 
 
 | Module | File | Tests |
 |--------|------|-------|
-| Test | `daml/Test.daml` | 9 integration tests: BLE flow, collateral, duplicate sigs, expiration, validator auth, precision, mUSD lifecycle |
-| CantonDirectMintTest | `daml/CantonDirectMintTest.daml` | 10 integration tests: mint, redeem, bridge-out/in, supply cap sync, yield attestation, end-to-end flow, reserve tracker, paused enforcement, USDCx flow |
+| NegativeTests | `daml/NegativeTests.daml` | 13 adversarial tests: unauthorized actions, compliance bypass attempts, double-spend prevention, access control enforcement |
 
 ### 10.3 Canton Security Architecture
 
