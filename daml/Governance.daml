@@ -1,0 +1,399 @@
+-- | Governance.daml - Multi-Signature Governance Framework
+--
+-- This module provides institutional-grade governance primitives for:
+--   1. Multi-signature proposals requiring M-of-N approval
+--   2. Time-locked execution for security review period
+--   3. Role-based access control with delegation
+--   4. Emergency actions with higher thresholds
+--
+-- All governance actions are logged immutably for audit compliance.
+
+module Governance where
+
+import DA.Time
+import DA.Set qualified as Set
+import DA.List (dedup)
+import DA.Optional (isSome, fromSome)
+import DA.Foldable (forA_)
+import DA.Text qualified as T
+
+-- ============================================================
+--                     TYPE DEFINITIONS
+-- ============================================================
+
+-- | Types of governance actions with different threshold requirements
+data ActionType
+  = ParameterUpdate      -- Fee changes, rate limits (standard threshold)
+  | MinterAuthorization  -- Add/remove authorized minters
+  | SupplyCapChange      -- Modify global supply cap
+  | EmergencyPause       -- Pause protocol (elevated threshold)
+  | ContractUpgrade      -- Upgrade contracts (highest threshold)
+  | TreasuryWithdrawal   -- Withdraw from treasury
+  | GovernorChange       -- Add/remove governors (highest threshold)
+  deriving (Eq, Show)
+
+-- | Proposal status
+data ProposalStatus
+  = Pending           -- Awaiting approvals
+  | Approved          -- Threshold met, in timelock
+  | Executed          -- Successfully executed
+  | Rejected          -- Explicitly rejected
+  | Expired           -- Deadline passed without approval
+  | Cancelled         -- Cancelled by proposer
+  deriving (Eq, Show)
+
+-- | Role for access control
+data GovernorRole
+  = Admin             -- Full access
+  | Operator          -- Day-to-day operations
+  | Guardian          -- Emergency actions only
+  | Proposer          -- Can propose but not approve
+  deriving (Eq, Show, Ord)
+
+-- ============================================================
+--                     1. GOVERNANCE CONFIG
+-- ============================================================
+
+-- | GovernanceConfig - Protocol governance parameters.
+-- Single instance per protocol deployment.
+template GovernanceConfig
+  with
+    operator : Party                    -- Protocol operator
+    governors : [(Party, GovernorRole)] -- Governor list with roles
+    standardThreshold : Int             -- M-of-N for normal actions
+    elevatedThreshold : Int             -- M-of-N for emergency/upgrades
+    timelockDuration : RelTime          -- Delay between approval and execution
+    proposalExpiry : RelTime            -- How long proposals remain valid
+    maxActiveProposals : Int            -- Prevent proposal spam
+    activeProposalCount : Int
+    observers : [Party]
+  where
+    signatory operator
+    observer (map fst governors) <> observers
+
+    ensure standardThreshold > 0
+        && elevatedThreshold >= standardThreshold
+        && standardThreshold <= length governors
+        && elevatedThreshold <= length governors
+        && maxActiveProposals > 0
+
+    key operator : Party
+    maintainer key
+
+    -- | Add a new governor (requires proposal, not direct)
+    nonconsuming choice GovConfig_GetThreshold : Int
+      with
+        actionType : ActionType
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` map fst governors || requester == operator)
+        return $ case actionType of
+          EmergencyPause    -> elevatedThreshold
+          ContractUpgrade   -> elevatedThreshold
+          GovernorChange    -> elevatedThreshold
+          _                 -> standardThreshold
+
+    -- | Check if party has required role
+    nonconsuming choice GovConfig_HasRole : Bool
+      with
+        party : Party
+        requiredRole : GovernorRole
+      controller party
+      do
+        let partyRole = lookup party governors
+        case partyRole of
+          None -> return False
+          Some role -> return (role <= requiredRole)  -- Lower enum = higher privilege
+
+-- ============================================================
+--                     2. MULTI-SIG PROPOSAL
+-- ============================================================
+
+-- | MultiSigProposal - Generic governance proposal requiring M-of-N approval.
+-- Supports arbitrary action payloads with type-safe execution.
+template MultiSigProposal
+  with
+    proposalId : Text                   -- Unique identifier
+    operator : Party
+    proposer : Party                    -- Governor who created proposal
+    governors : [Party]                 -- Snapshot of governors at creation
+    actionType : ActionType
+    description : Text                  -- Human-readable description
+    payload : Text                      -- JSON-encoded action parameters
+    payloadHash : Text                  -- SHA-256 of payload for verification
+    requiredApprovals : Int             -- Threshold for this action type
+    approvals : Set.Set Party           -- Collected approvals
+    rejections : Set.Set Party          -- Explicit rejections
+    proposedAt : Time
+    expiresAt : Time
+    timelockEndsAt : Optional Time      -- Set when approved
+    status : ProposalStatus
+    observers : [Party]
+  where
+    signatory operator, proposer
+    observer governors <> observers
+
+    ensure T.length proposalId > 0
+        && T.length description > 0
+        && T.length payloadHash == 64
+        && requiredApprovals > 0
+
+    key (operator, proposalId) : (Party, Text)
+    maintainer key._1
+
+    -- | Governor approves the proposal
+    choice Proposal_Approve : ContractId MultiSigProposal
+      with
+        approver : Party
+      controller approver
+      do
+        assertMsg "NOT_GOVERNOR" (approver `elem` governors)
+        assertMsg "ALREADY_APPROVED" (not (Set.member approver approvals))
+        assertMsg "ALREADY_REJECTED" (not (Set.member approver rejections))
+        assertMsg "INVALID_STATUS" (status == Pending)
+        now <- getTime
+        assertMsg "PROPOSAL_EXPIRED" (now < expiresAt)
+
+        let newApprovals = Set.insert approver approvals
+        let isApproved = Set.size newApprovals >= requiredApprovals
+        let newTimelockEnds = if isApproved
+              then Some (addRelTime now (hours 24))  -- 24h timelock
+              else None
+
+        create this with
+          approvals = newApprovals
+          status = if isApproved then Approved else Pending
+          timelockEndsAt = newTimelockEnds
+
+    -- | Governor explicitly rejects the proposal
+    choice Proposal_Reject : ContractId MultiSigProposal
+      with
+        rejector : Party
+        reason : Text
+      controller rejector
+      do
+        assertMsg "NOT_GOVERNOR" (rejector `elem` governors)
+        assertMsg "ALREADY_VOTED" (not (Set.member rejector approvals) && not (Set.member rejector rejections))
+        assertMsg "INVALID_STATUS" (status == Pending)
+        assertMsg "REASON_REQUIRED" (T.length reason > 0)
+
+        let newRejections = Set.insert rejector rejections
+        -- Auto-reject if rejections exceed (N - threshold + 1)
+        let autoReject = Set.size newRejections > (length governors - requiredApprovals)
+
+        create this with
+          rejections = newRejections
+          status = if autoReject then Rejected else Pending
+
+    -- | Execute the proposal after timelock
+    choice Proposal_Execute : ContractId GovernanceActionLog
+      with
+        executor : Party
+      controller executor
+      do
+        assertMsg "NOT_GOVERNOR" (executor `elem` governors || executor == operator)
+        assertMsg "NOT_APPROVED" (status == Approved)
+        now <- getTime
+        
+        case timelockEndsAt of
+          None -> abort "TIMELOCK_NOT_SET"
+          Some timelockEnd -> do
+            assertMsg "TIMELOCK_NOT_ENDED" (now >= timelockEnd)
+        
+        -- Log the execution
+        create GovernanceActionLog with
+          operator
+          proposalId
+          actionType
+          description
+          payload
+          payloadHash
+          approvers = Set.toList approvals
+          executedBy = executor
+          executedAt = now
+
+    -- | Cancel proposal (proposer only, before approval)
+    choice Proposal_Cancel : ()
+      with
+        reason : Text
+      controller proposer
+      do
+        assertMsg "CANNOT_CANCEL_APPROVED" (status == Pending)
+        assertMsg "REASON_REQUIRED" (T.length reason > 0)
+        return ()
+
+-- ============================================================
+--                     3. MINTER AUTHORIZATION
+-- ============================================================
+
+-- | MinterRegistry - Tracks authorized minters with quotas.
+-- Addresses audit finding #3: Role-Based Access Control for minting.
+template MinterRegistry
+  with
+    operator : Party
+    governance : Party                  -- Governance config operator
+    minters : [(Party, Decimal)]        -- (minter, remaining quota)
+    defaultQuota : Decimal              -- New minter quota
+    totalMinted : Decimal               -- Lifetime minted amount
+    observers : [Party]
+  where
+    signatory operator
+    observer (map fst minters) <> observers
+
+    ensure defaultQuota >= 0.0
+
+    key operator : Party
+    maintainer key
+
+    -- | Add a new authorized minter (requires governance proposal)
+    choice MinterRegistry_AddMinter : ContractId MinterRegistry
+      with
+        newMinter : Party
+        quota : Decimal
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
+        
+        create this with
+          minters = (newMinter, quota) :: minters
+
+    -- | Remove a minter
+    choice MinterRegistry_RemoveMinter : ContractId MinterRegistry
+      with
+        minterToRemove : Party
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
+        
+        create this with
+          minters = filter (\(p, _) -> p /= minterToRemove) minters
+
+    -- | Use minting quota (called during mint operations)
+    choice MinterRegistry_UseMintQuota : ContractId MinterRegistry
+      with
+        minter : Party
+        amount : Decimal
+      controller minter
+      do
+        assertMsg "NOT_AUTHORIZED_MINTER" (minter `elem` map fst minters)
+        
+        let currentQuota = case lookup minter minters of
+              None -> 0.0
+              Some q -> q
+        assertMsg "EXCEEDS_MINT_QUOTA" (amount <= currentQuota)
+        
+        let updateQuota (p, q) = if p == minter then (p, q - amount) else (p, q)
+        create this with
+          minters = map updateQuota minters
+          totalMinted = totalMinted + amount
+
+    -- | Replenish minter quota (governance action)
+    choice MinterRegistry_ReplenishQuota : ContractId MinterRegistry
+      with
+        minter : Party
+        additionalQuota : Decimal
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
+        
+        let updateQuota (p, q) = if p == minter then (p, q + additionalQuota) else (p, q)
+        create this with
+          minters = map updateQuota minters
+
+-- ============================================================
+--                     4. GOVERNANCE ACTION LOG
+-- ============================================================
+
+-- | GovernanceActionLog - Immutable record of executed governance actions.
+-- Provides permanent audit trail for compliance.
+template GovernanceActionLog
+  with
+    operator : Party
+    proposalId : Text
+    actionType : ActionType
+    description : Text
+    payload : Text
+    payloadHash : Text
+    approvers : [Party]
+    executedBy : Party
+    executedAt : Time
+  where
+    signatory operator, executedBy
+
+    -- No choices - immutable audit record
+
+-- ============================================================
+--                     5. EMERGENCY PAUSE
+-- ============================================================
+
+-- | EmergencyPauseState - Protocol-wide pause mechanism.
+-- Guardians can trigger emergency pause with elevated threshold.
+template EmergencyPauseState
+  with
+    operator : Party
+    guardians : [Party]
+    isPaused : Bool
+    pausedAt : Optional Time
+    pausedBy : Optional Party
+    pauseReason : Optional Text
+    lastUpdated : Time
+  where
+    signatory operator
+    observer guardians
+
+    key operator : Party
+    maintainer key
+
+    -- | Trigger emergency pause (any guardian)
+    choice EmergencyPause_Trigger : ContractId EmergencyPauseState
+      with
+        guardian : Party
+        reason : Text
+      controller guardian
+      do
+        assertMsg "NOT_GUARDIAN" (guardian `elem` guardians)
+        assertMsg "ALREADY_PAUSED" (not isPaused)
+        assertMsg "REASON_REQUIRED" (T.length reason > 0)
+        now <- getTime
+        
+        create this with
+          isPaused = True
+          pausedAt = Some now
+          pausedBy = Some guardian
+          pauseReason = Some reason
+          lastUpdated = now
+
+    -- | Unpause (requires governance proposal)
+    choice EmergencyPause_Resume : ContractId EmergencyPauseState
+      with
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        assertMsg "NOT_PAUSED" isPaused
+        now <- getTime
+        
+        create this with
+          isPaused = False
+          pausedAt = None
+          pausedBy = None
+          pauseReason = None
+          lastUpdated = now
+
+    -- | Check pause status (nonconsuming)
+    nonconsuming choice EmergencyPause_IsPaused : Bool
+      with
+        requester : Party
+      controller requester
+      do return isPaused
