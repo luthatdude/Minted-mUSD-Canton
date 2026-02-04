@@ -39,11 +39,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile contracts
-        run: npx hardhat compile
+      - name: Compile contracts (with retry)
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i of 3..."
+            npx hardhat compile && break || {
+              echo "Compile failed, waiting 10s before retry..."
+              sleep 10
+            }
+          done
         env:
           # Increase timeout for compiler download
-          HARDHAT_NETWORK_TIMEOUT: 60000
+          HARDHAT_NETWORK_TIMEOUT: 120000
 
       - name: Run tests
         run: npx hardhat test
@@ -101,10 +108,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Compile contracts
-        run: npx hardhat compile
+      - name: Compile contracts (with retry)
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i of 3..."
+            npx hardhat compile && break || {
+              echo "Compile failed, waiting 10s before retry..."
+              sleep 10
+            }
+          done
         env:
-          HARDHAT_NETWORK_TIMEOUT: 60000
+          HARDHAT_NETWORK_TIMEOUT: 120000
 
       # Slither static analysis
       - name: Run Slither
