@@ -212,5 +212,218 @@ describe("SMUSD", function () {
         smusd.connect(user1).distributeYield(ethers.parseEther("100"))
       ).to.be.reverted;
     });
+
+    it("FIX M-3: should reject yield exceeding MAX_YIELD_BPS cap", async function () {
+      // MAX_YIELD_BPS = 1000 = 10%
+      // With 1000 mUSD deposited, max yield = 100 mUSD
+      const excessiveYield = ethers.parseEther("200"); // 20% > 10%
+      await expect(
+        smusd.connect(yieldManager).distributeYield(excessiveYield)
+      ).to.be.revertedWith("YIELD_EXCEEDS_CAP");
+    });
+
+    it("should accept yield within MAX_YIELD_BPS cap", async function () {
+      // 10% of 1000 = 100, so 50 should be fine
+      const validYield = ethers.parseEther("50");
+      await smusd.connect(yieldManager).distributeYield(validYield);
+      // No revert means success
+    });
+  });
+
+  // ============================================================
+  //  PAUSE/UNPAUSE (EMERGENCY CONTROLS)
+  // ============================================================
+
+  describe("Pause/Unpause", function () {
+    it("should allow PAUSER_ROLE to pause", async function () {
+      await smusd.connect(deployer).pause();
+      expect(await smusd.paused()).to.be.true;
+    });
+
+    it("should reject deposit when paused", async function () {
+      await smusd.connect(deployer).pause();
+      await expect(
+        smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address)
+      ).to.be.revertedWithCustomError(smusd, "EnforcedPause");
+    });
+
+    it("should reject withdraw when paused", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      await time.increase(COOLDOWN);
+
+      await smusd.connect(deployer).pause();
+      await expect(
+        smusd.connect(user1).withdraw(ethers.parseEther("100"), user1.address, user1.address)
+      ).to.be.revertedWithCustomError(smusd, "EnforcedPause");
+    });
+
+    it("should require DEFAULT_ADMIN_ROLE for unpause", async function () {
+      await smusd.connect(deployer).pause();
+
+      await expect(
+        smusd.connect(user1).unpause()
+      ).to.be.reverted;
+
+      await smusd.connect(deployer).unpause();
+      expect(await smusd.paused()).to.be.false;
+    });
+
+    it("should resume operations after unpause", async function () {
+      await smusd.connect(deployer).pause();
+      await smusd.connect(deployer).unpause();
+
+      // Should work again
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      expect(await smusd.balanceOf(user1.address)).to.be.gt(0);
+    });
+  });
+
+  // ============================================================
+  //  TREASURY INTEGRATION
+  // ============================================================
+
+  describe("Treasury Integration", function () {
+    it("should set treasury address", async function () {
+      const mockTreasury = ethers.Wallet.createRandom().address;
+      await smusd.connect(deployer).setTreasury(mockTreasury);
+      expect(await smusd.treasury()).to.equal(mockTreasury);
+    });
+
+    it("should reject zero address for treasury", async function () {
+      await expect(
+        smusd.connect(deployer).setTreasury(ethers.ZeroAddress)
+      ).to.be.revertedWith("ZERO_ADDRESS");
+    });
+
+    it("should emit TreasuryUpdated event", async function () {
+      const mockTreasury = ethers.Wallet.createRandom().address;
+      await expect(smusd.connect(deployer).setTreasury(mockTreasury))
+        .to.emit(smusd, "TreasuryUpdated")
+        .withArgs(ethers.ZeroAddress, mockTreasury);
+    });
+
+    it("should reject treasury update from non-admin", async function () {
+      await expect(
+        smusd.connect(user1).setTreasury(ethers.Wallet.createRandom().address)
+      ).to.be.reverted;
+    });
+  });
+
+  // ============================================================
+  //  CANTON SHARES SYNC
+  // ============================================================
+
+  describe("Canton Shares Sync", function () {
+    beforeEach(async function () {
+      await smusd.grantRole(await smusd.BRIDGE_ROLE(), bridge.address);
+    });
+
+    it("should sync Canton shares from bridge", async function () {
+      const cantonShares = ethers.parseEther("5000");
+      await smusd.connect(bridge).syncCantonShares(cantonShares, 1);
+
+      expect(await smusd.cantonTotalShares()).to.equal(cantonShares);
+      expect(await smusd.lastCantonSyncEpoch()).to.equal(1);
+    });
+
+    it("should reject non-sequential epoch", async function () {
+      await smusd.connect(bridge).syncCantonShares(ethers.parseEther("1000"), 1);
+
+      await expect(
+        smusd.connect(bridge).syncCantonShares(ethers.parseEther("2000"), 1)
+      ).to.be.revertedWith("EPOCH_NOT_SEQUENTIAL");
+    });
+
+    it("should update global total shares", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      const ethShares = await smusd.totalSupply();
+
+      const cantonShares = ethers.parseEther("2000");
+      await smusd.connect(bridge).syncCantonShares(cantonShares, 1);
+
+      // Global = Ethereum + Canton
+      expect(await smusd.globalTotalShares()).to.equal(ethShares + cantonShares);
+    });
+
+    it("should reject sync from non-bridge", async function () {
+      await expect(
+        smusd.connect(user1).syncCantonShares(ethers.parseEther("1000"), 1)
+      ).to.be.reverted;
+    });
+
+    it("should emit CantonSharesSynced event", async function () {
+      const cantonShares = ethers.parseEther("5000");
+      await expect(smusd.connect(bridge).syncCantonShares(cantonShares, 1))
+        .to.emit(smusd, "CantonSharesSynced");
+    });
+  });
+
+  // ============================================================
+  //  GLOBAL SHARE PRICE
+  // ============================================================
+
+  describe("Global Share Price", function () {
+    it("should return correct global share price with no Canton shares", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+
+      const price = await smusd.globalSharePrice();
+      expect(price).to.be.gt(0);
+    });
+
+    it("should return default price with no shares", async function () {
+      const price = await smusd.globalSharePrice();
+      // decimalsOffset = 3, so default = 10^3 = 1000
+      expect(price).to.equal(1000);
+    });
+
+    it("should return ethereum total shares", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      const totalSupply = await smusd.totalSupply();
+      expect(await smusd.ethereumTotalShares()).to.equal(totalSupply);
+    });
+
+    it("should return global total assets without treasury", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      const globalAssets = await smusd.globalTotalAssets();
+      const localAssets = await smusd.totalAssets();
+      expect(globalAssets).to.equal(localAssets);
+    });
+  });
+
+  // ============================================================
+  //  VIEW FUNCTIONS
+  // ============================================================
+
+  describe("View Functions", function () {
+    it("should return remaining cooldown correctly", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+
+      const remaining = await smusd.getRemainingCooldown(user1.address);
+      expect(remaining).to.be.gt(0);
+      expect(remaining).to.be.lte(COOLDOWN);
+    });
+
+    it("should return zero remaining cooldown after expiry", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      await time.increase(COOLDOWN + 1);
+
+      expect(await smusd.getRemainingCooldown(user1.address)).to.equal(0);
+    });
+
+    it("should convert assets to shares correctly", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+
+      const shares = await smusd.convertToShares(ethers.parseEther("100"));
+      expect(shares).to.be.gt(0);
+    });
+
+    it("should convert shares to assets correctly", async function () {
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+
+      const shares = await smusd.balanceOf(user1.address);
+      const assets = await smusd.convertToAssets(shares);
+      // Should be approximately equal to deposit (minus rounding)
+      expect(assets).to.be.gte(ethers.parseEther("999"));
+    });
   });
 });

@@ -308,5 +308,141 @@ describe('LeverageVault', function () {
       expect(effectiveLeverage).to.be.gt(10); // At least some leverage achieved
       expect(effectiveLeverage).to.be.lte(40); // Should not exceed 4x (max for 75% LTV)
     });
+
+    it('should return zero leverage for no position', async function () {
+      const effectiveLeverage = await leverageVault.getEffectiveLeverage(user.address);
+      expect(effectiveLeverage).to.equal(0);
+    });
+
+    it('should return position details', async function () {
+      await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        ethers.parseEther('10'),
+        20,
+        3
+      );
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.collateralToken).to.equal(await weth.getAddress());
+      expect(position.initialDeposit).to.equal(ethers.parseEther('10'));
+      expect(position.openedAt).to.be.gt(0);
+    });
+  });
+
+  describe('Emergency Functions', function () {
+    it('should reject emergency close for no position', async function () {
+      await expect(
+        leverageVault.emergencyClosePosition(user.address)
+      ).to.be.revertedWith('NO_POSITION');
+    });
+
+    it('should reject emergency close from non-admin', async function () {
+      await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        ethers.parseEther('10'),
+        20,
+        3
+      );
+
+      await expect(
+        leverageVault.connect(user).emergencyClosePosition(user.address)
+      ).to.be.reverted;
+    });
+
+    it('should allow emergency withdraw of stuck tokens', async function () {
+      // Send some tokens directly to the contract
+      await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
+
+      const balanceBefore = await weth.balanceOf(owner.address);
+      await leverageVault.emergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
+      const balanceAfter = await weth.balanceOf(owner.address);
+
+      expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther('5'));
+    });
+  });
+
+  describe('Pause/Unpause (FIX H-03)', function () {
+    it('should pause operations', async function () {
+      await leverageVault.pause();
+      expect(await leverageVault.paused()).to.be.true;
+    });
+
+    it('should reject operations when paused', async function () {
+      await leverageVault.pause();
+
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          ethers.parseEther('10'),
+          20,
+          5
+        )
+      ).to.be.revertedWithCustomError(leverageVault, 'EnforcedPause');
+    });
+
+    it('should require admin to unpause', async function () {
+      await leverageVault.pause();
+
+      await expect(
+        leverageVault.connect(user).unpause()
+      ).to.be.reverted;
+
+      await leverageVault.unpause();
+      expect(await leverageVault.paused()).to.be.false;
+    });
+
+    it('should resume operations after unpause', async function () {
+      await leverageVault.pause();
+      await leverageVault.unpause();
+
+      await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        ethers.parseEther('10'),
+        20,
+        5
+      );
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.totalCollateral).to.be.gt(0);
+    });
+  });
+
+  describe('Edge Cases', function () {
+    it('should reject zero initial amount', async function () {
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          0,
+          20,
+          5
+        )
+      ).to.be.revertedWith('INVALID_AMOUNT');
+    });
+
+    it('should reject leverage too low', async function () {
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          ethers.parseEther('10'),
+          5, // 0.5x - below minimum 1.0x
+          5
+        )
+      ).to.be.revertedWith('LEVERAGE_TOO_LOW');
+    });
+
+    it('should reject invalid token address for enable', async function () {
+      await expect(
+        leverageVault.enableToken(ethers.ZeroAddress, 3000)
+      ).to.be.revertedWith('INVALID_TOKEN');
+    });
+
+    it('should reject invalid fee tier', async function () {
+      const MockERC20 = await ethers.getContractFactory('MockERC20');
+      const newToken = await MockERC20.deploy('Test', 'TEST', 18);
+
+      await expect(
+        leverageVault.enableToken(await newToken.getAddress(), 999)
+      ).to.be.revertedWith('INVALID_FEE_TIER');
+    });
   });
 });
