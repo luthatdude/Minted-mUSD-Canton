@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /**
  * @title MockWormholeTokenBridge
- * @notice Mock Wormhole Token Bridge for testing TreasuryReceiver
+ * @notice Mock Wormhole Token Bridge for testing DepositRouter and TreasuryReceiver
  */
 contract MockWormholeTokenBridge {
     using SafeERC20 for IERC20;
@@ -14,8 +14,13 @@ contract MockWormholeTokenBridge {
     IERC20 public usdc;
     uint256 public transferAmount;
     address public transferRecipient;
+    uint64 private _sequence;
     
-    constructor(address _usdc) {
+    constructor() {
+        // Default constructor for flexible testing
+    }
+    
+    function setUsdc(address _usdc) external {
         usdc = IERC20(_usdc);
     }
     
@@ -25,6 +30,26 @@ contract MockWormholeTokenBridge {
     
     function setTransferRecipient(address recipient) external {
         transferRecipient = recipient;
+    }
+    
+    /// @notice Mock transferTokens for DepositRouter testing
+    function transferTokens(
+        address token,
+        uint256 amount,
+        uint16,
+        bytes32,
+        uint256,
+        uint32
+    ) external payable returns (uint64 sequence) {
+        // Pull tokens from caller (simulating bridge lock)
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        _sequence++;
+        return _sequence;
+    }
+    
+    /// @notice Mock wrappedAsset for bridge queries
+    function wrappedAsset(uint16, bytes32) external view returns (address) {
+        return address(usdc);
     }
     
     function completeTransfer(bytes memory) external {

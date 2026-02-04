@@ -540,6 +540,37 @@ template Vault
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         return (principalDebt + accruedInterest + newInterest)
 
+    -- | Get current interest rate (for UI display)
+    nonconsuming choice Vault_GetInterestRate : Bps
+      with
+        requester : Party
+      controller requester
+      do
+        return config.interestRateBps
+
+    -- | Sync interest rate from Ethereum (via attestation)
+    -- Allows the vault to use dynamic utilization-based rates
+    choice Vault_SyncInterestRate : ContractId Vault
+      with
+        newRateBps : Bps
+        ethBlockNumber : Int     -- For audit trail
+      controller operator
+      do
+        assertMsg "RATE_MUST_BE_NON_NEGATIVE" (newRateBps >= 0)
+        assertMsg "RATE_TOO_HIGH" (newRateBps <= 10000)  -- Max 100% APR
+        
+        -- Accrue interest at old rate before updating
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        
+        create this with
+          config = config with interestRateBps = newRateBps
+          accruedInterest = accruedInterest + newInterest
+          lastInterestUpdate = now
+
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
     -- FIX DL-C03: Now requires MUSDSupplyService CID for supply-cap-tracked minting

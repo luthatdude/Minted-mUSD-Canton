@@ -18,6 +18,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
+    bytes32 public constant INTEREST_ROUTER_ROLE = keccak256("INTEREST_ROUTER_ROLE");
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
@@ -38,11 +39,22 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @notice Treasury contract for global asset value
     address public treasury;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTEREST ROUTING: Track interest from BorrowModule
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// @notice Total interest received from borrowers
+    uint256 public totalInterestReceived;
+    
+    /// @notice Last interest receipt timestamp
+    uint256 public lastInterestReceiptTime;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
     event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
 
     constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -114,6 +126,28 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
 
         emit YieldDistributed(msg.sender, amount);
+    }
+
+    /// @notice Receive interest payments from BorrowModule
+    /// @dev Called by BorrowModule to route borrower interest to suppliers
+    /// @param amount The amount of mUSD interest to receive
+    function receiveInterest(uint256 amount) external onlyRole(INTEREST_ROUTER_ROLE) {
+        require(amount > 0, "ZERO_AMOUNT");
+        require(globalTotalShares() > 0, "NO_SHARES_EXIST");
+        
+        // Cap interest to 10% of current assets per call (same as yield cap)
+        uint256 currentAssets = totalAssets();
+        uint256 maxInterest = (currentAssets * MAX_YIELD_BPS) / 10000;
+        require(amount <= maxInterest, "INTEREST_EXCEEDS_CAP");
+
+        // Transfer mUSD from BorrowModule (which approved us)
+        IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
+        
+        // Track for analytics
+        totalInterestReceived += amount;
+        lastInterestReceiptTime = block.timestamp;
+
+        emit InterestReceived(msg.sender, amount, totalInterestReceived);
     }
 
     // FIX S-03: decimalsOffset provides some protection against donation attacks
