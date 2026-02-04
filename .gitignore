@@ -5,6 +5,10 @@ typechain-types/
 .daml/
 install.sh
 
+# Coverage reports (auto-generated)
+coverage/
+coverage.json
+
 # FIX C-10: Exclude sensitive files
 .env
 .env.*
