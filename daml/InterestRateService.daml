@@ -200,13 +200,9 @@ template InterestPayment
 --                     HELPER FUNCTIONS
 -- ============================================================
 
--- | Convert RelTime to microseconds (for duration calculations)
-convertRelTimeToMicroseconds : RelTime -> Int
-convertRelTimeToMicroseconds rt = 
-    let microsPerSecond = 1000000
-    in truncate (intToDecimal (relToInt rt))
-
 -- | Calculate simple interest
+-- Note: For Canton, we pass duration as seconds directly (Int)
+-- since RelTime conversion is handled at the call site
 calculateSimpleInterest : Decimal -> Int -> Int -> Decimal
 calculateSimpleInterest principal rateBps durationSeconds =
     let secondsPerYear = 31536000.0
