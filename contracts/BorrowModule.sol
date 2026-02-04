@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// BLE Protocol - Borrow Module
-// Tracks debt positions with per-second interest accrual
+// BLE Protocol - Borrow Module V2
+// Tracks debt positions with utilization-based dynamic interest rates
+// Routes interest payments to SMUSD stakers
 
 pragma solidity 0.8.26;
 
@@ -28,10 +29,35 @@ interface IMUSDMint {
     function burn(address from, uint256 amount) external;
 }
 
+interface IInterestRateModel {
+    function calculateInterest(
+        uint256 principal,
+        uint256 totalBorrows,
+        uint256 totalSupply,
+        uint256 secondsElapsed
+    ) external view returns (uint256);
+    function splitInterest(uint256 interestAmount) 
+        external view returns (uint256 supplierAmount, uint256 reserveAmount);
+    function getBorrowRateAnnual(uint256 totalBorrows, uint256 totalSupply) 
+        external view returns (uint256);
+    function getSupplyRateAnnual(uint256 totalBorrows, uint256 totalSupply) 
+        external view returns (uint256);
+    function utilizationRate(uint256 totalBorrows, uint256 totalSupply) 
+        external pure returns (uint256);
+}
+
+interface ISMUSD {
+    function receiveInterest(uint256 amount) external;
+}
+
+interface ITreasury {
+    function totalValue() external view returns (uint256);
+}
+
 /// @title BorrowModule
 /// @notice Manages debt positions for overcollateralized mUSD borrowing.
-///         Users deposit collateral in CollateralVault, then borrow mUSD here.
-///         Interest accrues per-second on outstanding debt.
+///         Uses utilization-based dynamic interest rates (Compound-style).
+///         Interest accrues per-second and is routed to SMUSD stakers.
 contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
@@ -44,11 +70,37 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     IPriceOracle public immutable oracle;
     IMUSDMint public immutable musd;
 
-    // Annual interest rate in basis points (e.g., 200 = 2% APR)
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTEREST RATE MODEL INTEGRATION
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// @notice Dynamic interest rate model (utilization-based)
+    IInterestRateModel public interestRateModel;
+    
+    /// @notice SMUSD vault to receive interest payments
+    ISMUSD public smusd;
+    
+    /// @notice Treasury for total supply calculation
+    ITreasury public treasury;
+    
+    /// @notice Global total borrows across all users
+    uint256 public totalBorrows;
+    
+    /// @notice Accumulated protocol reserves (from reserve factor)
+    uint256 public protocolReserves;
+    
+    /// @notice Last time global interest was accrued
+    uint256 public lastGlobalAccrualTime;
+    
+    /// @notice Total interest paid to suppliers (for analytics)
+    uint256 public totalInterestPaidToSuppliers;
+    
+    /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
 
     // Seconds per year for interest calculation
     uint256 private constant SECONDS_PER_YEAR = 365 days;
+    uint256 private constant BPS = 10000;
 
     // Minimum debt to open a position (prevents dust positions)
     uint256 public minDebt;
@@ -69,6 +121,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     event InterestRateUpdated(uint256 oldRate, uint256 newRate);
     event DebtAdjusted(address indexed user, uint256 newDebt, string reason);
     event MinDebtUpdated(uint256 oldMinDebt, uint256 newMinDebt);
+    
+    // Interest routing events
+    event InterestRoutedToSuppliers(uint256 supplierAmount, uint256 reserveAmount);
+    event InterestRateModelUpdated(address indexed oldModel, address indexed newModel);
+    event SMUSDUpdated(address indexed oldSMUSD, address indexed newSMUSD);
+    event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+    event GlobalInterestAccrued(uint256 interest, uint256 newTotalBorrows, uint256 utilizationBps);
+    event ReservesWithdrawn(address indexed to, uint256 amount);
 
     constructor(
         address _vault,
@@ -86,9 +146,37 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         musd = IMUSDMint(_musd);
         interestRateBps = _interestRateBps;
         minDebt = _minDebt;
+        lastGlobalAccrualTime = block.timestamp;
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(BORROW_ADMIN_ROLE, msg.sender);
+    }
+
+    // ============================================================
+    //                  INTEREST MODEL SETTERS
+    // ============================================================
+
+    /// @notice Set the interest rate model (enables dynamic rates)
+    function setInterestRateModel(address _model) external onlyRole(BORROW_ADMIN_ROLE) {
+        address old = address(interestRateModel);
+        interestRateModel = IInterestRateModel(_model);
+        emit InterestRateModelUpdated(old, _model);
+    }
+
+    /// @notice Set the SMUSD vault for interest routing
+    function setSMUSD(address _smusd) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_smusd != address(0), "ZERO_ADDRESS");
+        address old = address(smusd);
+        smusd = ISMUSD(_smusd);
+        emit SMUSDUpdated(old, _smusd);
+    }
+
+    /// @notice Set the Treasury for supply calculation
+    function setTreasury(address _treasury) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_treasury != address(0), "ZERO_ADDRESS");
+        address old = address(treasury);
+        treasury = ITreasury(_treasury);
+        emit TreasuryUpdated(old, _treasury);
     }
 
     // ============================================================
@@ -108,6 +196,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         require(newDebt >= minDebt, "BELOW_MIN_DEBT");
 
         pos.principal += amount;
+        totalBorrows += amount; // Track global borrows
 
         // FIX H-20: Use borrow capacity (collateral factor) not liquidation threshold
         // _healthFactor uses liquidation threshold, which allows borrowing at the liquidation edge
@@ -136,6 +225,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         require(newDebt >= minDebt, "BELOW_MIN_DEBT");
 
         pos.principal += amount;
+        totalBorrows += amount; // Track global borrows
 
         uint256 capacity = _borrowCapacity(user);
         uint256 newTotalDebt = totalDebt(user);
@@ -167,6 +257,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
+        // Track principal repayment for totalBorrows update
+        uint256 principalRepaid = 0;
+
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
@@ -175,6 +268,12 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= principalPayment;
+            principalRepaid = principalPayment;
+        }
+
+        // Update global borrows (only principal portion, not interest)
+        if (principalRepaid > 0 && totalBorrows >= principalRepaid) {
+            totalBorrows -= principalRepaid;
         }
 
         // Burn the repaid mUSD
@@ -225,13 +324,104 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     //                  INTEREST ACCRUAL
     // ============================================================
 
+    /// @notice Get total supply for utilization calculation
+    /// @dev Uses Treasury.totalValue() if available, otherwise returns totalBorrows * 2 as fallback
+    function _getTotalSupply() internal view returns (uint256) {
+        if (address(treasury) != address(0)) {
+            try treasury.totalValue() returns (uint256 value) {
+                return value;
+            } catch {
+                // Fallback: assume 50% utilization
+                return totalBorrows * 2;
+            }
+        }
+        // No treasury set: assume 50% utilization
+        return totalBorrows > 0 ? totalBorrows * 2 : 1e18;
+    }
+
+    /// @notice Get current borrow rate (dynamic or fixed fallback)
+    function _getCurrentBorrowRateBps() internal view returns (uint256) {
+        if (address(interestRateModel) != address(0)) {
+            return interestRateModel.getBorrowRateAnnual(totalBorrows, _getTotalSupply());
+        }
+        return interestRateBps; // Fallback to fixed rate
+    }
+
+    /// @notice Accrue global interest and route to suppliers
+    /// @dev Called before any borrow/repay to update global state
+    function _accrueGlobalInterest() internal {
+        uint256 elapsed = block.timestamp - lastGlobalAccrualTime;
+        // slither-disable-next-line incorrect-equality
+        if (elapsed == 0 || totalBorrows == 0) {
+            lastGlobalAccrualTime = block.timestamp;
+            return;
+        }
+
+        uint256 totalSupply = _getTotalSupply();
+        uint256 interest;
+
+        if (address(interestRateModel) != address(0)) {
+            // Use dynamic interest rate model
+            interest = interestRateModel.calculateInterest(
+                totalBorrows,
+                totalBorrows,
+                totalSupply,
+                elapsed
+            );
+        } else {
+            // Fallback to fixed rate
+            interest = (totalBorrows * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+        }
+
+        if (interest > 0) {
+            // Split interest between suppliers and protocol reserves
+            uint256 supplierAmount;
+            uint256 reserveAmount;
+            
+            if (address(interestRateModel) != address(0)) {
+                (supplierAmount, reserveAmount) = interestRateModel.splitInterest(interest);
+            } else {
+                // Default 10% to reserves if no model
+                reserveAmount = interest / 10;
+                supplierAmount = interest - reserveAmount;
+            }
+
+            // Add reserves to protocol
+            protocolReserves += reserveAmount;
+
+            // Route supplier portion to SMUSD
+            if (supplierAmount > 0 && address(smusd) != address(0)) {
+                // Mint mUSD representing interest earned
+                musd.mint(address(this), supplierAmount);
+                // Approve and send to SMUSD
+                IERC20(address(musd)).approve(address(smusd), supplierAmount);
+                smusd.receiveInterest(supplierAmount);
+                totalInterestPaidToSuppliers += supplierAmount;
+                
+                emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+            }
+
+            // Update total borrows to include accrued interest
+            totalBorrows += interest;
+            
+            uint256 utilization = address(interestRateModel) != address(0)
+                ? interestRateModel.utilizationRate(totalBorrows, totalSupply)
+                : (totalBorrows * BPS) / totalSupply;
+            
+            emit GlobalInterestAccrued(interest, totalBorrows, utilization);
+        }
+
+        lastGlobalAccrualTime = block.timestamp;
+    }
+
     /// @notice Accrue interest on a user's debt
-    /// @dev Uses SIMPLE INTEREST model (not compound).
-    ///      Formula: interest = principal × rate × time
-    ///      This is intentional for gas efficiency and predictability.
-    ///      For multi-year positions, compound interest could be added.
+    /// @dev Uses dynamic rate from InterestRateModel if set, otherwise fixed rate.
+    ///      Uses SIMPLE INTEREST model (not compound) for gas efficiency.
     ///      H-02: DOCUMENTED DESIGN DECISION - simple interest is intentional.
     function _accrueInterest(address user) internal {
+        // First accrue global interest (for routing to suppliers)
+        _accrueGlobalInterest();
+
         DebtPosition storage pos = positions[user];
         if (pos.principal == 0 && pos.accruedInterest == 0) {
             pos.lastAccrualTime = block.timestamp;
@@ -242,8 +432,19 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // slither-disable-next-line incorrect-equality
         if (elapsed == 0) return;
 
-        // interest = principal * rate * elapsed / (10000 * SECONDS_PER_YEAR)
-        uint256 interest = (pos.principal * interestRateBps * elapsed) / (10000 * SECONDS_PER_YEAR);
+        uint256 interest;
+        if (address(interestRateModel) != address(0)) {
+            // Use dynamic rate from model
+            interest = interestRateModel.calculateInterest(
+                pos.principal,
+                totalBorrows,
+                _getTotalSupply(),
+                elapsed
+            );
+        } else {
+            // Fallback to fixed rate
+            interest = (pos.principal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+        }
 
         pos.accruedInterest += interest;
         pos.lastAccrualTime = block.timestamp;
@@ -321,12 +522,19 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 total = pos.principal + pos.accruedInterest;
         uint256 reduction = amount > total ? total : amount;
 
+        uint256 principalReduced = 0;
         if (reduction <= pos.accruedInterest) {
             pos.accruedInterest -= reduction;
         } else {
             uint256 remaining = reduction - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= remaining;
+            principalReduced = remaining;
+        }
+
+        // Update global borrows
+        if (principalReduced > 0 && totalBorrows >= principalReduced) {
+            totalBorrows -= principalReduced;
         }
 
         emit DebtAdjusted(user, totalDebt(user), "LIQUIDATION");
@@ -340,7 +548,18 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     function totalDebt(address user) public view returns (uint256) {
         DebtPosition storage pos = positions[user];
         uint256 elapsed = block.timestamp - pos.lastAccrualTime;
-        uint256 pendingInterest = (pos.principal * interestRateBps * elapsed) / (10000 * SECONDS_PER_YEAR);
+        
+        uint256 pendingInterest;
+        if (address(interestRateModel) != address(0)) {
+            pendingInterest = interestRateModel.calculateInterest(
+                pos.principal,
+                totalBorrows,
+                _getTotalSupply(),
+                elapsed
+            );
+        } else {
+            pendingInterest = (pos.principal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+        }
         return pos.principal + pos.accruedInterest + pendingInterest;
     }
 
@@ -367,6 +586,50 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Get total borrow capacity for a user (public wrapper)
     function borrowCapacity(address user) external view returns (uint256) {
         return _borrowCapacity(user);
+    }
+
+    // ============================================================
+    //                  INTEREST RATE VIEW FUNCTIONS
+    // ============================================================
+
+    /// @notice Get current utilization rate in BPS
+    function getUtilizationRate() external view returns (uint256) {
+        if (address(interestRateModel) != address(0)) {
+            return interestRateModel.utilizationRate(totalBorrows, _getTotalSupply());
+        }
+        uint256 supply = _getTotalSupply();
+        if (supply == 0) return 0;
+        return (totalBorrows * BPS) / supply;
+    }
+
+    /// @notice Get current annual borrow rate in BPS
+    function getCurrentBorrowRate() external view returns (uint256) {
+        return _getCurrentBorrowRateBps();
+    }
+
+    /// @notice Get current annual supply rate in BPS
+    function getCurrentSupplyRate() external view returns (uint256) {
+        if (address(interestRateModel) != address(0)) {
+            return interestRateModel.getSupplyRateAnnual(totalBorrows, _getTotalSupply());
+        }
+        // Fallback: 90% of borrow rate goes to suppliers
+        return (interestRateBps * 9) / 10;
+    }
+
+    /// @notice Get total supply used for utilization calculation
+    function getTotalSupply() external view returns (uint256) {
+        return _getTotalSupply();
+    }
+
+    /// @notice Withdraw accumulated protocol reserves
+    function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(amount <= protocolReserves, "EXCEEDS_RESERVES");
+        require(to != address(0), "ZERO_ADDRESS");
+        
+        protocolReserves -= amount;
+        musd.mint(to, amount);
+        
+        emit ReservesWithdrawn(to, amount);
     }
 
     // ============================================================
