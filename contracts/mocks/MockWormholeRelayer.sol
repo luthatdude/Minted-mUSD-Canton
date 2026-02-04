@@ -9,6 +9,11 @@ pragma solidity ^0.8.20;
 // slither-disable-next-line locked-ether
 contract MockWormholeRelayer {
     uint64 private _sequence;
+    uint256 public bridgeCost;
+    
+    constructor(uint256 _bridgeCost) {
+        bridgeCost = _bridgeCost;
+    }
 
     function sendPayloadToEvm(
         uint16,
@@ -25,7 +30,7 @@ contract MockWormholeRelayer {
         uint16,
         uint256,
         uint256
-    ) external pure returns (uint256 nativePriceQuote, uint256 targetChainRefundPerGasUnused) {
-        return (0.01 ether, 0);
+    ) external view returns (uint256 nativePriceQuote, uint256 targetChainRefundPerGasUnused) {
+        return (bridgeCost, 0);
     }
 }

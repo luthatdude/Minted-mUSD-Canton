@@ -162,7 +162,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         // 30 days minimum - shorter pools often have 1-2% APY premium
         // which more than offsets the ~1.2% annual slippage from more frequent rolls
         minTimeToExpiry = 30 days;
-        minTvlUsd = 50_000_000e6;      // $50M minimum (6 decimals)
+        minTvlUsd = 10_000_000e6;      // $10M minimum (6 decimals)
         minApyBps = 900;               // 9% minimum APY
         tvlWeight = 4000;              // 40%
         apyWeight = 6000;              // 60% - favors higher APY shorter-dated pools
