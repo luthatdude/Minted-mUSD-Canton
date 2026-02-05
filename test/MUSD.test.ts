@@ -161,11 +161,23 @@ describe("MUSD", function () {
       await expect(musd.setSupplyCap(0)).to.be.revertedWith("INVALID_SUPPLY_CAP");
     });
 
-    it("FIX C-2: should reject cap below current supply", async function () {
+    it("FIX: should ALLOW cap below current supply (undercollateralization response)", async function () {
+      // Mint 5M tokens
       await musd.connect(bridge).mint(user1.address, ethers.parseEther("5000000"));
+      
+      // Now set cap to 1M (below current supply) - this should SUCCEED
+      // and emit SupplyCapBelowSupply event
+      const newCap = ethers.parseEther("1000000");
+      await expect(musd.setSupplyCap(newCap))
+        .to.emit(musd, "SupplyCapBelowSupply")
+        .withArgs(newCap, ethers.parseEther("5000000"));
+      
+      expect(await musd.supplyCap()).to.equal(newCap);
+      
+      // Now new mints should fail
       await expect(
-        musd.setSupplyCap(ethers.parseEther("1000000"))
-      ).to.be.revertedWith("CAP_BELOW_SUPPLY");
+        musd.connect(bridge).mint(user1.address, ethers.parseEther("1"))
+      ).to.be.revertedWith("EXCEEDS_CAP");
     });
 
     it("FIX C-2: should allow cap equal to current supply", async function () {
