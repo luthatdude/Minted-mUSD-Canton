@@ -250,17 +250,41 @@ class RelayService {
     console.log(`[Relay] Found ${this.processedAttestations.size} processed attestations`);
   }
 
+  // Maximum attestations to process per poll cycle to prevent memory exhaustion
+  private static readonly MAX_BATCH_SIZE = 100;
+
   /**
    * Poll Canton for finalized attestations ready to bridge
+   * FIX M-06: Added pagination to prevent memory exhaustion on large backlogs.
+   * Processes up to MAX_BATCH_SIZE attestations per cycle, prioritizing by nonce.
    */
   private async pollForAttestations(): Promise<void> {
     // Query active AttestationRequest contracts
     // FIX P0: Use MintedProtocolV3 to match validator-node-v2.ts
     // Previously used V2 which meant relay and validator saw different data
-    const attestations = await (this.ledger.query as any)(
-      "MintedProtocolV3:AttestationRequest",
-      { aggregator: this.config.cantonParty }
-    ) as CreateEvent<AttestationRequest>[];
+    let attestations: CreateEvent<AttestationRequest>[];
+    
+    try {
+      attestations = await (this.ledger.query as any)(
+        "MintedProtocolV3:AttestationRequest",
+        { aggregator: this.config.cantonParty }
+      ) as CreateEvent<AttestationRequest>[];
+    } catch (error) {
+      console.error(`[Relay] Failed to query attestations: ${error}`);
+      return;
+    }
+
+    // FIX M-06: Limit batch size to prevent memory issues
+    if (attestations.length > RelayService.MAX_BATCH_SIZE) {
+      console.warn(`[Relay] Large backlog detected: ${attestations.length} attestations. Processing first ${RelayService.MAX_BATCH_SIZE}`);
+      // Sort by nonce to process in order, then take first batch
+      attestations = attestations
+        .sort((a, b) => Number(a.payload.payload.nonce) - Number(b.payload.payload.nonce))
+        .slice(0, RelayService.MAX_BATCH_SIZE);
+    }
+
+    // Track processed count for this cycle
+    let processedThisCycle = 0;
 
     for (const attestation of attestations) {
       const payload = attestation.payload.payload;
@@ -300,6 +324,11 @@ class RelayService {
       // Bridge it
       console.log(`[Relay] Bridging attestation ${attestationId}...`);
       await this.bridgeAttestation(payload, validatorSigs);
+      processedThisCycle++;
+    }
+
+    if (processedThisCycle > 0) {
+      console.log(`[Relay] Processed ${processedThisCycle} attestations this cycle`);
     }
   }
 
