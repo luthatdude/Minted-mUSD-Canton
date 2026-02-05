@@ -40,6 +40,19 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     address public treasury;
 
     // ═══════════════════════════════════════════════════════════════════════
+    // FIX CRITICAL: Rate limiting for Canton share sync to prevent manipulation
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// @notice Last Canton sync timestamp
+    uint256 public lastCantonSyncTime;
+    
+    /// @notice Minimum interval between syncs (1 hour)
+    uint256 public constant MIN_SYNC_INTERVAL = 1 hours;
+    
+    /// @notice Maximum share change per sync (5% = 500 bps)
+    uint256 public constant MAX_SHARE_CHANGE_BPS = 500;
+
+    // ═══════════════════════════════════════════════════════════════════════
     // INTEREST ROUTING: Track interest from BorrowModule
     // ═══════════════════════════════════════════════════════════════════════
     
@@ -183,13 +196,26 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Sync Canton shares from bridge attestation
+    /// @dev FIX CRITICAL: Rate-limited to prevent share price manipulation
     /// @param _cantonShares Total smUSD shares on Canton
     /// @param epoch Sync epoch (must be sequential)
     function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
         require(epoch > lastCantonSyncEpoch, "EPOCH_NOT_SEQUENTIAL");
         
+        // FIX: Rate limit - minimum 1 hour between syncs
+        require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
+        
+        // FIX: Magnitude limit - max 5% change per sync to prevent manipulation
+        if (cantonTotalShares > 0) {
+            uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
+            uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
+            require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
+            require(_cantonShares >= maxDecrease, "SHARE_DECREASE_TOO_LARGE");
+        }
+        
         cantonTotalShares = _cantonShares;
         lastCantonSyncEpoch = epoch;
+        lastCantonSyncTime = block.timestamp;
         
         emit CantonSharesSynced(_cantonShares, epoch, globalSharePrice());
     }

@@ -534,9 +534,10 @@ contract PendleStrategyV2 is
 
     /**
      * @notice Keeper function to trigger rollover
-     * @dev Emits event for monitoring
+     * @dev FIX HIGH: Added access control - only STRATEGIST or GUARDIAN can trigger
+     * @dev Previously permissionless, allowing front-running attacks
      */
-    function triggerRollover() external nonReentrant {
+    function triggerRollover() external nonReentrant onlyRole(STRATEGIST_ROLE) {
         if (!_shouldRollover()) revert RolloverNotNeeded();
 
         uint256 daysRemaining = 0;

@@ -282,6 +282,53 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         emit Repaid(msg.sender, repayAmount, totalDebt(msg.sender));
     }
 
+    /// @notice Repay mUSD debt on behalf of a user (for LeverageVault integration)
+    /// @dev FIX CRITICAL: Allows LeverageVault to repay user debt when closing positions
+    /// @param user The user whose debt to repay
+    /// @param amount Amount of mUSD to repay (18 decimals)
+    function repayFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
+        require(amount > 0, "INVALID_AMOUNT");
+        require(user != address(0), "INVALID_USER");
+
+        _accrueInterest(user);
+
+        DebtPosition storage pos = positions[user];
+        uint256 total = pos.principal + pos.accruedInterest;
+        require(total > 0, "NO_DEBT");
+
+        // Cap repayment at total debt
+        uint256 repayAmount = amount > total ? total : amount;
+
+        // FIX S-M03: Prevent dust positions after partial repayment
+        uint256 remaining = total - repayAmount;
+        if (remaining > 0) {
+            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+        }
+
+        // Track principal repayment for totalBorrows update
+        uint256 principalRepaid = 0;
+
+        // Pay interest first, then principal
+        if (repayAmount <= pos.accruedInterest) {
+            pos.accruedInterest -= repayAmount;
+        } else {
+            uint256 principalPayment = repayAmount - pos.accruedInterest;
+            pos.accruedInterest = 0;
+            pos.principal -= principalPayment;
+            principalRepaid = principalPayment;
+        }
+
+        // Update global borrows (only principal portion, not interest)
+        if (principalRepaid > 0 && totalBorrows >= principalRepaid) {
+            totalBorrows -= principalRepaid;
+        }
+
+        // Burn the repaid mUSD from the caller (LeverageVault)
+        musd.burn(msg.sender, repayAmount);
+
+        emit Repaid(user, repayAmount, totalDebt(user));
+    }
+
     /// @notice Withdraw collateral (only if position stays healthy)
     /// @param token The collateral token
     /// @param amount Amount to withdraw

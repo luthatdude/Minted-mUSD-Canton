@@ -126,6 +126,9 @@ contract TreasuryV2 is
     /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
+    /// FIX CRITICAL: Events for rebalance failures
+    event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
+    event RebalanceDepositFailed(address indexed strategy, uint256 amount);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -791,7 +794,10 @@ contract TreasuryV2 is
             if (currentValue > targetValue) {
                 uint256 excess = currentValue - targetValue;
                 // slither-disable-next-line calls-loop
-                try IStrategy(strat).withdraw(excess) {} catch {}
+                // FIX: Add error event instead of silent swallow
+                try IStrategy(strat).withdraw(excess) {} catch {
+                    emit RebalanceWithdrawFailed(strat, excess);
+                }
             }
         }
 
@@ -814,9 +820,13 @@ contract TreasuryV2 is
 
                 asset.forceApprove(strat, toDeposit);
                 // slither-disable-next-line calls-loop
+                // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
-                } catch {}
+                } catch {
+                    emit RebalanceDepositFailed(strat, toDeposit);
+                    asset.forceApprove(strat, 0); // Clear approval on failure
+                }
             }
         }
 
