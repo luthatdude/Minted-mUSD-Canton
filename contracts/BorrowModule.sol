@@ -373,10 +373,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Get total supply for utilization calculation
     /// @dev Uses Treasury.totalValue() if available, otherwise returns totalBorrows * 2 as fallback
+    /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but totalBorrows
+    ///      is in mUSD (18 decimals). Must scale by 1e12 for correct utilization.
     function _getTotalSupply() internal view returns (uint256) {
         if (address(treasury) != address(0)) {
             try treasury.totalValue() returns (uint256 value) {
-                return value;
+                // FIX: Convert USDC (6 decimals) to mUSD scale (18 decimals)
+                return value * 1e12;
             } catch {
                 // Fallback: assume 50% utilization
                 return totalBorrows * 2;

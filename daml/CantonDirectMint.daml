@@ -442,6 +442,11 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
+        -- FIX CRITICAL: Archive old service before creating new one
+        -- Without this, old instances remain active with stale state,
+        -- allowing users to bypass supply cap and rate limits
+        archive self
+
         -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
@@ -521,6 +526,9 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
+
         -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
@@ -579,6 +587,9 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
+
         newService <- create this with
           currentSupply = currentSupply - musd.amount
           accumulatedFees = accumulatedFees + feeAmount
@@ -595,6 +606,8 @@ template CantonDirectMintService
       controller operator
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with supplyCap = newCap
 
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
@@ -602,6 +615,8 @@ template CantonDirectMintService
         newPaused : Bool
       controller operator
       do
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with paused = newPaused
 
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
@@ -610,6 +625,8 @@ template CantonDirectMintService
       controller operator
       do
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with dailyMintLimit = newLimit
 
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
@@ -617,12 +634,16 @@ template CantonDirectMintService
         newRegistryCid : Optional (ContractId ComplianceRegistry)
       controller operator
       do
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with complianceRegistryCid = newRegistryCid
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
       controller operator
       do
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with accumulatedFees = 0.0
 
 -- ============================================================

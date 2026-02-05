@@ -180,17 +180,24 @@ async function main() {
   // Configure Roles & Permissions
   // ═══════════════════════════════════════════════════════════
   
-  // Grant MINTER_ROLE to DirectMint and Bridge
-  console.log("Granting MINTER_ROLE...");
-  const MINTER_ROLE = await musd.MINTER_ROLE();
-  await musd.grantRole(MINTER_ROLE, directMintAddress);
-  await musd.grantRole(MINTER_ROLE, bridgeAddress);
-  await musd.grantRole(MINTER_ROLE, borrowModuleAddress);
+  // Grant BRIDGE_ROLE to contracts that need mint/burn access
+  // FIX CRITICAL: MUSD uses BRIDGE_ROLE not MINTER_ROLE
+  console.log("Granting BRIDGE_ROLE to mint/burn contracts...");
+  const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+  await musd.grantRole(BRIDGE_ROLE, directMintAddress);
+  await musd.grantRole(BRIDGE_ROLE, bridgeAddress);
+  await musd.grantRole(BRIDGE_ROLE, borrowModuleAddress);
   
-  // Grant LIQUIDATION_ROLE to LiquidationEngine
-  console.log("Granting LIQUIDATION_ROLE...");
-  const LIQUIDATION_ROLE = await borrowModule.LIQUIDATION_ROLE();
-  await borrowModule.grantRole(LIQUIDATION_ROLE, liquidationEngineAddress);
+  // Grant LIQUIDATOR_ROLE to LiquidationEngine for burn access
+  // FIX CRITICAL: LiquidationEngine needs MUSD.LIQUIDATOR_ROLE to burn debt
+  console.log("Granting LIQUIDATOR_ROLE to LiquidationEngine...");
+  const LIQUIDATOR_ROLE = await musd.LIQUIDATOR_ROLE();
+  await musd.grantRole(LIQUIDATOR_ROLE, liquidationEngineAddress);
+  
+  // Grant LIQUIDATION_ROLE on BorrowModule to LiquidationEngine
+  console.log("Granting BorrowModule LIQUIDATION_ROLE...");
+  const BORROW_LIQUIDATION_ROLE = await borrowModule.LIQUIDATION_ROLE();
+  await borrowModule.grantRole(BORROW_LIQUIDATION_ROLE, liquidationEngineAddress);
   
   // Configure PriceOracle with Chainlink feeds
   console.log("Configuring Chainlink price feeds...");
