@@ -48,6 +48,11 @@ interface IMUSDBurn {
 /// @notice Liquidates undercollateralized borrowing positions.
 ///         Liquidators repay a portion of the debt in mUSD and receive
 ///         the borrower's collateral at a discount (liquidation penalty).
+/// @dev FIX S-M05: SETUP DEPENDENCY — After deployment, the admin MUST:
+///      1. Grant LIQUIDATOR_ROLE on MUSD.sol to this contract's address
+///         so it can call musd.burn() during liquidations.
+///      2. Grant LIQUIDATION_ROLE on CollateralVault to this contract's address
+///         so it can call vault.seize() to transfer collateral.
 contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 

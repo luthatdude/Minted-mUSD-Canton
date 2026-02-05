@@ -287,7 +287,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @param minCollateralOut Minimum collateral to receive (slippage protection)
     /// @return collateralReturned Amount of collateral returned to user
     /// @dev FIX M-01: If swap fails, use closeLeveragedPositionWithMusd() instead
-    function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant returns (uint256 collateralReturned) {
+    /// FIX S-M12: Added whenNotPaused to prevent close operations during emergency pause
+    function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         require(pos.totalCollateral > 0, "NO_POSITION");
 
@@ -368,7 +369,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     ///      This completely eliminates swap failure risk.
     /// @param musdAmount Amount of mUSD to provide for debt repayment
     /// @return collateralReturned Amount of collateral returned to user
-    function closeLeveragedPositionWithMusd(uint256 musdAmount) external nonReentrant returns (uint256 collateralReturned) {
+    /// FIX S-M13: Added whenNotPaused to prevent close operations during emergency pause
+    function closeLeveragedPositionWithMusd(uint256 musdAmount) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         require(pos.totalCollateral > 0, "NO_POSITION");
 
