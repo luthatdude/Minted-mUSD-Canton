@@ -54,6 +54,7 @@ interface IMUSD {
 interface IBorrowModule {
     function borrowFor(address user, uint256 amount) external;
     function repay(uint256 amount) external;
+    function repayFor(address user, uint256 amount) external;
     function totalDebt(address user) external view returns (uint256);
     function borrowCapacity(address user) external view returns (uint256);
     function maxBorrow(address user) external view returns (uint256);
@@ -315,9 +316,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
             require(musdReceived >= debtToRepay, "INSUFFICIENT_MUSD_FROM_SWAP");
 
-            // FIX M-6: Use forceApprove for consistency and USDT-safety
+            // FIX CRITICAL: Use repayFor() to repay the USER's debt, not the vault's
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
-            borrowModule.repay(debtToRepay);
+            borrowModule.repayFor(msg.sender, debtToRepay);
 
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
@@ -381,9 +382,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             // Pull mUSD from user
             IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), musdAmount);
 
-            // Repay the debt
+            // FIX CRITICAL: Use repayFor() to repay the USER's debt, not the vault's
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
-            borrowModule.repay(debtToRepay);
+            borrowModule.repayFor(msg.sender, debtToRepay);
 
             // Refund excess mUSD if user provided more than needed
             uint256 excessMusd = musdAmount - debtToRepay;

@@ -93,10 +93,13 @@ template ComplianceRegistry
 
     -- | Validate a mint transaction. Only the sender (minter) needs to be checked.
     -- Nonconsuming — can be called from DirectMint choices without archiving.
+    -- FIX CRITICAL: Changed controller to operator only. The operator acts on behalf of the
+    -- regulator when exercising from CantonDirectMint. The regulator's policy is enforced
+    -- by the blacklist/frozen data maintained on this contract (which only regulator can modify).
     nonconsuming choice ValidateMint : ()
       with
         minter : Party
-      controller regulator, operator
+      controller operator
       do
         assertMsg "MINTER_BLACKLISTED" (not (Set.member minter blacklisted))
         -- Frozen parties CAN receive (mint creates new assets for them),
@@ -105,21 +108,23 @@ template ComplianceRegistry
     -- | Validate a transfer between two parties.
     -- Checks both sender and receiver against blacklist.
     -- Also checks sender against freeze list (frozen can receive but not send).
+    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateTransfer : ()
       with
         sender : Party
         receiver : Party
-      controller regulator, operator
+      controller operator
       do
         assertMsg "SENDER_BLACKLISTED" (not (Set.member sender blacklisted))
         assertMsg "RECEIVER_BLACKLISTED" (not (Set.member receiver blacklisted))
         assertMsg "SENDER_FROZEN" (not (Set.member sender frozen))
 
     -- | Validate a redemption (burn). Checks the redeemer is not blacklisted or frozen.
+    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateRedemption : ()
       with
         redeemer : Party
-      controller regulator, operator
+      controller operator
       do
         assertMsg "REDEEMER_BLACKLISTED" (not (Set.member redeemer blacklisted))
         assertMsg "REDEEMER_FROZEN" (not (Set.member redeemer frozen))
