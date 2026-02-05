@@ -11,9 +11,11 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
+    using Math for uint256;
 
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -284,6 +286,21 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             return shares / (10 ** _decimalsOffset());
         }
         return (shares * globalTotalAssets()) / totalShares;
+    }
+
+    /// @notice FIX C-02: Override internal _convertToShares to use global share price
+    /// @dev OZ ERC4626 deposit/withdraw/mint/redeem call these internal versions.
+    ///      Without this override, operations would use Ethereum-local rate while
+    ///      views showed global rate — creating an arbitrage surface.
+    function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
+        uint256 shares = globalTotalShares();
+        return assets.mulDiv(shares + 10 ** _decimalsOffset(), globalTotalAssets() + 1, rounding);
+    }
+
+    /// @notice FIX C-02: Override internal _convertToAssets to use global share price
+    function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
+        uint256 totalShares = globalTotalShares();
+        return shares.mulDiv(globalTotalAssets() + 1, totalShares + 10 ** _decimalsOffset(), rounding);
     }
 
     // ============================================================

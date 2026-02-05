@@ -457,6 +457,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 
-    // Storage gap for future upgrades — 12 state variables → 50 - 12 = 38
-    uint256[38] private __gap;
+    // Storage gap for future upgrades — 13 state variables → 50 - 13 = 37
+    // FIX H-02: Corrected count to include unpauseRequestTime (13th variable)
+    uint256[37] private __gap;
 }

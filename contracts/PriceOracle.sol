@@ -100,6 +100,18 @@ contract PriceOracle is AccessControl {
             enabled: true
         });
 
+        // FIX S-M07: Auto-initialize lastKnownPrice from the feed to prevent stale fallback gaps
+        try IAggregatorV3(feed).latestRoundData() returns (
+            uint80, int256 answer, uint256, uint256, uint80
+        ) {
+            if (answer > 0) {
+                uint256 feedDecimals = IAggregatorV3(feed).decimals();
+                lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
+            }
+        } catch {
+            // Feed not yet reporting — lastKnownPrice stays 0 until first getPrice() call
+        }
+
         emit FeedUpdated(token, feed, stalePeriod, tokenDecimals);
     }
 

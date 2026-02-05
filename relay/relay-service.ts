@@ -288,12 +288,21 @@ class RelayService {
   private async loadProcessedAttestations(): Promise<void> {
     console.log("[Relay] Loading processed attestations from chain...");
 
-    // FIX H-8: Paginate event loading to avoid RPC limits on large block ranges
+    // FIX B-M02: Increased block range from 10,000 to 50,000 and added pagination
+    // to avoid missing processed attestations during longer relay downtime
     const filter = this.bridgeContract.filters.AttestationReceived();
     const currentBlock = await this.provider.getBlockNumber();
-    const maxRange = 10000;
+    const maxRange = 50000;
     const fromBlock = Math.max(0, currentBlock - maxRange);
-    const events = await this.bridgeContract.queryFilter(filter, fromBlock, currentBlock);
+    
+    // Paginate in chunks of 10,000 to avoid RPC limits
+    const chunkSize = 10000;
+    let events: ethers.EventLog[] = [];
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const chunk = await this.bridgeContract.queryFilter(filter, start, end);
+      events = events.concat(chunk as ethers.EventLog[]);
+    }
 
     for (const event of events) {
       const args = (event as ethers.EventLog).args;
@@ -317,13 +326,20 @@ class RelayService {
     // Query active AttestationRequest contracts
     // FIX P0: Use MintedProtocolV3 to match validator-node-v2.ts
     // Previously used V2 which meant relay and validator saw different data
+    // FIX B-M03: Added query timeout to prevent indefinite hangs (matching validator-node.ts)
     let attestations: CreateEvent<AttestationRequest>[];
     
     try {
-      attestations = await (this.ledger.query as any)(
+      const queryPromise = (this.ledger.query as any)(
         "MintedProtocolV3:AttestationRequest",
         { aggregator: this.config.cantonParty }
-      ) as CreateEvent<AttestationRequest>[];
+      ) as Promise<CreateEvent<AttestationRequest>[]>;
+      
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Canton query timeout (30s)")), 30_000)
+      );
+      
+      attestations = await Promise.race([queryPromise, timeoutPromise]);
     } catch (error) {
       console.error(`[Relay] Failed to query attestations: ${error}`);
       return;
@@ -442,11 +458,20 @@ class RelayService {
       const sortedSigs = sortSignaturesBySignerAddress(formattedSigs, messageHash);
 
       // Build attestation struct
+      // FIX B-M01: Validate timestamp to prevent negative values from expiresAt - 3600
+      const expiresAtMs = new Date(payload.expiresAt).getTime();
+      if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
+        throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
+      }
+      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
+      if (timestampSec <= 0) {
+        throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
+      }
       const attestation = {
         id: idBytes32,
         cantonAssets: ethers.parseUnits(payload.globalCantonAssets, 18),
         nonce: BigInt(payload.nonce),
-        timestamp: BigInt(Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600), // 1hr before expiry
+        timestamp: BigInt(timestampSec),
       };
 
       // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
@@ -535,7 +560,8 @@ class RelayService {
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
-        BigInt(Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600),
+        // FIX B-M01: Use validated timestamp calculation consistent with bridgeAttestation
+        BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
         chainId,
         this.config.bridgeContractAddress,
       ]

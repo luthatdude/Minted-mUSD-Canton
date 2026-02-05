@@ -521,7 +521,8 @@ class ValidatorNode {
 
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    const timestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
+    // FIX B-M01: Validate timestamp to prevent negative values
+    const timestamp = Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600);
 
     return ethers.solidityPackedKeccak256(
       ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],

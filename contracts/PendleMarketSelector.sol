@@ -149,7 +149,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// FIX S-M16: Added zero-address check for admin parameter
     function initialize(address _admin) external initializer {
+        require(_admin != address(0), "ZERO_ADMIN");
         __AccessControl_init();
         __UUPSUpgradeable_init();
 
@@ -414,6 +416,10 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // ADMIN FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @notice Maximum whitelisted markets to prevent unbounded array growth
+    /// FIX S-M14/S-M15: Cap whitelistedMarkets array to prevent gas DoS
+    uint256 public constant MAX_WHITELISTED_MARKETS = 100;
+
     /**
      * @notice Add a market to whitelist
      * @param market Market address
@@ -423,6 +429,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         // FIX L-07: Validate market address
         require(market != address(0), "ZERO_ADDRESS");
         if (!isWhitelisted[market]) {
+            // FIX S-M15: Enforce maximum markets cap
+            require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
             whitelistedMarkets.push(market);
             isWhitelisted[market] = true;
         }
@@ -441,9 +449,13 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         string[] calldata categories
     ) external onlyRole(MARKET_ADMIN_ROLE) {
         require(markets.length == categories.length, "Length mismatch");
+        // FIX S-M14: Cap batch size to prevent out-of-gas on large arrays
+        require(markets.length <= 50, "BATCH_TOO_LARGE");
 
         for (uint256 i = 0; i < markets.length; i++) {
             if (!isWhitelisted[markets[i]]) {
+                // FIX S-M15: Enforce maximum markets cap
+                require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
                 whitelistedMarkets.push(markets[i]);
                 isWhitelisted[markets[i]] = true;
             }

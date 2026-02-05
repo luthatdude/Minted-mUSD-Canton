@@ -127,7 +127,7 @@ describe("LiquidationEngine", function () {
 
   describe("Liquidation Eligibility", function () {
     it("Should correctly identify liquidatable positions", async function () {
-      const { liquidationEngine, borrowModule, collateralVault, weth, ethFeed, user1 } =
+      const { liquidationEngine, borrowModule, collateralVault, priceOracle, weth, ethFeed, user1 } =
         await loadFixture(deployLiquidationFixture);
 
       // Deposit 10 ETH ($20,000) and borrow 14,000 mUSD (70% utilization)
@@ -143,6 +143,8 @@ describe("LiquidationEngine", function () {
       // New collateral value: 10 * 1500 = $15,000
       // Health factor = (15000 * 0.80) / 14000 = 0.857 < 1.0
       await ethFeed.setAnswer(150000000000n); // $1500
+      // FIX: Update circuit breaker cache after price change
+      await priceOracle.updatePrice(await weth.getAddress());
 
       expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
     });
@@ -179,6 +181,7 @@ describe("LiquidationEngine", function () {
         liquidationEngine,
         borrowModule,
         collateralVault,
+        priceOracle,
         musd,
         weth,
         ethFeed,
@@ -194,6 +197,7 @@ describe("LiquidationEngine", function () {
 
       // Make position liquidatable by dropping price
       await ethFeed.setAnswer(150000000000n); // $1500
+      await priceOracle.updatePrice(await weth.getAddress());
 
       // Liquidator repays 5000 mUSD of debt
       const repayAmount = ethers.parseEther("5000");
@@ -214,6 +218,7 @@ describe("LiquidationEngine", function () {
         liquidationEngine,
         borrowModule,
         collateralVault,
+        priceOracle,
         musd,
         weth,
         ethFeed,
@@ -231,6 +236,7 @@ describe("LiquidationEngine", function () {
 
       // Make liquidatable
       await ethFeed.setAnswer(150000000000n);
+      await priceOracle.updatePrice(await weth.getAddress());
 
       // Liquidate
       const repayAmount = ethers.parseEther("5000");
@@ -264,7 +270,7 @@ describe("LiquidationEngine", function () {
     });
 
     it("Should reject self-liquidation", async function () {
-      const { liquidationEngine, borrowModule, collateralVault, musd, weth, ethFeed, user1 } =
+      const { liquidationEngine, borrowModule, collateralVault, priceOracle, musd, weth, ethFeed, user1 } =
         await loadFixture(deployLiquidationFixture);
 
       // Setup
@@ -275,6 +281,7 @@ describe("LiquidationEngine", function () {
 
       // Make liquidatable
       await ethFeed.setAnswer(150000000000n);
+      await priceOracle.updatePrice(await weth.getAddress());
 
       // Try to self-liquidate
       const repayAmount = ethers.parseEther("5000");
@@ -292,6 +299,7 @@ describe("LiquidationEngine", function () {
         liquidationEngine,
         borrowModule,
         collateralVault,
+        priceOracle,
         musd,
         weth,
         ethFeed,
@@ -307,6 +315,7 @@ describe("LiquidationEngine", function () {
 
       // Make liquidatable
       await ethFeed.setAnswer(150000000000n);
+      await priceOracle.updatePrice(await weth.getAddress());
 
       const repayAmount = ethers.parseEther("5000");
       await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
@@ -325,6 +334,7 @@ describe("LiquidationEngine", function () {
         liquidationEngine,
         borrowModule,
         collateralVault,
+        priceOracle,
         musd,
         weth,
         ethFeed,
@@ -340,6 +350,7 @@ describe("LiquidationEngine", function () {
 
       // Make slightly liquidatable (HF ~0.86, above fullLiquidationThreshold of 0.5)
       await ethFeed.setAnswer(150000000000n);
+      await priceOracle.updatePrice(await weth.getAddress());
 
       // Try to repay 100% of debt (should be capped at close factor 50%)
       const fullDebt = await borrowModule.totalDebt(user1.address);
@@ -359,7 +370,7 @@ describe("LiquidationEngine", function () {
 
   describe("Estimate Functions", function () {
     it("Should estimate collateral seizure correctly", async function () {
-      const { liquidationEngine, borrowModule, collateralVault, weth, ethFeed, user1 } =
+      const { liquidationEngine, borrowModule, collateralVault, priceOracle, weth, ethFeed, user1 } =
         await loadFixture(deployLiquidationFixture);
 
       // Setup position
@@ -370,6 +381,7 @@ describe("LiquidationEngine", function () {
 
       // Make liquidatable
       await ethFeed.setAnswer(150000000000n);
+      await priceOracle.updatePrice(await weth.getAddress());
 
       const repayAmount = ethers.parseEther("5000");
       const estimate = await liquidationEngine.estimateSeize(

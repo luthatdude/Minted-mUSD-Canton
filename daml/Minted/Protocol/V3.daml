@@ -344,10 +344,18 @@ template MUSDTransferProposal
           observers
 
     -- | Sender cancels the proposal
-    choice TransferProposal_Cancel : ()
+    -- FIX C-12: Return tokens to sender instead of destroying them
+    choice TransferProposal_Cancel : ContractId MintedMUSD
       controller sender
       do
-        return ()
+        create MintedMUSD with
+          issuer
+          owner = sender
+          amount
+          blacklisted
+          agreementHash
+          agreementUri
+          observers
     
     -- | Issuer can reject for compliance
     choice TransferProposal_Reject : ()
