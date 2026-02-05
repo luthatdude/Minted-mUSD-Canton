@@ -95,15 +95,38 @@ The relay service is the off-chain bridge coordinator and is **critical to bridg
 - **Collateral ratio checks** - Validator-side enforcement before signing
 - **Error handling** - Graceful failure without partial state corruption
 
+### Test Mocks (Priority: Low)
+
+| File | LOC | Description |
+|------|-----|-------------|
+| `contracts/mocks/*.sol` | ~809 | Mock contracts for testing (MockERC20, MockAggregatorV3, MockStrategy) |
+
+### Test Suite (Priority: Medium)
+
+| File | LOC | Description |
+|------|-----|-------------|
+| `test/*.ts` | ~5,918 | Hardhat test files covering all contracts |
+
+### Deployment Scripts (Priority: Medium)
+
+| File | LOC | Description |
+|------|-----|-------------|
+| `scripts/*.ts` | ~2,158 | Deployment and migration scripts |
+
+### Kubernetes Infrastructure (Priority: Medium)
+
+| Directory | LOC | Description |
+|-----------|-----|-------------|
+| `k8s/base/*` | ~200 | Namespace, Postgres configs |
+| `k8s/canton/*` | ~1,082 | Participant node, secrets, network policies, RBAC |
+
+**Total Additional:** ~10,167 LOC
+
 ---
 
 ## Out of Scope
 
-- `contracts/mocks/*` - Test mocks only
-- `test/*` - Test files
-- `frontend/*` - React frontend
-- `k8s/*` - Kubernetes configs (infrastructure only, not security-relevant)
-- `scripts/*` - Deployment scripts
+- `frontend/*` - React frontend (UI only, no security-critical logic)
 
 ---
 
@@ -234,11 +257,12 @@ Telegram: [INSERT HANDLE]
 
 | Phase | Duration |
 |-------|----------|
-| Initial Review | 2-3 weeks |
-| Findings Report | Week 4 |
-| Remediation | 1-2 weeks |
-| Re-audit | 1 week |
-| Final Report | Week 6-7 |
+| Initial Review | Week 1-2 |
+| Findings Report | End of Week 2 |
+| Remediation | Week 3 |
+| Final Report | End of Week 3 |
+
+**Total Duration: 3 weeks**
 
 ---
 
