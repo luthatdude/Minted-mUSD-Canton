@@ -42,7 +42,8 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    ensure totalValue >= 0.0
+    -- FIX D-C02: Require strictly positive value to prevent collateral verification bypass
+    ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
     maintainer key._1

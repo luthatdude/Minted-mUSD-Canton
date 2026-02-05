@@ -60,6 +60,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     /// FIX H-5: Maximum attestation age — reject attestations older than this
     uint256 public constant MAX_ATTESTATION_AGE = 6 hours;
+    
+    /// FIX B-C04: Minimum gap between attestation timestamps to prevent same-block replay
+    uint256 public constant MIN_ATTESTATION_GAP = 60; // 1 minute minimum between attestations
 
     // Attestation tracking
     mapping(bytes32 => bool) public usedAttestationIds;
@@ -88,6 +91,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event AttestationInvalidated(bytes32 indexed attestationId, string reason);
     // FIX S-M02: Event for min signatures change
     event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
+    /// FIX B-C05: Event for attestation migration from V8
+    event AttestationsMigrated(uint256 count, address indexed fromBridge);
     // Rate limiting events
     event RateLimitReset(uint256 timestamp);
     event DailyCapIncreaseLimitUpdated(uint256 oldLimit, uint256 newLimit);
@@ -147,6 +152,21 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(_limit > 0, "INVALID_LIMIT");
         emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
         dailyCapIncreaseLimit = _limit;
+    }
+
+    /// @notice FIX B-C05: Migrate used attestation IDs from previous bridge version
+    /// @dev Must be called during upgrade to prevent cross-version replay attacks
+    /// @param attestationIds Array of attestation IDs that were used in the previous bridge
+    /// @param previousBridge Address of the previous bridge contract (for audit trail)
+    function migrateUsedAttestations(
+        bytes32[] calldata attestationIds, 
+        address previousBridge
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(previousBridge != address(0), "INVALID_PREVIOUS_BRIDGE");
+        for (uint256 i = 0; i < attestationIds.length; i++) {
+            usedAttestationIds[attestationIds[i]] = true;
+        }
+        emit AttestationsMigrated(attestationIds.length, previousBridge);
     }
 
     // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
@@ -228,7 +248,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");
         require(att.cantonAssets > 0, "ZERO_ASSETS");
         require(att.timestamp <= block.timestamp, "FUTURE_TIMESTAMP");
-        require(att.timestamp > lastAttestationTime, "STALE_ATTESTATION");
+        /// FIX B-C04: Require minimum gap between attestation timestamps
+        require(att.timestamp >= lastAttestationTime + MIN_ATTESTATION_GAP, "ATTESTATION_TOO_CLOSE");
         /// FIX H-5: Reject attestations older than MAX_ATTESTATION_AGE
         require(block.timestamp - att.timestamp <= MAX_ATTESTATION_AGE, "ATTESTATION_TOO_OLD");
 

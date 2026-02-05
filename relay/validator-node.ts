@@ -105,6 +105,9 @@ class ValidatorNode {
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
+  // FIX B-C06: Ethereum provider for contract verification
+  private ethereumProvider: ethers.JsonRpcProvider | null = null;
+  private verifiedBridgeCodeHash: string | null = null;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
@@ -121,6 +124,11 @@ class ValidatorNode {
     // Initialize AWS KMS
     this.kmsClient = new KMSClient({ region: config.awsRegion });
 
+    // FIX B-C06: Initialize Ethereum provider for bridge verification
+    if (process.env.ETHEREUM_RPC_URL) {
+      this.ethereumProvider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL);
+    }
+
     console.log(`[Validator] Initialized`);
     console.log(`[Validator] Party: ${config.validatorParty}`);
     console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
@@ -132,6 +140,10 @@ class ValidatorNode {
    */
   async start(): Promise<void> {
     console.log("[Validator] Starting...");
+    
+    // FIX B-C06: Verify bridge contract before starting
+    await this.verifyBridgeContract();
+    
     this.isRunning = true;
 
     // Main loop
@@ -153,6 +165,55 @@ class ValidatorNode {
   stop(): void {
     console.log("[Validator] Stopping...");
     this.isRunning = false;
+  }
+
+  /**
+   * FIX B-C06: Verify bridge contract exists and has expected code
+   * This prevents signing attestations for malicious/wrong contracts
+   */
+  private async verifyBridgeContract(): Promise<void> {
+    const bridgeAddress = process.env.BRIDGE_CONTRACT_ADDRESS;
+    
+    if (!bridgeAddress) {
+      throw new Error("BRIDGE_CONTRACT_ADDRESS not set - cannot verify bridge");
+    }
+    
+    if (!ethers.isAddress(bridgeAddress)) {
+      throw new Error(`BRIDGE_CONTRACT_ADDRESS is not a valid address: ${bridgeAddress}`);
+    }
+    
+    if (!this.ethereumProvider) {
+      console.warn("[Validator] ETHEREUM_RPC_URL not set - skipping bridge code verification");
+      console.warn("[Validator] WARNING: In production, set ETHEREUM_RPC_URL to verify bridge contract");
+      return;
+    }
+    
+    console.log(`[Validator] Verifying bridge contract at ${bridgeAddress}...`);
+    
+    try {
+      const code = await this.ethereumProvider.getCode(bridgeAddress);
+      
+      if (code === "0x" || code.length < 100) {
+        throw new Error(`SECURITY: Bridge contract at ${bridgeAddress} has no code or is EOA`);
+      }
+      
+      // Hash the code for comparison/logging
+      this.verifiedBridgeCodeHash = ethers.keccak256(code);
+      console.log(`[Validator] Bridge code hash: ${this.verifiedBridgeCodeHash}`);
+      
+      // If expected hash is set, verify it matches
+      const expectedHash = process.env.EXPECTED_BRIDGE_CODE_HASH;
+      if (expectedHash && expectedHash !== this.verifiedBridgeCodeHash) {
+        throw new Error(`SECURITY: Bridge code hash mismatch! Expected ${expectedHash}, got ${this.verifiedBridgeCodeHash}`);
+      }
+      
+      console.log(`[Validator] ✓ Bridge contract verified at ${bridgeAddress}`);
+    } catch (error: any) {
+      if (error.message?.includes("SECURITY:")) {
+        throw error;
+      }
+      throw new Error(`Failed to verify bridge contract: ${error.message}`);
+    }
   }
 
   /**

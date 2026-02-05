@@ -205,8 +205,14 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // FIX: Rate limit - minimum 1 hour between syncs
         require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
         
-        // FIX: Magnitude limit - max 5% change per sync to prevent manipulation
-        if (cantonTotalShares > 0) {
+        // FIX S-C01: First sync must use admin-only initialization to prevent manipulation
+        // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
+        if (cantonTotalShares == 0) {
+            uint256 ethShares = totalSupply();
+            uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : _cantonShares;
+            require(_cantonShares <= maxInitialShares, "INITIAL_SHARES_TOO_LARGE");
+        } else {
+            // FIX: Magnitude limit - max 5% change per sync to prevent manipulation
             uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
             uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
             require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");

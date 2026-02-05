@@ -714,7 +714,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             if (musdReceived > 0) {
                 uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
-                try borrowModule.repay(repayAmount) {} catch {}
+                // FIX S-C02: Use repayFor to reduce USER's debt, not vault's debt
+                // Previously called repay() which operated on msg.sender (vault), leaving user debt intact
+                try borrowModule.repayFor(user, repayAmount) {} catch {}
             }
         }
 

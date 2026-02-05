@@ -239,7 +239,7 @@ describe("BLEBridgeV9", function () {
       const sigs1 = await createSortedSignatures(attestation1, validators.slice(0, 3));
       await bridge.processAttestation(attestation1, sigs1);
 
-      // Try older timestamp
+      // Try older timestamp (now requires MIN_ATTESTATION_GAP = 60 seconds)
       const attestation2 = {
         id: ethers.id("att-stale"),
         cantonAssets: ethers.parseEther("1000000"),
@@ -248,8 +248,9 @@ describe("BLEBridgeV9", function () {
       };
 
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
+      // FIX B-C04: Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
       await expect(bridge.processAttestation(attestation2, sigs2))
-        .to.be.revertedWith("STALE_ATTESTATION");
+        .to.be.revertedWith("ATTESTATION_TOO_CLOSE");
     });
   });
 

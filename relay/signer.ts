@@ -168,6 +168,10 @@ export function formatKMSSignature(
   // is already the EIP-191 prefixed hash. verifyMessage would hash it again.
   const normalizedPublicKey = publicKey.toLowerCase();
 
+  // FIX B-C02: Track valid recovery IDs and reject if both work (malleability)
+  let validRecoveryId: number | null = null;
+  let validSig: string | null = null;
+
   for (const v of [27, 28]) {
     const sig = `0x${rHex}${sHex}${v.toString(16)}`;
     try {
@@ -177,12 +181,25 @@ export function formatKMSSignature(
         .toLowerCase();
 
       if (recovered === normalizedPublicKey) {
-        return sig;
+        // FIX B-C02: Enforce signature uniqueness - only one recovery ID should work
+        if (validRecoveryId !== null) {
+          throw new Error("SIGNATURE_MALLEABILITY: Both recovery IDs valid - possible attack");
+        }
+        validRecoveryId = v;
+        validSig = sig;
       }
-    } catch {
-      // Try next recovery ID
+    } catch (e: any) {
+      // Rethrow malleability errors
+      if (e.message?.includes("SIGNATURE_MALLEABILITY")) {
+        throw e;
+      }
+      // Try next recovery ID for other errors
       continue;
     }
+  }
+
+  if (validSig !== null) {
+    return validSig;
   }
 
   throw new Error("RECOVERY_ID_FAILED: Could not recover correct public key");
