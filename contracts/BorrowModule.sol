@@ -580,19 +580,21 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 total = pos.principal + pos.accruedInterest;
         uint256 reduction = amount > total ? total : amount;
 
-        uint256 principalReduced = 0;
         if (reduction <= pos.accruedInterest) {
             pos.accruedInterest -= reduction;
         } else {
             uint256 remaining = reduction - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= remaining;
-            principalReduced = remaining;
         }
 
-        // Update global borrows
-        if (principalReduced > 0 && totalBorrows >= principalReduced) {
-            totalBorrows -= principalReduced;
+        // FIX H-04: Subtract full reduction (principal + interest) from totalBorrows.
+        // Same class as C-05: _accrueGlobalInterest adds interest to totalBorrows,
+        // so liquidation must subtract the full amount, not just principal.
+        if (reduction > 0 && totalBorrows >= reduction) {
+            totalBorrows -= reduction;
+        } else if (reduction > 0) {
+            totalBorrows = 0; // Safety: prevent underflow from rounding drift
         }
 
         emit DebtAdjusted(user, totalDebt(user), "LIQUIDATION");

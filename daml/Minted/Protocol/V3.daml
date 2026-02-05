@@ -796,6 +796,7 @@ template VaultManager
       do create this with defaultConfig = newConfig
 
     -- | Update vault config for a specific vault
+    -- FIX H-03: Verify operator authority over the vault
     choice UpdateVaultConfig : ContractId Vault
       with
         vaultCid : ContractId Vault
@@ -803,6 +804,8 @@ template VaultManager
       controller operator
       do
         vault <- fetch vaultCid
+        -- FIX H-03: Ensure this VaultManager's operator matches the vault's operator
+        assertMsg "OPERATOR_MISMATCH" (vault.operator == operator)
         archive vaultCid
         create vault with config = newConfig
 

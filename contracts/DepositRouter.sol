@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -242,6 +242,34 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function getDeposit(uint64 sequence) external view returns (PendingDeposit memory) {
         return pendingDeposits[sequence];
+    }
+
+    /**
+     * @notice Mark a deposit as completed after cross-chain confirmation
+     * @param sequence Wormhole sequence number of the completed deposit
+     * @dev FIX M-01: The completed flag was never set. This admin function
+     *      allows marking deposits as completed after TreasuryReceiver processes them.
+     */
+    function markDepositComplete(uint64 sequence) external onlyRole(ROUTER_ADMIN_ROLE) {
+        PendingDeposit storage deposit = pendingDeposits[sequence];
+        require(deposit.depositor != address(0), "DEPOSIT_NOT_FOUND");
+        require(!deposit.completed, "ALREADY_COMPLETED");
+        deposit.completed = true;
+        emit DepositCompleted(sequence, deposit.depositor, deposit.amount);
+    }
+
+    /**
+     * @notice Mark multiple deposits as completed in a single transaction
+     * @param sequences Array of Wormhole sequence numbers
+     */
+    function markDepositsComplete(uint64[] calldata sequences) external onlyRole(ROUTER_ADMIN_ROLE) {
+        for (uint256 i = 0; i < sequences.length; i++) {
+            PendingDeposit storage deposit = pendingDeposits[sequences[i]];
+            if (deposit.depositor != address(0) && !deposit.completed) {
+                deposit.completed = true;
+                emit DepositCompleted(sequences[i], deposit.depositor, deposit.amount);
+            }
+        }
     }
 
     // ============ Admin Functions ============
