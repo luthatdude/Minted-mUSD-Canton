@@ -142,8 +142,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     // FIX S-M02: Emit event for admin parameter change
     // FIX C-01: Enforce minimum signature threshold of 2 to prevent single-point compromise
+    // FIX B-H04: Add upper bound to prevent bridge lockup
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
+        require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH"); // FIX B-H04: Max 10 to prevent lockup
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
@@ -195,13 +197,42 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                  EMERGENCY FUNCTIONS
     // ============================================================
 
+    /// @dev FIX B-H08: Timelock for unpause to prevent immediate recovery after exploit
+    uint256 public unpauseRequestTime;
+    uint256 public constant UNPAUSE_DELAY = 24 hours;
+    
+    event UnpauseRequested(uint256 requestTime, uint256 executeAfter);
+    event UnpauseCancelled();
+
     function pause() external onlyRole(EMERGENCY_ROLE) {
         _pause();
+        // Cancel any pending unpause request
+        if (unpauseRequestTime > 0) {
+            unpauseRequestTime = 0;
+            emit UnpauseCancelled();
+        }
     }
 
-    /// FIX H-05: Unpause requires DEFAULT_ADMIN_ROLE (separation of duties)
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// FIX B-H08: Request unpause (starts timelock)
+    function requestUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(paused(), "NOT_PAUSED");
+        unpauseRequestTime = block.timestamp;
+        emit UnpauseRequested(block.timestamp, block.timestamp + UNPAUSE_DELAY);
+    }
+
+    /// FIX B-H08: Execute unpause after timelock delay
+    function executeUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(paused(), "NOT_PAUSED");
+        require(unpauseRequestTime > 0, "NO_UNPAUSE_REQUEST");
+        require(block.timestamp >= unpauseRequestTime + UNPAUSE_DELAY, "TIMELOCK_NOT_ELAPSED");
+        unpauseRequestTime = 0;
         _unpause();
+    }
+
+    /// @dev Legacy unpause function - now requires timelock
+    /// FIX H-05: Kept for interface compatibility but reverts with guidance
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        revert("USE_requestUnpause_AND_executeUnpause");
     }
 
     /// @notice Emergency reduction of supply cap

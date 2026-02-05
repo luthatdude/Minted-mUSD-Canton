@@ -328,11 +328,22 @@ describe("BLEBridgeV9", function () {
       await bridge.connect(emergency).pause();
 
       // Emergency role cannot unpause
-      await expect(bridge.connect(emergency).unpause())
+      await expect(bridge.connect(emergency).requestUnpause())
         .to.be.reverted;
 
-      // Admin can unpause
-      await expect(bridge.connect(deployer).unpause())
+      // Admin can request unpause
+      await expect(bridge.connect(deployer).requestUnpause())
+        .to.emit(bridge, "UnpauseRequested");
+      
+      // Cannot execute immediately - need to wait 24 hours
+      await expect(bridge.connect(deployer).executeUnpause())
+        .to.be.revertedWith("TIMELOCK_NOT_ELAPSED");
+      
+      // Fast forward 24 hours
+      await time.increase(24 * 60 * 60);
+      
+      // Now admin can execute unpause
+      await expect(bridge.connect(deployer).executeUnpause())
         .to.emit(bridge, "Unpaused");
     });
 
