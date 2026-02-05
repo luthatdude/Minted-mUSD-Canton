@@ -41,6 +41,17 @@ interface IWormholeTokenBridge {
         uint32 nonce
     ) external payable returns (uint64 sequence);
 
+    /// @notice Transfer tokens with an arbitrary payload (for recipient data)
+    /// @dev FIX P0: Required to pass recipient address to TreasuryReceiver
+    function transferTokensWithPayload(
+        address token,
+        uint256 amount,
+        uint16 recipientChain,
+        bytes32 recipient,
+        uint32 nonce,
+        bytes memory payload
+    ) external payable returns (uint64 sequence);
+
     function wrappedAsset(uint16 tokenChainId, bytes32 tokenAddress) external view returns (address);
 }
 
@@ -338,18 +349,23 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         // Increment nonce
         _nonce++;
         
-        // Convert recipient address to bytes32
-        bytes32 recipientBytes = bytes32(uint256(uint160(treasuryAddress)));
+        // Convert treasury address to bytes32 (receiver contract)
+        bytes32 treasuryReceiverBytes = bytes32(uint256(uint160(treasuryAddress)));
         
-        // Initiate Wormhole token transfer
+        // FIX P0: Encode the actual depositor as payload so TreasuryReceiver
+        // knows who to mint mUSD for. Without this, TreasuryReceiver's
+        // abi.decode(vm.payload, (address)) would fail on empty payload.
+        bytes memory recipientPayload = abi.encode(depositor);
+        
+        // Initiate Wormhole token transfer WITH PAYLOAD
         // slither-disable-next-line reentrancy-benign
-        sequence = tokenBridge.transferTokens{value: bridgeCost}(
+        sequence = tokenBridge.transferTokensWithPayload{value: bridgeCost}(
             address(usdc),
             netAmount,
             ETHEREUM_CHAIN_ID,
-            recipientBytes,
-            0, // No arbiter fee
-            _nonce
+            treasuryReceiverBytes,
+            _nonce,
+            recipientPayload
         );
         
         // Store pending deposit
