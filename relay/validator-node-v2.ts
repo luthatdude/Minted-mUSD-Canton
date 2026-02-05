@@ -379,8 +379,12 @@ class ValidatorNode {
         // FIX H-13: Use ethers.parseUnits for financial precision
         const attestedValue = ethers.parseUnits(attestedAsset.assetValue, 18);
 
-        // Allow 0.1% tolerance for timing differences
-        const tolerance = cantonAsset.currentValue / 1000n;
+        // FIX B-H06: Add absolute tolerance cap to prevent percentage tolerance from being too large
+        // 0.1% of $500M = $500K which is too high; cap at $100K absolute
+        const MAX_ABSOLUTE_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
+        const percentTolerance = cantonAsset.currentValue / 1000n; // 0.1%
+        const tolerance = percentTolerance < MAX_ABSOLUTE_TOLERANCE ? percentTolerance : MAX_ABSOLUTE_TOLERANCE;
+        
         const diff = attestedValue > cantonAsset.currentValue
           ? attestedValue - cantonAsset.currentValue
           : cantonAsset.currentValue - attestedValue;
@@ -396,7 +400,11 @@ class ValidatorNode {
 
       // 4. Verify total matches
       const attestedTotal = ethers.parseUnits(payload.totalCantonValue, 18);
-      const tolerance = snapshot.totalValue / 1000n;
+      // FIX B-H06: Cap tolerance at $100K absolute to prevent exploitation on large TVL
+      const MAX_TOTAL_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
+      const percentTolerance = snapshot.totalValue / 1000n;
+      const tolerance = percentTolerance < MAX_TOTAL_TOLERANCE ? percentTolerance : MAX_TOTAL_TOLERANCE;
+      
       const totalDiff = attestedTotal > snapshot.totalValue
         ? attestedTotal - snapshot.totalValue
         : snapshot.totalValue - attestedTotal;

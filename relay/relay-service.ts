@@ -17,7 +17,8 @@ import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
-import { readSecret } from "./utils";
+// FIX B-H07: Use readAndValidatePrivateKey for secp256k1 range validation
+import { readSecret, readAndValidatePrivateKey } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
 
@@ -61,14 +62,21 @@ const DEFAULT_CONFIG: RelayConfig = {
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
-  relayerPrivateKey: readSecret("relayer_private_key", "RELAYER_PRIVATE_KEY"),
+  // FIX B-H07: Validate private key is in valid secp256k1 range
+  relayerPrivateKey: readAndValidatePrivateKey("relayer_private_key", "RELAYER_PRIVATE_KEY"),
 
   // FIX CRITICAL: Map DAML Party → Ethereum address
   // Load from JSON config file or environment
   // Format: {"validator1::122abc": "0x71C7...", "validator2::456def": "0x82D8..."}
-  validatorAddresses: JSON.parse(
-    process.env.VALIDATOR_ADDRESSES || readSecret("validator_addresses", "") || "{}"
-  ),
+  // FIX B-H03: Limit JSON size to 10KB to prevent memory exhaustion attacks
+  validatorAddresses: (() => {
+    const raw = process.env.VALIDATOR_ADDRESSES || readSecret("validator_addresses", "") || "{}";
+    const MAX_JSON_SIZE = 10 * 1024; // 10KB
+    if (raw.length > MAX_JSON_SIZE) {
+      throw new Error(`VALIDATOR_ADDRESSES exceeds ${MAX_JSON_SIZE} byte limit - possible injection attack`);
+    }
+    return JSON.parse(raw);
+  })(),
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),

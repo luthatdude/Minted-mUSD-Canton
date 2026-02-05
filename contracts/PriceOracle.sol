@@ -35,13 +35,45 @@ contract PriceOracle is AccessControl {
 
     // collateral token address => feed config
     mapping(address => FeedConfig) public feeds;
+    
+    /// @dev FIX S-H01: Circuit breaker - track last known prices and max deviation
+    mapping(address => uint256) public lastKnownPrice;
+    uint256 public maxDeviationBps = 2000; // 20% max price change per update
+    bool public circuitBreakerEnabled = true;
 
     event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
     event FeedRemoved(address indexed token);
+    /// @dev FIX S-H01: Event for circuit breaker triggers
+    event CircuitBreakerTriggered(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 deviationBps);
+    event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
+    event CircuitBreakerToggled(bool enabled);
 
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
+    }
+
+    /// @dev FIX S-H01: Set max deviation for circuit breaker (in basis points)
+    function setMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
+        require(_maxDeviationBps >= 100 && _maxDeviationBps <= 5000, "DEVIATION_OUT_OF_RANGE"); // 1% to 50%
+        emit MaxDeviationUpdated(maxDeviationBps, _maxDeviationBps);
+        maxDeviationBps = _maxDeviationBps;
+    }
+
+    /// @dev FIX S-H01: Toggle circuit breaker on/off
+    function setCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
+        circuitBreakerEnabled = _enabled;
+        emit CircuitBreakerToggled(_enabled);
+    }
+
+    /// @dev FIX S-H01: Manually update last known price (for recovery after circuit breaker trip)
+    function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+        (, int256 answer, , , ) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        uint8 feedDecimals = config.feed.decimals();
+        lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
     }
 
     /// @notice Register or update a Chainlink price feed for a collateral token
@@ -105,6 +137,38 @@ contract PriceOracle is AccessControl {
         // Chainlink answer is price per 1 token unit in USD, scaled to feedDecimals
         // Normalize to 18 decimals
         price = uint256(answer) * (10 ** (18 - feedDecimals));
+
+        // FIX S-H01: Circuit breaker check (view-compatible - checks against cached price)
+        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+            uint256 oldPrice = lastKnownPrice[token];
+            uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
+            uint256 deviationBps = (diff * 10000) / oldPrice;
+            require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
+        }
+        // Note: lastKnownPrice is updated via updatePrice() or admin resetLastKnownPrice()
+    }
+
+    /// @notice FIX S-H01: Update cached price (call before getPrice if circuit breaker trips)
+    /// @dev This allows keepers to update the price after verifying the deviation is legitimate
+    function updatePrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+        
+        (, int256 answer, , uint256 updatedAt, ) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        
+        uint8 feedDecimals = config.feed.decimals();
+        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+        uint256 oldPrice = lastKnownPrice[token];
+        
+        if (oldPrice > 0) {
+            uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
+            uint256 deviationBps = (diff * 10000) / oldPrice;
+            emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
+        }
+        
+        lastKnownPrice[token] = newPrice;
     }
 
     /// @notice Get the USD value of a specific amount of collateral

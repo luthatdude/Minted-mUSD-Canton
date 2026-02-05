@@ -120,14 +120,15 @@ template BridgeOutAttestation
         return (newAttestation, sig)
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
-    -- FIX DL-H1: Derive requiredSignatures from validatorGroup size (majority quorum)
+    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- BFT consensus requires >2/3 honest validators to prevent Byzantine attacks
     choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
       with
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
-        -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -217,14 +218,14 @@ template BridgeInAttestation
         return (newAttestation, sig)
 
     -- Finalize and archive — USDC can now be minted on Canton
-    -- FIX DL-H2: Derive requiredSignatures from validatorGroup size (majority quorum)
+    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
     choice BridgeIn_Finalize : [ContractId BridgeInSignature]
       with
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
-        -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -305,14 +306,14 @@ template SupplyCapAttestation
         return (newAttestation, sig)
 
     -- Finalize: archives attestation, returns the verified global state
-    -- FIX DL-H3: Derive requiredSignatures from validatorGroup size (majority quorum)
+    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
     choice SupplyCap_Finalize : SupplyCapPayload
       with
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
-        -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
@@ -394,14 +395,14 @@ template YieldAttestation
         return (newAttestation, sig)
 
     -- Finalize: returns verified yield data for smUSD sync
-    -- FIX DL-H4: Derive requiredSignatures from validatorGroup size (majority quorum)
+    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
     choice Yield_Finalize : YieldPayload
       with
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
-        -- Derive majority threshold: (n / 2) + 1
-        let requiredSignatures = (length validatorGroup / 2) + 1
+        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids

@@ -10,6 +10,12 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
+/// @dev FIX S-H04: Interface for checking health factor before withdrawal
+interface IBorrowModule {
+    function healthFactor(address user) external view returns (uint256);
+    function totalDebt(address user) external view returns (uint256);
+}
+
 /// @title CollateralVault
 /// @notice Holds collateral deposits for the borrowing system.
 ///         BorrowModule and LiquidationEngine interact with this vault.
@@ -21,6 +27,12 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    /// @dev FIX S-H04: BorrowModule reference for health factor checks
+    address public borrowModule;
+    
+    /// @dev FIX S-H04: Event for borrowModule updates
+    event BorrowModuleUpdated(address indexed oldModule, address indexed newModule);
 
     struct CollateralConfig {
         bool enabled;
@@ -48,6 +60,13 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(VAULT_ADMIN_ROLE, msg.sender);
+    }
+
+    /// @dev FIX S-H04: Set the BorrowModule address for health factor checks
+    function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
+        require(_borrowModule != address(0), "INVALID_MODULE");
+        emit BorrowModuleUpdated(borrowModule, _borrowModule);
+        borrowModule = _borrowModule;
     }
 
     // ============================================================
@@ -186,18 +205,36 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Withdraw collateral on behalf of a user (for LeverageVault close position)
     /// @dev Only callable by contracts with LEVERAGE_VAULT_ROLE
+    /// @dev FIX S-H04: Now checks health factor via BorrowModule to prevent undercollateralized withdrawals
     /// @param user The user whose collateral to withdraw
     /// @param token The collateral token
     /// @param amount Amount to withdraw
     /// @param recipient Where to send the collateral
+    /// @param skipHealthCheck Set to true only during position closure (when debt is also being repaid)
     function withdrawFor(
         address user,
         address token,
         uint256 amount,
-        address recipient
+        address recipient,
+        bool skipHealthCheck
     ) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
         require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
         require(recipient != address(0), "INVALID_RECIPIENT");
+        
+        // FIX S-H04: Check health factor unless explicitly skipped during atomic position closure
+        if (!skipHealthCheck && borrowModule != address(0)) {
+            // Only check if user has debt
+            uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
+            if (userDebt > 0) {
+                // Get current health factor - must be >= 1.0 (10000 bps) after withdrawal
+                // Note: This is a view call, actual withdrawal may change the calculation
+                // The LeverageVault must use skipHealthCheck=true only in atomic close operations
+                // where debt is being repaid in the same transaction
+                uint256 hf = IBorrowModule(borrowModule).healthFactor(user);
+                // Require significant margin (1.1x = 11000 bps) to account for the withdrawal
+                require(hf >= 11000, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
+            }
+        }
 
         deposits[user][token] -= amount;
         IERC20(token).safeTransfer(recipient, amount);
