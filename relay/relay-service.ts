@@ -38,6 +38,11 @@ interface RelayConfig {
   treasuryAddress: string;     // Treasury for auto-deploy trigger
   relayerPrivateKey: string;   // Hot wallet for gas
 
+  // FIX CRITICAL: Mapping from DAML Party ID to Ethereum address
+  // Without this, signature validation ALWAYS fails because we compared
+  // Party strings like "validator1::122abc" to addresses like "0x71C7..."
+  validatorAddresses: Record<string, string>;
+
   // Operational
   pollIntervalMs: number;
   maxRetries: number;
@@ -57,6 +62,13 @@ const DEFAULT_CONFIG: RelayConfig = {
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   relayerPrivateKey: readSecret("relayer_private_key", "RELAYER_PRIVATE_KEY"),
+
+  // FIX CRITICAL: Map DAML Party → Ethereum address
+  // Load from JSON config file or environment
+  // Format: {"validator1::122abc": "0x71C7...", "validator2::456def": "0x82D8..."}
+  validatorAddresses: JSON.parse(
+    process.env.VALIDATOR_ADDRESSES || readSecret("validator_addresses", "") || "{}"
+  ),
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
@@ -243,8 +255,10 @@ class RelayService {
    */
   private async pollForAttestations(): Promise<void> {
     // Query active AttestationRequest contracts
+    // FIX P0: Use MintedProtocolV3 to match validator-node-v2.ts
+    // Previously used V2 which meant relay and validator saw different data
     const attestations = await (this.ledger.query as any)(
-      "MintedProtocolV2:AttestationRequest",
+      "MintedProtocolV3:AttestationRequest",
       { aggregator: this.config.cantonParty }
     ) as CreateEvent<AttestationRequest>[];
 
@@ -445,6 +459,18 @@ class RelayService {
       try {
         let rsvSignature: string;
 
+        // FIX CRITICAL: Look up the Ethereum address for this DAML Party
+        // sig.validator is a DAML Party string like "validator1::122abc"
+        // We need the corresponding Ethereum address like "0x71C7..."
+        const validatorEthAddress = this.config.validatorAddresses[sig.validator];
+        if (!validatorEthAddress) {
+          console.error(
+            `[Relay] No Ethereum address mapped for validator party: ${sig.validator}`
+          );
+          console.error(`[Relay] Add to VALIDATOR_ADDRESSES config: {"${sig.validator}": "0x..."}`);
+          continue;  // Skip - no address mapping
+        }
+
         // FIX M-19: Validate RSV format more strictly (check hex content + v value)
         if (sig.ecdsaSignature.startsWith("0x") && sig.ecdsaSignature.length === 132) {
           // Verify it's valid hex and has a valid v value (1b or 1c = 27 or 28)
@@ -463,7 +489,7 @@ class RelayService {
           rsvSignature = formatKMSSignature(
             derBuffer,
             messageHash,
-            sig.validator  // Validator's Ethereum address
+            validatorEthAddress  // FIX: Use mapped Ethereum address, not DAML Party
           );
         }
 
@@ -471,11 +497,12 @@ class RelayService {
         // This catches invalid signatures before wasting gas on-chain
         try {
           const recoveredAddress = ethers.recoverAddress(ethSignedHash, rsvSignature);
-          const expectedAddress = sig.validator.toLowerCase();
+          // FIX CRITICAL: Compare to mapped Ethereum address, not DAML Party
+          const expectedAddress = validatorEthAddress.toLowerCase();
 
           if (recoveredAddress.toLowerCase() !== expectedAddress) {
             console.error(
-              `[Relay] CRITICAL: Signature from ${sig.validator} recovers to ${recoveredAddress}`
+              `[Relay] CRITICAL: Signature from ${sig.validator} (${validatorEthAddress}) recovers to ${recoveredAddress}`
             );
             console.error(`[Relay] Rejecting invalid signature - possible attack or key mismatch`);
             continue;  // Skip this signature
@@ -483,7 +510,7 @@ class RelayService {
 
           // Signature verified - add to formatted list
           formatted.push(rsvSignature);
-          console.log(`[Relay] Verified signature from ${sig.validator}`);
+          console.log(`[Relay] Verified signature from ${sig.validator} (${validatorEthAddress})`);
 
         } catch (recoverError) {
           console.error(

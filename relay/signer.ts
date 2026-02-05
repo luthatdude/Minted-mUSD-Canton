@@ -164,13 +164,16 @@ export function formatKMSSignature(
   }
 
   // Try both recovery IDs to find the correct one
+  // FIX: Use recoverAddress instead of verifyMessage because messageHash
+  // is already the EIP-191 prefixed hash. verifyMessage would hash it again.
   const normalizedPublicKey = publicKey.toLowerCase();
 
   for (const v of [27, 28]) {
     const sig = `0x${rHex}${sHex}${v.toString(16)}`;
     try {
+      // FIX CRITICAL: recoverAddress expects the digest directly, not bytes
       const recovered = ethers
-        .verifyMessage(ethers.getBytes(messageHash), sig)
+        .recoverAddress(messageHash, sig)
         .toLowerCase();
 
       if (recovered === normalizedPublicKey) {

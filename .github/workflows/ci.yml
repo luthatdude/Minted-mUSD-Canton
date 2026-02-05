@@ -62,14 +62,14 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          # FIX M-3: Raise coverage threshold to 80% for institutional audit readiness
+          # FIX P1: Coverage threshold is now BLOCKING for institutional audit readiness
           COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
           echo "Statement coverage: $COVERAGE%"
           if (( $(echo "$COVERAGE < 80" | bc -l) )); then
             echo "::error::Coverage below 80% threshold — institutional audit requires ≥80%"
             exit 1
           fi
-        continue-on-error: true
+        # FIX P1: Removed continue-on-error to make coverage gate blocking
 
       - name: Upload coverage
         if: always()

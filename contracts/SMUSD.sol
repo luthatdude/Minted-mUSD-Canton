@@ -227,17 +227,21 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Get global total assets from Treasury
     /// @dev Falls back to local totalAssets if treasury not set
+    /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but
+    ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
             return totalAssets();
         }
-        // Treasury.totalValue() returns total USDC backing all mUSD
+        // Treasury.totalValue() returns total USDC backing all mUSD (6 decimals)
         // slither-disable-next-line calls-loop
         (bool success, bytes memory data) = treasury.staticcall(
             abi.encodeWithSignature("totalValue()")
         );
         if (success && data.length >= 32) {
-            return abi.decode(data, (uint256));
+            // FIX: Convert USDC (6 decimals) to mUSD (18 decimals)
+            uint256 usdcValue = abi.decode(data, (uint256));
+            return usdcValue * 1e12;
         }
         return totalAssets();
     }
