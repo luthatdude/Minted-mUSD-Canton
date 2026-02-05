@@ -268,8 +268,12 @@ contract PendleStrategyV2 is
     /// @notice Slippage tolerance in basis points
     uint256 public slippageBps;
 
-    /// @dev Storage gap for upgrades
-    uint256[40] private __gap;
+    /// @notice FIX M-02: Configurable PT discount rate in BPS (default 1000 = 10%)
+    /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
+    uint256 public ptDiscountRateBps;
+
+    /// @dev Storage gap for upgrades (reduced by 1 for ptDiscountRateBps)
+    uint256[39] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -280,6 +284,7 @@ contract PendleStrategyV2 is
     event MarketRolled(address indexed oldMarket, address indexed newMarket, uint256 amount, uint256 newExpiry);
     event RolloverTriggered(address indexed triggeredBy, uint256 daysToExpiry);
     event SlippageUpdated(uint256 oldSlippage, uint256 newSlippage);
+    event PtDiscountRateUpdated(uint256 oldRate, uint256 newRate);
     event RolloverThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
     event EmergencyWithdraw(uint256 ptRedeemed, uint256 usdcOut);
 
@@ -336,6 +341,7 @@ contract PendleStrategyV2 is
         // Default settings
         rolloverThreshold = DEFAULT_ROLLOVER_THRESHOLD;
         slippageBps = 50; // 0.5% default slippage
+        ptDiscountRateBps = 1000; // FIX M-02: 10% default, now configurable
         active = true;
 
         // Setup roles
@@ -690,8 +696,8 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // Assume ~10% APY discount rate
-        uint256 discountBps = (1000 * timeRemaining) / secondsPerYear; // 10% annualized
+        // FIX M-02: Use configurable discount rate instead of hardcoded 10%
+        uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
         return (ptAmount * valueBps) / BPS;
@@ -708,7 +714,8 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        uint256 discountBps = (1000 * timeRemaining) / secondsPerYear;
+        // FIX M-02: Use configurable discount rate
+        uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
         // PT needed = usdc / (PT value per usdc)
@@ -737,6 +744,17 @@ contract PendleStrategyV2 is
         if (_slippageBps > MAX_SLIPPAGE_BPS) revert InvalidSlippage();
         emit SlippageUpdated(slippageBps, _slippageBps);
         slippageBps = _slippageBps;
+    }
+
+    /**
+     * @notice Set PT discount rate for NAV valuation
+     * @param _discountBps New discount rate in BPS (e.g., 1000 = 10%, 500 = 5%)
+     * @dev FIX M-02: Allows adjusting PT discount rate to match current market implied APY
+     */
+    function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
+        require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
+        emit PtDiscountRateUpdated(ptDiscountRateBps, _discountBps);
+        ptDiscountRateBps = _discountBps;
     }
 
     /**
