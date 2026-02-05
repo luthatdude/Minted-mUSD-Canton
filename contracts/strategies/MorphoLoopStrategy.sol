@@ -651,7 +651,8 @@ contract MorphoLoopStrategy is
 
         // Health factor = (collateral * liquidationLTV) / borrow
         uint256 liquidationLtv = marketParams.lltv; // Already in WAD
-        healthFactor = (pos.collateral * liquidationLtv) / (currentBorrow * WAD / WAD);
+        // FIX L-02: Removed WAD/WAD no-op (was dividing and multiplying by WAD)
+        healthFactor = (pos.collateral * liquidationLtv) / currentBorrow;
     }
 
     /**
