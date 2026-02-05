@@ -152,6 +152,17 @@ const BRIDGE_ABI = [
     "outputs": [{ "type": "bool" }],
     "stateMutability": "view",
     "type": "function"
+  },
+  // FIX B-C03: ABI for hasRole to validate validator addresses on-chain
+  {
+    "inputs": [
+      { "name": "role", "type": "bytes32" },
+      { "name": "account", "type": "address" }
+    ],
+    "name": "hasRole",
+    "outputs": [{ "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
   }
 ];
 
@@ -203,6 +214,10 @@ class RelayService {
    */
   async start(): Promise<void> {
     console.log("[Relay] Starting...");
+    
+    // FIX B-C03: Validate validator addresses against on-chain roles before starting
+    await this.validateValidatorAddresses();
+    
     this.isRunning = true;
 
     // Load already-processed attestations from chain
@@ -217,6 +232,38 @@ class RelayService {
       }
       await this.sleep(this.config.pollIntervalMs);
     }
+  }
+
+  /**
+   * FIX B-C03: Validate that all configured validator addresses have VALIDATOR_ROLE on-chain
+   * This prevents signature forgery via config injection attacks
+   */
+  private async validateValidatorAddresses(): Promise<void> {
+    const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));
+    const validatorEntries = Object.entries(this.config.validatorAddresses);
+    
+    if (validatorEntries.length === 0) {
+      throw new Error("SECURITY: No validator addresses configured - cannot verify signatures");
+    }
+    
+    console.log(`[Relay] Validating ${validatorEntries.length} validator addresses against on-chain roles...`);
+    
+    for (const [partyId, address] of validatorEntries) {
+      try {
+        const hasRole = await this.bridgeContract.hasRole(VALIDATOR_ROLE, address);
+        if (!hasRole) {
+          throw new Error(`SECURITY: Validator ${partyId} (${address}) does NOT have VALIDATOR_ROLE on-chain - possible config injection attack`);
+        }
+        console.log(`[Relay] ✓ Validator ${partyId} (${address}) verified on-chain`);
+      } catch (error: any) {
+        if (error.message?.includes("SECURITY:")) {
+          throw error;
+        }
+        throw new Error(`Failed to verify validator ${partyId}: ${error.message}`);
+      }
+    }
+    
+    console.log(`[Relay] All ${validatorEntries.length} validator addresses verified on-chain`);
   }
 
   /**
@@ -394,7 +441,22 @@ class RelayService {
         timestamp: BigInt(Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600), // 1hr before expiry
       };
 
-      // Estimate gas
+      // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
+      // If another relay or MEV bot front-runs us, simulation will fail and we skip
+      try {
+        await this.bridgeContract.processAttestation.staticCall(attestation, sortedSigs);
+      } catch (simulationError: any) {
+        console.log(`[Relay] Pre-flight simulation failed for ${attestationId}: ${simulationError.reason || simulationError.message}`);
+        // Check if it's because attestation was already processed
+        const recheckUsed = await this.bridgeContract.usedAttestationIds(idBytes32);
+        if (recheckUsed) {
+          console.log(`[Relay] Attestation ${attestationId} was processed by another relay`);
+          this.processedAttestations.add(attestationId);
+        }
+        return;
+      }
+
+      // Estimate gas (after successful simulation)
       const gasEstimate = await this.bridgeContract.processAttestation.estimateGas(
         attestation,
         sortedSigs

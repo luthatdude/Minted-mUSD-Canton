@@ -708,18 +708,22 @@ contract TreasuryV2 is
     /**
      * @notice Remove a strategy (withdraws all funds first)
      * FIX H-3: Revert on withdrawal failure to prevent fund loss
+     * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
      */
     function removeStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
 
         uint256 idx = strategyIndex[strategy];
 
-        // FIX H-3: Withdraw all from strategy - REVERT on failure
+        // FIX H-3 + S-C03: Withdraw all from strategy - verify full amount
         if (strategies[idx].active) {
             uint256 stratValue = IStrategy(strategy).totalValue();
             if (stratValue > 0) {
                 uint256 withdrawn = IStrategy(strategy).withdrawAll();
-                require(withdrawn > 0, "WITHDRAWAL_FAILED");
+                // FIX S-C03: Require at least 95% of strategy value to be withdrawn
+                // Allows for slippage/fees but prevents silent fund stranding
+                uint256 minWithdrawn = (stratValue * 95) / 100;
+                require(withdrawn >= minWithdrawn, "WITHDRAWAL_INCOMPLETE");
                 emit StrategyWithdrawn(strategy, withdrawn);
             }
         }
