@@ -70,6 +70,31 @@ Minted is a cross-chain stablecoin protocol bridging Canton Network (DAML) and E
 
 **Total DAML:** ~4,121 LOC across 13 modules
 
+### Relay Service (Priority: Critical)
+
+The relay service is the off-chain bridge coordinator and is **critical to bridge security**. Compromise of the relay could lead to unauthorized minting.
+
+| File | LOC | Description |
+|------|-----|-------------|
+| `relay-service.ts` | ~685 | Canton event watching, Ethereum transaction submission, attestation handling |
+| `validator-node-v2.ts` | ~630 | Canton Asset API integration, AWS KMS signing, collateral ratio validation |
+| `validator-node.ts` | ~454 | Legacy validator (reference) |
+| `signer.ts` | ~235 | Signature aggregation, 3-of-5 threshold logic, sorted address deduplication |
+| `yield-sync-service.ts` | ~738 | Yield synchronization between Canton and Ethereum |
+| `yield-keeper.ts` | ~355 | Automated yield harvesting and distribution |
+| `utils.ts` | ~24 | Shared utilities |
+
+**Total Relay:** ~3,121 LOC across 7 files
+
+#### Relay Security Concerns (Critical)
+- **AWS KMS key access** - Validator keys stored in KMS, review access patterns
+- **Signature aggregation** - Verify 3-of-5 threshold cannot be bypassed
+- **Event validation** - Ensure Canton events are properly verified before signing
+- **Race conditions** - Multiple validators processing same attestation
+- **Nonce synchronization** - Off-chain nonce tracking vs on-chain state
+- **Collateral ratio checks** - Validator-side enforcement before signing
+- **Error handling** - Graceful failure without partial state corruption
+
 ---
 
 ## Out of Scope
@@ -77,17 +102,8 @@ Minted is a cross-chain stablecoin protocol bridging Canton Network (DAML) and E
 - `contracts/mocks/*` - Test mocks only
 - `test/*` - Test files
 - `frontend/*` - React frontend
-- `k8s/*` - Kubernetes configs
+- `k8s/*` - Kubernetes configs (infrastructure only, not security-relevant)
 - `scripts/*` - Deployment scripts
-
-### Relay Service (Optional Scope)
-
-The relay service (`relay/`) handles off-chain bridge coordination:
-- `relay-service.ts` - Canton event watching, Ethereum submission
-- `validator-node-v2.ts` - Canton Asset API + AWS KMS signing
-- `signer.ts` - Signature aggregation
-
-**Recommendation:** Include relay in scope if bridge security is comprehensive review.
 
 ---
 
@@ -208,8 +224,9 @@ Telegram: [INSERT HANDLE]
 
 1. **Security Assessment Report** - Findings categorized by severity (Critical/High/Medium/Low/Informational)
 2. **DAML-Specific Review** - Party authorization, atomic commit, choice controller analysis
-3. **Bridge Security Analysis** - Multi-sig, replay protection, rate limiting
-4. **Remediation Verification** - Re-review of fixed issues
+3. **Bridge Security Analysis** - Multi-sig, replay protection, rate limiting, **relay service review**
+4. **Relay Service Review** - Off-chain validator logic, AWS KMS usage, signature aggregation
+5. **Remediation Verification** - Re-review of fixed issues
 
 ---
 
