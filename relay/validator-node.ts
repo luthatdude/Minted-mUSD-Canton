@@ -218,12 +218,26 @@ class ValidatorNode {
 
   /**
    * Poll for attestation requests that need signing
+   * FIX B-H05: Added query timeout to prevent indefinite hangs
    */
   private async pollForAttestations(): Promise<void> {
+    // FIX B-H05: Timeout for Canton ledger queries (30 seconds)
+    const QUERY_TIMEOUT_MS = 30000;
+    const queryWithTimeout = async <T>(queryFn: () => Promise<T>): Promise<T> => {
+      return Promise.race([
+        queryFn(),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error("Canton query timeout")), QUERY_TIMEOUT_MS)
+        )
+      ]);
+    };
+
     // Query AttestationRequest contracts where we're in the validator group
-    const attestations = await (this.ledger.query as any)(
-      "MintedProtocolV2:AttestationRequest",
-      {}  // Query all, filter locally
+    const attestations = await queryWithTimeout(() =>
+      (this.ledger.query as any)(
+        "MintedProtocolV2:AttestationRequest",
+        {}  // Query all, filter locally
+      )
     ) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
