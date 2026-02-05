@@ -157,7 +157,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Set the interest rate model (enables dynamic rates)
+    /// FIX S-M01: Added zero-address check to prevent bricking interest accrual
     function setInterestRateModel(address _model) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_model != address(0), "ZERO_ADDRESS");
         address old = address(interestRateModel);
         interestRateModel = IInterestRateModel(_model);
         emit InterestRateModelUpdated(old, _model);
@@ -257,9 +259,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
-        // Track principal repayment for totalBorrows update
-        uint256 principalRepaid = 0;
-
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
@@ -268,12 +267,16 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= principalPayment;
-            principalRepaid = principalPayment;
         }
 
-        // Update global borrows (only principal portion, not interest)
-        if (principalRepaid > 0 && totalBorrows >= principalRepaid) {
-            totalBorrows -= principalRepaid;
+        // FIX C-05: Subtract full repayment (principal + interest) from totalBorrows.
+        // Previously only principal was subtracted, but _accrueGlobalInterest() adds
+        // interest to totalBorrows, so repayment must subtract the full amount to
+        // prevent totalBorrows from growing unboundedly.
+        if (repayAmount > 0 && totalBorrows >= repayAmount) {
+            totalBorrows -= repayAmount;
+        } else if (repayAmount > 0) {
+            totalBorrows = 0; // Safety: prevent underflow if rounding drift occurs
         }
 
         // Burn the repaid mUSD
@@ -305,9 +308,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
-        // Track principal repayment for totalBorrows update
-        uint256 principalRepaid = 0;
-
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
@@ -315,12 +315,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= principalPayment;
-            principalRepaid = principalPayment;
         }
 
-        // Update global borrows (only principal portion, not interest)
-        if (principalRepaid > 0 && totalBorrows >= principalRepaid) {
-            totalBorrows -= principalRepaid;
+        // FIX C-05: Subtract full repayment (principal + interest) from totalBorrows.
+        if (repayAmount > 0 && totalBorrows >= repayAmount) {
+            totalBorrows -= repayAmount;
+        } else if (repayAmount > 0) {
+            totalBorrows = 0;
         }
 
         // Burn the repaid mUSD from the caller (LeverageVault)
@@ -421,6 +422,12 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         } else {
             // Fallback to fixed rate
             interest = (totalBorrows * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+        }
+
+        // FIX S-M02: Cap interest per accrual to 10% of totalBorrows to prevent runaway minting
+        uint256 maxInterestPerAccrual = totalBorrows / 10;
+        if (interest > maxInterestPerAccrual) {
+            interest = maxInterestPerAccrual;
         }
 
         if (interest > 0) {
@@ -565,7 +572,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Called by LiquidationEngine to reduce a user's debt after seizure
-    function reduceDebt(address user, uint256 amount) external onlyRole(LIQUIDATION_ROLE) {
+    /// FIX M-01: Added nonReentrant to match all other state-modifying debt functions
+    function reduceDebt(address user, uint256 amount) external nonReentrant onlyRole(LIQUIDATION_ROLE) {
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];
@@ -672,6 +680,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Withdraw accumulated protocol reserves
+    /// FIX M-02: Reserves represent accrued interest — mint is correct here because
+    /// the interest is not held as mUSD tokens but tracked as accounting entries.
+    /// However, this must coordinate with MUSD supply cap to prevent unbounded minting.
     function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(amount <= protocolReserves, "EXCEEDS_RESERVES");
         require(to != address(0), "ZERO_ADDRESS");
@@ -697,7 +708,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         emit InterestRateUpdated(old, _rateBps);
     }
 
+    /// FIX S-M03: Enforce minDebt > 0 to prevent dust positions
     function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+        require(_minDebt > 0, "MIN_DEBT_ZERO");
         require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
         emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;

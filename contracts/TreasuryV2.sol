@@ -878,6 +878,9 @@ contract TreasuryV2 is
     /**
      * @notice Update fee configuration
      */
+    /// FIX S-M09: Added event for fee config changes
+    event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
+
     function setFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
@@ -889,21 +892,34 @@ contract TreasuryV2 is
 
         fees.performanceFeeBps = _performanceFeeBps;
         fees.feeRecipient = _feeRecipient;
+
+        emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
     }
+
+    /// FIX S-M10: Added event for reserve BPS changes
+    event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
 
     /**
      * @notice Update reserve percentage
      */
     function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+        uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
+        emit ReserveBpsUpdated(oldBps, _reserveBps);
     }
+
+    /// FIX S-M11: Added event and validation for min auto-allocate changes
+    event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     /**
      * @notice Update minimum auto-allocate amount
      */
     function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_minAmount > 0, "ZERO_MIN_AMOUNT");
+        uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
+        emit MinAutoAllocateUpdated(oldAmount, _minAmount);
     }
 
     /**

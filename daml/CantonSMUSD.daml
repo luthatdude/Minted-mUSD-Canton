@@ -26,12 +26,14 @@ import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 -- | Individual smUSD position.
 -- Represents a user's share in the yield vault.
 -- Amount is in "shares" — redeemable for mUSD at current share price.
+-- FIX D-M01: Added stakedAt timestamp for cooldown enforcement
 template CantonSMUSD
   with
     issuer : Party
     owner : Party
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
+    stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
   where
     signatory issuer, owner
 
@@ -147,11 +149,14 @@ template CantonStakingService
         exercise musdCid CantonMUSD_Burn
 
         -- Issue smUSD shares
+        -- FIX D-M01: Record staked timestamp for cooldown enforcement
+        now <- getTime
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = newShares
           entrySharePrice = globalSharePrice
+          stakedAt = now
 
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
@@ -164,6 +169,7 @@ template CantonStakingService
 
     -- | Unstake: smUSD shares → mUSD at GLOBAL share price
     -- User redeems shares at the unified global share price (includes all yield)
+    -- FIX D-M01: Enforce cooldown period symmetry with Solidity's 24h unstake cooldown
     choice Unstake : (ContractId CantonStakingService, ContractId CantonMUSD)
       with
         user : Party
@@ -174,6 +180,12 @@ template CantonStakingService
 
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
+
+        -- FIX D-M01: Enforce cooldown period before allowing unstake
+        now <- getTime
+        let cooldownRel = seconds cooldownSeconds
+        let elapsed = subTime now smusd.stakedAt
+        assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownRel)
 
         -- Calculate mUSD value using GLOBAL share price
         let musdAmount = smusd.shares * globalSharePrice
@@ -210,7 +222,9 @@ template CantonStakingService
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
-        assertMsg "SHARE_PRICE_DECREASED" (newGlobalSharePrice >= globalSharePrice)  -- Yield only increases
+        -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
+        let minAllowedPrice = globalSharePrice * 0.9
+        assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
 
         -- FIX CRITICAL: Archive old service before creating new one
         archive self

@@ -219,10 +219,9 @@ export function validateSignature(
   expectedSigner: string
 ): boolean {
   try {
-    const recovered = ethers.verifyMessage(
-      ethers.getBytes(messageHash),
-      signature
-    );
+    // FIX H-01: Use recoverAddress instead of verifyMessage to avoid double EIP-191 prefix.
+    // The messageHash is already a hash — verifyMessage would hash it again with EIP-191 prefix.
+    const recovered = ethers.recoverAddress(messageHash, signature);
     return recovered.toLowerCase() === expectedSigner.toLowerCase();
   } catch {
     return false;
@@ -241,7 +240,8 @@ export function sortSignaturesBySignerAddress(
   messageHash: string
 ): string[] {
   const signerPairs = signatures.map((sig) => {
-    const signer = ethers.verifyMessage(ethers.getBytes(messageHash), sig);
+    // FIX H-01: Use recoverAddress instead of verifyMessage (consistent with formatKMSSignature)
+    const signer = ethers.recoverAddress(messageHash, sig);
     return { signature: sig, signer: signer.toLowerCase() };
   });
 

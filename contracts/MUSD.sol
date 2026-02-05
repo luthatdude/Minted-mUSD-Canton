@@ -65,7 +65,9 @@ contract MUSD is ERC20, AccessControl, Pausable {
     }
 
     // Blacklist enforced in _update() override
+    /// FIX S-M06: Added zero-address check to prevent minting to address(0)
     function mint(address to, uint256 amount) external onlyRole(BRIDGE_ROLE) {
+        require(to != address(0), "MINT_TO_ZERO");
         require(totalSupply() + amount <= supplyCap, "EXCEEDS_CAP");
         _mint(to, amount);
         emit Mint(to, amount);

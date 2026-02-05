@@ -600,12 +600,16 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
+    -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
       controller operator
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
+        -- FIX D-M02: Limit cap changes to max 20% increase per update
+        let maxIncrease = supplyCap * 1.2
+        assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with supplyCap = newCap

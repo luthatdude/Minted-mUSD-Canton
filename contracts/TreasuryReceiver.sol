@@ -172,8 +172,19 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         tokenBridge.completeTransfer(encodedVAA);
         uint256 received = usdc.balanceOf(address(this)) - balanceBefore;
         
-        // Decode the payload to get recipient
-        (address recipient) = abi.decode(vm.payload, (address));
+        // FIX C-07: Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
+        // Layout: payloadID(1) + amount(32) + tokenAddress(32) + tokenChain(2) +
+        //         to(32) + toChain(2) + fromAddress(32) + userPayload(variable)
+        // Total fixed header = 133 bytes. User payload starts at offset 133.
+        require(vm.payload.length >= 133 + 32, "INVALID_PAYLOAD_LENGTH");
+        require(uint8(vm.payload[0]) == 3, "NOT_TRANSFER_WITH_PAYLOAD");
+        
+        // Extract user payload (the abi.encode(depositor) from DepositRouter)
+        bytes memory userPayload = new bytes(vm.payload.length - 133);
+        for (uint256 i = 0; i < userPayload.length; i++) {
+            userPayload[i] = vm.payload[133 + i];
+        }
+        address recipient = abi.decode(userPayload, (address));
         
         // FIX H-07: Actually mint mUSD for the recipient via DirectMint
         // Previously forwarded USDC to treasury but never minted mUSD

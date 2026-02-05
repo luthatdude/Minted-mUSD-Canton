@@ -400,7 +400,9 @@ class ValidatorNode {
     const idBytes32 = ethers.id(payload.attestationId);
     // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
-    const timestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
+    // FIX B-M01: Validate timestamp to prevent negative values
+    const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
+    const timestamp = Math.max(1, rawTimestamp);
 
     // This must match what BLEBridgeV9 expects
     return ethers.solidityPackedKeccak256(

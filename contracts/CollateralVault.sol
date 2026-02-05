@@ -119,18 +119,31 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// FIX M-09: Allow disabling collateral (no new deposits, existing positions can withdraw)
+    /// FIX S-M04: Also remove from supportedTokens array to prevent gas DoS during iteration
     function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
         collateralConfigs[token].enabled = false;
+
+        // FIX S-M04: Remove from supportedTokens array (swap-and-pop)
+        for (uint256 i = 0; i < supportedTokens.length; i++) {
+            if (supportedTokens[i] == token) {
+                supportedTokens[i] = supportedTokens[supportedTokens.length - 1];
+                supportedTokens.pop();
+                break;
+            }
+        }
+
         // FIX M-05: Emit specific disable event instead of misleading CollateralUpdated(0, 0)
         emit CollateralDisabled(token);
     }
 
     /// FIX S-C03: Re-enable a previously disabled collateral token
+    /// FIX S-M04: Re-add to supportedTokens array on enable
     function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
         collateralConfigs[token].enabled = true;
+        supportedTokens.push(token);
         // FIX M-05: Use specific enable event
         emit CollateralEnabled(token);
     }

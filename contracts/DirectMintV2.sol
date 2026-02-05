@@ -146,6 +146,10 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
         // Calculate fee - using combined calculation to avoid precision loss
         uint256 feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
+        // FIX S-M08: Ensure fee is non-zero when redeemFeeBps > 0 to prevent fee-free small redemptions
+        if (redeemFeeBps > 0 && feeUsdc == 0) {
+            feeUsdc = 1; // Minimum 1 wei USDC fee
+        }
         usdcOut = usdcEquivalent - feeUsdc;
 
         require(usdcOut > 0, "ZERO_OUTPUT");
