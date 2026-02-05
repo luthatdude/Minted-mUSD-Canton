@@ -234,12 +234,12 @@ daml test
 ## Contact
 
 **Luis Cuello** - Founder & CEO  
-Email: [INSERT EMAIL]  
-Telegram: [INSERT HANDLE]
+Email: Luis@minted.app
+Telegram: @trenchweb3
 
 **Mark Napolitano** - CTO  
-Email: [INSERT EMAIL]  
-Telegram: [INSERT HANDLE]
+Email: Mark@dapp.com
+Telegram: @defi_mark
 
 ---
 
