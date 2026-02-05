@@ -14,6 +14,8 @@ contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    /// @dev FIX CRITICAL: LiquidationEngine needs burn permission
+    bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
@@ -22,6 +24,8 @@ contract MUSD is ERC20, AccessControl, Pausable {
     event BlacklistUpdated(address indexed account, bool status);
     event Mint(address indexed to, uint256 amount);
     event Burn(address indexed from, uint256 amount);
+    /// @dev FIX: Event for when cap drops below current supply (undercollateralization response)
+    event SupplyCapBelowSupply(uint256 newCap, uint256 currentSupply);
 
     constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -31,15 +35,25 @@ contract MUSD is ERC20, AccessControl, Pausable {
     }
 
     /// @notice Set supply cap - callable by admin or cap manager (BLEBridgeV9)
-    /// FIX C-2: Floor at current totalSupply to prevent blocking existing holders
+    /// @dev FIX CRITICAL: Allow cap decreases for undercollateralization response.
+    ///      When attestations report lower backing, cap MUST be able to drop.
+    ///      If cap < totalSupply, no new mints allowed but existing holders unaffected.
     function setSupplyCap(uint256 _cap) external {
         require(
             hasRole(DEFAULT_ADMIN_ROLE, msg.sender) || hasRole(CAP_MANAGER_ROLE, msg.sender),
             "UNAUTHORIZED"
         );
         require(_cap > 0, "INVALID_SUPPLY_CAP");
-        require(_cap >= totalSupply(), "CAP_BELOW_SUPPLY");
+        
         uint256 oldCap = supplyCap;
+        uint256 currentSupply = totalSupply();
+        
+        // FIX: Allow cap below current supply (signals undercollateralization)
+        // Existing holders keep their tokens, but no new mints until supply drops
+        if (_cap < currentSupply) {
+            emit SupplyCapBelowSupply(_cap, currentSupply);
+        }
+        
         supplyCap = _cap;
         emit SupplyCapUpdated(oldCap, _cap);
     }
@@ -58,7 +72,12 @@ contract MUSD is ERC20, AccessControl, Pausable {
     }
 
     // Blacklist enforced in _update() override
-    function burn(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) {
+    /// @dev FIX CRITICAL: Allow LIQUIDATOR_ROLE to burn for liquidations
+    function burn(address from, uint256 amount) external {
+        require(
+            hasRole(BRIDGE_ROLE, msg.sender) || hasRole(LIQUIDATOR_ROLE, msg.sender),
+            "UNAUTHORIZED_BURN"
+        );
         if (from != msg.sender) {
             _spendAllowance(from, msg.sender, amount);
         }
