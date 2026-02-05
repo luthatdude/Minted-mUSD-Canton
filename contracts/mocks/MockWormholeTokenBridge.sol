@@ -46,6 +46,22 @@ contract MockWormholeTokenBridge {
         _sequence++;
         return _sequence;
     }
+
+    /// @notice Mock transferTokensWithPayload for DepositRouter testing (with recipient payload)
+    /// @dev FIX P0: Added to support transferTokensWithPayload in DepositRouter
+    function transferTokensWithPayload(
+        address token,
+        uint256 amount,
+        uint16,
+        bytes32,
+        uint32,
+        bytes memory // payload - ignored in mock
+    ) external payable returns (uint64 sequence) {
+        // Pull tokens from caller (simulating bridge lock)
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
+        _sequence++;
+        return _sequence;
+    }
     
     /// @notice Mock wrappedAsset for bridge queries
     function wrappedAsset(uint16, bytes32) external view returns (address) {

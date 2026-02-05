@@ -107,6 +107,25 @@ interface IMorphoOracle {
     function price() external view returns (uint256);
 }
 
+/// @notice Morpho Blue Market struct for IRM calls
+struct MorphoMarket {
+    uint128 totalSupplyAssets;
+    uint128 totalSupplyShares;
+    uint128 totalBorrowAssets;
+    uint128 totalBorrowShares;
+    uint128 lastUpdate;
+    uint128 fee;
+}
+
+/// @notice Morpho Blue Interest Rate Model interface
+interface IIRM {
+    /// @notice Get borrow rate for market (per second, scaled by 1e18)
+    function borrowRateView(
+        IMorphoBlue.MarketParams memory marketParams,
+        MorphoMarket memory market
+    ) external view returns (uint256);
+}
+
 contract MorphoLoopStrategy is
     IStrategy,
     AccessControlUpgradeable,
@@ -168,6 +187,15 @@ contract MorphoLoopStrategy is
     /// @notice Total principal deposited (before leverage)
     uint256 public totalPrincipal;
 
+    /// @notice FIX CRITICAL: Maximum borrow rate (annualized, 18 decimals) for profitable looping
+    /// @dev Only loop when borrowRate < maxBorrowRateForProfit
+    /// @dev Default: 3% = 0.03e18 - looping is only profitable when borrow rate is low
+    uint256 public maxBorrowRateForProfit;
+
+    /// @notice FIX: Minimum supply rate required to proceed (annualized, 18 decimals)
+    /// @dev Default: 1% = 0.01e18
+    uint256 public minSupplyRateRequired;
+
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
     // ═══════════════════════════════════════════════════════════════════════
@@ -177,6 +205,8 @@ contract MorphoLoopStrategy is
     event Deleveraged(uint256 repaid, uint256 withdrawn);
     event EmergencyDeleverage(uint256 healthFactorBefore, uint256 healthFactorAfter);
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
+    event LoopingSkipped(uint256 borrowRate, uint256 maxAllowed, string reason);
+    event ProfitabilityParamsUpdated(uint256 maxBorrowRate, uint256 minSupplyRate);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -188,6 +218,7 @@ contract MorphoLoopStrategy is
     error HealthFactorTooLow();
     error ExcessiveLoops();
     error InvalidLTV();
+    error LoopingNotProfitable();
 
     // ═══════════════════════════════════════════════════════════════════════
     // CONSTRUCTOR & INITIALIZER
@@ -220,6 +251,13 @@ contract MorphoLoopStrategy is
         safetyBufferBps = 500;
         targetLoops = 4;
         active = true;
+
+        // FIX CRITICAL: Set profitability thresholds
+        // Only loop when borrow rate is low enough to profit
+        // maxBorrowRateForProfit: 3% annualized = 0.03e18
+        // minSupplyRateRequired: 1% annualized = 0.01e18
+        maxBorrowRateForProfit = 0.03e18;
+        minSupplyRateRequired = 0.01e18;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(TREASURY_ROLE, _treasury);
@@ -370,13 +408,77 @@ contract MorphoLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
+     * @notice Check if looping is profitable given current market rates
+     * @dev Looping is profitable when: supplyRate * leverage > borrowRate * (leverage - 1)
+     *      For collateral-based looping where collateral earns 0%, we need borrow rate to be
+     *      extremely low or have external yield. This function uses maxBorrowRateForProfit.
+     * @return profitable Whether looping would be profitable
+     * @return currentBorrowRate The current borrow rate (annualized, 18 decimals)
+     */
+    function _isLoopingProfitable() internal view returns (bool profitable, uint256 currentBorrowRate) {
+        // Get current market state
+        (
+            uint128 totalSupplyAssets,
+            uint128 totalSupplyShares,
+            uint128 totalBorrowAssets,
+            uint128 totalBorrowShares,
+            uint128 lastUpdate,
+            uint128 fee
+        ) = morpho.market(marketId);
+
+        // Build market struct for IRM call
+        MorphoMarket memory marketData = MorphoMarket({
+            totalSupplyAssets: totalSupplyAssets,
+            totalSupplyShares: totalSupplyShares,
+            totalBorrowAssets: totalBorrowAssets,
+            totalBorrowShares: totalBorrowShares,
+            lastUpdate: lastUpdate,
+            fee: fee
+        });
+
+        // Query IRM for current borrow rate (per second)
+        address irm = marketParams.irm;
+        if (irm == address(0)) {
+            // No IRM = no interest = always profitable to loop
+            return (true, 0);
+        }
+
+        // Get borrow rate from IRM (per second, 18 decimals)
+        uint256 borrowRatePerSecond = IIRM(irm).borrowRateView(marketParams, marketData);
+        
+        // Convert to annualized rate: rate * seconds_per_year
+        // seconds_per_year ≈ 31536000
+        currentBorrowRate = borrowRatePerSecond * 31536000;
+
+        // FIX CRITICAL: Only loop if borrow rate is below threshold
+        // For collateral-based looping, collateral earns 0%, so we need very low borrow rates
+        // or external yield sources (like Morpho rewards) to be profitable
+        profitable = currentBorrowRate <= maxBorrowRateForProfit;
+    }
+
+    /**
      * @notice Execute looping: supply → borrow → supply → repeat
+     * @dev FIX CRITICAL: Now checks profitability before looping
+     *      If not profitable, only supplies initial amount without leverage
      * @param initialAmount Starting USDC amount
      * @return totalSupplied Total USDC supplied across all loops
      */
     function _loop(uint256 initialAmount) internal returns (uint256 totalSupplied) {
         uint256 amountToSupply = initialAmount;
         totalSupplied = 0;
+
+        // FIX CRITICAL: Check if looping is profitable before proceeding
+        (bool profitable, uint256 borrowRate) = _isLoopingProfitable();
+        
+        if (!profitable) {
+            // Looping not profitable - supply as collateral without leverage
+            // This protects against paying high borrow interest with 0% supply yield
+            emit LoopingSkipped(borrowRate, maxBorrowRateForProfit, "Borrow rate too high");
+            
+            // Just supply the initial amount without looping
+            morpho.supplyCollateral(marketParams, initialAmount, address(this), "");
+            return initialAmount;
+        }
 
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
             // Supply USDC as collateral
@@ -403,11 +505,16 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Deleverage to free up principal
+     * @dev FIX C-STRAT-02: Return actual freed amount, not inflated collateral withdrawn
+     *      Previously counted ALL withdrawn collateral as "freed" but most was used for repayment
      * @param principalNeeded Amount of principal to free
-     * @return freed Amount actually freed
+     * @return freed Amount actually freed and available for transfer
      */
     function _deleverage(uint256 principalNeeded) internal returns (uint256 freed) {
         IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
+        
+        // FIX: Track starting balance to calculate actual net freed
+        uint256 startingBalance = usdc.balanceOf(address(this));
         
         // Calculate current borrow amount
         (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
@@ -425,24 +532,37 @@ contract MorphoLoopStrategy is
             uint256 toWithdraw = maxWithdraw > principalNeeded ? principalNeeded : maxWithdraw;
             
             morpho.withdrawCollateral(marketParams, toWithdraw, address(this), address(this));
-            freed += toWithdraw;
-
-            if (freed >= principalNeeded) break;
+            // FIX: Don't count as freed here - calculate at end based on actual balance
 
             // Use withdrawn funds to repay debt
             uint256 balance = usdc.balanceOf(address(this));
-            if (balance > 0 && currentBorrow > 0) {
-                uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
+            if (balance > startingBalance && currentBorrow > 0) {
+                // Only use newly withdrawn funds for repayment
+                uint256 available = balance - startingBalance;
+                uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
             }
+            
+            // Check if we've freed enough (balance increased by principalNeeded)
+            uint256 currentBalance = usdc.balanceOf(address(this));
+            if (currentBalance >= startingBalance + principalNeeded) break;
         }
+        
+        // FIX C-STRAT-02: Return actual net increase in balance, not total collateral withdrawn
+        // This is what's actually available for transfer
+        uint256 endingBalance = usdc.balanceOf(address(this));
+        freed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
     }
 
     /**
      * @notice Full deleverage - repay all debt and withdraw all collateral
+     * @dev FIX C-STRAT-02: Return actual freed amount based on ending balance
      */
     function _fullDeleverage() internal returns (uint256 totalFreed) {
+        // FIX: Track starting balance to calculate actual net freed
+        uint256 startingBalance = usdc.balanceOf(address(this));
+        
         for (uint256 i = 0; i < MAX_LOOPS * 2; i++) {
             IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
             
@@ -457,7 +577,7 @@ contract MorphoLoopStrategy is
             if (currentBorrow == 0) {
                 if (pos.collateral > 0) {
                     morpho.withdrawCollateral(marketParams, pos.collateral, address(this), address(this));
-                    totalFreed += pos.collateral;
+                    // FIX: Don't count here - calculate at end
                 }
                 break;
             }
@@ -466,7 +586,7 @@ contract MorphoLoopStrategy is
             uint256 maxWithdraw = _maxWithdrawable();
             if (maxWithdraw > 0) {
                 morpho.withdrawCollateral(marketParams, maxWithdraw, address(this), address(this));
-                totalFreed += maxWithdraw;
+                // FIX: Don't count here - calculate at end
             }
 
             // Repay with available balance
@@ -476,6 +596,10 @@ contract MorphoLoopStrategy is
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }
         }
+        
+        // FIX C-STRAT-02: Return actual net increase in balance
+        uint256 endingBalance = usdc.balanceOf(address(this));
+        totalFreed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
     }
 
     /**
@@ -594,6 +718,41 @@ contract MorphoLoopStrategy is
     function setSafetyBuffer(uint256 _safetyBufferBps) external onlyRole(STRATEGIST_ROLE) {
         require(_safetyBufferBps >= 200 && _safetyBufferBps <= 2000, "Invalid buffer");
         safetyBufferBps = _safetyBufferBps;
+    }
+
+    /**
+     * @notice Update profitability thresholds for looping
+     * @dev FIX CRITICAL: Allows strategist to tune when looping is profitable
+     * @param _maxBorrowRate Maximum borrow rate (annualized, 18 decimals) to allow looping
+     * @param _minSupplyRate Minimum supply rate (annualized, 18 decimals) required
+     */
+    function setProfitabilityParams(
+        uint256 _maxBorrowRate,
+        uint256 _minSupplyRate
+    ) external onlyRole(STRATEGIST_ROLE) {
+        // Sanity checks: rates should be reasonable (0% - 50%)
+        require(_maxBorrowRate <= 0.50e18, "Max borrow rate too high");
+        require(_minSupplyRate <= 0.50e18, "Min supply rate too high");
+        
+        maxBorrowRateForProfit = _maxBorrowRate;
+        minSupplyRateRequired = _minSupplyRate;
+        
+        emit ProfitabilityParamsUpdated(_maxBorrowRate, _minSupplyRate);
+    }
+
+    /**
+     * @notice Check current looping profitability status
+     * @return isProfitable Whether looping is currently profitable
+     * @return currentBorrowRate Current borrow rate (annualized, 18 decimals)
+     * @return maxAllowedRate Maximum allowed borrow rate for profitability
+     */
+    function checkProfitability() 
+        external 
+        view 
+        returns (bool isProfitable, uint256 currentBorrowRate, uint256 maxAllowedRate) 
+    {
+        (isProfitable, currentBorrowRate) = _isLoopingProfitable();
+        maxAllowedRate = maxBorrowRateForProfit;
     }
 
     /**
