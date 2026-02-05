@@ -304,6 +304,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Enforce 24h rolling window on supply cap increases
     /// @param increase The requested cap increase amount
     /// @return allowed The actual allowed increase (clamped to remaining limit)
+    /// @dev FIX M-05: Reverts when allowed == 0 to preserve attestation for next window.
+    ///      Previously, a zero-allowed increase would consume the attestation/nonce but
+    ///      leave supply cap unchanged, requiring governance intervention.
     function _handleRateLimitCapIncrease(uint256 increase) internal returns (uint256 allowed) {
         _resetDailyLimitsIfNeeded();
 
@@ -312,15 +315,20 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             ? dailyCapIncreased - dailyCapDecreased
             : 0;
 
-        require(netIncreased < dailyCapIncreaseLimit, "DAILY_CAP_INCREASE_LIMIT");
-
-        uint256 remaining = dailyCapIncreaseLimit - netIncreased;
+        uint256 remaining = dailyCapIncreaseLimit > netIncreased 
+            ? dailyCapIncreaseLimit - netIncreased 
+            : 0;
+        
+        // FIX M-05: If daily limit is exhausted, revert to preserve attestation
+        // The attestation can be resubmitted after the 24h window resets
+        require(remaining > 0, "DAILY_CAP_LIMIT_EXHAUSTED");
+        
         allowed = increase > remaining ? remaining : increase;
 
         dailyCapIncreased += allowed;
 
         if (allowed < increase) {
-            emit RateLimitedCapIncrease(increase, allowed, 0);
+            emit RateLimitedCapIncrease(increase, allowed, remaining);
         }
     }
 
