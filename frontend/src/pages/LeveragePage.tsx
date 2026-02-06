@@ -54,6 +54,8 @@ export default function LeveragePage() {
   const [estimatedDebt, setEstimatedDebt] = useState<bigint>(0n);
   const [maxLeverage, setMaxLeverage] = useState(30);
   const [loading, setLoading] = useState(false);
+  // FIX M-05 (Final Audit): User-visible error feedback instead of silent console.error
+  const [txError, setTxError] = useState<string | null>(null);
 
   // Fetch user data
   useEffect(() => {
@@ -115,6 +117,7 @@ export default function LeveragePage() {
   const handleOpenPosition = async () => {
     if (!leverageVault || !weth || !depositAmount) return;
     setLoading(true);
+    setTxError(null);
     try {
       const amount = ethers.parseEther(depositAmount);
       // Check allowance and approve exact amount if needed (atomic pattern)
@@ -136,8 +139,9 @@ export default function LeveragePage() {
       setPosition(pos);
       setHasPosition(true);
       setDepositAmount('');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Open position error:', err);
+      setTxError(err?.reason || err?.shortMessage || err?.message || 'Failed to open position');
     }
     setLoading(false);
   };
@@ -146,6 +150,7 @@ export default function LeveragePage() {
   const handleClosePosition = async () => {
     if (!leverageVault || !position) return;
     setLoading(true);
+    setTxError(null);
     try {
       // FIX FE-H03: Calculate reasonable minCollateralOut instead of 0
       // Use 95% of initial deposit as minimum to protect against sandwich/MEV attacks
@@ -154,8 +159,9 @@ export default function LeveragePage() {
       await tx.wait();
       setPosition(null);
       setHasPosition(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Close position error:', err);
+      setTxError(err?.reason || err?.shortMessage || err?.message || 'Failed to close position');
     }
     setLoading(false);
   };
@@ -199,6 +205,14 @@ export default function LeveragePage() {
 
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+
+        {/* FIX M-05 (Final Audit): Show transaction errors to user */}
+        {txError && (
+          <div className="col-span-full rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400 flex justify-between items-center">
+            <span>{txError}</span>
+            <button onClick={() => setTxError(null)} className="ml-4 text-red-500 hover:text-red-300">&times;</button>
+          </div>
+        )}
           <StatCard 
             label="WETH Balance" 
             value={formatToken(wethBalance, 18, 4)} 

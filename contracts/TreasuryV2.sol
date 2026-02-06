@@ -292,8 +292,13 @@ contract TreasuryV2 is
 
             if (total > 0 && strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                uint256 stratValue = IStrategy(strategies[i].strategy).totalValue();
-                currentBps[i] = (stratValue * BPS) / total;
+                // FIX M-02 (Final Audit): Wrap in try/catch so a reverting strategy
+                // doesn't DoS this view function. Defaults to 0 bps on failure.
+                try IStrategy(strategies[i].strategy).totalValue() returns (uint256 stratValue) {
+                    currentBps[i] = (stratValue * BPS) / total;
+                } catch {
+                    currentBps[i] = 0;
+                }
             }
         }
     }

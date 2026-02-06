@@ -185,9 +185,11 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         collateralRatioBps = _ratioBps;
         emit CollateralRatioUpdated(oldRatio, _ratioBps);
 
-        // Recalculate supply cap with new ratio
+        // FIX M-04 (Final Audit): Admin ratio changes bypass rate limit.
+        // setCollateralRatio is already admin-only with daily cooldown + 10% max change,
+        // so applying the daily cap limit on top can block legitimate governance.
         if (attestedCantonAssets > 0) {
-            _updateSupplyCap(attestedCantonAssets);
+            _updateSupplyCap(attestedCantonAssets, true);
         }
 
         lastRatioChangeTime = block.timestamp;
@@ -310,8 +312,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         lastAttestationTime = att.timestamp;
         attestedCantonAssets = att.cantonAssets;
 
-        // Update supply cap based on attested assets
-        uint256 newCap = _updateSupplyCap(att.cantonAssets);
+        // Update supply cap based on attested assets (rate-limited for attestations)
+        uint256 newCap = _updateSupplyCap(att.cantonAssets, false);
 
         emit AttestationReceived(att.id, att.cantonAssets, newCap, att.nonce, att.timestamp);
     }
@@ -320,10 +322,11 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                    INTERNAL FUNCTIONS
     // ============================================================
 
-    /// @notice Calculate and update supply cap based on attested assets, enforcing rate limit
+    /// @notice Calculate and update supply cap based on attested assets, optionally enforcing rate limit
     /// @param _attestedAssets Total assets attested by Canton
+    /// @param skipRateLimit If true, bypasses daily cap increase limit (for admin ratio changes)
     /// @return newCap The new supply cap
-    function _updateSupplyCap(uint256 _attestedAssets) internal returns (uint256 newCap) {
+    function _updateSupplyCap(uint256 _attestedAssets, bool skipRateLimit) internal returns (uint256 newCap) {
         // supplyCap = attestedAssets / (collateralRatio / 10000)
         // e.g., $500M assets at 110% ratio = $454.5M cap
         newCap = (_attestedAssets * 10000) / collateralRatioBps;
@@ -333,9 +336,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         // Only update if cap is changing
         if (newCap != oldCap) {
             if (newCap > oldCap) {
-                // Cap is increasing — enforce 24h rate limit
-                uint256 increase = newCap - oldCap;
-                newCap = oldCap + _handleRateLimitCapIncrease(increase);
+                // Cap is increasing — enforce 24h rate limit (unless admin-initiated)
+                if (skipRateLimit) {
+                    // Admin ratio change: bypass rate limit but still track for accounting
+                    _resetDailyLimitsIfNeeded();
+                    dailyCapIncreased += newCap - oldCap;
+                } else {
+                    uint256 increase = newCap - oldCap;
+                    newCap = oldCap + _handleRateLimitCapIncrease(increase);
+                }
             } else {
                 // Cap is decreasing — always allow (decreases offset future increases)
                 _handleRateLimitCapDecrease(oldCap - newCap);

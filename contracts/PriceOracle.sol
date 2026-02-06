@@ -100,6 +100,14 @@ contract PriceOracle is AccessControl {
             enabled: true
         });
 
+        // FIX M-03 (Final Audit): Validate feedDecimals <= 18 to prevent underflow
+        // in getPrice() where we compute 10 ** (18 - feedDecimals).
+        // A feed with > 18 decimals would revert at query time, not at config time.
+        {
+            uint8 fd = IAggregatorV3(feed).decimals();
+            require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
+        }
+
         // FIX S-M07: Auto-initialize lastKnownPrice from the feed to prevent stale fallback gaps
         try IAggregatorV3(feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256, uint80
