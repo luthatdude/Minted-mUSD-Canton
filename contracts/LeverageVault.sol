@@ -539,7 +539,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         ) returns (uint256 amountOut) {
             collateralReceived = amountOut;
         } catch {
-            // Swap failed, return 0
+            // FIX M-02: Clear dangling approval on swap failure (defense-in-depth)
+            IERC20(address(musd)).forceApprove(address(swapRouter), 0);
             collateralReceived = 0;
         }
 

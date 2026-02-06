@@ -71,9 +71,11 @@ export function BorrowPage() {
             deposited,
             price,
             valueUsd,
-            factorBps: config[0],
-            liqThreshold: config[1],
-            liqPenalty: config[2],
+            // FIX M-05: getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
+            // Previously mapped [0]→factor, [1]→threshold, [2]→penalty (off-by-one, skipping enabled)
+            factorBps: config[1],
+            liqThreshold: config[2],
+            liqPenalty: config[3],
           });
         }
         setCollaterals(infos);
