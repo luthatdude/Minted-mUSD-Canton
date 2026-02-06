@@ -313,9 +313,11 @@ cd daml && daml test       # DAML
 │       ├── network-policy.yaml          # Default-deny + explicit allow rules
 │       ├── secrets.yaml                 # Template secrets (postgres, TLS)
 │       └── pod-disruption-budget.yaml   # PDBs for Canton and PostgreSQL
-├── test/                                # Hardhat test suites
-│   ├── BLEProtocol.test.ts              # 27 tests
-│   └── TreasuryV2.test.ts              # 33 tests
+├── test/                                # Hardhat test suites (678 tests)
+│   ├── BLEProtocol.test.ts
+│   ├── TreasuryV2.test.ts
+│   ├── TreasuryReceiver.test.ts
+│   └── DeepAuditV2.test.ts
 ├── hardhat.config.ts
 ├── package.json
 └── tsconfig.json
@@ -418,7 +420,7 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 - [x] NGINX API gateway with TLS termination and rate limiting
 - [x] Kubernetes deployment manifests (Canton, PostgreSQL, NGINX, NetworkPolicy)
 - [x] CI/CD pipeline (Solidity, DAML, Docker, Slither, Trivy, kubeval)
-- [x] Integration tests (60 Hardhat + 20 DAML tests)
+- [x] Integration tests (678 Solidity + 16 DAML + 29 relay tests)
 - [ ] Mainnet deployment (deployment scripts, network config, contract verification)
 - [ ] Monitoring stack (Prometheus, Grafana dashboards for Canton + Bridge health)
 
@@ -447,9 +449,9 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 
 | Document | Description |
 |----------|-------------|
-| [SECURITY.md](SECURITY.md) | Security policy, assumptions, vulnerability disclosure process |
-| [THREAT_MODEL.md](THREAT_MODEL.md) | Formal threat model with attack trees and STRIDE analysis |
-| [SECURITY_AUDIT.md](SECURITY_AUDIT.md) | Comprehensive audit checklist and findings |
+| [audit/SECURITY.md](audit/SECURITY.md) | Security policy, assumptions, vulnerability disclosure process |
+| [audit/THREAT_MODEL.md](audit/THREAT_MODEL.md) | Formal threat model with attack trees and STRIDE analysis |
+| [audit/SECURITY_AUDIT.md](audit/SECURITY_AUDIT.md) | Comprehensive audit checklist and findings |
 | [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | State machines and flow diagrams (Mermaid) |
 
 ## License
