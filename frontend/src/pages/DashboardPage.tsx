@@ -27,6 +27,11 @@ interface DashboardData {
   interestRateBps: bigint;
 }
 
+// FIX FE-H06: Type-safe PromiseSettledResult value extractor
+function settledValue<T>(result: PromiseSettledResult<T>, fallback: T): T {
+  return result.status === "fulfilled" ? result.value : fallback;
+}
+
 interface PortfolioData {
   // Balances
   ethBalance: bigint;
@@ -70,7 +75,7 @@ export function DashboardPage() {
           musd.supplyCap(),
           treasury?.totalBacking() ?? 0n,
           treasury?.availableReserves() ?? 0n,
-          treasury?.deployedToStrategies() ?? 0n,
+          treasury?.totalValue() ?? 0n,
           smusd?.totalAssets() ?? 0n,
           smusd?.totalSupply() ?? 0n,
           bridge?.attestedCantonAssets() ?? 0n,
@@ -82,23 +87,22 @@ export function DashboardPage() {
           borrow?.interestRateBps() ?? 0n,
         ]);
 
-        const val = (i: number) => results[i].status === "fulfilled" ? (results[i] as any).value : 0n;
-
+        // FIX FE-H06: Use type-safe settledValue instead of `as any`
         setData({
-          musdSupply: val(0),
-          supplyCap: val(1),
-          totalBacking: val(2),
-          availableReserves: val(3),
-          deployedToStrategies: val(4),
-          smusdTotalAssets: val(5),
-          smusdTotalSupply: val(6),
-          attestedAssets: val(7),
-          collateralRatio: val(8),
-          bridgeHealthRatio: val(9),
-          bridgePaused: results[10].status === "fulfilled" ? (results[10] as any).value : false,
-          mintFeeBps: val(11),
-          redeemFeeBps: val(12),
-          interestRateBps: val(13),
+          musdSupply: settledValue(results[0], 0n),
+          supplyCap: settledValue(results[1], 0n),
+          totalBacking: settledValue(results[2], 0n),
+          availableReserves: settledValue(results[3], 0n),
+          deployedToStrategies: settledValue(results[4], 0n),
+          smusdTotalAssets: settledValue(results[5], 0n),
+          smusdTotalSupply: settledValue(results[6], 0n),
+          attestedAssets: settledValue(results[7], 0n),
+          collateralRatio: settledValue(results[8], 0n),
+          bridgeHealthRatio: settledValue(results[9], 0n),
+          bridgePaused: settledValue(results[10], false),
+          mintFeeBps: settledValue(results[11], 0n),
+          redeemFeeBps: settledValue(results[12], 0n),
+          interestRateBps: settledValue(results[13], 0n),
         });
       } catch (err) {
         console.error("Dashboard load error:", err);

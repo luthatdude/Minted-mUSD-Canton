@@ -13,6 +13,7 @@ export const CONTRACTS: Record<string, string> = {
   LiquidationEngine: process.env.NEXT_PUBLIC_LIQUIDATION_ENGINE_ADDRESS || "",
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
+  LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
 };
 
 // FIX FE-H2: Validate contract addresses at config time

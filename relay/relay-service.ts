@@ -409,8 +409,10 @@ class RelayService {
   private async fetchValidatorSignatures(
     requestId: ContractId<AttestationRequest>
   ): Promise<ValidatorSignature[]> {
+    // FIX R-H01: Use MintedProtocolV3 to match pollForAttestations query version
+    // Previously used V2 which would miss signatures created on V3 templates
     const signatures = await (this.ledger.query as any)(
-      "MintedProtocolV2:ValidatorSignature",
+      "MintedProtocolV3:ValidatorSignature",
       { requestId }
     ) as CreateEvent<ValidatorSignature>[];
     return signatures.map(s => s.payload);

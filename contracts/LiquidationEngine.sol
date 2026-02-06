@@ -206,10 +206,13 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Check if a position is liquidatable
+    /// @dev FIX S-H04: Uses healthFactorUnsafe() to match liquidate() behavior.
+    ///      Previously used healthFactor() which reverts when circuit breaker trips,
+    ///      causing isLiquidatable to revert while liquidate() would succeed.
     function isLiquidatable(address borrower) external view returns (bool) {
         uint256 debt = borrowModule.totalDebt(borrower);
         if (debt == 0) return false;
-        return borrowModule.healthFactor(borrower) < 10000;
+        return borrowModule.healthFactorUnsafe(borrower) < 10000;
     }
 
     /// @notice Estimate collateral received for a given debt repayment
