@@ -196,6 +196,130 @@ describe("TreasuryReceiver", function () {
     });
   });
 
+  describe("receiveAndMint", function () {
+    /**
+     * Builds a Wormhole TransferWithPayload (type 3) payload.
+     * Layout: payloadID(1) + amount(32) + tokenAddress(32) + tokenChain(2) +
+     *         to(32) + toChain(2) + fromAddress(32) + userPayload(variable)
+     * Total fixed header = 133 bytes.
+     */
+    function buildTransferPayload(recipientAddress: string): string {
+      // payloadID = 3 (TransferWithPayload)
+      const payloadId = "03";
+      // amount (32 bytes) — doesn't matter for our mock
+      const amount = "0".repeat(64);
+      // tokenAddress (32 bytes)
+      const tokenAddress = "0".repeat(64);
+      // tokenChain (2 bytes)
+      const tokenChain = "0001";
+      // to (32 bytes)
+      const to = "0".repeat(64);
+      // toChain (2 bytes)
+      const toChain = "0002";
+      // fromAddress (32 bytes)
+      const fromAddress = "0".repeat(64);
+      // userPayload = abi.encode(recipient)
+      const userPayload = ethers.AbiCoder.defaultAbiCoder()
+        .encode(["address"], [recipientAddress])
+        .slice(2); // remove 0x
+
+      return "0x" + payloadId + amount + tokenAddress + tokenChain + to + toChain + fromAddress + userPayload;
+    }
+
+    async function setupReceiveAndMint(fixture: Awaited<ReturnType<typeof deployFixture>>) {
+      const { receiver, wormhole, tokenBridge, bridgeAdmin, user1 } = fixture;
+
+      const routerAddress = ethers.zeroPadValue("0xDEAD", 32);
+      await receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
+
+      const vaaHash = ethers.keccak256(ethers.toUtf8Bytes("unique-vaa-1"));
+      const payload = buildTransferPayload(user1.address);
+
+      await wormhole.setMockVM(BASE_CHAIN_ID, routerAddress, payload, vaaHash);
+      await tokenBridge.setTransferAmount(ethers.parseUnits("1000", 6));
+
+      return { routerAddress, vaaHash, payload };
+    }
+
+    it("Should receive bridged USDC and mint mUSD via DirectMint", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, user1 } = fixture;
+      const { vaaHash } = await setupReceiveAndMint(fixture);
+
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.emit(receiver, "MUSDMinted")
+        .to.emit(receiver, "DepositReceived");
+
+      expect(await receiver.isVAAProcessed(vaaHash)).to.be.true;
+    });
+
+    it("Should fallback to treasury when DirectMint fails", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, directMint, usdc, treasury } = fixture;
+      await setupReceiveAndMint(fixture);
+
+      // Make DirectMint fail
+      await directMint.setShouldFail(true);
+
+      const treasuryBalBefore = await usdc.balanceOf(treasury.address);
+
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.emit(receiver, "MintFallbackToTreasury");
+
+      // USDC should have gone to treasury
+      const treasuryBalAfter = await usdc.balanceOf(treasury.address);
+      expect(treasuryBalAfter - treasuryBalBefore).to.equal(ethers.parseUnits("1000", 6));
+    });
+
+    it("Should reject invalid VAA", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, wormhole } = fixture;
+
+      await wormhole.setShouldValidate(false);
+
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.be.revertedWithCustomError(receiver, "InvalidVAA");
+    });
+
+    it("Should reject replay (same VAA hash)", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver } = fixture;
+      await setupReceiveAndMint(fixture);
+
+      // First call should succeed
+      await receiver.receiveAndMint("0x01");
+
+      // Second call with same VAA should revert
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.be.revertedWithCustomError(receiver, "VAAAlreadyProcessed");
+    });
+
+    it("Should reject unauthorized router", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, wormhole } = fixture;
+
+      // Set mock VM with an unregistered router
+      const unknownRouter = ethers.zeroPadValue("0xBEEF", 32);
+      const vaaHash = ethers.keccak256(ethers.toUtf8Bytes("unauth-vaa"));
+      const payload = buildTransferPayload(fixture.user1.address);
+      await wormhole.setMockVM(ARBITRUM_CHAIN_ID, unknownRouter, payload, vaaHash);
+
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.be.revertedWithCustomError(receiver, "UnauthorizedRouter");
+    });
+
+    it("Should reject when paused", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, pauser } = fixture;
+      await setupReceiveAndMint(fixture);
+
+      await receiver.connect(pauser).pause();
+
+      await expect(receiver.receiveAndMint("0x01"))
+        .to.be.revertedWithCustomError(receiver, "EnforcedPause");
+    });
+  });
+
   describe("Emergency Controls", function () {
     it("Should pause operations", async function () {
       const { receiver, pauser } = await loadFixture(deployFixture);
