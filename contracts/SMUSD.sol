@@ -132,8 +132,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         require(totalSupply() > 0, "NO_SHARES_EXIST");
         require(amount > 0, "INVALID_AMOUNT");
         
-        // FIX M-3: Cap yield distribution to prevent excessive dilution
-        uint256 currentAssets = totalAssets();
+        // FIX P2-M2: Use globalTotalAssets() for cap (serves both ETH + Canton shareholders)
+        uint256 currentAssets = globalTotalAssets();
         uint256 maxYield = (currentAssets * MAX_YIELD_BPS) / 10000;
         require(amount <= maxYield, "YIELD_EXCEEDS_CAP");
 
@@ -150,8 +150,12 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         require(amount > 0, "ZERO_AMOUNT");
         require(globalTotalShares() > 0, "NO_SHARES_EXIST");
         
-        // Cap interest to 10% of current assets per call (same as yield cap)
-        uint256 currentAssets = totalAssets();
+        // FIX P2-M2: Use globalTotalAssets() for the cap, not local totalAssets().
+        // The vault serves both Ethereum and Canton shareholders, so the cap
+        // should reflect the total asset base. Using local assets was too
+        // restrictive when Canton shares are large, potentially causing
+        // _accrueGlobalInterest() to revert and blocking all borrows/repays.
+        uint256 currentAssets = globalTotalAssets();
         uint256 maxInterest = (currentAssets * MAX_YIELD_BPS) / 10000;
         require(amount <= maxInterest, "INTEREST_EXCEEDS_CAP");
 

@@ -142,6 +142,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
+        // FIX P2-M1: Enforce 50-token cap on re-enable to prevent gas DoS
+        require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         collateralConfigs[token].enabled = true;
         supportedTokens.push(token);
         // FIX M-05: Use specific enable event

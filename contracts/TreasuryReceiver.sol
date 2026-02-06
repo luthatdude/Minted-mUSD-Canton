@@ -159,7 +159,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         
         // Check for replay
         if (processedVAAs[vm.hash]) revert VAAAlreadyProcessed();
-        processedVAAs[vm.hash] = true;
+        // FIX P1-CODEX6: Don't mark processed yet — wait until mint/fallback succeeds
         
         // Verify source is authorized
         bytes32 authorizedRouter = authorizedRouters[vm.emitterChainId];
@@ -190,11 +190,15 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         // Previously forwarded USDC to treasury but never minted mUSD
         usdc.forceApprove(directMint, received);
         try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
+            // FIX P1-CODEX6: Mark processed only after successful mint
+            processedVAAs[vm.hash] = true;
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
             // If minting fails, forward to treasury as fallback (funds not lost)
             usdc.forceApprove(directMint, 0);
             usdc.safeTransfer(treasury, received);
+            // FIX P1-CODEX6: Mark processed after successful fallback transfer
+            processedVAAs[vm.hash] = true;
             emit MintFallbackToTreasury(recipient, received, vm.hash);
         }
         
