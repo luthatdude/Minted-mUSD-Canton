@@ -215,6 +215,41 @@ contract PriceOracle is AccessControl {
         valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
     }
 
+    /// @notice FIX P1-H4: Get price WITHOUT circuit breaker check, for liquidation paths
+    /// @dev During market crashes (>20% move), the circuit breaker blocks getPrice(),
+    ///      which prevents liquidations. This function allows liquidation to proceed
+    ///      using the raw Chainlink price, ensuring bad debt doesn't accumulate.
+    function getPriceUnsafe(address token) external view returns (uint256 price) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        require(answeredInRound >= roundId, "STALE_ROUND");
+
+        uint8 feedDecimals = config.feed.decimals();
+        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+        price = uint256(answer) * (10 ** (18 - feedDecimals));
+        // No circuit breaker check — raw Chainlink price
+    }
+
+    /// @notice FIX P1-H4: Get USD value WITHOUT circuit breaker, for liquidation paths
+    function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256 valueUsd) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        require(answeredInRound >= roundId, "STALE_ROUND");
+
+        uint8 feedDecimals = config.feed.decimals();
+        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+        uint256 priceNormalized = uint256(answer) * (10 ** (18 - feedDecimals));
+        valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
+    }
+
     /// @notice Check if a feed is active and returning fresh data
     function isFeedHealthy(address token) external view returns (bool) {
         FeedConfig storage config = feeds[token];

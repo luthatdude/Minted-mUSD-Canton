@@ -129,6 +129,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event GlobalInterestAccrued(uint256 interest, uint256 newTotalBorrows, uint256 utilizationBps);
     event ReservesWithdrawn(address indexed to, uint256 amount);
+    /// @dev FIX P0-H1: Emitted when interest routing to SMUSD fails (e.g. supply cap hit)
+    event InterestRoutingFailed(uint256 supplierAmount, bytes reason);
+    /// @dev FIX P1-H3: Emitted when reserve minting fails
+    event ReservesMintFailed(address indexed to, uint256 amount);
 
     constructor(
         address _vault,
@@ -447,15 +451,24 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             protocolReserves += reserveAmount;
 
             // Route supplier portion to SMUSD
+            // FIX P0-H1: Wrap in try/catch so supply cap exhaustion doesn't brick
+            // repay/liquidation paths. Interest is still tracked in totalBorrows.
             if (supplierAmount > 0 && address(smusd) != address(0)) {
-                // Mint mUSD representing interest earned
-                musd.mint(address(this), supplierAmount);
-                // Approve and send to SMUSD
-                IERC20(address(musd)).approve(address(smusd), supplierAmount);
-                smusd.receiveInterest(supplierAmount);
-                totalInterestPaidToSuppliers += supplierAmount;
-                
-                emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+                try musd.mint(address(this), supplierAmount) {
+                    // Approve and send to SMUSD
+                    IERC20(address(musd)).approve(address(smusd), supplierAmount);
+                    try smusd.receiveInterest(supplierAmount) {
+                        totalInterestPaidToSuppliers += supplierAmount;
+                        emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+                    } catch (bytes memory reason) {
+                        // SMUSD rejected — burn the minted tokens to keep supply clean
+                        musd.burn(address(this), supplierAmount);
+                        emit InterestRoutingFailed(supplierAmount, reason);
+                    }
+                } catch (bytes memory reason) {
+                    // Supply cap hit — skip routing, interest still accrues as debt
+                    emit InterestRoutingFailed(supplierAmount, reason);
+                }
             }
 
             // Update total borrows to include accrued interest
@@ -489,18 +502,25 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // slither-disable-next-line incorrect-equality
         if (elapsed == 0) return;
 
+        // FIX P1-H2: Calculate user interest as their proportional share of global interest
+        // to prevent totalBorrows divergence. User's share = (user_principal / totalBorrows) * global_interest
+        // This ensures Σ user_interest ≈ global_interest by construction.
         uint256 interest;
-        if (address(interestRateModel) != address(0)) {
-            // Use dynamic rate from model
-            interest = interestRateModel.calculateInterest(
-                pos.principal,
-                totalBorrows,
-                _getTotalSupply(),
-                elapsed
-            );
-        } else {
-            // Fallback to fixed rate
-            interest = (pos.principal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+        uint256 userTotal = pos.principal + pos.accruedInterest;
+        if (totalBorrows > 0 && userTotal > 0) {
+            if (address(interestRateModel) != address(0)) {
+                uint256 globalInterest = interestRateModel.calculateInterest(
+                    totalBorrows,
+                    totalBorrows,
+                    _getTotalSupply(),
+                    elapsed
+                );
+                // User's proportional share of global interest
+                interest = (globalInterest * userTotal) / totalBorrows;
+            } else {
+                // Fallback: use user's total debt (principal + accrued) as base
+                interest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+            }
         }
 
         pos.accruedInterest += interest;
@@ -682,17 +702,26 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Withdraw accumulated protocol reserves
-    /// FIX M-02: Reserves represent accrued interest — mint is correct here because
-    /// the interest is not held as mUSD tokens but tracked as accounting entries.
-    /// However, this must coordinate with MUSD supply cap to prevent unbounded minting.
+    /// FIX P1-H3: Reserves are accounting entries for the protocol's share of interest.
+    /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
+    /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
+    /// Admin should coordinate with supply cap management before withdrawing.
     function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(amount <= protocolReserves, "EXCEEDS_RESERVES");
         require(to != address(0), "ZERO_ADDRESS");
         
         protocolReserves -= amount;
-        musd.mint(to, amount);
         
-        emit ReservesWithdrawn(to, amount);
+        // FIX P1-H3: Try to mint — if supply cap is hit, revert gracefully
+        // so admin knows to increase cap or reduce reserves first
+        try musd.mint(to, amount) {
+            emit ReservesWithdrawn(to, amount);
+        } catch {
+            // Restore reserves and emit failure
+            protocolReserves += amount;
+            emit ReservesMintFailed(to, amount);
+            revert("SUPPLY_CAP_REACHED");
+        }
     }
 
     // ============================================================
