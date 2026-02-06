@@ -14,7 +14,7 @@ This folder contains all security audit materials for the Minted mUSD Protocol.
 ## Quick Links
 
 - **Repository:** https://github.com/luthatdude/Minted-mUSD-Canton
-- **Pinned Commit:** See `AUDIT_SCOPE.md` for exact commit hash
+- **Pinned Commit:** `bfe0f2c` (frozen February 6, 2026)
 - **Timeline:** 3 weeks
 
 ## Scope Summary

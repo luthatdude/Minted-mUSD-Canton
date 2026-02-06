@@ -1,7 +1,7 @@
 # Minted Protocol - Security Audit Scope
 
 **Prepared for:** Softstack  
-**Date:** February 5, 2026  
+**Date:** February 6, 2026  
 **Prepared by:** Minted Protocol Team
 
 ---
@@ -9,7 +9,7 @@
 ## Repository
 
 **GitHub:** https://github.com/luthatdude/Minted-mUSD-Canton  
-**Commit:** `fb20130e8403fc9fadea100bb8b738119a3fcaf9`  
+**Commit:** `bfe0f2c` (frozen)
 **Branch:** `main`
 
 ---
@@ -170,7 +170,7 @@ npx hardhat compile
 npx hardhat test
 ```
 
-**Expected result:** 436 tests passing
+**Expected result:** 678 tests passing
 
 ### DAML
 
@@ -197,8 +197,12 @@ daml test
 | InterestRateModel | 22 | ✅ Pass |
 | CollateralVault | 18 | ✅ Pass |
 | PriceOracle | 12 | ✅ Pass |
+| TreasuryReceiver | 23 | ✅ Pass |
 | Integration | 25 | ✅ Pass |
-| **Total** | **436** | ✅ Pass |
+| DeepAuditV2 | 125 | ✅ Pass |
+| Relay (Jest) | 29 | ✅ Pass |
+| DAML | 16 | ✅ Pass |
+| **Total** | **678 + 29 + 16** | ✅ Pass |
 
 ---
 
