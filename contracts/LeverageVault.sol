@@ -167,6 +167,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 musdProvidedByUser
     );
 
+    /// @notice FIX S-H03: Emitted when emergency close debt repayment fails
+    event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
+
     // ============================================================
     //                  CONSTRUCTOR
     // ============================================================
@@ -326,8 +329,14 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // Swap excess mUSD back to collateral (received to this contract)
-                _swapMusdToCollateral(collateralToken, excessMusd);
+                // FIX S-C02: Try to swap excess mUSD back to collateral.
+                // If swap fails (returns 0), transfer the mUSD directly to user
+                // instead of leaving it trapped in the contract.
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd);
+                if (swappedCollateral == 0) {
+                    // Swap failed — return mUSD directly to user
+                    IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
+                }
             }
         }
 
@@ -723,7 +732,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
                 // FIX S-C02: Use repayFor to reduce USER's debt, not vault's debt
                 // Previously called repay() which operated on msg.sender (vault), leaving user debt intact
-                try borrowModule.repayFor(user, repayAmount) {} catch {}
+                // FIX S-H03: Emit event on failure instead of silent catch
+                try borrowModule.repayFor(user, repayAmount) {} catch {
+                    emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+                }
             }
         }
 
