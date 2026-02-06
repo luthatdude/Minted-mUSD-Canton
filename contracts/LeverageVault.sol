@@ -39,7 +39,8 @@ interface ICollateralVault {
         bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps
     );
     function depositFor(address user, address token, uint256 amount) external;
-    function withdrawFor(address user, address token, uint256 amount, address recipient) external;
+    // FIX C-04: Match actual CollateralVault 5-param signature (was missing skipHealthCheck)
+    function withdrawFor(address user, address token, uint256 amount, address recipient, bool skipHealthCheck) external;
 }
 
 /// @notice mUSD mint interface
@@ -311,7 +312,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             }
 
             // FIX: Actually withdraw collateral from vault to this contract
-            collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this));
+            // FIX C-04: Pass skipHealthCheck=true — atomic close repays debt in same tx
+            collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
 
             // Swap collateral → mUSD
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
@@ -332,7 +334,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // FIX: Withdraw ALL remaining collateral from vault to user
         uint256 remainingCollateral = collateralVault.deposits(msg.sender, collateralToken);
         if (remainingCollateral > 0) {
-            collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender);
+            // FIX C-04: skipHealthCheck=true — debt already repaid above
+            collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender, true);
         }
         
         // Also send any collateral held by this contract to user
@@ -398,7 +401,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw ALL collateral from vault directly to user
         uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);
         if (totalCollateralInVault > 0) {
-            collateralVault.withdrawFor(msg.sender, collateralToken, totalCollateralInVault, msg.sender);
+            // FIX C-04: skipHealthCheck=true — debt already repaid above
+            collateralVault.withdrawFor(msg.sender, collateralToken, totalCollateralInVault, msg.sender, true);
         }
 
         // Also send any collateral held by this contract to user
@@ -706,7 +710,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw all collateral from vault to this contract
         uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);
         if (totalCollateralInVault > 0) {
-            collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this));
+            // FIX C-04: skipHealthCheck=true — emergency close, debt repaid below
+            collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this), true);
         }
 
         // Attempt to repay as much debt as possible

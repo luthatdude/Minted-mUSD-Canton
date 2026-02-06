@@ -13,6 +13,8 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface IPriceOracle {
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
+    // FIX C-01: Unsafe variant bypasses circuit breaker for liquidation health checks
+    function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256);
 }
 
 interface ICollateralVault {
@@ -568,6 +570,27 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         return totalWeighted;
     }
 
+    /// @notice FIX C-01: Collateral value using unsafe oracle (bypasses circuit breaker)
+    /// @dev Mirrors _weightedCollateralValue but uses getValueUsdUnsafe so liquidation
+    ///      health checks work during extreme price moves when circuit breaker trips.
+    function _weightedCollateralValueUnsafe(address user) internal view returns (uint256) {
+        address[] memory tokens = vault.getSupportedTokens();
+        uint256 totalWeighted = 0;
+
+        for (uint256 i = 0; i < tokens.length; i++) {
+            uint256 deposited = vault.deposits(user, tokens[i]);
+            if (deposited == 0) continue;
+
+            (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
+            if (!enabled) continue;
+
+            uint256 valueUsd = oracle.getValueUsdUnsafe(tokens[i], deposited);
+            totalWeighted += (valueUsd * liqThreshold) / 10000;
+        }
+
+        return totalWeighted;
+    }
+
     /// @notice Get the maximum borrowable amount for a user (based on collateral factor, not liq threshold)
     function _borrowCapacity(address user) internal view returns (uint256) {
         address[] memory tokens = vault.getSupportedTokens();
@@ -651,6 +674,22 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         if (debt == 0) return type(uint256).max;
 
         uint256 weightedCollateral = _weightedCollateralValue(user);
+        if (weightedCollateral == 0) return 0;
+
+        return (weightedCollateral * 10000) / debt;
+    }
+
+    /// @notice FIX C-01: Health factor using unsafe oracle (bypasses circuit breaker)
+    /// @dev Used by LiquidationEngine so liquidations proceed during >20% price crashes.
+    ///      Without this, healthFactor() reverts via getValueUsd() circuit breaker,
+    ///      blocking all liquidations exactly when they are most needed.
+    /// @return Health factor in basis points (10000 = 1.0)
+    function healthFactorUnsafe(address user) external view returns (uint256) {
+        uint256 debt = totalDebt(user);
+        // slither-disable-next-line incorrect-equality
+        if (debt == 0) return type(uint256).max;
+
+        uint256 weightedCollateral = _weightedCollateralValueUnsafe(user);
         if (weightedCollateral == 0) return 0;
 
         return (weightedCollateral * 10000) / debt;

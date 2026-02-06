@@ -231,7 +231,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     /// @dev Legacy unpause function - now requires timelock
     /// FIX H-05: Kept for interface compatibility but reverts with guidance
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function unpause() external view onlyRole(DEFAULT_ADMIN_ROLE) {
         revert("USE_requestUnpause_AND_executeUnpause");
     }
 

@@ -20,7 +20,7 @@ contract MockDirectMint {
         musd = IERC20(_musd);
     }
     
-    function mintFor(address recipient, uint256 usdcAmount) external returns (uint256 musdMinted) {
+    function mintFor(address /* recipient */, uint256 usdcAmount) external returns (uint256 musdMinted) {
         require(!shouldFail, "MINT_FAILED");
         
         // Pull USDC from caller

@@ -251,11 +251,12 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      *      allows marking deposits as completed after TreasuryReceiver processes them.
      */
     function markDepositComplete(uint64 sequence) external onlyRole(ROUTER_ADMIN_ROLE) {
-        PendingDeposit storage deposit = pendingDeposits[sequence];
-        require(deposit.depositor != address(0), "DEPOSIT_NOT_FOUND");
-        require(!deposit.completed, "ALREADY_COMPLETED");
-        deposit.completed = true;
-        emit DepositCompleted(sequence, deposit.depositor, deposit.amount);
+        // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
+        PendingDeposit storage pendingDep = pendingDeposits[sequence];
+        require(pendingDep.depositor != address(0), "DEPOSIT_NOT_FOUND");
+        require(!pendingDep.completed, "ALREADY_COMPLETED");
+        pendingDep.completed = true;
+        emit DepositCompleted(sequence, pendingDep.depositor, pendingDep.amount);
     }
 
     /**
@@ -264,10 +265,11 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function markDepositsComplete(uint64[] calldata sequences) external onlyRole(ROUTER_ADMIN_ROLE) {
         for (uint256 i = 0; i < sequences.length; i++) {
-            PendingDeposit storage deposit = pendingDeposits[sequences[i]];
-            if (deposit.depositor != address(0) && !deposit.completed) {
-                deposit.completed = true;
-                emit DepositCompleted(sequences[i], deposit.depositor, deposit.amount);
+            // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
+            PendingDeposit storage pendingDep = pendingDeposits[sequences[i]];
+            if (pendingDep.depositor != address(0) && !pendingDep.completed) {
+                pendingDep.completed = true;
+                emit DepositCompleted(sequences[i], pendingDep.depositor, pendingDep.amount);
             }
         }
     }

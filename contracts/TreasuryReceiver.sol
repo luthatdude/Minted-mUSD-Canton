@@ -154,7 +154,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      */
     function receiveAndMint(bytes calldata encodedVAA) external nonReentrant whenNotPaused {
         // Parse and verify the VAA
-        (IWormhole.VM memory vm, bool valid, string memory reason) = wormhole.parseAndVerifyVM(encodedVAA);
+        // FIX: Suppress unused 'reason' compiler warning
+        (IWormhole.VM memory vm, bool valid, ) = wormhole.parseAndVerifyVM(encodedVAA);
         if (!valid) revert InvalidVAA();
         
         // Check for replay
