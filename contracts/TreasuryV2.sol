@@ -852,6 +852,11 @@ contract TreasuryV2 is
             }
         }
 
+        // FIX TV-M01 (Final Audit): Re-read totalValue() after withdrawals.
+        // Pass 1 withdrawals change strategy values, so using the stale `total`
+        // for pass 2 would systematically over-allocate to under-funded strategies.
+        total = totalValue();
+
         // Second pass: deposit to under-allocated strategies
         uint256 reserve = reserveBalance();
         uint256 targetReserveAmt = (total * reserveBps) / BPS;
