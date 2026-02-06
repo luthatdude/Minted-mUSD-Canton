@@ -75,14 +75,18 @@ export function BridgePage() {
       try {
         const filter = bridge.filters.AttestationReceived();
         const logs = await bridge.queryFilter(filter, -10000);
-        const parsed = logs.slice(-20).reverse().map((log: any) => ({
-          id: log.args.id,
-          cantonAssets: log.args.cantonAssets,
-          newSupplyCap: log.args.newSupplyCap,
-          nonce: log.args.nonce,
-          timestamp: log.args.timestamp,
-          blockNumber: log.blockNumber,
-        }));
+        // FIX FE-H07: Use ethers.EventLog type instead of any
+        const parsed = logs.slice(-20).reverse().map((log) => {
+          const eventLog = log as ethers.EventLog;
+          return {
+            id: eventLog.args.id,
+            cantonAssets: eventLog.args.cantonAssets,
+            newSupplyCap: eventLog.args.newSupplyCap,
+            nonce: eventLog.args.nonce,
+            timestamp: eventLog.args.timestamp,
+            blockNumber: eventLog.blockNumber,
+          };
+        });
         setEvents(parsed);
       } catch {}
     }

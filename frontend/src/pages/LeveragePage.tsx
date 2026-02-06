@@ -150,10 +150,13 @@ export default function LeveragePage() {
 
   // Close position
   const handleClosePosition = async () => {
-    if (!leverageVault) return;
+    if (!leverageVault || !position) return;
     setLoading(true);
     try {
-      const tx = await leverageVault.closeLeveragedPosition(0); // 0 = no min
+      // FIX FE-H03: Calculate reasonable minCollateralOut instead of 0
+      // Use 95% of initial deposit as minimum to protect against sandwich/MEV attacks
+      const minOut = (position.initialDeposit * 95n) / 100n;
+      const tx = await leverageVault.closeLeveragedPosition(minOut);
       await tx.wait();
       setPosition(null);
       setHasPosition(false);

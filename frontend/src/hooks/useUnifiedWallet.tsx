@@ -35,9 +35,9 @@ interface UnifiedWalletContextType {
   switchChain: (chainId: number) => Promise<void>;
   
   // Contract interactions
-  getContract: (address: string, abi: any[]) => Contract | null;
-  readContract: <T>(address: string, abi: any[], method: string, args?: any[]) => Promise<T>;
-  writeContract: (address: string, abi: any[], method: string, args?: any[]) => Promise<ethers.TransactionResponse>;
+  getContract: (address: string, abi: ethers.InterfaceAbi) => Contract | null;
+  readContract: <T>(address: string, abi: ethers.InterfaceAbi, method: string, args?: unknown[]) => Promise<T>;
+  writeContract: (address: string, abi: ethers.InterfaceAbi, method: string, args?: unknown[]) => Promise<ethers.TransactionResponse>;
   
   // Provider/Signer access
   provider: BrowserProvider | null;
@@ -173,7 +173,7 @@ export function UnifiedWalletProvider({ children }: UnifiedWalletProviderProps) 
   }, [isMetaMaskActive, isWalletConnectActive, metamask, walletConnect]);
 
   // Get contract from active wallet
-  const getContract = useCallback((contractAddress: string, abi: any[]): Contract | null => {
+  const getContract = useCallback((contractAddress: string, abi: ethers.InterfaceAbi): Contract | null => {
     if (isMetaMaskActive) {
       return metamask.getContract(contractAddress, abi);
     } else if (isWalletConnectActive) {
@@ -185,9 +185,9 @@ export function UnifiedWalletProvider({ children }: UnifiedWalletProviderProps) 
   // Read contract via active wallet
   const readContract = useCallback(async <T,>(
     contractAddress: string,
-    abi: any[],
+    abi: ethers.InterfaceAbi,
     method: string,
-    args: any[] = []
+    args: unknown[] = []
   ): Promise<T> => {
     if (isMetaMaskActive) {
       return metamask.readContract<T>(contractAddress, abi, method, args);
@@ -200,9 +200,9 @@ export function UnifiedWalletProvider({ children }: UnifiedWalletProviderProps) 
   // Write contract via active wallet
   const writeContract = useCallback(async (
     contractAddress: string,
-    abi: any[],
+    abi: ethers.InterfaceAbi,
     method: string,
-    args: any[] = []
+    args: unknown[] = []
   ): Promise<ethers.TransactionResponse> => {
     if (isMetaMaskActive) {
       return metamask.writeContract(contractAddress, abi, method, args);
