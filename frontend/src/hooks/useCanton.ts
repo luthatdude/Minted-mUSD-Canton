@@ -1,10 +1,32 @@
 import { useState, useCallback, useRef } from "react";
 import { CANTON_CONFIG } from "@/lib/config";
 
+// FIX M-07: Typed interfaces for Canton JSON API responses
+interface CantonQueryResponse {
+  result: CantonContractRaw[];
+  status: number;
+}
+
+interface CantonContractRaw {
+  contractId: string;
+  templateId: string;
+  payload: Record<string, unknown>;
+}
+
+interface CantonExerciseResponse {
+  result: unknown;
+  status: number;
+}
+
+interface CantonCreateResponse {
+  result: { contractId: string };
+  status: number;
+}
+
 interface CantonContract {
   contractId: string;
   templateId: string;
-  payload: Record<string, any>;
+  payload: Record<string, unknown>;
 }
 
 interface CantonState {
@@ -48,7 +70,7 @@ export function useCanton() {
 
   /** Query active contracts by template */
   const query = useCallback(
-    async (templateId: string, filter?: Record<string, any>): Promise<CantonContract[]> => {
+    async (templateId: string, filter?: Record<string, unknown>): Promise<CantonContract[]> => {
       try {
         const resp = await fetch(`${baseUrl}/v1/query`, {
           method: "POST",
@@ -59,14 +81,15 @@ export function useCanton() {
           }),
         });
         if (!resp.ok) throw new Error(`Query failed: ${resp.status}`);
-        const data = await resp.json();
-        return (data.result || []).map((c: any) => ({
+        const data: CantonQueryResponse = await resp.json();
+        return (data.result || []).map((c) => ({
           contractId: c.contractId,
           templateId: c.templateId,
           payload: c.payload,
         }));
-      } catch (err: any) {
-        setState((s) => ({ ...s, error: err.message }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        setState((s) => ({ ...s, error: message }));
         return [];
       }
     },
@@ -79,8 +102,8 @@ export function useCanton() {
       templateId: string,
       contractId: string,
       choice: string,
-      argument: Record<string, any>
-    ): Promise<any> => {
+      argument: Record<string, unknown>
+    ): Promise<unknown> => {
       try {
         const resp = await fetch(`${baseUrl}/v1/exercise`, {
           method: "POST",
@@ -88,10 +111,11 @@ export function useCanton() {
           body: JSON.stringify({ templateId, contractId, choice, argument }),
         });
         if (!resp.ok) throw new Error(`Exercise failed: ${resp.status}`);
-        const data = await resp.json();
+        const data: CantonExerciseResponse = await resp.json();
         return data.result;
-      } catch (err: any) {
-        setState((s) => ({ ...s, error: err.message }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        setState((s) => ({ ...s, error: message }));
         throw err;
       }
     },
@@ -108,10 +132,11 @@ export function useCanton() {
           body: JSON.stringify({ templateId, payload }),
         });
         if (!resp.ok) throw new Error(`Create failed: ${resp.status}`);
-        const data = await resp.json();
+        const data: CantonCreateResponse = await resp.json();
         return data.result.contractId;
-      } catch (err: any) {
-        setState((s) => ({ ...s, error: err.message }));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        setState((s) => ({ ...s, error: message }));
         throw err;
       }
     },

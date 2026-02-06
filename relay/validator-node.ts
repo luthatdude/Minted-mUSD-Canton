@@ -233,9 +233,10 @@ class ValidatorNode {
     };
 
     // Query AttestationRequest contracts where we're in the validator group
+    // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
     const attestations = await queryWithTimeout(() =>
       (this.ledger.query as any)(
-        "MintedProtocolV2:AttestationRequest",
+        "MintedProtocolV3:AttestationRequest",
         {}  // Query all, filter locally
       )
     ) as CreateEvent<AttestationRequest>[];
@@ -291,8 +292,9 @@ class ValidatorNode {
     // FIX C-09: Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
     try {
+      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
       const positions = await (this.ledger.query as any)(
-        "MintedProtocolV2:InstitutionalEquityPosition",
+        "MintedProtocolV3:InstitutionalEquityPosition",
         {}
       ) as CreateEvent<InstitutionalEquityPosition>[];
 
@@ -357,8 +359,9 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
+      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
       await (this.ledger.exercise as any)(
-        "MintedProtocolV2:AttestationRequest",
+        "MintedProtocolV3:AttestationRequest",
         contractId,
         "ProvideSignature",
         {

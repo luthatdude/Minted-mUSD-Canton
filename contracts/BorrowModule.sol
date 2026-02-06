@@ -602,6 +602,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Get the maximum borrowable amount for a user (based on collateral factor, not liq threshold)
+    /// @dev M-01: Intentionally skips disabled tokens — users must NOT open new debt against
+    ///      disabled collateral. This is asymmetric with health-check/liquidation (which still
+    ///      credits disabled collateral via liqThreshold > 0) to avoid trapping users. The
+    ///      asymmetry is by design: disabled tokens protect against new risk but don't orphan
+    ///      existing positions.
     function _borrowCapacity(address user) internal view returns (uint256) {
         address[] memory tokens = vault.getSupportedTokens();
         uint256 totalCapacity = 0;
@@ -611,7 +616,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             if (deposited == 0) continue;
 
             (bool enabled, uint256 colFactor, , ) = vault.getConfig(tokens[i]);
-            if (!enabled) continue;
+            if (!enabled) continue; // Intentional: no new borrows against disabled collateral
 
             uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
             totalCapacity += (valueUsd * colFactor) / 10000;
