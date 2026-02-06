@@ -116,9 +116,12 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Remove a price feed
+    /// @dev FIX M-06: Also clears lastKnownPrice to prevent stale circuit-breaker
+    ///      state if the same token is later re-added with a new feed.
     function removeFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         require(feeds[token].enabled, "FEED_NOT_FOUND");
         delete feeds[token];
+        delete lastKnownPrice[token];
         emit FeedRemoved(token);
     }
 

@@ -110,26 +110,20 @@ export default function LeveragePage() {
     estimate();
   }, [leverageVault, depositAmount, leverageX10]);
 
-  // Approve WETH
-  const handleApprove = async () => {
-    if (!weth) return;
-    setLoading(true);
-    try {
-      const tx = await weth.approve(LEVERAGE_VAULT_ADDRESS, ethers.MaxUint256);
-      await tx.wait();
-      setWethAllowance(ethers.MaxUint256);
-    } catch (err) {
-      console.error('Approve error:', err);
-    }
-    setLoading(false);
-  };
-
-  // Open leveraged position
+  // FIX M-03/M-04: Combined atomic approve + open position
+  // Previously used separate MaxUint256 approve then open (two clicks, race condition)
   const handleOpenPosition = async () => {
-    if (!leverageVault || !depositAmount) return;
+    if (!leverageVault || !weth || !depositAmount) return;
     setLoading(true);
     try {
       const amount = ethers.parseEther(depositAmount);
+      // Check allowance and approve exact amount if needed (atomic pattern)
+      const currentAllowance = await weth.allowance(address, LEVERAGE_VAULT_ADDRESS);
+      if (currentAllowance < amount) {
+        const approveTx = await weth.approve(LEVERAGE_VAULT_ADDRESS, amount);
+        await approveTx.wait();
+        setWethAllowance(amount);
+      }
       const tx = await leverageVault.openLeveragedPosition(
         WETH_ADDRESS,
         amount,
@@ -165,9 +159,6 @@ export default function LeveragePage() {
     }
     setLoading(false);
   };
-
-  const needsApproval = depositAmount && 
-    ethers.parseEther(depositAmount || '0') > wethAllowance;
 
   const effectiveLeverage = position 
     ? (Number(position.totalCollateral) / Number(position.initialDeposit)).toFixed(2)
@@ -301,25 +292,14 @@ export default function LeveragePage() {
 
             {/* Action Buttons */}
             <div className="flex gap-4">
-              {needsApproval ? (
-                <TxButton
-                  onClick={handleApprove}
-                  loading={loading}
-                  disabled={!isConnected}
-                  className="flex-1"
-                >
-                  Approve WETH
-                </TxButton>
-              ) : (
-                <TxButton
-                  onClick={handleOpenPosition}
-                  loading={loading}
-                  disabled={!isConnected || !depositAmount || parseFloat(depositAmount) <= 0}
-                  className="flex-1"
-                >
-                  Open {(leverageX10 / 10).toFixed(1)}x Position
-                </TxButton>
-              )}
+              <TxButton
+                onClick={handleOpenPosition}
+                loading={loading}
+                disabled={!isConnected || !depositAmount || parseFloat(depositAmount) <= 0}
+                className="flex-1"
+              >
+                Open {(leverageX10 / 10).toFixed(1)}x Position
+              </TxButton>
             </div>
           </div>
         ) : (

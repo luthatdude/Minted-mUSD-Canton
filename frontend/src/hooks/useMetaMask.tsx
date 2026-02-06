@@ -47,9 +47,9 @@ interface MetaMaskContextType {
   switchChain: (chainId: number) => Promise<void>;
   
   // Contract interactions
-  getContract: (address: string, abi: any[]) => Contract | null;
-  readContract: <T>(address: string, abi: any[], method: string, args?: any[]) => Promise<T>;
-  writeContract: (address: string, abi: any[], method: string, args?: any[]) => Promise<ethers.TransactionResponse>;
+  getContract: (address: string, abi: ethers.InterfaceAbi) => Contract | null;
+  readContract: <T>(address: string, abi: ethers.InterfaceAbi, method: string, args?: unknown[]) => Promise<T>;
+  writeContract: (address: string, abi: ethers.InterfaceAbi, method: string, args?: unknown[]) => Promise<ethers.TransactionResponse>;
   
   // Provider/Signer access
   provider: BrowserProvider | null;
@@ -321,7 +321,7 @@ export function MetaMaskProvider({ children }: MetaMaskProviderProps) {
   }, [sdkProvider]);
 
   // Get contract instance
-  const getContract = useCallback((contractAddress: string, abi: any[]): Contract | null => {
+  const getContract = useCallback((contractAddress: string, abi: ethers.InterfaceAbi): Contract | null => {
     if (!signer) return null;
     return new Contract(contractAddress, abi, signer);
   }, [signer]);
@@ -329,9 +329,9 @@ export function MetaMaskProvider({ children }: MetaMaskProviderProps) {
   // Read contract
   const readContract = useCallback(async <T,>(
     contractAddress: string,
-    abi: any[],
+    abi: ethers.InterfaceAbi,
     method: string,
-    args: any[] = []
+    args: unknown[] = []
   ): Promise<T> => {
     if (!provider) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, provider);
@@ -341,9 +341,9 @@ export function MetaMaskProvider({ children }: MetaMaskProviderProps) {
   // Write contract
   const writeContract = useCallback(async (
     contractAddress: string,
-    abi: any[],
+    abi: ethers.InterfaceAbi,
     method: string,
-    args: any[] = []
+    args: unknown[] = []
   ): Promise<ethers.TransactionResponse> => {
     if (!signer) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, signer);
