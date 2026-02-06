@@ -38,6 +38,9 @@ interface IBorrowModule {
 interface IPriceOracleLiq {
     function getPrice(address token) external view returns (uint256);
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
+    /// @dev FIX P1-H4: Unsafe versions bypass circuit breaker for liquidation paths
+    function getPriceUnsafe(address token) external view returns (uint256);
+    function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256);
 }
 
 interface IMUSDBurn {
@@ -147,7 +150,11 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         // Disabled collateral positions must still be liquidatable for protocol safety
         (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
-        uint256 collateralPrice = oracle.getPrice(collateralToken);
+        // FIX P1-H4: Use getPriceUnsafe() for liquidation path.
+        // During market crashes (>20% price drop), the circuit breaker blocks getPrice(),
+        // which would prevent liquidations and allow bad debt to accumulate.
+        // Liquidations MUST proceed using raw Chainlink data to protect the protocol.
+        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
         require(collateralPrice > 0, "INVALID_PRICE");
 
         // FIX H-01: Convert USD value to collateral token amount accounting for token decimals
@@ -165,7 +172,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         if (seizeAmount > available) {
             seizeAmount = available;
             // Recalculate actual debt repaid based on available collateral
-            uint256 seizeValue = oracle.getValueUsd(collateralToken, seizeAmount);
+            // FIX P1-H4: Use unsafe version to bypass circuit breaker
+            uint256 seizeValue = oracle.getValueUsdUnsafe(collateralToken, seizeAmount);
             actualRepay = (seizeValue * 10000) / (10000 + penaltyBps);
         }
 
@@ -208,7 +216,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     ) external view returns (uint256 collateralAmount) {
         (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
 
-        uint256 collateralPrice = oracle.getPrice(collateralToken);
+        // FIX P1-H4: Use unsafe version so estimates work even when circuit breaker trips
+        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
         if (collateralPrice == 0) return 0;
 
         // FIX L-04: Require decimals() — view function, safe to let revert for unsupported tokens

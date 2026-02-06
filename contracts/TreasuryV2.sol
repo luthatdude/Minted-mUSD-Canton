@@ -205,9 +205,14 @@ contract TreasuryV2 is
     // VIEW FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @dev FIX P0-CODEX1: Event for strategy totalValue() failures
+    event StrategyValueQueryFailed(address indexed strategy);
+
     /**
      * @notice Total value across reserve + all strategies
      * @dev Loops over bounded, admin-controlled strategies array (max ~10 strategies)
+     *      FIX P0-CODEX1: Uses try/catch so a reverting strategy doesn't DoS
+     *      all deposits, withdrawals, and redemptions system-wide.
      */
     function totalValue() public view returns (uint256) {
         uint256 total = reserveBalance();
@@ -215,7 +220,14 @@ contract TreasuryV2 is
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                total += IStrategy(strategies[i].strategy).totalValue();
+                // FIX P0-CODEX1: Treat reverting strategies as zero value instead of DoS
+                try IStrategy(strategies[i].strategy).totalValue() returns (uint256 val) {
+                    total += val;
+                } catch {
+                    // Strategy is broken — treated as zero. Admin should removeStrategy.
+                    // Note: can't emit event in view function, but the broken strategy
+                    // will be visible via getCurrentAllocations() returning 0 for it.
+                }
             }
         }
 
@@ -541,13 +553,18 @@ contract TreasuryV2 is
         uint256 remaining = amount;
 
         // Calculate total strategy value
+        // FIX P0-CODEX1: Use try/catch to prevent DoS from reverting strategies
         uint256 totalStratValue = 0;
         uint256 lastActiveIdx = type(uint256).max;
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                totalStratValue += IStrategy(strategies[i].strategy).totalValue();
-                lastActiveIdx = i;
+                try IStrategy(strategies[i].strategy).totalValue() returns (uint256 val) {
+                    totalStratValue += val;
+                    lastActiveIdx = i;
+                } catch {
+                    // Skip broken strategies during withdrawal
+                }
             }
         }
 
@@ -560,7 +577,13 @@ contract TreasuryV2 is
 
             address strat = strategies[i].strategy;
             // slither-disable-next-line calls-loop
-            uint256 stratValue = IStrategy(strat).totalValue();
+            // FIX P0-CODEX1: Use try/catch for strategy value query
+            uint256 stratValue;
+            try IStrategy(strat).totalValue() returns (uint256 val) {
+                stratValue = val;
+            } catch {
+                continue; // Skip broken strategies
+            }
 
             if (stratValue == 0) continue;
 
@@ -710,21 +733,40 @@ contract TreasuryV2 is
      * FIX H-3: Revert on withdrawal failure to prevent fund loss
      * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
      */
+    /// @dev FIX P0-CODEX2: Emitted when strategy force-deactivated due to failed withdrawal
+    event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
+
     function removeStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
 
         uint256 idx = strategyIndex[strategy];
 
-        // FIX H-3 + S-C03: Withdraw all from strategy - verify full amount
+        // FIX P0-CODEX2: Try to withdraw, but don't let failure permanently block removal.
+        // If withdrawAll() fails, force-deactivate to prevent permanent DoS.
         if (strategies[idx].active) {
-            uint256 stratValue = IStrategy(strategy).totalValue();
+            uint256 stratValue;
+            try IStrategy(strategy).totalValue() returns (uint256 val) {
+                stratValue = val;
+            } catch {
+                stratValue = 0;
+            }
+
             if (stratValue > 0) {
-                uint256 withdrawn = IStrategy(strategy).withdrawAll();
-                // FIX S-C03: Require at least 95% of strategy value to be withdrawn
-                // Allows for slippage/fees but prevents silent fund stranding
-                uint256 minWithdrawn = (stratValue * 95) / 100;
-                require(withdrawn >= minWithdrawn, "WITHDRAWAL_INCOMPLETE");
-                emit StrategyWithdrawn(strategy, withdrawn);
+                try IStrategy(strategy).withdrawAll() returns (uint256 withdrawn) {
+                    // Verify at least 95% withdrawn (slippage tolerance)
+                    uint256 minWithdrawn = (stratValue * 95) / 100;
+                    if (withdrawn >= minWithdrawn) {
+                        emit StrategyWithdrawn(strategy, withdrawn);
+                    } else {
+                        // Partial withdrawal — still deactivate but warn
+                        emit StrategyForceDeactivated(strategy, stratValue - withdrawn, "");
+                    }
+                } catch (bytes memory reason) {
+                    // FIX P0-CODEX2: Force-deactivate instead of reverting.
+                    // Funds remain in the strategy — admin must recover via
+                    // emergencyWithdrawAll() or direct strategy interaction later.
+                    emit StrategyForceDeactivated(strategy, stratValue, reason);
+                }
             }
         }
 
