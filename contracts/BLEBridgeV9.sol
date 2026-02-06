@@ -58,6 +58,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public dailyCapDecreased;      // Cumulative cap decreases in current window (offsets increases)
     uint256 public lastRateLimitReset;     // Timestamp of last window reset
 
+    // FIX BB-M01 (Final Audit): unpauseRequestTime moved here from mid-contract
+    // to prevent storage layout fragility on future UUPS upgrades.
+    uint256 public unpauseRequestTime;
+
     /// FIX H-5: Maximum attestation age — reject attestations older than this
     uint256 public constant MAX_ATTESTATION_AGE = 6 hours;
     
@@ -200,7 +204,6 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     // ============================================================
 
     /// @dev FIX B-H08: Timelock for unpause to prevent immediate recovery after exploit
-    uint256 public unpauseRequestTime;
     uint256 public constant UNPAUSE_DELAY = 24 hours;
     
     event UnpauseRequested(uint256 requestTime, uint256 executeAfter);
