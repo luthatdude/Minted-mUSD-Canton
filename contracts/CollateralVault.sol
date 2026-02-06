@@ -81,7 +81,12 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 liquidationPenaltyBps
     ) external onlyRole(VAULT_ADMIN_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
-        require(!collateralConfigs[token].enabled, "ALREADY_ADDED");
+        // FIX CV-H01 (Final Audit): Use collateralFactorBps == 0 instead of !enabled.
+        // A disabled token still has collateralFactorBps > 0, so the old guard
+        // allowed addCollateral to push a duplicate into supportedTokens[],
+        // causing BorrowModule._weightedCollateralValue() to double-count.
+        // Use enableCollateral() to re-enable a disabled token instead.
+        require(collateralConfigs[token].collateralFactorBps == 0, "ALREADY_ADDED");
         // FIX M-08: Cap supported tokens array to prevent unbounded growth
         require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
