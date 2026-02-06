@@ -275,21 +275,19 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Override convertToShares to use global share price
+    /// @dev FIX AUDIT-01: Delegates to internal _convertToShares to ensure preview
+    ///      functions match actual deposit/mint behavior (ERC-4626 compliance).
+    ///      Previously used a different formula without virtual-share offset,
+    ///      creating an inconsistency between preview and execution.
     function convertToShares(uint256 assets) public view override returns (uint256) {
-        uint256 shares = globalTotalShares();
-        if (shares == 0) {
-            return assets * (10 ** _decimalsOffset());
-        }
-        return (assets * shares) / globalTotalAssets();
+        return _convertToShares(assets, Math.Rounding.Floor);
     }
 
     /// @notice Override convertToAssets to use global share price
+    /// @dev FIX AUDIT-01: Delegates to internal _convertToAssets to ensure preview
+    ///      functions match actual redeem/withdraw behavior (ERC-4626 compliance).
     function convertToAssets(uint256 shares) public view override returns (uint256) {
-        uint256 totalShares = globalTotalShares();
-        if (totalShares == 0) {
-            return shares / (10 ** _decimalsOffset());
-        }
-        return (shares * globalTotalAssets()) / totalShares;
+        return _convertToAssets(shares, Math.Rounding.Floor);
     }
 
     /// @notice FIX C-02: Override internal _convertToShares to use global share price
