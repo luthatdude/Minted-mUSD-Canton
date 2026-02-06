@@ -552,6 +552,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Get the collateral value weighted by liquidation threshold
+    /// @dev FIX S-C01: Includes disabled collateral in health calculations.
+    ///      When admin disables a token, borrowers still have deposits. Excluding
+    ///      disabled tokens would instantly drop their health factor, making them
+    ///      liquidatable through no fault of their own. The collateral config
+    ///      (liqThreshold) persists even after disableCollateral().
     function _weightedCollateralValue(address user) internal view returns (uint256) {
         address[] memory tokens = vault.getSupportedTokens();
         uint256 totalWeighted = 0;
@@ -560,8 +565,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             uint256 deposited = vault.deposits(user, tokens[i]);
             if (deposited == 0) continue;
 
-            (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
-            if (!enabled) continue;
+            (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
+            // FIX S-C01: Do NOT skip disabled tokens — borrowers with existing deposits
+            // must retain their collateral value for health factor calculations.
+            // Only liqThreshold == 0 means truly unconfigured (never added).
+            if (liqThreshold == 0) continue;
 
             uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
             totalWeighted += (valueUsd * liqThreshold) / 10000;
@@ -573,6 +581,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice FIX C-01: Collateral value using unsafe oracle (bypasses circuit breaker)
     /// @dev Mirrors _weightedCollateralValue but uses getValueUsdUnsafe so liquidation
     ///      health checks work during extreme price moves when circuit breaker trips.
+    /// @dev FIX S-C01: Includes disabled collateral (same rationale as _weightedCollateralValue)
     function _weightedCollateralValueUnsafe(address user) internal view returns (uint256) {
         address[] memory tokens = vault.getSupportedTokens();
         uint256 totalWeighted = 0;
@@ -581,8 +590,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             uint256 deposited = vault.deposits(user, tokens[i]);
             if (deposited == 0) continue;
 
-            (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
-            if (!enabled) continue;
+            (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
+            // FIX S-C01: Do NOT skip disabled tokens (same fix as _weightedCollateralValue)
+            if (liqThreshold == 0) continue;
 
             uint256 valueUsd = oracle.getValueUsdUnsafe(tokens[i], deposited);
             totalWeighted += (valueUsd * liqThreshold) / 10000;
@@ -648,22 +658,30 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Get total debt (principal + accrued interest) for a user
+    /// @dev FIX S-H02: Uses pos.principal + pos.accruedInterest (total debt) as interest base,
+    ///      matching _accrueInterest() execution. Previously used only pos.principal, causing
+    ///      the view to understate pending interest vs what _accrueInterest actually charges.
     function totalDebt(address user) public view returns (uint256) {
         DebtPosition storage pos = positions[user];
         uint256 elapsed = block.timestamp - pos.lastAccrualTime;
+        uint256 userTotal = pos.principal + pos.accruedInterest;
         
         uint256 pendingInterest;
         if (address(interestRateModel) != address(0)) {
-            pendingInterest = interestRateModel.calculateInterest(
-                pos.principal,
+            // FIX S-H02: Use userTotal as base (matches _accrueInterest proportional share)
+            uint256 globalInterest = interestRateModel.calculateInterest(
+                totalBorrows,
                 totalBorrows,
                 _getTotalSupply(),
                 elapsed
             );
+            // User's proportional share of global interest (same formula as _accrueInterest)
+            pendingInterest = totalBorrows > 0 ? (globalInterest * userTotal) / totalBorrows : 0;
         } else {
-            pendingInterest = (pos.principal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+            // FIX S-H02: Use userTotal (principal + accrued) as base, matching _accrueInterest
+            pendingInterest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
         }
-        return pos.principal + pos.accruedInterest + pendingInterest;
+        return userTotal + pendingInterest;
     }
 
     /// @notice Get health factor for a user (public view)

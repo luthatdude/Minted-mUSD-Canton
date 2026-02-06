@@ -13,6 +13,11 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
+/// @dev FIX S-H01: Typed interface for Treasury calls (replaces raw staticcall)
+interface ITreasury {
+    function totalValue() external view returns (uint256);
+}
+
 contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
     using Math for uint256;
@@ -241,21 +246,22 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @dev Falls back to local totalAssets if treasury not set
     /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
+    /// @dev FIX S-H01: Uses typed interface call instead of raw staticcall for
+    ///      better error propagation and compile-time safety.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
             return totalAssets();
         }
         // Treasury.totalValue() returns total USDC backing all mUSD (6 decimals)
         // slither-disable-next-line calls-loop
-        (bool success, bytes memory data) = treasury.staticcall(
-            abi.encodeWithSignature("totalValue()")
-        );
-        if (success && data.length >= 32) {
+        try ITreasury(treasury).totalValue() returns (uint256 usdcValue) {
             // FIX: Convert USDC (6 decimals) to mUSD (18 decimals)
-            uint256 usdcValue = abi.decode(data, (uint256));
             return usdcValue * 1e12;
+        } catch {
+            // Fallback to local totalAssets if Treasury call fails
+            // This is a degraded state — monitoring should alert on share price divergence
+            return totalAssets();
         }
-        return totalAssets();
     }
 
     /// @notice Global share price used for both chains
