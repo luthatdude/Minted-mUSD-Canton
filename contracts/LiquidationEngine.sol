@@ -32,6 +32,8 @@ interface IERC20Decimals {
 interface IBorrowModule {
     function totalDebt(address user) external view returns (uint256);
     function healthFactor(address user) external view returns (uint256);
+    // FIX C-01: Unsafe variant bypasses circuit breaker for liquidation path
+    function healthFactorUnsafe(address user) external view returns (uint256);
     function reduceDebt(address user, uint256 amount) external;
 }
 
@@ -127,7 +129,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
 
         // Check position is liquidatable
-        uint256 hf = borrowModule.healthFactor(borrower);
+        // FIX C-01: Use healthFactorUnsafe to bypass circuit breaker during price crashes.
+        // Previously used healthFactor() which reverts via getValueUsd() circuit breaker,
+        // blocking all liquidations during >20% price moves — exactly when they're needed most.
+        uint256 hf = borrowModule.healthFactorUnsafe(borrower);
         require(hf < 10000, "POSITION_HEALTHY"); // Health factor < 1.0
 
         // Determine max repayable amount
