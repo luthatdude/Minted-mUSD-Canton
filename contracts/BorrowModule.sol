@@ -354,7 +354,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
             // Compute post-withdrawal health by subtracting the withdrawn amount's value
             (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(token);
-            require(enabled, "TOKEN_NOT_SUPPORTED");
+            // FIX M-01 (Final Audit): Allow withdrawal of disabled-token collateral.
+            // If admin disables a token, users with debt must still be able to withdraw
+            // as long as the token was properly configured (liqThreshold > 0).
+            // Blocking withdrawal traps collateral permanently for indebted users.
+            require(enabled || liqThreshold > 0, "TOKEN_NOT_SUPPORTED");
             uint256 withdrawnValue = oracle.getValueUsd(token, amount);
             uint256 weightedReduction = (withdrawnValue * liqThreshold) / 10000;
 
