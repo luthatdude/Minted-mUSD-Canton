@@ -33,8 +33,10 @@ export function AdminPage() {
 
   // Treasury Admin
   const [strategyAddr, setStrategyAddr] = useState("");
-  const [deployAmount, setDeployAmount] = useState("");
-  const [maxDeployBps, setMaxDeployBps] = useState("");
+  const [targetBps, setTargetBps] = useState("");
+  const [minBps, setMinBps] = useState("");
+  const [maxBps, setMaxBps] = useState("");
+  const [reserveBps, setReserveBps] = useState("");
 
   // Bridge Admin
   const [bridgeMinSigs, setBridgeMinSigs] = useState("");
@@ -70,8 +72,9 @@ export function AdminPage() {
           vals.paused = (await directMint.paused()).toString();
         }
         if (treasury) {
-          vals.maxDeploy = formatBps(await treasury.maxDeploymentBps());
-          vals.totalBacking = formatUSD(await treasury.totalBacking(), 6);
+          // FIX H-02 (Final Audit): Use TreasuryV2 functions instead of stale V1 calls
+          vals.maxDeploy = formatBps(await treasury.reserveBps());
+          vals.totalBacking = formatUSD(await treasury.totalValue(), 6);
         }
         if (bridge) {
           vals.bridgeMinSigs = (await bridge.minSignatures()).toString();
@@ -271,38 +274,57 @@ export function AdminPage() {
       {section === "treasury" && (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <StatCard label="Total Backing" value={currentValues.totalBacking || "..."} />
-            <StatCard label="Max Deployment" value={currentValues.maxDeploy || "..."} />
+            <StatCard label="Total Value" value={currentValues.totalBacking || "..."} />
+            <StatCard label="Reserve (bps)" value={currentValues.maxDeploy || "..."} />
           </div>
           <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Deploy to Strategy</h3>
+            <h3 className="mb-3 font-semibold text-gray-300">Add Strategy</h3>
             <div>
               <label className="label">Strategy Address</label>
               <input className="input" type="text" placeholder="0x..." value={strategyAddr} onChange={(e) => setStrategyAddr(e.target.value)} />
             </div>
-            <div className="mt-3">
-              <label className="label">Amount (USDC)</label>
-              <input className="input" type="number" value={deployAmount} onChange={(e) => setDeployAmount(e.target.value)} />
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">Target (bps)</label>
+                <input className="input" type="number" placeholder="5000" value={targetBps} onChange={(e) => setTargetBps(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Min (bps)</label>
+                <input className="input" type="number" placeholder="4000" value={minBps} onChange={(e) => setMinBps(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Max (bps)</label>
+                <input className="input" type="number" placeholder="6000" value={maxBps} onChange={(e) => setMaxBps(e.target.value)} />
+              </div>
             </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.deployToStrategy(strategyAddr, ethers.parseUnits(deployAmount, USDC_DECIMALS)))}
+              onClick={() => tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), true))}
               loading={tx.loading}
-              disabled={!strategyAddr || !deployAmount}
+              disabled={!strategyAddr || !targetBps || !minBps || !maxBps}
             >
-              Deploy
+              Add Strategy
             </TxButton>
           </div>
           <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Max Deployment (bps)</h3>
-            <input className="input" type="number" placeholder="9000" value={maxDeployBps} onChange={(e) => setMaxDeployBps(e.target.value)} />
+            <h3 className="mb-3 font-semibold text-gray-300">Reserve Ratio (bps)</h3>
+            <input className="input" type="number" placeholder="1000" value={reserveBps} onChange={(e) => setReserveBps(e.target.value)} />
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.setMaxDeploymentBps(BigInt(maxDeployBps)))}
+              onClick={() => tx.send(() => treasury!.setReserveBps(BigInt(reserveBps)))}
               loading={tx.loading}
-              disabled={!maxDeployBps}
+              disabled={!reserveBps}
             >
-              Set Max Deployment
+              Set Reserve
+            </TxButton>
+          </div>
+          <div className="card">
+            <TxButton
+              className="w-full"
+              onClick={() => tx.send(() => treasury!.rebalance())}
+              loading={tx.loading}
+            >
+              Rebalance All Strategies
             </TxButton>
           </div>
         </div>

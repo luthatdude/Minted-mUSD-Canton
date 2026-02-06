@@ -581,7 +581,12 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
     });
 
     it("should enforce 50-token cap on enableCollateral", async function () {
-      // Add tokens to get to 49
+      // FIX H-01 (Final Audit): disabled tokens now stay in supportedTokens[],
+      // so enableCollateral no longer pushes — it just flips the enabled flag.
+      // This test verifies:
+      //   1. After filling to 50 and disabling one, array still has 50 entries
+      //   2. Re-enabling the disabled token succeeds (no push, no cap check)
+      //   3. Adding a 51st token still fails with TOO_MANY_TOKENS
       const MockERC20F = await ethers.getContractFactory("MockERC20");
 
       for (let i = 0; i < 47; i++) {
@@ -589,18 +594,18 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
         await vault.addCollateral(await token.getAddress(), 5000, 6000, 300);
       }
 
-      // Now at 49 tokens. Add one more, disable it, then add one more to reach 50.
+      // Now at 49 tokens. Add one more to reach 50.
       const token49 = await MockERC20F.deploy("Token49", "TK49", 18);
       await vault.addCollateral(await token49.getAddress(), 5000, 6000, 300);
-      // Now at 50 — disable one to make room
+      // Now at 50 — disable one (stays in array per H-01 fix)
       await vault.disableCollateral(await token49.getAddress());
-      // Now at 49 — add new one to reach 50
+      // Array still has 50 entries — adding 51st should fail
       const token50 = await MockERC20F.deploy("Token50", "TK50", 18);
-      await vault.addCollateral(await token50.getAddress(), 5000, 6000, 300);
-      // Now at 50 — re-enabling token49 should fail
       await expect(
-        vault.enableCollateral(await token49.getAddress())
+        vault.addCollateral(await token50.getAddress(), 5000, 6000, 300)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
+      // Re-enabling token49 should succeed (no push needed, already in array)
+      await vault.enableCollateral(await token49.getAddress());
     });
   });
 
