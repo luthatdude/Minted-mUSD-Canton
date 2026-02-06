@@ -579,6 +579,16 @@ template Vault
           accruedInterest = accruedInterest + newInterest
           lastInterestUpdate = now
 
+    -- | FIX H-03: Update vault config (operator-controlled, consuming choice)
+    -- Must live on Vault so that Vault's signatories {operator, owner} are in
+    -- the authorization context when the contract is archived and recreated.
+    choice Vault_UpdateConfig : ContractId Vault
+      with
+        newConfig : VaultConfig
+      controller operator
+      do
+        create this with config = newConfig
+
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
     -- FIX DL-C03: Now requires MUSDSupplyService CID for supply-cap-tracked minting
@@ -796,18 +806,18 @@ template VaultManager
       do create this with defaultConfig = newConfig
 
     -- | Update vault config for a specific vault
-    -- FIX H-03: Verify operator authority over the vault
+    -- FIX H-03: Exercise Vault_UpdateConfig on the Vault contract directly.
+    -- This brings Vault's signatories {operator, owner} into the authorization
+    -- context, allowing the consuming choice to archive and recreate the Vault.
+    -- Previously, manual archive from VaultManager failed because only {operator}
+    -- was in scope but Vault requires {operator, owner} for archive.
     choice UpdateVaultConfig : ContractId Vault
       with
         vaultCid : ContractId Vault
         newConfig : VaultConfig
       controller operator
       do
-        vault <- fetch vaultCid
-        -- FIX H-03: Ensure this VaultManager's operator matches the vault's operator
-        assertMsg "OPERATOR_MISMATCH" (vault.operator == operator)
-        archive vaultCid
-        create vault with config = newConfig
+        exercise vaultCid Vault_UpdateConfig with newConfig
 
 -- ============================================================
 --                     6. LIQUIDATION RECEIPT
