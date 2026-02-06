@@ -407,25 +407,29 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       const unsafePrice = await priceOracle.getPriceUnsafe(await weth.getAddress());
       expect(unsafePrice).to.equal(newPrice * 10n ** 10n); // normalized to 18 dec
 
-      // Liquidation would use unsafe price path, but healthFactor()
-      // in BorrowModule still uses safe getValueUsd() which trips the breaker.
-      // This is an AUDIT FINDING: healthFactor reverts → liquidate reverts.
-      // Verify that the liquidation engine at least doesn't revert on the
-      // unsafe price calls by checking the oracle directly.
+      // FIX C-05: getValueUsd now enforces circuit breaker, so safe healthFactor reverts
       const wethAddr = await weth.getAddress();
+      await expect(
+        priceOracle.getValueUsd(wethAddr, collateral)
+      ).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
 
-      // Verify unsafe oracle path works for collateral valuation
-      const collateralValue = await priceOracle.getValueUsdUnsafe(wethAddr, collateral);
-      expect(collateralValue).to.equal(ethers.parseEther("4000")); // 5 ETH * $800
+      // FIX C-01: healthFactorUnsafe bypasses circuit breaker for liquidation path
+      const hfUnsafe = await borrowModule.healthFactorUnsafe(user1.address);
+      expect(hfUnsafe).to.be.lt(10000n); // Position is liquidatable
 
-      // healthFactor uses safe path and will revert with circuit breaker
+      // Liquidation should NOW succeed using healthFactorUnsafe + getPriceUnsafe
+      await musd.connect(liquidator).approve(
+        await liquidationEngine.getAddress(),
+        ethers.parseEther("5000")
+      );
+
       await expect(
         liquidationEngine.connect(liquidator).liquidate(
           user1.address,
           wethAddr,
           ethers.parseEther("1000")
         )
-      ).to.be.reverted;
+      ).to.emit(liquidationEngine, "Liquidation");
     });
 
     it("getValueUsdUnsafe should return correct values", async function () {

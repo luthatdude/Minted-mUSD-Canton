@@ -187,32 +187,11 @@ contract PriceOracle is AccessControl {
     /// @param token The collateral token address
     /// @param amount The amount of collateral (in token's native decimals)
     /// @return valueUsd USD value scaled to 18 decimals
+    /// FIX C-05: Now calls getPrice() internally so circuit breaker is enforced.
+    /// Previously read the feed directly, bypassing the circuit breaker check.
     function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
-
-        // FIX M-23: Capture roundId and answeredInRound for staleness check
-        (
-            uint80 roundId,
-            int256 answer,
-            ,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        ) = config.feed.latestRoundData();
-
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        // FIX M-23: Ensure the round was fully answered (not incomplete)
-        require(answeredInRound >= roundId, "STALE_ROUND");
-
-        uint8 feedDecimals = config.feed.decimals();
-        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-
-        // price per token in 18 decimals
-        uint256 priceNormalized = uint256(answer) * (10 ** (18 - feedDecimals));
-
-        // value = amount * price / 10^tokenDecimals
-        valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
+        uint256 priceNormalized = this.getPrice(token);
+        valueUsd = (amount * priceNormalized) / (10 ** feeds[token].tokenDecimals);
     }
 
     /// @notice FIX P1-H4: Get price WITHOUT circuit breaker check, for liquidation paths
