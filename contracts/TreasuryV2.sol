@@ -205,13 +205,13 @@ contract TreasuryV2 is
     // VIEW FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @dev FIX P0-CODEX1: Event for strategy totalValue() failures
+    /// @dev Event for strategy totalValue() failures
     event StrategyValueQueryFailed(address indexed strategy);
 
     /**
      * @notice Total value across reserve + all strategies
      * @dev Loops over bounded, admin-controlled strategies array (max ~10 strategies)
-     *      FIX P0-CODEX1: Uses try/catch so a reverting strategy doesn't DoS
+     *      Uses try/catch so a reverting strategy doesn't DoS
      *      all deposits, withdrawals, and redemptions system-wide.
      */
     function totalValue() public view returns (uint256) {
@@ -220,7 +220,7 @@ contract TreasuryV2 is
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                // FIX P0-CODEX1: Treat reverting strategies as zero value instead of DoS
+                // Treat reverting strategies as zero value instead of DoS
                 try IStrategy(strategies[i].strategy).totalValue() returns (uint256 val) {
                     total += val;
                 } catch {
@@ -558,7 +558,7 @@ contract TreasuryV2 is
         uint256 remaining = amount;
 
         // Calculate total strategy value
-        // FIX P0-CODEX1: Use try/catch to prevent DoS from reverting strategies
+        // Use try/catch to prevent DoS from reverting strategies
         uint256 totalStratValue = 0;
         uint256 lastActiveIdx = type(uint256).max;
         for (uint256 i = 0; i < strategies.length; i++) {
@@ -582,7 +582,7 @@ contract TreasuryV2 is
 
             address strat = strategies[i].strategy;
             // slither-disable-next-line calls-loop
-            // FIX P0-CODEX1: Use try/catch for strategy value query
+            // Use try/catch for strategy value query
             uint256 stratValue;
             try IStrategy(strat).totalValue() returns (uint256 val) {
                 stratValue = val;
@@ -738,7 +738,7 @@ contract TreasuryV2 is
      * FIX H-3: Revert on withdrawal failure to prevent fund loss
      * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
      */
-    /// @dev FIX P0-CODEX2: Emitted when strategy force-deactivated due to failed withdrawal
+    /// @dev Emitted when strategy force-deactivated due to failed withdrawal
     event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
 
     function removeStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
@@ -746,7 +746,7 @@ contract TreasuryV2 is
 
         uint256 idx = strategyIndex[strategy];
 
-        // FIX P0-CODEX2: Try to withdraw, but don't let failure permanently block removal.
+        // Try to withdraw, but don't let failure permanently block removal.
         // If withdrawAll() fails, force-deactivate to prevent permanent DoS.
         if (strategies[idx].active) {
             uint256 stratValue;
@@ -767,7 +767,7 @@ contract TreasuryV2 is
                         emit StrategyForceDeactivated(strategy, stratValue - withdrawn, "");
                     }
                 } catch (bytes memory reason) {
-                    // FIX P0-CODEX2: Force-deactivate instead of reverting.
+                    // Force-deactivate instead of reverting.
                     // Funds remain in the strategy — admin must recover via
                     // emergencyWithdrawAll() or direct strategy interaction later.
                     emit StrategyForceDeactivated(strategy, stratValue, reason);
