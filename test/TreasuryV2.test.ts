@@ -566,4 +566,82 @@ describe("TreasuryV2", function () {
       expect(all[1].strategy).to.equal(await strategyB.getAddress());
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // STRATEGY ROLLOVER
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe("Strategy Rollover", function () {
+    it("Should remove a funded strategy (funds returned) and add a replacement", async function () {
+      // Setup: add strategyA at 45%, deposit & allocate
+      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Verify strategyA received funds
+      const stratAValue = await strategyA.totalValue();
+      expect(stratAValue).to.be.gt(0);
+
+      // Remove strategyA — should withdrawAll back to treasury
+      const treasuryAddr = await treasury.getAddress();
+      const treasuryBalBefore = await usdc.balanceOf(treasuryAddr);
+      await treasury.removeStrategy(await strategyA.getAddress());
+      const treasuryBalAfter = await usdc.balanceOf(treasuryAddr);
+
+      // Funds should have been returned to treasury
+      expect(treasuryBalAfter - treasuryBalBefore).to.equal(stratAValue);
+
+      // strategyA should be deactivated
+      expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.false;
+
+      // Add strategyB as replacement at the same allocation
+      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+
+      // Rebalance to push funds to the new strategy
+      await treasury.rebalance();
+
+      // strategyB should now hold funds
+      const stratBValue = await strategyB.totalValue();
+      expect(stratBValue).to.be.gt(0);
+
+      // Total value should be approximately unchanged
+      const totalAfter = await treasury.totalValue();
+      expect(totalAfter).to.be.closeTo(depositAmount, ONE_USDC); // within 1 USDC
+    });
+
+    it("Should handle rollover when old strategy withdraw fails", async function () {
+      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+
+      const depositAmount = 50_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Make strategy withdraw fail
+      await strategyA.setWithdrawShouldFail(true);
+
+      // Remove should still succeed (strategy is force-deactivated)
+      await expect(treasury.removeStrategy(await strategyA.getAddress()))
+        .to.emit(treasury, "StrategyForceDeactivated");
+
+      // Strategy should be deactivated despite withdraw failure
+      expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.false;
+    });
+
+    it("Should remove an empty strategy cleanly", async function () {
+      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+
+      // Don't deposit anything — strategy has 0 value
+      await treasury.removeStrategy(await strategyA.getAddress());
+
+      expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.false;
+
+      // Can re-add the same strategy address
+      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.true;
+    });
+  });
 });
