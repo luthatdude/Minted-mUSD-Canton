@@ -154,6 +154,7 @@ testDepositCTN = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   -- Deposit as collateral
   (newServiceCid, escrowCid) <- submit setup.user do
@@ -178,6 +179,7 @@ testDepositUSDC = do
       issuer = setup.operator
       owner = setup.user
       amount = 5000.0
+      privacyObservers = []
 
   (newServiceCid, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
@@ -200,6 +202,7 @@ testDepositSMUSD = do
       shares = 1000.0
       entrySharePrice = 1.05
       stakedAt = datetime 2026 Jan 1 0 0 0
+      privacyObservers = []
 
   -- Need sMUSD price feed
   smusdFeedCid <- submit setup.operator do
@@ -233,6 +236,7 @@ testDepositFailsWhenPaused = do
       issuer = setup.operator
       owner = setup.user
       amount = 1000.0
+      privacyObservers = []
 
   -- Deposit should fail
   submitMustFail setup.user do
@@ -255,6 +259,7 @@ testBorrowAgainstCTN = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -288,6 +293,7 @@ testBorrowExceedsLTV = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -311,6 +317,7 @@ testBorrowBelowMinimum = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -339,6 +346,7 @@ testRepayDebt = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -378,6 +386,7 @@ testWithdrawCollateral = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -412,6 +421,7 @@ testLiquidation = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -442,6 +452,7 @@ testLiquidation = do
       amount = 550.0
       agreementHash = testMpaHash
       agreementUri = testMpaUri
+      privacyObservers = []
 
   -- Liquidate (50% close factor → max repay = $550)
   (svc3, receiptCid) <- submit setup.liquidator do
@@ -472,6 +483,7 @@ testLiquidationHealthyPositionFails = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -493,6 +505,7 @@ testLiquidationHealthyPositionFails = do
       amount = 50.0
       agreementHash = testMpaHash
       agreementUri = testMpaUri
+      privacyObservers = []
 
   -- Liquidation should fail — position is healthy
   submitMustFail setup.liquidator do
@@ -520,12 +533,14 @@ testMultiCollateralBorrow = do
       issuer = setup.operator
       owner = setup.user
       amount = 5000.0
+      privacyObservers = []
 
   usdcCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonUSDC with
       issuer = setup.operator
       owner = setup.user
       amount = 1000.0
+      privacyObservers = []
 
   (svc1, ctnEscrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
@@ -573,6 +588,7 @@ testDebtAccrual = do
       accruedInterest = 0.0
       lastAccrualTime = datetime 2026 Jan 1 0 0 0
       interestRateBps = 500  -- 5% APR
+      privacyObservers = []
 
   -- Get total debt (includes accrued interest since Jan 1)
   totalDebt <- submit user do
@@ -595,6 +611,7 @@ testDebtRateUpdate = do
       accruedInterest = 0.0
       lastAccrualTime = datetime 2026 Feb 6 12 0 0
       interestRateBps = 500
+      privacyObservers = []
 
   newDebtCid <- submit operator do
     exerciseCmd debtCid Debt_UpdateRate with newRateBps = 800
@@ -620,6 +637,7 @@ testEscrowAddCollateral = do
       amount = 5000.0
       depositedAt = datetime 2026 Feb 6 12 0 0
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
+      privacyObservers = []
 
   newEscrowCid <- submit user do
     exerciseCmd escrowCid Escrow_AddCollateral with addAmount = 3000.0
@@ -641,6 +659,7 @@ testEscrowPartialWithdraw = do
       amount = 5000.0
       depositedAt = datetime 2026 Feb 6 12 0 0
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
+      privacyObservers = []
 
   (newEscrowCid, withdrawn) <- submit operator do
     exerciseCmd escrowCid Escrow_WithdrawPartial with withdrawAmount = 2000.0
@@ -663,6 +682,7 @@ testEscrowSeize = do
       amount = 5000.0
       depositedAt = datetime 2026 Feb 6 12 0 0
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
+      privacyObservers = []
 
   (remainingOpt, seized) <- submit operator do
     exerciseCmd escrowCid Escrow_Seize with seizeAmount = 3000.0
@@ -688,6 +708,7 @@ testEscrowSeizeFull = do
       amount = 5000.0
       depositedAt = datetime 2026 Feb 6 12 0 0
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
+      privacyObservers = []
 
   (remainingOpt, seized) <- submit operator do
     exerciseCmd escrowCid Escrow_Seize with seizeAmount = 5000.0
@@ -782,6 +803,7 @@ testUnauthorizedDeposit = do
       issuer = setup.operator
       owner = setup.user
       amount = 1000.0
+      privacyObservers = []
 
   -- Attacker tries to deposit user's coin
   submitMustFail attacker do
@@ -803,6 +825,7 @@ testBorrowAgainstUSDCHighLTV = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
@@ -834,6 +857,7 @@ testFullLifecycle = do
       issuer = setup.operator
       owner = setup.user
       amount = 10000.0
+      privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
     exerciseCmd setup.serviceCid Lending_DepositCTN with

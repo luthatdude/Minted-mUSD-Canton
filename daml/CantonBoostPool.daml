@@ -25,6 +25,7 @@ module CantonBoostPool where
 import DA.Time
 import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
+import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
 --                     SECTION 1: CANTON COIN TOKEN
@@ -37,9 +38,18 @@ template CantonCoin
     issuer : Party
     owner  : Party
     amount : Money
+    privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
     ensure amount > 0.0
+
+    -- | Update observers from user's privacy settings
+    choice CantonCoin_UpdateObservers : ContractId CantonCoin
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     choice CantonCoin_Transfer : ContractId CantonCoinTransferProposal
       with newOwner : Party
@@ -93,9 +103,18 @@ template BoostPoolLP
     owner          : Party
     shares         : Money        -- LP share amount
     depositedAt    : Time         -- For cooldown enforcement
+    privacyObservers : [Party]    -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
     ensure shares > 0.0
+
+    -- | Update observers from user's privacy settings
+    choice BPLP_UpdateObservers : ContractId BoostPoolLP
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
       with newOwner : Party
@@ -231,11 +250,13 @@ template CantonBoostPoolService
 
         -- Issue LP token
         now <- getTime
+        userObs <- lookupUserObservers operator user
         lpCid <- create BoostPoolLP with
           issuer = operator
           owner = user
           shares = newShares
           depositedAt = now
+          privacyObservers = userObs
 
         -- Update pool state (consuming choice auto-archives self)
         newService <- create this with
@@ -279,10 +300,12 @@ template CantonBoostPoolService
         archive lpCid
 
         -- Mint Canton back to user
+        userObs <- lookupUserObservers operator user
         cantonCid <- create CantonCoin with
           issuer = operator
           owner = user
           amount = netCantonOut
+          privacyObservers = userObs
 
         -- Update pool state (consuming choice auto-archives self)
         newService <- create this with
@@ -368,6 +391,7 @@ template CantonBoostPoolService
           issuer = operator
           owner = operator
           amount = withdrawAmount
+          privacyObservers = []  -- Protocol wallet, fully private
 
         newService <- create this with
           protocolRewardsAccrued = protocolRewardsAccrued - withdrawAmount
