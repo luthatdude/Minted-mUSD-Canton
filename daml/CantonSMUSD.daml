@@ -18,6 +18,7 @@ module CantonSMUSD where
 
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
+import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -34,10 +35,19 @@ template CantonSMUSD
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
     stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
+    privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
 
     ensure shares > 0.0
+
+    -- | Update observers from user's privacy settings
+    choice SMUSD_UpdateObservers : ContractId CantonSMUSD
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
@@ -151,12 +161,14 @@ template CantonStakingService
         -- Issue smUSD shares
         -- FIX D-M01: Record staked timestamp for cooldown enforcement
         now <- getTime
+        userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = newShares
           entrySharePrice = globalSharePrice
           stakedAt = now
+          privacyObservers = userObs
 
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
@@ -194,12 +206,14 @@ template CantonStakingService
         archive smusdCid
 
         -- Mint mUSD to user (at global share price — includes cross-chain yield)
+        userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
           amount = musdAmount
           agreementHash = mpaHash
           agreementUri = mpaUri
+          privacyObservers = userObs
 
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
