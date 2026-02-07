@@ -75,7 +75,7 @@ describe("TreasuryV2", function () {
       expect(await treasury.minAutoAllocateAmount()).to.equal(1000n * ONE_USDC);
 
       const fees = await treasury.fees();
-      expect(fees.performanceFeeBps).to.equal(2000); // 20%
+      expect(fees.performanceFeeBps).to.equal(4000); // 40% — stakers get ~6% on 10% gross
       expect(fees.feeRecipient).to.equal(feeRecipient.address);
     });
 
@@ -360,9 +360,9 @@ describe("TreasuryV2", function () {
       // Trigger fee accrual
       await treasury.accrueFees();
 
-      // 20% of 10K yield = 2K fees
+      // 40% of 10K yield = 4K fees (stakers get 6K = ~6% target)
       const pending = await treasury.pendingFees();
-      expect(pending).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
+      expect(pending).to.be.closeTo(4_000n * ONE_USDC, 100n * ONE_USDC);
     });
 
     it("Should claim fees to recipient", async function () {
@@ -385,7 +385,7 @@ describe("TreasuryV2", function () {
       await treasury.claimFees();
 
       const recipientBal = await usdc.balanceOf(feeRecipient.address);
-      expect(recipientBal).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
+      expect(recipientBal).to.be.closeTo(4_000n * ONE_USDC, 100n * ONE_USDC);
     });
   });
 
