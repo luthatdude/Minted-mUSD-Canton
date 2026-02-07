@@ -23,8 +23,8 @@ import "./interfaces/IStrategy.sol";
  *   Blended:            ~10% gross APY
  *
  * Revenue Split:
- *   smUSD Holders:      80%
- *   Protocol:           20%
+ *   smUSD Holders:      60% (~6% net APY target)
+ *   Protocol:           40% (spread above 6%)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
@@ -67,7 +67,7 @@ contract TreasuryV2 is
     }
 
     struct ProtocolFees {
-        uint256 performanceFeeBps;  // Fee on yield (default 2000 = 20%)
+        uint256 performanceFeeBps;  // Fee on yield (default 4000 = 40%)
         uint256 accruedFees;        // Accumulated protocol fees
         address feeRecipient;       // Where fees go
     }
@@ -180,7 +180,7 @@ contract TreasuryV2 is
 
         // Default fee configuration
         fees = ProtocolFees({
-            performanceFeeBps: 2000,  // 20% of yield
+            performanceFeeBps: 4000,  // 40% of yield → stakers get ~6% on 10% gross
             accruedFees: 0,
             feeRecipient: _feeRecipient
         });
