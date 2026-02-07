@@ -3,7 +3,7 @@
 **Prepared For:** External Security Auditors  
 **Audit Scope:** Minted mUSD Smart Contract System  
 **Repository:** https://github.com/luthatdude/Minted-mUSD-Canton  
-**Version:** main branch @ `bfe0f2c` (frozen February 6, 2026)  
+**Version:** main branch @ `PENDING` (will be set after push)  
 **Compiler:** Solidity 0.8.26 / DAML SDK 2.10.3
 **Framework:** Hardhat, OpenZeppelin Contracts v5.x, Canton Network
 
@@ -196,18 +196,19 @@ Every user-facing function on Ethereum has a Canton-side equivalent. Canton oper
 
 | Contract | File | LoC | Upgradeability | Audit Priority |
 |----------|------|-----|----------------|----------------|
-| MUSD | `contracts/MUSD.sol` | ~70 | Non-upgradeable | **P1** |
-| SMUSD | `contracts/SMUSD.sol` | ~105 | Non-upgradeable | **P1** |
-| Treasury | `contracts/Treasury.sol` | ~330 | Non-upgradeable | **P1** |
-| TreasuryV2 | `contracts/TreasuryV2.sol` | ~875 | UUPS | **P0** |
-| DirectMint | `contracts/DirectMint.sol` | ~245 | Non-upgradeable | **P1** |
-| DirectMintV2 | `contracts/DirectMintV2.sol` | ~315 | Non-upgradeable | **P1** |
-| CollateralVault | `contracts/CollateralVault.sol` | ~215 | Non-upgradeable | **P1** |
-| BorrowModule | `contracts/BorrowModule.sol` | ~390 | Non-upgradeable | **P0** |
-| LiquidationEngine | `contracts/LiquidationEngine.sol` | ~215 | Non-upgradeable | **P0** |
-| BLEBridgeV8 | `contracts/BLEBridgeV8.sol` | ~395 | UUPS | **P0** |
-| BLEBridgeV9 | `contracts/BLEBridgeV9.sol` | ~395 | UUPS | **P0** |
-| PriceOracle | `contracts/PriceOracle.sol` | ~150 | Non-upgradeable | **P0** |
+| MUSD | `contracts/MUSD.sol` | ~104 | Non-upgradeable | **P1** |
+| SMUSD | `contracts/SMUSD.sol` | ~329 | Non-upgradeable | **P1** |
+| TreasuryV2 | `contracts/TreasuryV2.sol` | ~1,000 | UUPS | **P0** |
+| DirectMintV2 | `contracts/DirectMintV2.sol` | ~324 | Non-upgradeable | **P1** |
+| CollateralVault | `contracts/CollateralVault.sol` | ~299 | Non-upgradeable | **P1** |
+| BorrowModule | `contracts/BorrowModule.sol` | ~830 | Non-upgradeable | **P0** |
+| LiquidationEngine | `contracts/LiquidationEngine.sol` | ~274 | Non-upgradeable | **P0** |
+| BLEBridgeV9 | `contracts/BLEBridgeV9.sol` | ~475 | UUPS | **P0** |
+| PriceOracle | `contracts/PriceOracle.sol` | ~256 | Non-upgradeable | **P0** |
+| PendleStrategyV2 | `contracts/strategies/PendleStrategyV2.sol` | ~830 | Non-upgradeable | **P0** |
+| MorphoLoopStrategy | `contracts/strategies/MorphoLoopStrategy.sol` | ~811 | Non-upgradeable | **P0** |
+
+> **Note:** `Treasury.sol`, `DirectMint.sol`, and `BLEBridgeV8.sol` are archived predecessors retained for reference. Only the V2/V9 versions are deployed.
 
 ### 3.2 Supporting Contracts
 
@@ -259,7 +260,7 @@ bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE"); 
 
 | Contract | Role | Expected Holder |
 |----------|------|-----------------|
-| **MUSD** | BRIDGE_ROLE | DirectMint, DirectMintV2, BLEBridgeV8, BorrowModule |
+| **MUSD** | BRIDGE_ROLE | DirectMintV2, BLEBridgeV9, BorrowModule |
 | **MUSD** | CAP_MANAGER_ROLE | BLEBridgeV9 |
 | **MUSD** | COMPLIANCE_ROLE | Compliance multisig |
 | **TreasuryV2** | VAULT_ROLE | DirectMintV2, CollateralVault |
@@ -277,7 +278,7 @@ bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE"); 
 DEFAULT_ADMIN_ROLE
     │
     ├── Can grant/revoke any role
-    ├── Can upgrade UUPS contracts (BLEBridgeV8/V9, TreasuryV2)
+    ├── Can upgrade UUPS contracts (BLEBridgeV9, TreasuryV2)
     ├── Can change fee configurations
     └── Can unpause (EMERGENCY_ROLE can only pause)
 ```
@@ -797,7 +798,7 @@ mapping(bytes32 => bool) public usedAttestationIds;
 uint256[38] private __gap;  // UUPS storage gap
 ```
 
-**⚠️ STORAGE LAYOUT WARNING:** BLEBridgeV9 is NOT storage-compatible with BLEBridgeV8. Direct UUPS upgrade will corrupt state. Requires fresh proxy deployment with migration.
+**⚠️ STORAGE LAYOUT WARNING:** BLEBridgeV9 is NOT storage-compatible with BLEBridgeV8 (archived). Direct UUPS upgrade will corrupt state. Requires fresh proxy deployment with migration. BLEBridgeV8 is retained for reference only.
 
 ### A.3 TreasuryV2 State Variables
 
@@ -1171,7 +1172,9 @@ template AttestationRequest (V3)
 │   └── Risk: CRITICAL — previously accepted caller-supplied requiredSignatures
 ```
 
-#### 10.4.7 MintedProtocolV2Fixed.daml (Critical — Audited Protocol with Security Fixes)
+#### 10.4.7 Minted/Protocol/V3.daml (Critical — Audited Protocol with Security Fixes)
+
+> **Note:** This module supersedes the previously-documented `MintedProtocolV2Fixed.daml` which was folded into V3.
 
 ```
 Critical Fixes Applied:
