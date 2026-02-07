@@ -27,7 +27,7 @@ module CantonLending where
 import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
@@ -211,10 +211,11 @@ template EscrowedCollateral
       do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
+    -- FIX H-L3: Operator-controlled — called by LendingService after verifying token proof
     choice Escrow_AddCollateral : ContractId EscrowedCollateral
       with
         addAmount : Money
-      controller owner
+      controller operator
       do
         assertMsg "ADD_AMOUNT_POSITIVE" (addAmount > 0.0)
         now <- getTime
@@ -435,17 +436,21 @@ template CantonLendingService
         -- Consume the actual token (escrow it)
         archive coinCid
 
-        -- Create or update escrowed position
+        -- FIX C-L2: Look up existing escrow by key; merge if found, create if not
         now <- getTime
         userObs <- lookupUserObservers operator user
-        escrowCid <- create EscrowedCollateral with
-          operator
-          owner = user
-          collateralType = CTN_Coin
-          amount = coin.amount
-          depositedAt = now
-          lastUpdatedAt = now
-          privacyObservers = userObs
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_Coin)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = coin.amount
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_Coin
+            amount = coin.amount
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -465,16 +470,21 @@ template CantonLendingService
 
         archive usdcCid
 
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
-        escrowCid <- create EscrowedCollateral with
-          operator
-          owner = user
-          collateralType = CTN_USDC
-          amount = usdc.amount
-          depositedAt = now
-          lastUpdatedAt = now
-          privacyObservers = userObs
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDC)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = usdc.amount
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_USDC
+            amount = usdc.amount
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -494,16 +504,21 @@ template CantonLendingService
 
         archive usdcxCid
 
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
-        escrowCid <- create EscrowedCollateral with
-          operator
-          owner = user
-          collateralType = CTN_USDCx
-          amount = usdcx.amount
-          depositedAt = now
-          lastUpdatedAt = now
-          privacyObservers = userObs
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDCx)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = usdcx.amount
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_USDCx
+            amount = usdcx.amount
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -523,17 +538,22 @@ template CantonLendingService
 
         archive smusdCid
 
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
         userObs <- lookupUserObservers operator user
-        escrowCid <- create EscrowedCollateral with
-          operator
-          owner = user
-          collateralType = CTN_SMUSD
-          amount = smusd.shares
-          depositedAt = now
-          lastUpdatedAt = now
-          privacyObservers = userObs
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = smusd.shares
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_SMUSD
+            amount = smusd.shares
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -560,8 +580,15 @@ template CantonLendingService
         -- Calculate total collateral value (weighted by collateralFactorBps)
         totalWeightedValue <- computeWeightedCollateralValue operator configs escrowCids priceFeedCids True
 
-        -- Check existing debt
-        existingDebt <- getExistingDebt operator user
+        -- FIX C-L1 + H-L5: Look up existing debt, accrue interest, then increase principal
+        existingDebtOpt <- lookupByKey @CantonDebtPosition (operator, user)
+        (existingDebt, accruedDebtCid) <- case existingDebtOpt of
+          None -> return (0.0, None)
+          Some debtCid -> do
+            -- Accrue interest BEFORE reading total debt
+            accrued <- exercise debtCid Debt_AccrueInterest with caller = user
+            debt <- fetch accrued
+            return (debt.principalDebt + debt.accruedInterest, Some accrued)
 
         -- Health check: totalWeightedValue must cover existing + new debt
         let totalDebtAfter = existingDebt + borrowAmount
@@ -577,16 +604,19 @@ template CantonLendingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- Create or update debt position
+        -- FIX C-L1: Increase existing debt principal (preserving accrued interest) or create new
         now <- getTime
-        debtCid <- create CantonDebtPosition with
-          operator
-          borrower = user
-          principalDebt = existingDebt + borrowAmount
-          accruedInterest = 0.0
-          lastAccrualTime = now
-          interestRateBps
-          privacyObservers = userObs
+        debtCid <- case accruedDebtCid of
+          Some existCid -> exercise existCid Debt_IncreasePrincipal with
+            additionalBorrow = borrowAmount
+          None -> create CantonDebtPosition with
+            operator
+            borrower = user
+            principalDebt = borrowAmount
+            accruedInterest = 0.0
+            lastAccrualTime = now
+            interestRateBps
+            privacyObservers = userObs
 
         -- Update service
         newService <- create this with
@@ -688,6 +718,147 @@ template CantonLendingService
         return (newService, coinCid)
 
     -- ──────────────────────────────────────────────────────
+    --  FIX H-L4: WITHDRAW USDC / USDCx / sMUSD COLLATERAL
+    -- ──────────────────────────────────────────────────────
+
+    -- | Withdraw USDC collateral. Must pass health check after withdrawal.
+    choice Lending_WithdrawUSDC : (ContractId CantonLendingService, ContractId CantonUSDC)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
+
+        existingDebt <- getExistingDebt operator user
+        if existingDebt > 0.0 then do
+          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_USDC configs
+            usdcPrice <- getCtxPrice operator "USDC" priceFeedCids True
+            return (remainingThisEscrow * usdcPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          pure ()
+
+        userObs <- lookupUserObservers operator user
+        usdcCid <- create CantonUSDC with
+          issuer = operator
+          owner = user
+          amount = withdrawAmount
+          privacyObservers = userObs
+
+        newService <- create this with {}
+        return (newService, usdcCid)
+
+    -- | Withdraw USDCx collateral.
+    choice Lending_WithdrawUSDCx : (ContractId CantonLendingService, ContractId USDCx)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
+
+        existingDebt <- getExistingDebt operator user
+        if existingDebt > 0.0 then do
+          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_USDCx configs
+            usdcxPrice <- getCtxPrice operator "USDCx" priceFeedCids True
+            return (remainingThisEscrow * usdcxPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          pure ()
+
+        userObs <- lookupUserObservers operator user
+        usdcxCid <- create USDCx with
+          issuer = operator
+          owner = user
+          amount = withdrawAmount
+          sourceChain = "canton-lending-withdrawal"
+          cctpNonce = 0
+          privacyObservers = userObs
+
+        newService <- create this with {}
+        return (newService, usdcxCid)
+
+    -- | Withdraw CantonSMUSD collateral.
+    choice Lending_WithdrawSMUSD : (ContractId CantonLendingService, ContractId CantonSMUSD)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
+
+        existingDebt <- getExistingDebt operator user
+        if existingDebt > 0.0 then do
+          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_SMUSD configs
+            smusdPrice <- getCtxPrice operator "sMUSD" priceFeedCids True
+            return (remainingThisEscrow * smusdPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          pure ()
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user
+        smusdCid <- create CantonSMUSD with
+          issuer = operator
+          owner = user
+          shares = withdrawAmount
+          entrySharePrice = 1.0  -- Re-entry at current share price
+          stakedAt = now
+          privacyObservers = userObs
+
+        newService <- create this with {}
+        return (newService, smusdCid)
+
+    -- ──────────────────────────────────────────────────────
     --  LIQUIDATION
     -- ──────────────────────────────────────────────────────
 
@@ -707,6 +878,9 @@ template CantonLendingService
         priceFeedCids    : [ContractId CantonPriceFeed]
       controller liquidator
       do
+        -- FIX H-L1: Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
+        assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
+
         -- Verify liquidator owns the repayment mUSD
         musd <- fetch musdCid
         assertMsg "NOT_MUSD_OWNER" (musd.owner == liquidator)
@@ -748,8 +922,53 @@ template CantonLendingService
         newDebtCid <- exercise accruedDebtCid Debt_ReduceForLiquidation with
           reductionAmount = actualRepay
 
-        -- Burn liquidator's mUSD (repayment)
-        exercise musdCid CantonMUSD_Burn
+        -- FIX C-L3: Split mUSD if liquidator provided more than actualRepay, refund change
+        if musd.amount > actualRepay then do
+          (burnCid, changeCid) <- exercise musdCid CantonMUSD_Split with
+            splitAmount = actualRepay
+          exercise burnCid CantonMUSD_Burn
+          -- changeCid goes back to liquidator (already owned by them)
+          pure ()
+        else
+          exercise musdCid CantonMUSD_Burn
+
+        -- FIX H-L2: Transfer seized collateral to liquidator as the appropriate token type
+        -- (Seized amount is now minted as a new token for the liquidator)
+        userObs <- lookupUserObservers operator liquidator
+        case targetEscrow.collateralType of
+          CTN_Coin -> do
+            create CantonCoin with
+              issuer = operator
+              owner = liquidator
+              amount = actualSeize
+              privacyObservers = userObs
+            pure ()
+          CTN_USDC -> do
+            create CantonUSDC with
+              issuer = operator
+              owner = liquidator
+              amount = actualSeize
+              privacyObservers = userObs
+            pure ()
+          CTN_USDCx -> do
+            create USDCx with
+              issuer = operator
+              owner = liquidator
+              amount = actualSeize
+              sourceChain = "canton-lending-seizure"
+              cctpNonce = 0
+              privacyObservers = userObs
+            pure ()
+          CTN_SMUSD -> do
+            now2 <- getTime
+            create CantonSMUSD with
+              issuer = operator
+              owner = liquidator
+              shares = actualSeize
+              entrySharePrice = colPrice
+              stakedAt = now2
+              privacyObservers = userObs
+            pure ()
 
         -- Calculate keeper bonus vs protocol fee
         let penaltyValue = actualSeize * colPrice - actualRepay
@@ -862,6 +1081,7 @@ getConfig ct [] = error ("CONFIG_NOT_FOUND: " <> show ct)
 getConfig ct (c :: cs) = if c.collateralType == ct then c else getConfig ct cs
 
 -- | Get existing debt for a user (returns 0 if no position)
+-- FIX H-L5: Accrue interest before reading so health checks use current values
 getExistingDebt : Party -> Party -> Update Money
 getExistingDebt operator user = do
   debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
@@ -869,7 +1089,12 @@ getExistingDebt operator user = do
     None -> return 0.0
     Some debtCid -> do
       debt <- fetch debtCid
-      return (debt.principalDebt + debt.accruedInterest)
+      now <- getTime
+      let elapsed = convertRelTimeToMicroseconds (subTime now debt.lastAccrualTime)
+      let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+      let yearSeconds = 31536000.0 : Money
+      let newInterest = debt.principalDebt * intToNumeric debt.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+      return (debt.principalDebt + debt.accruedInterest + newInterest)
 
 -- | Get price from feed list by symbol (with staleness check option)
 getCtxPrice : Party -> Text -> [ContractId CantonPriceFeed] -> Bool -> Update Money
