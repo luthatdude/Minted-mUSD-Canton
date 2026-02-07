@@ -21,6 +21,7 @@ import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
+import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
 type Money = Numeric 18
@@ -37,10 +38,19 @@ template CantonUSDC
     issuer : Party
     owner : Party
     amount : Money
+    privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
 
     ensure amount > 0.0
+
+    -- | Update observers from user's privacy settings
+    choice CantonUSDC_UpdateObservers : ContractId CantonUSDC
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     choice CantonUSDC_Transfer : ContractId CantonUSDCTransferProposal
       with
@@ -95,10 +105,19 @@ template USDCx
     amount : Money
     sourceChain : Text        -- Original chain (e.g., "ethereum", "base", "arbitrum")
     cctpNonce : Int           -- Circle CCTP attestation nonce for provenance
+    privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
 
     ensure amount > 0.0
+
+    -- | Update observers from user's privacy settings
+    choice USDCx_UpdateObservers : ContractId USDCx
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     choice USDCx_Transfer : ContractId USDCxTransferProposal
       with
@@ -154,12 +173,21 @@ template CantonMUSD
     amount : Money
     agreementHash : Text  -- SHA-256 hash of the Master Participation Agreement PDF
     agreementUri : Text   -- URI to the legal terms document
+    privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
+    observer privacyObservers
 
     ensure amount > 0.0
       && DA.Text.length agreementHash == 64
       && DA.Text.length agreementUri > 0
+
+    -- | Update observers from user's privacy settings
+    choice CantonMUSD_UpdateObservers : ContractId CantonMUSD
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     agreement
       "By holding or transferring this Canton mUSD token, the owner acknowledges "
@@ -423,14 +451,14 @@ template CantonDirectMintService
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
         -- Mint Canton mUSD to user (1:1 minus fee)
+        userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
           amount = netAmount
           agreementHash = mpaHash
           agreementUri = mpaUri
-
-        -- Emit bridge-out request — pipe the backing stables to Ethereum
+          privacyObservers = userObs
         bridgeReq <- create BridgeOutRequest with
           operator = operator
           user = user
@@ -504,12 +532,14 @@ template CantonDirectMintService
         exercise usdcxProposal USDCxTransferProposal_Accept
 
         -- Mint Canton mUSD to user (1:1 minus fee)
+        userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
           amount = netAmount
           agreementHash = mpaHash
           agreementUri = mpaUri
+          privacyObservers = userObs
 
         -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
         -- The relay will:

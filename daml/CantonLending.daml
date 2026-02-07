@@ -30,6 +30,7 @@ import DA.Optional (fromOptional)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
+import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
 --                     SECTION 1: COLLATERAL CONFIG
@@ -192,13 +193,22 @@ template EscrowedCollateral
     amount         : Money          -- Escrowed amount
     depositedAt    : Time           -- First deposit time
     lastUpdatedAt  : Time           -- Last deposit/withdrawal time
+    privacyObservers : [Party]      -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory operator, owner
+    observer privacyObservers
 
     ensure amount > 0.0
 
     key (operator, owner, collateralType) : (Party, Party, CollateralType)
     maintainer key._1
+
+    -- | Update observers from user's privacy settings
+    choice Escrow_UpdateObservers : ContractId EscrowedCollateral
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
     choice Escrow_AddCollateral : ContractId EscrowedCollateral
@@ -264,13 +274,22 @@ template CantonDebtPosition
     accruedInterest   : Money       -- Interest accumulated since last accrual
     lastAccrualTime   : Time        -- Last interest accrual timestamp
     interestRateBps   : Bps         -- Current annual interest rate
+    privacyObservers  : [Party]     -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory operator, borrower
+    observer privacyObservers
 
     ensure principalDebt >= 0.0 && accruedInterest >= 0.0
 
     key (operator, borrower) : (Party, Party)
     maintainer key._1
+
+    -- | Update observers from user's privacy settings
+    choice Debt_UpdateObservers : ContractId CantonDebtPosition
+      with
+        newObservers : [Party]
+      controller borrower
+      do create this with privacyObservers = newObservers
 
     -- | Calculate total debt (principal + accrued + new interest)
     nonconsuming choice Debt_GetTotalDebt : Money
@@ -418,6 +437,7 @@ template CantonLendingService
 
         -- Create or update escrowed position
         now <- getTime
+        userObs <- lookupUserObservers operator user
         escrowCid <- create EscrowedCollateral with
           operator
           owner = user
@@ -425,6 +445,7 @@ template CantonLendingService
           amount = coin.amount
           depositedAt = now
           lastUpdatedAt = now
+          privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -445,6 +466,7 @@ template CantonLendingService
         archive usdcCid
 
         now <- getTime
+        userObs <- lookupUserObservers operator user
         escrowCid <- create EscrowedCollateral with
           operator
           owner = user
@@ -452,6 +474,7 @@ template CantonLendingService
           amount = usdc.amount
           depositedAt = now
           lastUpdatedAt = now
+          privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -472,6 +495,7 @@ template CantonLendingService
         archive usdcxCid
 
         now <- getTime
+        userObs <- lookupUserObservers operator user
         escrowCid <- create EscrowedCollateral with
           operator
           owner = user
@@ -479,6 +503,7 @@ template CantonLendingService
           amount = usdcx.amount
           depositedAt = now
           lastUpdatedAt = now
+          privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -500,6 +525,7 @@ template CantonLendingService
 
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
+        userObs <- lookupUserObservers operator user
         escrowCid <- create EscrowedCollateral with
           operator
           owner = user
@@ -507,6 +533,7 @@ template CantonLendingService
           amount = smusd.shares
           depositedAt = now
           lastUpdatedAt = now
+          privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -541,12 +568,14 @@ template CantonLendingService
         assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
 
         -- Mint mUSD to borrower
+        userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
           amount = borrowAmount
           agreementHash = mpaHash
           agreementUri = mpaUri
+          privacyObservers = userObs
 
         -- Create or update debt position
         now <- getTime
@@ -557,6 +586,7 @@ template CantonLendingService
           accruedInterest = 0.0
           lastAccrualTime = now
           interestRateBps
+          privacyObservers = userObs
 
         -- Update service
         newService <- create this with
@@ -647,10 +677,12 @@ template CantonLendingService
           pure ()
 
         -- Recreate the CantonCoin token for the user
+        userObs <- lookupUserObservers operator user
         coinCid <- create CantonCoin with
           issuer = operator
           owner = user
           amount = withdrawAmount
+          privacyObservers = userObs
 
         newService <- create this with {}
         return (newService, coinCid)
@@ -790,6 +822,7 @@ template CantonLendingService
           amount
           agreementHash = mpaHash
           agreementUri = mpaUri
+          privacyObservers = []  -- Protocol reserves, fully private
         newService <- create this with
           protocolReserves = protocolReserves - amount
         return (newService, musdCid)

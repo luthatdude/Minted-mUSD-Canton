@@ -39,6 +39,7 @@ createSmusd operator user shares entryPrice stakedAt =
       shares
       entrySharePrice = entryPrice
       stakedAt
+      privacyObservers = []
 
 -- | Create a CantonCoin for a user
 createCanton : Party -> Party -> Money -> Script (ContractId CantonCoin)
@@ -48,6 +49,7 @@ createCanton operator user amount =
       issuer = operator
       owner = user
       amount
+      privacyObservers = []
 
 -- | Create a default CantonBoostPoolService
 createPoolService : Party -> [Party] -> Script (ContractId CantonBoostPoolService)
