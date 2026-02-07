@@ -509,7 +509,7 @@ export class LendingKeeperBot {
       await this.ledger.exercise(
         "CantonLending:CantonLendingService" as any,
         serviceContract.contractId,
-        "Lending_Liquidate",
+        "Lending_Liquidate" as any,
         {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
@@ -519,7 +519,7 @@ export class LendingKeeperBot {
           musdCid: (musdContract as any).contractId,
           escrowCids: candidate.escrows.map((e) => e.contractId),
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
-        }
+        } as any
       );
 
       this.lastLiquidationTime = Date.now();
