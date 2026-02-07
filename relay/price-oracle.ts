@@ -412,14 +412,14 @@ export class PriceOracleService {
         // Template ID — must match codegen
         "CantonLending:CantonPriceFeed" as any,
         // Key: (operator, symbol)
-        { _1: this.config.cantonParty, _2: symbol },
+        { _1: this.config.cantonParty, _2: symbol } as any,
         // Choice name
-        "PriceFeed_Update",
+        "PriceFeed_Update" as any,
         // Choice arguments
         {
           newPriceUsd: price.toFixed(18), // Money is Numeric 18
           newSource: source,
-        }
+        } as any
       );
 
       this.health.lastUpdate = new Date();
