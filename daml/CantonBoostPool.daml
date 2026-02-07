@@ -180,6 +180,15 @@ template BoostPoolDepositRecord
       do
         create this with cumulativeCantonValue = cumulativeCantonValue + additionalValue
 
+    -- FIX H-BP1: Decrement cumulative cap on withdrawal so users can re-deposit
+    choice DepositRecord_Subtract : ContractId BoostPoolDepositRecord
+      with
+        subtractValue : Money
+      controller operator
+      do
+        let newValue = max 0.0 (cumulativeCantonValue - subtractValue)
+        create this with cumulativeCantonValue = newValue
+
 -- ============================================================
 --                     SECTION 3: CANTON BOOST POOL SERVICE
 -- ============================================================
@@ -369,6 +378,15 @@ template CantonBoostPoolService
           amount = netCantonOut
           privacyObservers = userObs
 
+        -- FIX H-BP1: Decrement cumulative deposit record so user can re-deposit
+        let withdrawnCantonValue = rawCantonOut * cantonPriceMusd
+        existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
+        case existingRecordOpt of
+          Some recCid -> do
+            exercise recCid DepositRecord_Subtract with subtractValue = withdrawnCantonValue
+            pure ()
+          None -> pure ()
+
         -- FIX C-B3: Route exit fee to protocol
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited - rawCantonOut
@@ -458,6 +476,27 @@ template CantonBoostPoolService
 
         newService <- create this with
           protocolRewardsAccrued = protocolRewardsAccrued - withdrawAmount
+
+        return (newService, cantonCid)
+
+    -- | Operator withdraws accumulated protocol fees (entry + exit fees from C-B3 fix).
+    -- FIX H-BP2: Without this, protocolFeesAccrued was permanently locked.
+    choice WithdrawProtocolFees : (ContractId CantonBoostPoolService, ContractId CantonCoin)
+      with
+        withdrawAmount : Money
+      controller operator
+      do
+        assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
+        assertMsg "INSUFFICIENT_PROTOCOL_FEES" (withdrawAmount <= protocolFeesAccrued)
+
+        cantonCid <- create CantonCoin with
+          issuer = operator
+          owner = operator
+          amount = withdrawAmount
+          privacyObservers = []  -- Protocol wallet, fully private
+
+        newService <- create this with
+          protocolFeesAccrued = protocolFeesAccrued - withdrawAmount
 
         return (newService, cantonCid)
 

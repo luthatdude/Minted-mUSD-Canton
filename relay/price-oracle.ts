@@ -404,7 +404,7 @@ export class PriceOracleService {
       throw new Error("All price sources unavailable");
     }
 
-    this.lastCtnPrice = result.price;
+    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass (FIX NEW-PO-01)
     return result;
   }
 
@@ -490,27 +490,45 @@ export class PriceOracleService {
 
     this.running = true;
 
+    let boundsViolationCount = 0;
+    const MAX_BOUNDS_VIOLATIONS = 5; // FIX NEW-PO-02: After N consecutive rejections, reset lastCtnPrice to allow recovery
+
     while (this.running) {
       if (!this.health.paused) {
         try {
           const result = await this.fetchCTNPrice();
 
           // FIX PO-04: Off-chain price sanity check (absolute range + rate-of-change)
+          // FIX NEW-PO-01: Compare against lastCtnPrice BEFORE updating it
           if (result.price < this.config.minPriceUsd || result.price > this.config.maxPriceUsd) {
+            boundsViolationCount++;
             console.error(
               `[PriceOracle] 🚨 Price $${result.price.toFixed(6)} outside absolute bounds ` +
-              `[$${this.config.minPriceUsd}, $${this.config.maxPriceUsd}]. Update blocked.`
+              `[$${this.config.minPriceUsd}, $${this.config.maxPriceUsd}]. Update blocked (${boundsViolationCount}/${MAX_BOUNDS_VIOLATIONS}).`
             );
           } else if (
             this.lastCtnPrice > 0 &&
             Math.abs(result.price - this.lastCtnPrice) / this.lastCtnPrice * 100 > this.config.maxChangePerUpdatePct
           ) {
+            boundsViolationCount++;
             console.error(
               `[PriceOracle] 🚨 Price change ${((result.price - this.lastCtnPrice) / this.lastCtnPrice * 100).toFixed(2)}% ` +
-              `exceeds per-update cap of ${this.config.maxChangePerUpdatePct}%. Update blocked.`
+              `exceeds per-update cap of ${this.config.maxChangePerUpdatePct}%. Update blocked (${boundsViolationCount}/${MAX_BOUNDS_VIOLATIONS}).`
             );
           } else {
             await this.pushPriceUpdate("CTN", result.price, result.source);
+            this.lastCtnPrice = result.price; // FIX NEW-PO-01: Only update AFTER successful push
+            boundsViolationCount = 0; // Reset on success
+          }
+
+          // FIX NEW-PO-02: If too many consecutive bounds violations, reset baseline to allow recovery
+          if (boundsViolationCount >= MAX_BOUNDS_VIOLATIONS) {
+            console.warn(
+              `[PriceOracle] ⚠️ ${MAX_BOUNDS_VIOLATIONS} consecutive bounds violations. ` +
+              `Resetting lastCtnPrice baseline to allow recovery. Manual review recommended.`
+            );
+            this.lastCtnPrice = 0; // Reset baseline — next cycle will accept any price within absolute bounds
+            boundsViolationCount = 0;
           }
         } catch (err) {
           console.error("[PriceOracle] Poll cycle failed:", (err as Error).message);

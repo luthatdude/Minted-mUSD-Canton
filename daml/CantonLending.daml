@@ -578,7 +578,8 @@ template CantonLendingService
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
-        totalWeightedValue <- computeWeightedCollateralValue operator configs escrowCids priceFeedCids True
+        -- FIX N-H3: Pass user as expectedOwner to verify all escrows belong to this user
+        totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
 
         -- FIX C-L1 + H-L5: Look up existing debt, accrue interest, then increase principal
         existingDebtOpt <- lookupByKey @CantonDebtPosition (operator, user)
@@ -683,10 +684,13 @@ template CantonLendingService
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
 
         -- Check health AFTER withdrawal
-        existingDebt <- getExistingDebt operator user
+        -- FIX N-H2: Accrue interest on-ledger for consistent state
+        existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- Must check remaining collateral covers debt
-          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids to prevent double-counting
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          -- FIX N-H3: Pass user as expectedOwner
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           -- Add value of remaining portion of this escrow (if partial withdrawal)
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
@@ -736,9 +740,12 @@ template CantonLendingService
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
 
-        existingDebt <- getExistingDebt operator user
+        -- FIX N-H2: Accrue interest on-ledger
+        existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_USDC configs
@@ -780,9 +787,12 @@ template CantonLendingService
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
 
-        existingDebt <- getExistingDebt operator user
+        -- FIX N-H2: Accrue interest on-ledger
+        existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_USDCx configs
@@ -826,9 +836,12 @@ template CantonLendingService
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
 
-        existingDebt <- getExistingDebt operator user
+        -- FIX N-H2: Accrue interest on-ledger
+        existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_SMUSD configs
@@ -892,12 +905,13 @@ template CantonLendingService
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = liquidator
 
         -- Check position is actually undercollateralized (UNSAFE price — no staleness check)
-        totalRawValue <- computeRawCollateralValue operator configs escrowCids priceFeedCids False
+        -- FIX N-H3: Pass borrower as expectedOwner to verify all escrows belong to this borrower
+        totalRawValue <- computeRawCollateralValue operator borrower configs escrowCids priceFeedCids False
         accruedDebt <- fetch accruedDebtCid
         let totalDebt = accruedDebt.principalDebt + accruedDebt.accruedInterest
 
         -- Health factor: rawValue weighted by liquidationThreshold / totalDebt
-        totalLiqValue <- computeLiquidationThresholdValue operator configs escrowCids priceFeedCids False
+        totalLiqValue <- computeLiquidationThresholdValue operator borrower configs escrowCids priceFeedCids False
         let healthFactor = if totalDebt > 0.0 then totalLiqValue / totalDebt else 999.0
         assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
 
@@ -1096,6 +1110,18 @@ getExistingDebt operator user = do
       let newInterest = debt.principalDebt * intToNumeric debt.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
       return (debt.principalDebt + debt.accruedInterest + newInterest)
 
+-- | FIX N-H2: Get existing debt AND persist the accrual on-ledger.
+-- Used by withdrawal paths to keep on-ledger state consistent.
+getExistingDebtAndAccrue : Party -> Party -> Update Money
+getExistingDebtAndAccrue operator user = do
+  debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
+  case debtOpt of
+    None -> return 0.0
+    Some debtCid -> do
+      accruedCid <- exercise debtCid Debt_AccrueInterest with caller = user
+      debt <- fetch accruedCid
+      return (debt.principalDebt + debt.accruedInterest)
+
 -- | Get price from feed list by symbol (with staleness check option)
 getCtxPrice : Party -> Text -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 getCtxPrice _ symbol [] _ = error ("PRICE_FEED_NOT_FOUND: " <> symbol)
@@ -1118,33 +1144,39 @@ getCtxPriceByType operator CTN_USDCx feeds safe = getCtxPrice operator "USDCx" f
 getCtxPriceByType operator CTN_SMUSD feeds safe = getCtxPrice operator "sMUSD" feeds safe
 
 -- | Compute total collateral value weighted by collateralFactorBps
-computeWeightedCollateralValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
-computeWeightedCollateralValue _ _ [] _ _ = return 0.0
-computeWeightedCollateralValue operator cfgs (eCid :: eRest) feeds safe = do
+-- FIX N-H3: Added expectedOwner param — each escrow is verified to belong to the expected user
+computeWeightedCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
+computeWeightedCollateralValue _ _ _ [] _ _ = return 0.0
+computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
+  assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
   let value = escrow.amount * price * intToNumeric cfg.collateralFactorBps / 10000.0
-  rest <- computeWeightedCollateralValue operator cfgs eRest feeds safe
+  rest <- computeWeightedCollateralValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)
 
 -- | Compute total raw collateral value (no LTV weighting)
-computeRawCollateralValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
-computeRawCollateralValue _ _ [] _ _ = return 0.0
-computeRawCollateralValue operator cfgs (eCid :: eRest) feeds safe = do
+-- FIX N-H3: Added expectedOwner param
+computeRawCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
+computeRawCollateralValue _ _ _ [] _ _ = return 0.0
+computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
+  assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
   let value = escrow.amount * price
-  rest <- computeRawCollateralValue operator cfgs eRest feeds safe
+  rest <- computeRawCollateralValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)
 
 -- | Compute total collateral value weighted by liquidationThresholdBps
-computeLiquidationThresholdValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
-computeLiquidationThresholdValue _ _ [] _ _ = return 0.0
-computeLiquidationThresholdValue operator cfgs (eCid :: eRest) feeds safe = do
+-- FIX N-H3: Added expectedOwner param
+computeLiquidationThresholdValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
+computeLiquidationThresholdValue _ _ _ [] _ _ = return 0.0
+computeLiquidationThresholdValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
+  assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
   let value = escrow.amount * price * intToNumeric cfg.liquidationThresholdBps / 10000.0
-  rest <- computeLiquidationThresholdValue operator cfgs eRest feeds safe
+  rest <- computeLiquidationThresholdValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)
