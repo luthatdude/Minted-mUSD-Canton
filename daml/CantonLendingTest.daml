@@ -31,8 +31,8 @@ data TestSetup = TestSetup with
   user       : Party
   liquidator : Party
   serviceCid : ContractId CantonLendingService
-  ctnFeedCid : ContractId TemplePriceFeed
-  usdcFeedCid : ContractId TemplePriceFeed
+  ctnFeedCid : ContractId CantonPriceFeed
+  usdcFeedCid : ContractId CantonPriceFeed
 
 setupTest : Script TestSetup
 setupTest = do
@@ -45,16 +45,16 @@ setupTest = do
 
   -- Create price feeds
   ctnFeedCid <- submit operator do
-    createCmd TemplePriceFeed with
+    createCmd CantonPriceFeed with
       operator
       symbol = "CTN"
       priceUsd = 0.17         -- $0.17 per CTN
       lastUpdated = datetime 2026 Feb 6 12 0 0
-      source = "temple-dex-twap"
+      source = "tradecraft-amm"
       observers = [user, liquidator]
 
   usdcFeedCid <- submit operator do
-    createCmd TemplePriceFeed with
+    createCmd CantonPriceFeed with
       operator
       symbol = "USDC"
       priceUsd = 1.0
@@ -203,7 +203,7 @@ testDepositSMUSD = do
 
   -- Need sMUSD price feed
   smusdFeedCid <- submit setup.operator do
-    createCmd TemplePriceFeed with
+    createCmd CantonPriceFeed with
       operator = setup.operator
       symbol = "sMUSD"
       priceUsd = 1.05
