@@ -66,8 +66,9 @@ template CantonCoin
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
 
+    -- FIX H-B2: Burn requires owner consent (both signatories) to prevent operator burning user coins
     choice CantonCoin_Burn : ()
-      controller issuer
+      controller issuer, owner
       do return ()
 
 -- | Transfer proposal for CantonCoin (dual-signatory safe)
@@ -153,6 +154,33 @@ template BoostPoolLPTransferProposal
       do create lp
 
 -- ============================================================
+--       SECTION 2B: BOOST POOL DEPOSIT RECORD (FIX C-B2)
+-- ============================================================
+
+-- | FIX C-B2: Tracks cumulative Canton deposited per user for cap enforcement.
+-- One record per user, updated on each deposit.
+template BoostPoolDepositRecord
+  with
+    operator              : Party
+    user                  : Party
+    cumulativeCantonValue : Money  -- Total Canton value (in mUSD) deposited so far
+  where
+    signatory operator
+    observer user
+
+    key (operator, user) : (Party, Party)
+    maintainer key._1
+
+    ensure cumulativeCantonValue >= 0.0
+
+    choice DepositRecord_Add : ContractId BoostPoolDepositRecord
+      with
+        additionalValue : Money
+      controller operator
+      do
+        create this with cumulativeCantonValue = cumulativeCantonValue + additionalValue
+
+-- ============================================================
 --                     SECTION 3: CANTON BOOST POOL SERVICE
 -- ============================================================
 
@@ -181,6 +209,8 @@ template CantonBoostPoolService
     protocolRewardsAccrued : Money      -- 40% kept by protocol
     lpRewardsDistributed   : Money      -- 60% distributed to LPs
     lastRewardEpoch        : Int        -- Last reward distribution epoch
+    -- FIX C-B3: Track accumulated fees for protocol withdrawal
+    protocolFeesAccrued    : Money      -- Entry + exit fees accumulated
     -- Pool parameters
     entryFeeBps            : Bps        -- Entry fee (default 25 = 0.25%)
     exitFeeBps             : Bps        -- Exit fee (default 50 = 0.50%)
@@ -197,6 +227,7 @@ template CantonBoostPoolService
         && totalLPShares >= 0.0
         && cantonPriceMusd > 0.0
         && globalSharePrice > 0.0
+        && protocolFeesAccrued >= 0.0
         && entryFeeBps >= 0 && entryFeeBps <= 500
         && exitFeeBps >= 0 && exitFeeBps <= 500
         && lpRewardShareBps >= 0 && lpRewardShareBps <= 10000
@@ -207,13 +238,14 @@ template CantonBoostPoolService
     -- ──────────────────────────────────────────────
 
     -- | Deposit Canton into the boost pool.
-    -- User must hold CantonSMUSD. Max deposit = sMUSD value × cantonCapRatio.
-    -- Canton deposited earns validator rewards. sMUSD continues earning Treasury yield independently.
+    -- FIX C-B1: sMUSD is archived and recreated (prevents same sMUSD qualifying unlimited deposits)
+    -- FIX C-B2: Cumulative per-user cap tracked via BoostPoolDepositRecord
+    -- FIX C-B3: Entry fees routed to protocolFeesAccrued
     choice Deposit : (ContractId CantonBoostPoolService, ContractId BoostPoolLP)
       with
         user       : Party
         cantonCid  : ContractId CantonCoin      -- Canton being deposited
-        smusdCid   : ContractId CantonSMUSD     -- Reference only — NOT consumed
+        smusdCid   : ContractId CantonSMUSD     -- FIX C-B1: Consumed and recreated
       controller user
       do
         assertMsg "POOL_PAUSED" (not paused)
@@ -222,19 +254,48 @@ template CantonBoostPoolService
         assertMsg "CANTON_ISSUER_MISMATCH" (canton.issuer == operator)
         assertMsg "CANTON_OWNER_MISMATCH" (canton.owner == user)
 
-        -- Read sMUSD position (fetch only — NOT archived/consumed)
+        -- FIX C-B1: Consume the sMUSD to prevent re-use as qualifier
         smusd <- fetch smusdCid
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
+        archive smusdCid
 
         -- Calculate deposit cap from sMUSD value
-        -- sMUSD value in mUSD terms = shares × globalSharePrice
         let smusdValueMusd = smusd.shares * globalSharePrice
-        -- Max Canton value (in mUSD) = sMUSD value × 0.25 (enforces 80/20 by reference)
         let maxCantonValueMusd = smusdValueMusd * cantonCapRatio
-        -- How much Canton (in mUSD terms) the user is depositing
         let cantonValueMusd = canton.amount * cantonPriceMusd
-        assertMsg "EXCEEDS_SMUSD_QUALIFIED_CAP" (cantonValueMusd <= maxCantonValueMusd)
+
+        -- FIX C-B2: Check cumulative deposit cap (not just per-deposit)
+        existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
+        previousDeposits <- case existingRecordOpt of
+          None -> return 0.0
+          Some recCid -> do
+            rec <- fetch recCid
+            return rec.cumulativeCantonValue
+
+        assertMsg "EXCEEDS_SMUSD_QUALIFIED_CAP" (previousDeposits + cantonValueMusd <= maxCantonValueMusd)
+
+        -- Update or create cumulative deposit record
+        case existingRecordOpt of
+          Some recCid -> do
+            exercise recCid DepositRecord_Add with additionalValue = cantonValueMusd
+            pure ()
+          None -> do
+            create BoostPoolDepositRecord with
+              operator
+              user
+              cumulativeCantonValue = cantonValueMusd
+            pure ()
+
+        -- Recreate sMUSD (gives it back to user but with a new contract ID)
+        now <- getTime
+        _newSmusdCid <- create CantonSMUSD with
+          issuer = operator
+          owner = user
+          shares = smusd.shares
+          entrySharePrice = smusd.entrySharePrice
+          stakedAt = smusd.stakedAt
+          privacyObservers = smusd.privacyObservers
 
         -- Apply entry fee
         let feeAmount = canton.amount * intToNumeric entryFeeBps / 10000.0
@@ -249,7 +310,6 @@ template CantonBoostPoolService
         exercise cantonCid CantonCoin_Burn
 
         -- Issue LP token
-        now <- getTime
         userObs <- lookupUserObservers operator user
         lpCid <- create BoostPoolLP with
           issuer = operator
@@ -258,10 +318,11 @@ template CantonBoostPoolService
           depositedAt = now
           privacyObservers = userObs
 
-        -- Update pool state (consuming choice auto-archives self)
+        -- FIX C-B3: Route entry fee to protocol
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited + netCantonIn
           totalLPShares = totalLPShares + newShares
+          protocolFeesAccrued = protocolFeesAccrued + feeAmount
 
         return (newService, lpCid)
 
@@ -270,14 +331,15 @@ template CantonBoostPoolService
     -- ──────────────────────────────────────────────
 
     -- | Withdraw Canton from the pool by burning LP tokens.
-    -- Returns proportional share of pool Canton balance.
+    -- FIX H-B1: Withdrawals are allowed even when paused (users can always exit)
+    -- FIX C-B3: Exit fees routed to protocolFeesAccrued
     choice Withdraw : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         user  : Party
         lpCid : ContractId BoostPoolLP
       controller user
       do
-        assertMsg "POOL_PAUSED" (not paused)
+        -- FIX H-B1: Removed pause check — withdrawals always allowed
 
         lp <- fetch lpCid
         assertMsg "LP_OWNER_MISMATCH" (lp.owner == user)
@@ -307,10 +369,11 @@ template CantonBoostPoolService
           amount = netCantonOut
           privacyObservers = userObs
 
-        -- Update pool state (consuming choice auto-archives self)
+        -- FIX C-B3: Route exit fee to protocol
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited - rawCantonOut
           totalLPShares = totalLPShares - lp.shares
+          protocolFeesAccrued = protocolFeesAccrued + feeAmount
 
         return (newService, cantonCid)
 

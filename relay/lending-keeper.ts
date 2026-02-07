@@ -55,6 +55,9 @@ interface KeeperBotConfig {
     penaltyBps: number;
     bonusBps: number;
   }>;
+
+  // FIX LK-03: Configurable sMUSD price (should come from yield-sync service in production)
+  smusdPrice: number;
 }
 
 const DEFAULT_CONFIG: KeeperBotConfig = {
@@ -78,6 +81,9 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
     "CTN_USDCx": { ltvBps: 9500, liqThresholdBps: 9700, penaltyBps: 300, bonusBps: 150 },
     "CTN_SMUSD": { ltvBps: 9000, liqThresholdBps: 9300, penaltyBps: 400, bonusBps: 200 },
   },
+
+  // FIX LK-03: Read sMUSD price from env (production: synced from yield-sync-service)
+  smusdPrice: parseFloat(process.env.SMUSD_PRICE || "1.05"),
 };
 
 // ============================================================
@@ -222,7 +228,7 @@ export class LendingKeeperBot {
       case "CTN_USDCx":
         return 1.0;  // Stablecoins hardcoded
       case "CTN_SMUSD":
-        return 1.05; // TODO: Get from yield-sync share price
+        return this.config.smusdPrice; // FIX LK-03: Configurable via SMUSD_PRICE env var
       default:
         throw new Error(`Unknown collateral type: ${collateralType}`);
     }
@@ -479,19 +485,47 @@ export class LendingKeeperBot {
         };
       }
 
+      // FIX LK-01: Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
+      // FIX LK-02: Force fresh price fetch before execution
+      try {
+        await this.oracle.fetchCTNPrice();
+      } catch (err) {
+        console.warn(`[Keeper] Could not refresh price before liquidation:`, (err as Error).message);
+      }
+
+      // Re-fetch debt position (may have been repaid since scan)
+      const freshDebtPositions = await this.ledger.query(
+        "CantonLending:CantonDebtPosition" as any,
+        { borrower: candidate.borrower }
+      );
+      if (freshDebtPositions.length === 0) {
+        return {
+          borrower: candidate.borrower, debtRepaid: 0, collateralSeized: 0,
+          collateralType: candidate.bestTarget.collateralType, keeperBonus: 0,
+          success: false, error: "Debt position no longer exists (already repaid/liquidated)",
+          timestamp,
+        };
+      }
+      const freshDebtCid = (freshDebtPositions[0] as any).contractId;
+
+      // Re-fetch target escrow (may have been withdrawn)
+      const freshEscrows = await this.fetchEscrowPositions(candidate.borrower);
+      const freshTarget = freshEscrows.find(
+        (e) => e.collateralType === candidate.bestTarget.collateralType
+      );
+      if (!freshTarget) {
+        return {
+          borrower: candidate.borrower, debtRepaid: 0, collateralSeized: 0,
+          collateralType: candidate.bestTarget.collateralType, keeperBonus: 0,
+          success: false, error: "Target escrow no longer exists",
+          timestamp,
+        };
+      }
+
       // Collect all price feed contract IDs
       const priceFeeds = await this.ledger.query(
         "CantonLending:CantonPriceFeed" as any,
         {}
-      );
-
-      // Exercise Lending_Liquidate
-      console.log(
-        `[Keeper] 🔥 Liquidating ${candidate.borrower}: ` +
-        `debt=$${candidate.totalDebt.toFixed(2)}, ` +
-        `HF=${candidate.healthFactor.toFixed(4)}, ` +
-        `target=${candidate.bestTarget.collateralType}, ` +
-        `repay=$${candidate.maxRepay.toFixed(2)}`
       );
 
       // Find the lending service contract
@@ -506,6 +540,15 @@ export class LendingKeeperBot {
 
       const serviceContract = services[0];
 
+      // Exercise Lending_Liquidate
+      console.log(
+        `[Keeper] 🔥 Liquidating ${candidate.borrower}: ` +
+        `debt=$${candidate.totalDebt.toFixed(2)}, ` +
+        `HF=${candidate.healthFactor.toFixed(4)}, ` +
+        `target=${candidate.bestTarget.collateralType}, ` +
+        `repay=$${candidate.maxRepay.toFixed(2)}`
+      );
+
       await this.ledger.exercise(
         "CantonLending:CantonLendingService" as any,
         serviceContract.contractId,
@@ -514,10 +557,10 @@ export class LendingKeeperBot {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
           repayAmount: candidate.maxRepay.toFixed(18),
-          targetEscrowCid: candidate.bestTarget.contractId,
-          debtCid: candidate.debtPosition.contractId,
+          targetEscrowCid: freshTarget.contractId,         // FIX LK-01: Fresh CID
+          debtCid: freshDebtCid,                           // FIX LK-01: Fresh CID
           musdCid: (musdContract as any).contractId,
-          escrowCids: candidate.escrows.map((e) => e.contractId),
+          escrowCids: freshEscrows.map((e) => e.contractId), // FIX LK-01: Fresh CIDs
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
         } as any
       );

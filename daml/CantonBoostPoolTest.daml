@@ -65,6 +65,7 @@ createPoolService operator observers =
       protocolRewardsAccrued = 0.0
       lpRewardsDistributed = 0.0
       lastRewardEpoch = 0
+      protocolFeesAccrued = 0.0
       entryFeeBps = 25                 -- 0.25%
       exitFeeBps = 50                  -- 0.50%
       lpRewardShareBps = 6000          -- 60% to LPs
@@ -169,6 +170,7 @@ test_CapScalesWithSharePrice = script do
       protocolRewardsAccrued = 0.0
       lpRewardsDistributed = 0.0
       lastRewardEpoch = 0
+      protocolFeesAccrued = 0.0
       entryFeeBps = 25
       exitFeeBps = 50
       lpRewardShareBps = 6000
@@ -491,17 +493,18 @@ test_PauseUnpause = script do
       cantonCid
       smusdCid
 
-  -- Pause again — withdraw fails
+  -- Pause again — FIX H-B1: withdrawals still allowed when paused (users can always exit)
   poolCid5 <- submit operator do
     exerciseCmd poolCid4 BoostPool_SetPaused with newPaused = True
 
   setTime (addRelTime baseTime (seconds 172801))
-  submitMustFail alice do
+  -- Withdraw succeeds even when paused (H-B1 fix: operator cannot lock user funds)
+  (_, returnedCantonCid) <- submit alice do
     exerciseCmd poolCid5 Withdraw with
       user = alice
       lpCid
 
-  debug "TEST 11 PASSED: Pause/unpause controls"
+  debug "TEST 11 PASSED: Pause/unpause controls (deposits blocked, withdrawals always allowed)"
   pure ()
 
 
