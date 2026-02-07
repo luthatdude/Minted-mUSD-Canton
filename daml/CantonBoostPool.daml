@@ -1,0 +1,438 @@
+-- | CantonBoostPool
+-- 80/20 mUSD/Canton Liquidity Pool with Boosted Yield
+--
+-- Architecture:
+--   Users deposit mUSD + Canton coin in an 80/20 ratio
+--   → LP tokens (bpMUSD) issued representing pool share
+--   → mUSD side earns standard staking yield (via CantonSMUSD global share price)
+--   → Canton side earns validator staking rewards
+--   → LP holders receive: 2% base APY boost + 60% of validator rewards
+--   → Protocol retains: 40% of validator rewards
+--
+-- Revenue Model:
+--   1. Validator rewards (40/60 split — protocol/LP)
+--   2. Yield spread on mUSD component (Treasury yield minus LP payout)
+--   3. Entry/exit fees (25-50bps)
+--   4. Strategic Canton accumulation for governance weight
+--
+-- Canton coin deposited is staked to Minted validators.
+-- mUSD deposited earns the global share price yield from CantonSMUSD.
+
+module CantonBoostPool where
+
+import DA.Time
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps)
+
+-- ============================================================
+--                     SECTION 1: CANTON COIN TOKEN
+-- ============================================================
+
+-- | Represents Canton coin held on Canton Network.
+-- In production, this wraps the native Canton validator token.
+template CantonCoin
+  with
+    issuer : Party
+    owner  : Party
+    amount : Money
+  where
+    signatory issuer, owner
+    ensure amount > 0.0
+
+    choice CantonCoin_Transfer : ContractId CantonCoinTransferProposal
+      with newOwner : Party
+      controller owner
+      do create CantonCoinTransferProposal with coin = this; newOwner
+
+    choice CantonCoin_Split : (ContractId CantonCoin, ContractId CantonCoin)
+      with splitAmount : Money
+      controller owner
+      do
+        assertMsg "SPLIT_POSITIVE" (splitAmount > 0.0)
+        assertMsg "SPLIT_LESS_THAN_TOTAL" (splitAmount < amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        return (c1, c2)
+
+    choice CantonCoin_Burn : ()
+      controller issuer
+      do return ()
+
+-- | Transfer proposal for CantonCoin (dual-signatory safe)
+template CantonCoinTransferProposal
+  with
+    coin     : CantonCoin
+    newOwner : Party
+  where
+    signatory coin.issuer, coin.owner
+    observer newOwner
+
+    choice CantonCoinTransferProposal_Accept : ContractId CantonCoin
+      controller newOwner
+      do create coin with owner = newOwner
+
+    choice CantonCoinTransferProposal_Reject : ContractId CantonCoin
+      controller newOwner
+      do create coin
+
+    choice CantonCoinTransferProposal_Cancel : ContractId CantonCoin
+      controller coin.owner
+      do create coin
+
+-- ============================================================
+--                     SECTION 2: LP TOKEN (bpMUSD)
+-- ============================================================
+
+-- | Boost Pool LP token — represents a share of the 80/20 pool.
+-- "bpMUSD" = Boost Pool mUSD
+template BoostPoolLP
+  with
+    issuer         : Party
+    owner          : Party
+    shares         : Money        -- LP share amount
+    entryPoolPrice : Money        -- Pool price when deposited (for PnL tracking)
+    depositedAt    : Time         -- For cooldown enforcement
+  where
+    signatory issuer, owner
+    ensure shares > 0.0
+
+    choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
+      with newOwner : Party
+      controller owner
+      do create BoostPoolLPTransferProposal with lp = this; newOwner
+
+    choice BPLP_Split : (ContractId BoostPoolLP, ContractId BoostPoolLP)
+      with splitShares : Money
+      controller owner
+      do
+        assertMsg "SPLIT_POSITIVE" (splitShares > 0.0)
+        assertMsg "SPLIT_LESS_THAN_TOTAL" (splitShares < shares)
+        c1 <- create this with shares = splitShares
+        c2 <- create this with shares = shares - splitShares
+        return (c1, c2)
+
+-- | Transfer proposal for BoostPoolLP (dual-signatory safe)
+template BoostPoolLPTransferProposal
+  with
+    lp       : BoostPoolLP
+    newOwner : Party
+  where
+    signatory lp.issuer, lp.owner
+    observer newOwner
+
+    choice BPLPTransferProposal_Accept : ContractId BoostPoolLP
+      controller newOwner
+      do create lp with owner = newOwner
+
+    choice BPLPTransferProposal_Reject : ContractId BoostPoolLP
+      controller newOwner
+      do create lp
+
+    choice BPLPTransferProposal_Cancel : ContractId BoostPoolLP
+      controller lp.owner
+      do create lp
+
+-- ============================================================
+--                     SECTION 3: BOOST POOL SERVICE
+-- ============================================================
+
+-- | The main 80/20 mUSD/Canton Boost Pool.
+--
+-- Pool mechanics:
+--   Deposit:  User sends mUSD + Canton at 80/20 ratio → receives bpMUSD LP tokens
+--   Withdraw: User burns bpMUSD → receives mUSD + Canton at current ratio
+--   Rewards:  Validator rewards distributed per-epoch via DistributeRewards
+--
+-- Yield sources for LP holders:
+--   1. Base 2% APY boost (paid from protocol yield spread on mUSD component)
+--   2. 60% of Canton validator staking rewards
+--   3. mUSD component appreciates via global smUSD share price
+template CantonBoostPoolService
+  with
+    operator           : Party
+    -- Pool balances
+    totalMusdDeposited : Money         -- Total mUSD in pool (80% side)
+    totalCantonStaked  : Money         -- Total Canton in pool (20% side)
+    totalLPShares      : Money         -- Total bpMUSD LP shares outstanding
+    -- Pricing
+    poolSharePrice     : Money         -- Current value per LP share
+    cantonPriceMusd    : Money         -- Canton coin price in mUSD terms
+    -- Validator rewards tracking
+    totalValidatorRewards : Money      -- Cumulative Canton validator rewards earned
+    protocolRewardsAccrued : Money     -- 40% kept by protocol
+    lpRewardsDistributed   : Money     -- 60% distributed to LPs
+    lastRewardEpoch    : Int           -- Last reward distribution epoch
+    -- Pool parameters
+    entryFeeBps        : Bps           -- Entry fee (default 25 = 0.25%)
+    exitFeeBps         : Bps           -- Exit fee (default 50 = 0.50%)
+    boostApyBps        : Bps           -- Base APY boost (default 200 = 2.00%)
+    lpRewardShareBps   : Bps           -- LP share of validator rewards (default 6000 = 60%)
+    cooldownSeconds    : Int           -- Minimum lock before withdrawal
+    minMusdDeposit     : Money         -- Minimum mUSD deposit
+    paused             : Bool
+    -- MPA pass-through
+    mpaHash            : Text
+    mpaUri             : Text
+    observers          : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure totalMusdDeposited >= 0.0
+        && totalCantonStaked >= 0.0
+        && totalLPShares >= 0.0
+        && poolSharePrice > 0.0
+        && cantonPriceMusd > 0.0
+        && entryFeeBps >= 0 && entryFeeBps <= 500       -- Max 5% entry fee
+        && exitFeeBps >= 0 && exitFeeBps <= 500          -- Max 5% exit fee
+        && boostApyBps >= 0 && boostApyBps <= 1000       -- Max 10% boost
+        && lpRewardShareBps >= 0 && lpRewardShareBps <= 10000
+
+    -- ──────────────────────────────────────────────
+    --  DEPOSIT: mUSD + Canton → bpMUSD LP tokens
+    -- ──────────────────────────────────────────────
+
+    -- | Deposit into the 80/20 pool.
+    -- User provides mUSD (80%) and Canton (20%) in value terms.
+    -- Canton amount is auto-calculated from mUSD amount and current Canton price.
+    choice Deposit : (ContractId CantonBoostPoolService, ContractId BoostPoolLP)
+      with
+        user       : Party
+        musdCid    : ContractId CantonMUSD     -- mUSD being deposited (80% side)
+        cantonCid  : ContractId CantonCoin     -- Canton being deposited (20% side)
+      controller user
+      do
+        assertMsg "POOL_PAUSED" (not paused)
+
+        musd   <- fetch musdCid
+        canton <- fetch cantonCid
+        assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "CANTON_ISSUER_MISMATCH" (canton.issuer == operator)
+        assertMsg "CANTON_OWNER_MISMATCH" (canton.owner == user)
+        assertMsg "BELOW_MIN_DEPOSIT" (musd.amount >= minMusdDeposit)
+
+        -- Enforce 80/20 ratio:
+        -- mUSD value = 80% of total deposit
+        -- Canton value (in mUSD terms) = 20% of total deposit
+        -- So: cantonValueMusd = musdAmount * 0.25 (i.e., 20/80)
+        let expectedCantonValue = musd.amount * 0.25
+        let cantonValueMusd = canton.amount * cantonPriceMusd
+        -- Allow 2% slippage tolerance on ratio
+        let minCantonValue = expectedCantonValue * 0.98
+        let maxCantonValue = expectedCantonValue * 1.02
+        assertMsg "RATIO_OUT_OF_RANGE" (cantonValueMusd >= minCantonValue && cantonValueMusd <= maxCantonValue)
+
+        -- Calculate total deposit value in mUSD terms
+        let totalDepositValue = musd.amount + cantonValueMusd
+
+        -- Apply entry fee
+        let feeAmount = totalDepositValue * (intToDecimal entryFeeBps / 10000.0)
+        let netDepositValue = totalDepositValue - feeAmount
+
+        -- Calculate LP shares
+        let newShares = if totalLPShares == 0.0
+              then netDepositValue  -- First depositor: 1 share = 1 mUSD value
+              else netDepositValue / poolSharePrice
+
+        -- Lock the tokens (burn from user, add to pool)
+        exercise musdCid CantonMUSD_Burn
+        exercise cantonCid CantonCoin_Burn
+
+        -- Issue LP tokens
+        now <- getTime
+        lpCid <- create BoostPoolLP with
+          issuer = operator
+          owner = user
+          shares = newShares
+          entryPoolPrice = poolSharePrice
+          depositedAt = now
+
+        -- Archive old service, create new one with updated balances
+        archive self
+        newService <- create this with
+          totalMusdDeposited = totalMusdDeposited + musd.amount
+          totalCantonStaked = totalCantonStaked + canton.amount
+          totalLPShares = totalLPShares + newShares
+
+        return (newService, lpCid)
+
+    -- ──────────────────────────────────────────────
+    --  WITHDRAW: bpMUSD LP tokens → mUSD + Canton
+    -- ──────────────────────────────────────────────
+
+    -- | Withdraw from the pool by burning LP tokens.
+    -- User receives their proportional share of mUSD and Canton.
+    choice Withdraw : (ContractId CantonBoostPoolService, ContractId CantonMUSD, ContractId CantonCoin)
+      with
+        user   : Party
+        lpCid  : ContractId BoostPoolLP
+      controller user
+      do
+        assertMsg "POOL_PAUSED" (not paused)
+
+        lp <- fetch lpCid
+        assertMsg "LP_OWNER_MISMATCH" (lp.owner == user)
+
+        -- Enforce cooldown
+        now <- getTime
+        let cooldownRel = seconds cooldownSeconds
+        let elapsed = subTime now lp.depositedAt
+        assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownRel)
+
+        -- Calculate proportional share of pool
+        let shareRatio = lp.shares / totalLPShares
+        let rawMusdOut = totalMusdDeposited * shareRatio
+        let rawCantonOut = totalCantonStaked * shareRatio
+
+        -- Apply exit fee
+        let musdFee = rawMusdOut * (intToDecimal exitFeeBps / 10000.0)
+        let cantonFee = rawCantonOut * (intToDecimal exitFeeBps / 10000.0)
+        let netMusdOut = rawMusdOut - musdFee
+        let netCantonOut = rawCantonOut - cantonFee
+
+        -- Burn LP token
+        archive lpCid
+
+        -- Mint mUSD and Canton back to user
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netMusdOut
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        cantonCid <- create CantonCoin with
+          issuer = operator
+          owner = user
+          amount = netCantonOut
+
+        -- Archive old service, update balances
+        archive self
+        newService <- create this with
+          totalMusdDeposited = totalMusdDeposited - rawMusdOut
+          totalCantonStaked = totalCantonStaked - rawCantonOut
+          totalLPShares = totalLPShares - lp.shares
+
+        return (newService, musdCid, cantonCid)
+
+    -- ──────────────────────────────────────────────
+    --  DISTRIBUTE VALIDATOR REWARDS
+    -- ──────────────────────────────────────────────
+
+    -- | Operator distributes Canton validator rewards to the pool.
+    -- Called each epoch after validator rewards are calculated.
+    --
+    -- Split: 60% to LP holders (added to pool Canton balance, increasing share price)
+    --        40% to protocol (retained separately)
+    choice DistributeRewards : ContractId CantonBoostPoolService
+      with
+        rewardAmount : Money        -- Total Canton validator rewards this epoch
+        epochNumber  : Int          -- Must be sequential
+      controller operator
+      do
+        assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
+        assertMsg "REWARD_POSITIVE" (rewardAmount > 0.0)
+
+        -- 60/40 split
+        let lpShare = rewardAmount * (intToDecimal lpRewardShareBps / 10000.0)
+        let protocolShare = rewardAmount - lpShare
+
+        -- LP share goes into pool Canton balance (increases share price)
+        let newCantonStaked = totalCantonStaked + lpShare
+        -- Recalculate pool share price
+        let totalPoolValueMusd = totalMusdDeposited + (newCantonStaked * cantonPriceMusd)
+        let newSharePrice = if totalLPShares > 0.0
+              then totalPoolValueMusd / totalLPShares
+              else poolSharePrice
+
+        archive self
+        create this with
+          totalCantonStaked = newCantonStaked
+          poolSharePrice = newSharePrice
+          totalValidatorRewards = totalValidatorRewards + rewardAmount
+          protocolRewardsAccrued = protocolRewardsAccrued + protocolShare
+          lpRewardsDistributed = lpRewardsDistributed + lpShare
+          lastRewardEpoch = epochNumber
+
+    -- ──────────────────────────────────────────────
+    --  SYNC CANTON PRICE
+    -- ──────────────────────────────────────────────
+
+    -- | Update the Canton/mUSD price (from oracle or bridge attestation).
+    -- This affects the pool share price and ratio calculations.
+    choice SyncCantonPrice : ContractId CantonBoostPoolService
+      with
+        newPriceMusd : Money
+      controller operator
+      do
+        assertMsg "PRICE_POSITIVE" (newPriceMusd > 0.0)
+        -- Cap price change at 20% per update to prevent manipulation
+        let maxPrice = cantonPriceMusd * 1.2
+        let minPrice = cantonPriceMusd * 0.8
+        assertMsg "PRICE_CHANGE_TOO_LARGE" (newPriceMusd >= minPrice && newPriceMusd <= maxPrice)
+
+        -- Recalculate pool share price with new Canton valuation
+        let totalPoolValueMusd = totalMusdDeposited + (totalCantonStaked * newPriceMusd)
+        let newSharePrice = if totalLPShares > 0.0
+              then totalPoolValueMusd / totalLPShares
+              else poolSharePrice
+
+        archive self
+        create this with
+          cantonPriceMusd = newPriceMusd
+          poolSharePrice = newSharePrice
+
+    -- ──────────────────────────────────────────────
+    --  PROTOCOL REWARD WITHDRAWAL
+    -- ──────────────────────────────────────────────
+
+    -- | Operator withdraws accumulated protocol Canton rewards.
+    choice WithdrawProtocolRewards : (ContractId CantonBoostPoolService, ContractId CantonCoin)
+      with
+        withdrawAmount : Money
+      controller operator
+      do
+        assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
+        assertMsg "INSUFFICIENT_PROTOCOL_REWARDS" (withdrawAmount <= protocolRewardsAccrued)
+
+        cantonCid <- create CantonCoin with
+          issuer = operator
+          owner = operator
+          amount = withdrawAmount
+
+        archive self
+        newService <- create this with
+          protocolRewardsAccrued = protocolRewardsAccrued - withdrawAmount
+
+        return (newService, cantonCid)
+
+    -- ──────────────────────────────────────────────
+    --  ADMIN
+    -- ──────────────────────────────────────────────
+
+    choice BoostPool_SetPaused : ContractId CantonBoostPoolService
+      with newPaused : Bool
+      controller operator
+      do
+        archive self
+        create this with paused = newPaused
+
+    choice BoostPool_UpdateFees : ContractId CantonBoostPoolService
+      with
+        newEntryFeeBps : Bps
+        newExitFeeBps  : Bps
+      controller operator
+      do
+        assertMsg "ENTRY_FEE_VALID" (newEntryFeeBps >= 0 && newEntryFeeBps <= 500)
+        assertMsg "EXIT_FEE_VALID" (newExitFeeBps >= 0 && newExitFeeBps <= 500)
+        archive self
+        create this with
+          entryFeeBps = newEntryFeeBps
+          exitFeeBps = newExitFeeBps
+
+    choice BoostPool_UpdateObservers : ContractId CantonBoostPoolService
+      with newObservers : [Party]
+      controller operator
+      do
+        archive self
+        create this with observers = newObservers
