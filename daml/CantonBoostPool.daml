@@ -359,6 +359,8 @@ template CantonBoostPoolService
         let elapsed = subTime now lp.depositedAt
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownRel)
 
+        -- FIX M-8: Guard against division by zero if pool state is inconsistent
+        assertMsg "POOL_EMPTY" (totalLPShares > 0.0)
         -- Calculate proportional Canton out
         let shareRatio = lp.shares / totalLPShares
         let rawCantonOut = totalCantonDeposited * shareRatio
@@ -409,6 +411,8 @@ template CantonBoostPoolService
       controller operator
       do
         assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
+        -- FIX M-11: Limit max epoch gap to prevent accounting anomalies from large skips
+        assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastRewardEpoch + 100)
         assertMsg "REWARD_POSITIVE" (rewardAmount > 0.0)
 
         let lpShare = rewardAmount * intToNumeric lpRewardShareBps / 10000.0
