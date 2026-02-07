@@ -97,6 +97,8 @@ testPriceFeedCreate = do
 testPriceFeedUpdate : Script ()
 testPriceFeedUpdate = do
   setup <- setupTest
+  -- FIX M-4: Advance time past the 10-second update cooldown
+  passTime (seconds 15)
   -- Update CTN price to $0.20 (within 50% cap)
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
@@ -119,6 +121,8 @@ testPriceFeedMovementCap = do
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
+  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
+  passTime (minutes 6)
   -- Emergency update bypasses movement cap
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
@@ -439,6 +443,8 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
+  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
+  passTime (minutes 6)
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10

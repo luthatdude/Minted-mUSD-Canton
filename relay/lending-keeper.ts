@@ -167,10 +167,13 @@ export class LendingKeeperBot {
   private async connectLedger(): Promise<void> {
     if (this.ledger) return;
 
+    // FIX M-7: Default to TLS for Canton ledger connections (consistent with relay-service.ts)
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: this.config.cantonToken,
-      httpBaseUrl: `http://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `ws://${this.config.cantonHost}:${this.config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
     });
 
     console.log(`[Keeper] Connected to Canton ledger`);
