@@ -3,7 +3,7 @@
 **Prepared For:** External Security Auditors  
 **Audit Scope:** Minted mUSD Smart Contract System  
 **Repository:** https://github.com/luthatdude/Minted-mUSD-Canton  
-**Version:** main branch @ `PENDING` (will be set after push)  
+**Version:** main branch @ `cdec82e` (frozen February 7, 2026)  
 **Compiler:** Solidity 0.8.26 / DAML SDK 2.10.3
 **Framework:** Hardhat, OpenZeppelin Contracts v5.x, Canton Network
 
