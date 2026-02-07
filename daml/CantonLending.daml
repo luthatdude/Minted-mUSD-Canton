@@ -149,11 +149,14 @@ template CantonPriceFeed
       controller operator
       do
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
+        -- FIX M-4: Minimum 10-second interval between updates to prevent rapid oscillation
+        now <- getTime
+        let timeSinceUpdate = subTime now lastUpdated
+        assertMsg "UPDATE_TOO_FREQUENT" (timeSinceUpdate >= seconds 10)
         -- Cap price movement to ±50% per update to prevent oracle manipulation
         let maxPrice = priceUsd * 1.5
         let minPrice = priceUsd * 0.5
         assertMsg "PRICE_MOVE_TOO_LARGE" (newPriceUsd >= minPrice && newPriceUsd <= maxPrice)
-        now <- getTime
         create this with
           priceUsd = newPriceUsd
           lastUpdated = now
@@ -161,6 +164,7 @@ template CantonPriceFeed
 
     -- | Emergency price override (bypasses movement cap)
     -- Only for circuit-breaker scenarios where price moved >50%
+    -- FIX M-6: Minimum 5-minute cooldown between emergency updates
     choice PriceFeed_EmergencyUpdate : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
@@ -170,6 +174,8 @@ template CantonPriceFeed
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
         now <- getTime
+        let timeSinceUpdate = subTime now lastUpdated
+        assertMsg "EMERGENCY_UPDATE_COOLDOWN" (timeSinceUpdate >= minutes 5)
         create this with
           priceUsd = newPriceUsd
           lastUpdated = now
@@ -629,6 +635,9 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Repay mUSD debt. Burns the mUSD token and reduces debt position.
+    -- FIX M-9: Repayment is intentionally allowed even when service is paused.
+    -- Blocking repayment during pause would trap users in accruing-interest positions,
+    -- which is harmful. Liquidation is also allowed during pause for the same reason.
     choice Lending_Repay : (ContractId CantonLendingService, ContractId CantonDebtPosition)
       with
         user      : Party
@@ -682,6 +691,8 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- Check health AFTER withdrawal
         -- FIX N-H2: Accrue interest on-ledger for consistent state
@@ -739,6 +750,8 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
@@ -786,6 +799,8 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
@@ -835,6 +850,8 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
@@ -858,14 +875,15 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
-        now <- getTime
+        -- FIX M-5: Preserve original escrow deposit timestamp; use escrow depositedAt
+        -- rather than resetting to now (which would unfairly restart cooldown timers)
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = withdrawAmount
-          entrySharePrice = 1.0  -- Re-entry at current share price
-          stakedAt = now
+          entrySharePrice = 1.0  -- Placeholder; real share price is tracked by CantonStakingService
+          stakedAt = escrow.depositedAt
           privacyObservers = userObs
 
         newService <- create this with {}
@@ -1017,11 +1035,17 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Update collateral config
+    -- FIX M-2: Validate config bounds to prevent operator misconfiguration
     choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
       controller operator
       do
+        assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
+        assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
+        assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
+        assertMsg "LIQ_PENALTY_RANGE" (newConfig.liquidationPenaltyBps >= 0 && newConfig.liquidationPenaltyBps <= 2000)
+        assertMsg "LIQ_BONUS_RANGE" (newConfig.liquidationBonusBps >= 0 && newConfig.liquidationBonusBps <= newConfig.liquidationPenaltyBps)
         let updatedConfigs = map (\c -> if c.collateralType == newConfig.collateralType then newConfig else c) configs
         create this with configs = updatedConfigs
 
@@ -1041,6 +1065,31 @@ template CantonLendingService
         newPaused : Bool
       controller operator
       do create this with paused = newPaused
+
+    -- FIX M-3: Admin choices for operational parameters
+    choice Lending_UpdateMinBorrow : ContractId CantonLendingService
+      with
+        newMinBorrow : Money
+      controller operator
+      do
+        assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
+        create this with minBorrow = newMinBorrow
+
+    choice Lending_UpdateReserveFactor : ContractId CantonLendingService
+      with
+        newReserveFactorBps : Bps
+      controller operator
+      do
+        assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
+        create this with reserveFactorBps = newReserveFactorBps
+
+    choice Lending_UpdateCloseFactor : ContractId CantonLendingService
+      with
+        newCloseFactorBps : Bps
+      controller operator
+      do
+        assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
+        create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
@@ -1151,8 +1200,12 @@ computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds
   escrow <- fetch eCid
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
+  -- FIX M-10: Disabled collateral types contribute 0 value to weighted collateral
+  -- This prevents borrowing against collateral that has been disabled by the operator
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
-  let value = escrow.amount * price * intToNumeric cfg.collateralFactorBps / 10000.0
+  let value = if cfg.enabled
+        then escrow.amount * price * intToNumeric cfg.collateralFactorBps / 10000.0
+        else 0.0
   rest <- computeWeightedCollateralValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)
 
