@@ -166,7 +166,7 @@ template CantonBoostPoolService
     entryFeeBps            : Bps        -- Entry fee (default 25 = 0.25%)
     exitFeeBps             : Bps        -- Exit fee (default 50 = 0.50%)
     lpRewardShareBps       : Bps        -- LP share of validator rewards (default 6000 = 60%)
-    cantonCapRatio         : Decimal    -- Max Canton value as ratio of sMUSD value (default 0.25 = 20/80)
+    cantonCapRatio         : Money      -- Max Canton value as ratio of sMUSD value (default 0.25 = 20/80)
     cooldownSeconds        : Int        -- Minimum lock before withdrawal
     paused                 : Bool
     observers              : [Party]
@@ -218,7 +218,7 @@ template CantonBoostPoolService
         assertMsg "EXCEEDS_SMUSD_QUALIFIED_CAP" (cantonValueMusd <= maxCantonValueMusd)
 
         -- Apply entry fee
-        let feeAmount = canton.amount * (intToDecimal entryFeeBps / 10000.0)
+        let feeAmount = canton.amount * intToNumeric entryFeeBps / 10000.0
         let netCantonIn = canton.amount - feeAmount
 
         -- Calculate LP shares: 1 share = 1 Canton at genesis, then proportional
@@ -237,8 +237,7 @@ template CantonBoostPoolService
           shares = newShares
           depositedAt = now
 
-        -- Update pool state
-        archive self
+        -- Update pool state (consuming choice auto-archives self)
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited + netCantonIn
           totalLPShares = totalLPShares + newShares
@@ -273,7 +272,7 @@ template CantonBoostPoolService
         let rawCantonOut = totalCantonDeposited * shareRatio
 
         -- Apply exit fee
-        let feeAmount = rawCantonOut * (intToDecimal exitFeeBps / 10000.0)
+        let feeAmount = rawCantonOut * intToNumeric exitFeeBps / 10000.0
         let netCantonOut = rawCantonOut - feeAmount
 
         -- Burn LP token
@@ -285,8 +284,7 @@ template CantonBoostPoolService
           owner = user
           amount = netCantonOut
 
-        -- Update pool state
-        archive self
+        -- Update pool state (consuming choice auto-archives self)
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited - rawCantonOut
           totalLPShares = totalLPShares - lp.shares
@@ -309,11 +307,10 @@ template CantonBoostPoolService
         assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
         assertMsg "REWARD_POSITIVE" (rewardAmount > 0.0)
 
-        let lpShare = rewardAmount * (intToDecimal lpRewardShareBps / 10000.0)
+        let lpShare = rewardAmount * intToNumeric lpRewardShareBps / 10000.0
         let protocolShare = rewardAmount - lpShare
 
         -- LP share goes into pool Canton balance (share price increases)
-        archive self
         create this with
           totalCantonDeposited = totalCantonDeposited + lpShare
           totalValidatorRewards = totalValidatorRewards + rewardAmount
@@ -338,7 +335,6 @@ template CantonBoostPoolService
         let minPrice = cantonPriceMusd * 0.8
         assertMsg "PRICE_CHANGE_TOO_LARGE" (newPriceMusd >= minPrice && newPriceMusd <= maxPrice)
 
-        archive self
         create this with cantonPriceMusd = newPriceMusd
 
     -- | Sync the global sMUSD share price (from CantonStakingService).
@@ -353,7 +349,6 @@ template CantonBoostPoolService
         let minAllowed = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowed)
 
-        archive self
         create this with globalSharePrice = newGlobalSharePrice
 
     -- ──────────────────────────────────────────────
@@ -374,7 +369,6 @@ template CantonBoostPoolService
           owner = operator
           amount = withdrawAmount
 
-        archive self
         newService <- create this with
           protocolRewardsAccrued = protocolRewardsAccrued - withdrawAmount
 
@@ -388,7 +382,6 @@ template CantonBoostPoolService
       with newPaused : Bool
       controller operator
       do
-        archive self
         create this with paused = newPaused
 
     choice BoostPool_UpdateFees : ContractId CantonBoostPoolService
@@ -399,23 +392,20 @@ template CantonBoostPoolService
       do
         assertMsg "ENTRY_FEE_VALID" (newEntryFeeBps >= 0 && newEntryFeeBps <= 500)
         assertMsg "EXIT_FEE_VALID" (newExitFeeBps >= 0 && newExitFeeBps <= 500)
-        archive self
         create this with
           entryFeeBps = newEntryFeeBps
           exitFeeBps = newExitFeeBps
 
     choice BoostPool_UpdateCapRatio : ContractId CantonBoostPoolService
       with
-        newCapRatio : Decimal
+        newCapRatio : Money
       controller operator
       do
         assertMsg "CAP_RATIO_VALID" (newCapRatio > 0.0 && newCapRatio <= 1.0)
-        archive self
         create this with cantonCapRatio = newCapRatio
 
     choice BoostPool_UpdateObservers : ContractId CantonBoostPoolService
       with newObservers : [Party]
       controller operator
       do
-        archive self
         create this with observers = newObservers
