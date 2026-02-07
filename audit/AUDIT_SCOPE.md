@@ -1,7 +1,7 @@
 # Minted Protocol - Security Audit Scope
 
 **Prepared for:** Softstack  
-**Date:** February 6, 2026  
+**Date:** February 7, 2026  
 **Prepared by:** Minted Protocol Team
 
 ---
@@ -9,7 +9,7 @@
 ## Repository
 
 **GitHub:** https://github.com/luthatdude/Minted-mUSD-Canton  
-**Commit:** `bfe0f2c` (frozen)
+**Commit:** `PENDING` (will be set after push)  
 **Branch:** `main`
 
 ---
@@ -33,42 +33,59 @@ Minted is a cross-chain stablecoin protocol bridging Canton Network (DAML) and E
 
 | Contract | LOC | Description |
 |----------|-----|-------------|
-| `BLEBridgeV9.sol` | ~500 | Cross-chain bridge with 3-of-5 multi-sig, rate limiting, nonce protection |
-| `TreasuryV2.sol` | ~950 | Yield strategies, fund allocation, fee accrual |
-| `BorrowModule.sol` | ~700 | CDP borrowing, interest accrual, health factor checks |
-| `LeverageVault.sol` | ~800 | Leverage looping, atomic position adjustment |
-| `SMUSD.sol` | ~350 | ERC-4626 yield vault with cooldown mechanism |
-| `DirectMintV2.sol` | ~350 | 1:1 mint/redeem against treasury |
-| `LiquidationEngine.sol` | ~300 | Liquidation logic, bonus calculations |
-| `InterestRateModel.sol` | ~280 | Utilization-based interest rate curves |
-| `CollateralVault.sol` | ~280 | Collateral deposits and withdrawals |
-| `DepositRouter.sol` | ~330 | Multi-path deposit routing |
-| `TreasuryReceiver.sol` | ~250 | Treasury fund receiver |
-| `PendleMarketSelector.sol` | ~550 | Pendle PT market integration |
-| `MUSD.sol` | ~100 | Core ERC-20 with blacklist, freeze, pause |
-| `PriceOracle.sol` | ~150 | Chainlink oracle integration with staleness checks |
+| `BLEBridgeV9.sol` | ~475 | Cross-chain bridge with 3-of-5 multi-sig, rate limiting, nonce protection |
+| `TreasuryV2.sol` | ~1,000 | Yield strategies, fund allocation, fee accrual |
+| `BorrowModule.sol` | ~830 | CDP borrowing, interest accrual, health factor checks |
+| `LeverageVault.sol` | ~770 | Leverage looping, atomic position adjustment |
+| `PendleStrategyV2.sol` | ~830 | Pendle PT yield strategy with rolling maturity |
+| `MorphoLoopStrategy.sol` | ~811 | Morpho leverage looping strategy |
+| `PendleMarketSelector.sol` | ~534 | Pendle PT market integration |
+| `DepositRouter.sol` | ~422 | Multi-path deposit routing |
+| `SMUSD.sol` | ~329 | ERC-4626 yield vault with cooldown mechanism |
+| `DirectMintV2.sol` | ~324 | 1:1 mint/redeem against treasury |
+| `CollateralVault.sol` | ~299 | Collateral deposits and withdrawals |
+| `TreasuryReceiver.sol` | ~295 | Treasury fund receiver |
+| `InterestRateModel.sol` | ~276 | Utilization-based interest rate curves |
+| `LiquidationEngine.sol` | ~274 | Liquidation logic, bonus calculations |
+| `PriceOracle.sol` | ~256 | Chainlink oracle integration with staleness checks |
+| `MUSD.sol` | ~104 | Core ERC-20 with blacklist, freeze, pause |
+| `IStrategy.sol` | ~40 | Strategy interface definition |
 
-**Total Solidity:** ~5,515 LOC across 14 contracts
+**Total Solidity:** ~7,869 LOC across 17 contracts
 
 ### DAML Modules (Priority: Critical)
 
 | Module | LOC | Description |
 |--------|-----|-------------|
-| `CantonDirectMint.daml` | ~650 | Direct mint/redeem with rate limiting, compliance hooks |
-| `BLEBridgeProtocol.daml` | ~430 | Bridge attestation creation and validation |
-| `MintedMUSD.daml` | ~320 | Core DAML asset with split/merge/transfer |
-| `MUSD_Protocol.daml` | ~500 | Protocol coordination |
-| `CantonSMUSD.daml` | ~220 | Canton yield vault |
-| `Compliance.daml` | ~150 | Blacklist, freeze, transfer validation |
-| `InterestRateService.daml` | ~220 | Interest rate calculations |
-| `Governance.daml` | ~370 | Governance proposals and voting |
-| `Upgrade.daml` | ~270 | Contract upgrade mechanisms |
-| `InstitutionalAssetV4.daml` | ~200 | Institutional asset handling |
-| `BLEProtocol.daml` | ~180 | Bridge protocol helpers |
-| `NegativeTests.daml` | ~380 | Security test scenarios |
-| `TokenInterface.daml` | ~10 | Interface definitions |
+| `Minted/Protocol/V3.daml` | ~1,545 | Core protocol v3 — unified vault, oracle, liquidation, lending pool |
+| `CantonLending.daml` | ~1,235 | Canton-native lending with Temple DEX price feeds, escrow, interest accrual |
+| `CantonDirectMint.daml` | ~722 | Direct mint/redeem with rate limiting, compliance hooks |
+| `CantonBoostPool.daml` | ~541 | Boost pool deposits, epoch-based rewards, protocol fees |
+| `MUSD_Protocol.daml` | ~535 | Protocol coordination |
+| `BLEBridgeProtocol.daml` | ~433 | Bridge attestation creation and validation |
+| `Governance.daml` | ~399 | Governance proposals and voting |
+| `MintedMUSD.daml` | ~331 | Core DAML asset with split/merge/transfer |
+| `Upgrade.daml` | ~281 | Contract upgrade mechanisms |
+| `CantonSMUSD.daml` | ~280 | Canton yield vault |
+| `InterestRateService.daml` | ~210 | Interest rate calculations |
+| `BLEProtocol.daml` | ~189 | Bridge protocol helpers |
+| `InstitutionalAssetV4.daml` | ~189 | Institutional asset handling |
+| `Compliance.daml` | ~156 | Blacklist, freeze, transfer validation |
+| `UserPrivacySettings.daml` | ~153 | Per-user privacy toggle (opt-in transparency) |
+| `TokenInterface.daml` | ~11 | Interface definitions |
 
-**Total DAML:** ~4,121 LOC across 13 modules
+**Total DAML (production):** ~7,210 LOC across 16 modules
+
+### DAML Test Modules (Priority: Medium)
+
+| Module | LOC | Description |
+|--------|-----|-------------|
+| `CantonBoostPoolTest.daml` | ~1,016 | Boost pool deep tests |
+| `CantonLendingTest.daml` | ~900 | Lending module tests |
+| `UserPrivacySettingsTest.daml` | ~633 | Privacy settings tests |
+| `NegativeTests.daml` | ~488 | Security negative-path scenarios |
+
+**Total DAML Tests:** ~3,037 LOC across 4 modules
 
 ### Relay Service (Priority: Critical)
 
@@ -76,15 +93,17 @@ The relay service is the off-chain bridge coordinator and is **critical to bridg
 
 | File | LOC | Description |
 |------|-----|-------------|
-| `relay-service.ts` | ~685 | Canton event watching, Ethereum transaction submission, attestation handling |
-| `validator-node-v2.ts` | ~630 | Canton Asset API integration, AWS KMS signing, collateral ratio validation |
-| `validator-node.ts` | ~454 | Legacy validator (reference) |
-| `signer.ts` | ~235 | Signature aggregation, 3-of-5 threshold logic, sorted address deduplication |
-| `yield-sync-service.ts` | ~738 | Yield synchronization between Canton and Ethereum |
+| `relay-service.ts` | ~839 | Canton event watching, Ethereum transaction submission, attestation handling |
+| `lending-keeper.ts` | ~715 | Canton lending liquidation keeper, health factor monitoring, auto-liquidation |
+| `validator-node-v2.ts` | ~639 | Canton Asset API integration, AWS KMS signing, collateral ratio validation |
+| `price-oracle.ts` | ~609 | Canton price feed relay, Chainlink→Canton bridge, sanity checks, circuit breaker |
+| `validator-node.ts` | ~534 | Legacy validator (reference) |
+| `yield-sync-service.ts` | ~512 | Yield synchronization between Canton and Ethereum |
 | `yield-keeper.ts` | ~355 | Automated yield harvesting and distribution |
-| `utils.ts` | ~24 | Shared utilities |
+| `signer.ts` | ~255 | Signature aggregation, 3-of-5 threshold logic, sorted address deduplication |
+| `utils.ts` | ~81 | Shared utilities |
 
-**Total Relay:** ~3,121 LOC across 7 files
+**Total Relay:** ~4,539 LOC across 9 files
 
 #### Relay Security Concerns (Critical)
 - **AWS KMS key access** - Validator keys stored in KMS, review access patterns
@@ -94,6 +113,8 @@ The relay service is the off-chain bridge coordinator and is **critical to bridg
 - **Nonce synchronization** - Off-chain nonce tracking vs on-chain state
 - **Collateral ratio checks** - Validator-side enforcement before signing
 - **Error handling** - Graceful failure without partial state corruption
+- **Price oracle relay** - Sanity checks, circuit breaker, bounds violation recovery
+- **Lending keeper** - Health factor monitoring, TLS enforcement, auto-liquidation safety
 
 ### Test Mocks (Priority: Low)
 
@@ -120,7 +141,7 @@ The relay service is the off-chain bridge coordinator and is **critical to bridg
 | `k8s/base/*` | ~200 | Namespace, Postgres configs |
 | `k8s/canton/*` | ~1,082 | Participant node, secrets, network policies, RBAC |
 
-**Total Additional:** ~10,167 LOC
+**Total Additional:** ~13,204 LOC
 
 ---
 
@@ -201,8 +222,8 @@ daml test
 | Integration | 25 | ✅ Pass |
 | DeepAuditV2 | 125 | ✅ Pass |
 | Relay (Jest) | 29 | ✅ Pass |
-| DAML | 16 | ✅ Pass |
-| **Total** | **678 + 29 + 16** | ✅ Pass |
+| DAML | 96 | ✅ Pass |
+| **Total** | **678 + 29 + 96** | ✅ Pass |
 
 ---
 
@@ -212,6 +233,8 @@ daml test
 ┌─────────────────────────────────────────────────────────────┐
 │                    CANTON NETWORK (DAML)                     │
 │  MintedMUSD ─── CantonSMUSD ─── CantonDirectMint            │
+│       │              │               │                       │
+│  CantonLending   CantonBoostPool   V3.daml                  │
 │       │                              │                       │
 │       └──────── BridgeProtocol ──────┘                       │
 └─────────────────────────┬───────────────────────────────────┘
@@ -220,6 +243,7 @@ daml test
 ┌─────────────────────────────────────────────────────────────┐
 │                    RELAY SERVICE                             │
 │  validator-node-v2.ts ─── AWS KMS ─── relay-service.ts      │
+│  price-oracle.ts ─── lending-keeper.ts ─── yield-keeper.ts  │
 └─────────────────────────┬───────────────────────────────────┘
                           │ Multi-sig Submission
                           ▼
@@ -229,7 +253,9 @@ daml test
 │                          │                                   │
 │  CollateralVault ─── BorrowModule ─── LiquidationEngine     │
 │                          │                                   │
-│              TreasuryV2 ─── PendleMarketSelector            │
+│       TreasuryV2 ─── PendleStrategyV2 / MorphoLoopStrategy  │
+│                          │                                   │
+│              PriceOracle ─── PendleMarketSelector           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -270,4 +296,4 @@ Telegram: @defi_mark
 
 ---
 
-*Document generated: February 5, 2026*
+*Document updated: February 7, 2026*
