@@ -639,7 +639,8 @@ testEscrowAddCollateral = do
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
       privacyObservers = []
 
-  newEscrowCid <- submit user do
+  -- FIX H-L3: Escrow_AddCollateral now controlled by operator (token proof required at service level)
+  newEscrowCid <- submit operator do
     exerciseCmd escrowCid Escrow_AddCollateral with addAmount = 3000.0
 
   escrow <- queryContractId operator newEscrowCid

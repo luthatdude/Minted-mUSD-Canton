@@ -48,6 +48,11 @@ interface PriceOracleConfig {
   divergenceThresholdPct: number; // Alert if sources diverge > this %
   maxConsecutiveFailures: number; // Circuit breaker threshold
   stablecoinPrice: number;      // Hardcoded USDC/USDCx price
+
+  // FIX PO-04: Off-chain price sanity bounds
+  minPriceUsd: number;          // Absolute floor (reject below)
+  maxPriceUsd: number;          // Absolute ceiling (reject above)
+  maxChangePerUpdatePct: number; // Max % change from last known price
 }
 
 const DEFAULT_CONFIG: PriceOracleConfig = {
@@ -65,6 +70,11 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   divergenceThresholdPct: parseFloat(process.env.DIVERGENCE_THRESHOLD || "5.0"),
   maxConsecutiveFailures: parseInt(process.env.MAX_FAILURES || "10", 10),
   stablecoinPrice: 1.0,
+
+  // FIX PO-04: Off-chain price sanity bounds
+  minPriceUsd: parseFloat(process.env.MIN_PRICE_USD || "0.001"),
+  maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
+  maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
 };
 
 // ============================================================
@@ -356,18 +366,22 @@ export class PriceOracleService {
       }
     }
 
-    // Cross-validation: alert if both sources available but diverge
+    // Cross-validation: block update if both sources available but diverge
+    // FIX PO-01: Divergence now blocks updates instead of just logging
     if (tradecraftResult && templeResult) {
       const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
       const divergencePct = Math.abs(tradecraftResult.price - templeResult.price) / avgPrice * 100;
 
       if (divergencePct > this.config.divergenceThresholdPct) {
-        console.warn(
-          `[PriceOracle] ⚠️  PRICE DIVERGENCE: ${divergencePct.toFixed(2)}% ` +
+        console.error(
+          `[PriceOracle] 🚨 PRICE DIVERGENCE BLOCKED: ${divergencePct.toFixed(2)}% ` +
           `(Tradecraft: $${tradecraftResult.price.toFixed(6)}, Temple: $${templeResult.price.toFixed(6)}). ` +
-          `Using Tradecraft (AMM — harder to manipulate).`
+          `Update rejected — manual review required.`
         );
-        // TODO: Send alert to monitoring (PagerDuty / Slack webhook)
+        throw new Error(
+          `Price divergence ${divergencePct.toFixed(2)}% exceeds threshold ${this.config.divergenceThresholdPct}%. ` +
+          `Update blocked for safety.`
+        );
       }
     }
 
@@ -480,7 +494,24 @@ export class PriceOracleService {
       if (!this.health.paused) {
         try {
           const result = await this.fetchCTNPrice();
-          await this.pushPriceUpdate("CTN", result.price, result.source);
+
+          // FIX PO-04: Off-chain price sanity check (absolute range + rate-of-change)
+          if (result.price < this.config.minPriceUsd || result.price > this.config.maxPriceUsd) {
+            console.error(
+              `[PriceOracle] 🚨 Price $${result.price.toFixed(6)} outside absolute bounds ` +
+              `[$${this.config.minPriceUsd}, $${this.config.maxPriceUsd}]. Update blocked.`
+            );
+          } else if (
+            this.lastCtnPrice > 0 &&
+            Math.abs(result.price - this.lastCtnPrice) / this.lastCtnPrice * 100 > this.config.maxChangePerUpdatePct
+          ) {
+            console.error(
+              `[PriceOracle] 🚨 Price change ${((result.price - this.lastCtnPrice) / this.lastCtnPrice * 100).toFixed(2)}% ` +
+              `exceeds per-update cap of ${this.config.maxChangePerUpdatePct}%. Update blocked.`
+            );
+          } else {
+            await this.pushPriceUpdate("CTN", result.price, result.source);
+          }
         } catch (err) {
           console.error("[PriceOracle] Poll cycle failed:", (err as Error).message);
         }
