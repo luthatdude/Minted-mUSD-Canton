@@ -147,7 +147,13 @@ The relay service is the off-chain bridge coordinator and is **critical to bridg
 
 ## Out of Scope
 
-- `frontend/*` - React frontend (UI only, no security-critical logic)
+- `frontend/*` — React frontend (UI only, no security-critical logic)
+- `contracts/mocks/*` — Test mock contracts (MockERC20, MockAggregatorV3, MockStrategy)
+- `archive/*` — Archived predecessor contracts (BLEBridgeV8.sol, Treasury.sol, DirectMint.sol)
+- `node_modules/*` — Third-party dependencies
+- `test/*` — Hardhat test suite (reference for understanding intent, not audited for correctness)
+- `scripts/*` — Deployment and migration scripts
+- `daml/*Test*.daml` — DAML test scenario files
 
 ---
 
