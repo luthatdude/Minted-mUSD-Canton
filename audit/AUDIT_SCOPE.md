@@ -9,7 +9,7 @@
 ## Repository
 
 **GitHub:** https://github.com/luthatdude/Minted-mUSD-Canton  
-**Commit:** `PENDING` (will be set after push)  
+**Commit:** `cdec82e` (frozen)  
 **Branch:** `main`
 
 ---
