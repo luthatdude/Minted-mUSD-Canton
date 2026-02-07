@@ -1,0 +1,890 @@
+-- | CantonLending
+-- Canton-native lending module with actual token escrowing
+--
+-- Architecture:
+--   Users deposit Canton-native assets (CantonCoin, CantonUSDC, USDCx, CantonSMUSD)
+--   as collateral into escrowed positions. They borrow CantonMUSD against this collateral.
+--
+--   Price feeds come from Temple DEX API (Canton's native DEX), synced by operator.
+--   Liquidations seize escrowed collateral and route through Temple DEX.
+--
+--   Unlike V3.daml's text-based Vault system, this module escrows ACTUAL token contracts.
+--   Collateral is locked on-ledger — not tracked by reference to Ethereum.
+--
+-- Supported Collateral:
+--   - CantonCoin (CTN)   — volatile, Temple DEX price feed, ~65% LTV
+--   - CantonUSDC         — stable 1:1, hardcoded price, ~95% LTV
+--   - USDCx              — stable 1:1 (xReserve bridged), ~95% LTV
+--   - CantonSMUSD        — yield-bearing, globalSharePrice feed, ~90% LTV
+--
+-- Revenue Model:
+--   Interest on borrows → routed to sMUSD stakers (mirroring Ethereum BorrowModule)
+--   Liquidation penalties → keeper bonus + protocol fee
+--   Reserve factor → protocol reserves
+
+module CantonLending where
+
+import DA.Time
+import DA.Text qualified as DA.Text
+import DA.Optional (fromOptional)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonSMUSD (CantonSMUSD(..))
+import CantonBoostPool (CantonCoin(..))
+
+-- ============================================================
+--                     SECTION 1: COLLATERAL CONFIG
+-- ============================================================
+
+-- | Collateral asset type tag
+data CollateralType
+  = CTN_Coin       -- CantonCoin (volatile)
+  | CTN_USDC       -- CantonUSDC (stable)
+  | CTN_USDCx      -- USDCx / xReserve bridged (stable)
+  | CTN_SMUSD      -- CantonSMUSD (yield-bearing stable)
+  deriving (Eq, Show, Ord)
+
+-- | Per-asset collateral parameters (mirrors CollateralVault.sol CollateralConfig)
+data CollateralConfig = CollateralConfig with
+    collateralType         : CollateralType
+    enabled                : Bool
+    collateralFactorBps    : Bps    -- Max LTV. e.g. 6500 = 65% for CTN, 9500 = 95% for USDC
+    liquidationThresholdBps : Bps   -- Liquidation triggers here. e.g. 7500 = 75%
+    liquidationPenaltyBps  : Bps    -- Penalty on seized collateral. e.g. 500 = 5%
+    liquidationBonusBps    : Bps    -- Keeper bonus from penalty. e.g. 250 = 2.5%
+  deriving (Eq, Show)
+
+-- | Default configs for each collateral type
+defaultCTNConfig : CollateralConfig
+defaultCTNConfig = CollateralConfig with
+    collateralType = CTN_Coin
+    enabled = True
+    collateralFactorBps = 6500       -- 65% LTV — volatile asset
+    liquidationThresholdBps = 7500   -- 75% — liquidation trigger
+    liquidationPenaltyBps = 1000     -- 10% penalty
+    liquidationBonusBps = 500        -- 5% keeper bonus
+
+defaultUSDCConfig : CollateralConfig
+defaultUSDCConfig = CollateralConfig with
+    collateralType = CTN_USDC
+    enabled = True
+    collateralFactorBps = 9500       -- 95% LTV — stable
+    liquidationThresholdBps = 9700   -- 97% — tight spread
+    liquidationPenaltyBps = 300      -- 3% penalty
+    liquidationBonusBps = 150        -- 1.5% keeper bonus
+
+defaultUSDCxConfig : CollateralConfig
+defaultUSDCxConfig = CollateralConfig with
+    collateralType = CTN_USDCx
+    enabled = True
+    collateralFactorBps = 9500
+    liquidationThresholdBps = 9700
+    liquidationPenaltyBps = 300
+    liquidationBonusBps = 150
+
+defaultSMUSDConfig : CollateralConfig
+defaultSMUSDConfig = CollateralConfig with
+    collateralType = CTN_SMUSD
+    enabled = True
+    collateralFactorBps = 9000       -- 90% LTV — yield-bearing, slight cooldown risk
+    liquidationThresholdBps = 9300   -- 93%
+    liquidationPenaltyBps = 400      -- 4% penalty
+    liquidationBonusBps = 200        -- 2% keeper bonus
+
+-- ============================================================
+--                     SECTION 2: TEMPLE DEX PRICE FEED
+-- ============================================================
+
+-- | TemplePriceFeed — Oracle fed from Temple DEX API.
+-- Operator syncs prices from Temple's on-chain order book / TWAP.
+-- Each asset gets its own feed. Stale feeds block borrows/withdrawals
+-- but NOT liquidations (liquidations use unsafe/stale-tolerant path).
+template TemplePriceFeed
+  with
+    operator    : Party
+    symbol      : Text           -- e.g. "CTN", "USDC", "USDCx", "sMUSD"
+    priceUsd    : Money          -- USD price (18 decimals)
+    lastUpdated : Time
+    source      : Text           -- e.g. "temple-dex-twap", "hardcoded", "smusd-share-price"
+    observers   : [Party]
+  where
+    signatory operator
+    observer observers
+
+    key (operator, symbol) : (Party, Text)
+    maintainer key._1
+
+    ensure priceUsd > 0.0
+
+    -- | Get price with staleness check (for borrows / withdrawals)
+    nonconsuming choice PriceFeed_GetPrice : Money
+      with
+        requester    : Party
+        maxStaleness : RelTime
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == operator)
+        now <- getTime
+        let age = subTime now lastUpdated
+        assertMsg "PRICE_STALE" (age <= maxStaleness)
+        return priceUsd
+
+    -- | Get price WITHOUT staleness check (for liquidation path)
+    -- Liquidations must proceed even with stale prices to protect protocol solvency
+    nonconsuming choice PriceFeed_GetPriceUnsafe : Money
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == operator)
+        return priceUsd
+
+    -- | Update price from Temple DEX API
+    choice PriceFeed_Update : ContractId TemplePriceFeed
+      with
+        newPriceUsd : Money
+        newSource   : Text
+      controller operator
+      do
+        assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
+        -- Cap price movement to ±50% per update to prevent oracle manipulation
+        let maxPrice = priceUsd * 1.5
+        let minPrice = priceUsd * 0.5
+        assertMsg "PRICE_MOVE_TOO_LARGE" (newPriceUsd >= minPrice && newPriceUsd <= maxPrice)
+        now <- getTime
+        create this with
+          priceUsd = newPriceUsd
+          lastUpdated = now
+          source = newSource
+
+    -- | Emergency price override (bypasses movement cap)
+    -- Only for circuit-breaker scenarios where price moved >50%
+    choice PriceFeed_EmergencyUpdate : ContractId TemplePriceFeed
+      with
+        newPriceUsd : Money
+        reason      : Text
+      controller operator
+      do
+        assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
+        assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
+        now <- getTime
+        create this with
+          priceUsd = newPriceUsd
+          lastUpdated = now
+          source = "emergency-override: " <> reason
+
+-- ============================================================
+--                     SECTION 3: ESCROWED COLLATERAL POSITION
+-- ============================================================
+
+-- | EscrowedCollateral — Actual token contracts locked as collateral.
+-- This is the key difference from V3.daml: we CONSUME the token contract
+-- and track the escrowed amount. Withdrawal recreates the token.
+--
+-- Each user has one EscrowedCollateral per collateral type.
+-- Multi-collateral users have multiple positions.
+template EscrowedCollateral
+  with
+    operator       : Party
+    owner          : Party
+    collateralType : CollateralType
+    amount         : Money          -- Escrowed amount
+    depositedAt    : Time           -- First deposit time
+    lastUpdatedAt  : Time           -- Last deposit/withdrawal time
+  where
+    signatory operator, owner
+
+    ensure amount > 0.0
+
+    key (operator, owner, collateralType) : (Party, Party, CollateralType)
+    maintainer key._1
+
+    -- | Add more collateral to this position (consuming choice — recreates with new total)
+    choice Escrow_AddCollateral : ContractId EscrowedCollateral
+      with
+        addAmount : Money
+      controller owner
+      do
+        assertMsg "ADD_AMOUNT_POSITIVE" (addAmount > 0.0)
+        now <- getTime
+        create this with
+          amount = amount + addAmount
+          lastUpdatedAt = now
+
+    -- | Withdraw collateral (partial) — health check done at LendingService level
+    choice Escrow_WithdrawPartial : (ContractId EscrowedCollateral, Money)
+      with
+        withdrawAmount : Money
+      controller operator  -- Only service can withdraw (after health check)
+      do
+        assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
+        assertMsg "INSUFFICIENT_COLLATERAL" (amount > withdrawAmount)
+        now <- getTime
+        newEscrow <- create this with
+          amount = amount - withdrawAmount
+          lastUpdatedAt = now
+        return (newEscrow, withdrawAmount)
+
+    -- | Withdraw ALL collateral (consuming) — health check done at LendingService level
+    choice Escrow_WithdrawAll : Money
+      controller operator
+      do
+        return amount
+
+    -- | Seize collateral for liquidation (operator-controlled)
+    choice Escrow_Seize : (Optional (ContractId EscrowedCollateral), Money)
+      with
+        seizeAmount : Money
+      controller operator
+      do
+        assertMsg "SEIZE_POSITIVE" (seizeAmount > 0.0)
+        assertMsg "SEIZE_EXCEEDS_BALANCE" (seizeAmount <= amount)
+        now <- getTime
+        if seizeAmount == amount
+          then return (None, seizeAmount)
+          else do
+            newEscrow <- create this with
+              amount = amount - seizeAmount
+              lastUpdatedAt = now
+            return (Some newEscrow, seizeAmount)
+
+-- ============================================================
+--                     SECTION 4: DEBT POSITION
+-- ============================================================
+
+-- | CantonDebtPosition — Tracks mUSD borrowed against escrowed collateral.
+-- Interest accrues per-second using Compound-style model.
+-- One position per user (can have multiple collateral types backing it).
+template CantonDebtPosition
+  with
+    operator          : Party
+    borrower          : Party
+    principalDebt     : Money       -- Original borrowed amount
+    accruedInterest   : Money       -- Interest accumulated since last accrual
+    lastAccrualTime   : Time        -- Last interest accrual timestamp
+    interestRateBps   : Bps         -- Current annual interest rate
+  where
+    signatory operator, borrower
+
+    ensure principalDebt >= 0.0 && accruedInterest >= 0.0
+
+    key (operator, borrower) : (Party, Party)
+    maintainer key._1
+
+    -- | Calculate total debt (principal + accrued + new interest)
+    nonconsuming choice Debt_GetTotalDebt : Money
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester == borrower || requester == operator)
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        return (principalDebt + accruedInterest + newInterest)
+
+    -- | Accrue interest and increase debt (called before borrow/repay/liquidate)
+    choice Debt_AccrueInterest : ContractId CantonDebtPosition
+      with
+        caller : Party
+      controller operator
+      do
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        create this with
+          accruedInterest = accruedInterest + newInterest
+          lastAccrualTime = now
+
+    -- | Add to principal (new borrow)
+    choice Debt_IncreasePrincipal : ContractId CantonDebtPosition
+      with
+        additionalBorrow : Money
+      controller operator
+      do
+        assertMsg "BORROW_POSITIVE" (additionalBorrow > 0.0)
+        create this with
+          principalDebt = principalDebt + additionalBorrow
+
+    -- | Repay debt: interest first, then principal
+    choice Debt_Repay : (ContractId CantonDebtPosition, Money)
+      with
+        repayAmount : Money
+      controller operator
+      do
+        assertMsg "REPAY_POSITIVE" (repayAmount > 0.0)
+        let totalDebt = principalDebt + accruedInterest
+        assertMsg "REPAY_EXCEEDS_DEBT" (repayAmount <= totalDebt)
+        -- Pay interest first, then principal
+        let (remainingRepay, newAccrued) =
+              if repayAmount >= accruedInterest
+                then (repayAmount - accruedInterest, 0.0)
+                else (0.0, accruedInterest - repayAmount)
+        let newPrincipal = if remainingRepay > principalDebt
+                           then 0.0
+                           else principalDebt - remainingRepay
+        let interestPaid = accruedInterest - newAccrued
+        newDebt <- create this with
+          principalDebt = newPrincipal
+          accruedInterest = newAccrued
+        return (newDebt, interestPaid)
+
+    -- | Reduce debt after liquidation (operator-controlled)
+    choice Debt_ReduceForLiquidation : ContractId CantonDebtPosition
+      with
+        reductionAmount : Money
+      controller operator
+      do
+        let totalDebt = principalDebt + accruedInterest
+        assertMsg "REDUCTION_EXCEEDS_DEBT" (reductionAmount <= totalDebt)
+        let (remainingReduction, newAccrued) =
+              if reductionAmount >= accruedInterest
+                then (reductionAmount - accruedInterest, 0.0)
+                else (0.0, accruedInterest - reductionAmount)
+        let newPrincipal = if remainingReduction > principalDebt
+                           then 0.0
+                           else principalDebt - remainingReduction
+        create this with
+          principalDebt = newPrincipal
+          accruedInterest = newAccrued
+
+    -- | Update interest rate (synced from InterestRateService)
+    choice Debt_UpdateRate : ContractId CantonDebtPosition
+      with
+        newRateBps : Bps
+      controller operator
+      do
+        assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
+        assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
+        create this with interestRateBps = newRateBps
+
+-- ============================================================
+--                     SECTION 5: LENDING SERVICE
+-- ============================================================
+
+-- | CantonLendingService — Central coordinator for Canton-native lending.
+-- Manages collateral configs, orchestrates deposits/borrows/liquidations.
+-- Operator syncs prices from Temple DEX API.
+template CantonLendingService
+  with
+    operator           : Party
+    configs            : [CollateralConfig]     -- Per-asset configs
+    totalBorrows       : Money                  -- Global total borrowed
+    interestRateBps    : Bps                    -- Current global borrow rate
+    reserveFactorBps   : Bps                    -- Protocol reserve cut (e.g. 1000 = 10%)
+    protocolReserves   : Money                  -- Accumulated protocol reserves
+    minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
+    closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
+    paused             : Bool
+    -- Master Participation Agreement (for minted mUSD)
+    mpaHash            : Text
+    mpaUri             : Text
+    observers          : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure totalBorrows >= 0.0
+        && reserveFactorBps >= 0 && reserveFactorBps <= 5000
+        && closeFactorBps > 0 && closeFactorBps <= 10000
+        && minBorrow > 0.0
+        && DA.Text.length mpaHash == 64
+        && DA.Text.length mpaUri > 0
+
+    -- ──────────────────────────────────────────────────────
+    --  DEPOSIT COLLATERAL
+    -- ──────────────────────────────────────────────────────
+
+    -- | Deposit CantonCoin as collateral (escrows the actual token)
+    choice Lending_DepositCTN : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user    : Party
+        coinCid : ContractId CantonCoin
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        coin <- fetch coinCid
+        assertMsg "NOT_OWNER" (coin.owner == user)
+        let cfg = getConfig CTN_Coin configs
+        assertMsg "CTN_NOT_ENABLED" cfg.enabled
+
+        -- Consume the actual token (escrow it)
+        archive coinCid
+
+        -- Create or update escrowed position
+        now <- getTime
+        escrowCid <- create EscrowedCollateral with
+          operator
+          owner = user
+          collateralType = CTN_Coin
+          amount = coin.amount
+          depositedAt = now
+          lastUpdatedAt = now
+
+        newService <- create this with {}
+        return (newService, escrowCid)
+
+    -- | Deposit CantonUSDC as collateral
+    choice Lending_DepositUSDC : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user    : Party
+        usdcCid : ContractId CantonUSDC
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        usdc <- fetch usdcCid
+        assertMsg "NOT_OWNER" (usdc.owner == user)
+        let cfg = getConfig CTN_USDC configs
+        assertMsg "USDC_NOT_ENABLED" cfg.enabled
+
+        archive usdcCid
+
+        now <- getTime
+        escrowCid <- create EscrowedCollateral with
+          operator
+          owner = user
+          collateralType = CTN_USDC
+          amount = usdc.amount
+          depositedAt = now
+          lastUpdatedAt = now
+
+        newService <- create this with {}
+        return (newService, escrowCid)
+
+    -- | Deposit USDCx as collateral
+    choice Lending_DepositUSDCx : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user     : Party
+        usdcxCid : ContractId USDCx
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        usdcx <- fetch usdcxCid
+        assertMsg "NOT_OWNER" (usdcx.owner == user)
+        let cfg = getConfig CTN_USDCx configs
+        assertMsg "USDCx_NOT_ENABLED" cfg.enabled
+
+        archive usdcxCid
+
+        now <- getTime
+        escrowCid <- create EscrowedCollateral with
+          operator
+          owner = user
+          collateralType = CTN_USDCx
+          amount = usdcx.amount
+          depositedAt = now
+          lastUpdatedAt = now
+
+        newService <- create this with {}
+        return (newService, escrowCid)
+
+    -- | Deposit CantonSMUSD as collateral
+    choice Lending_DepositSMUSD : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user     : Party
+        smusdCid : ContractId CantonSMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        smusd <- fetch smusdCid
+        assertMsg "NOT_OWNER" (smusd.owner == user)
+        let cfg = getConfig CTN_SMUSD configs
+        assertMsg "SMUSD_NOT_ENABLED" cfg.enabled
+
+        archive smusdCid
+
+        now <- getTime
+        -- sMUSD amount = shares (valued at share price via price feed)
+        escrowCid <- create EscrowedCollateral with
+          operator
+          owner = user
+          collateralType = CTN_SMUSD
+          amount = smusd.shares
+          depositedAt = now
+          lastUpdatedAt = now
+
+        newService <- create this with {}
+        return (newService, escrowCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  BORROW mUSD
+    -- ──────────────────────────────────────────────────────
+
+    -- | Borrow mUSD against escrowed collateral.
+    -- Requires all collateral positions + price feeds to compute health factor.
+    choice Lending_Borrow : (ContractId CantonLendingService, ContractId CantonDebtPosition, ContractId CantonMUSD)
+      with
+        user             : Party
+        borrowAmount     : Money
+        escrowCids       : [ContractId EscrowedCollateral]  -- All user's collateral positions
+        priceFeedCids    : [ContractId TemplePriceFeed]     -- Corresponding price feeds
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
+        assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
+        assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
+
+        -- Calculate total collateral value (weighted by collateralFactorBps)
+        totalWeightedValue <- computeWeightedCollateralValue operator configs escrowCids priceFeedCids True
+
+        -- Check existing debt
+        existingDebt <- getExistingDebt operator user
+
+        -- Health check: totalWeightedValue must cover existing + new debt
+        let totalDebtAfter = existingDebt + borrowAmount
+        assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
+
+        -- Mint mUSD to borrower
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = borrowAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+
+        -- Create or update debt position
+        now <- getTime
+        debtCid <- create CantonDebtPosition with
+          operator
+          borrower = user
+          principalDebt = existingDebt + borrowAmount
+          accruedInterest = 0.0
+          lastAccrualTime = now
+          interestRateBps
+
+        -- Update service
+        newService <- create this with
+          totalBorrows = totalBorrows + borrowAmount
+        return (newService, debtCid, musdCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  REPAY DEBT
+    -- ──────────────────────────────────────────────────────
+
+    -- | Repay mUSD debt. Burns the mUSD token and reduces debt position.
+    choice Lending_Repay : (ContractId CantonLendingService, ContractId CantonDebtPosition)
+      with
+        user      : Party
+        musdCid   : ContractId CantonMUSD
+        debtCid   : ContractId CantonDebtPosition
+      controller user
+      do
+        -- Verify ownership
+        musd <- fetch musdCid
+        assertMsg "NOT_MUSD_OWNER" (musd.owner == user)
+        debt <- fetch debtCid
+        assertMsg "NOT_DEBT_OWNER" (debt.borrower == user)
+
+        -- Accrue interest first
+        accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = user
+
+        -- Burn the mUSD (repayment)
+        exercise musdCid CantonMUSD_Burn
+
+        -- Reduce debt
+        (newDebtCid, interestPaid) <- exercise accruedDebtCid Debt_Repay with
+          repayAmount = musd.amount
+
+        -- Calculate reserve portion of interest
+        let reserveAmount = interestPaid * intToNumeric reserveFactorBps / 10000.0
+        let repayFromBorrows = min musd.amount totalBorrows
+
+        newService <- create this with
+          totalBorrows = totalBorrows - repayFromBorrows
+          protocolReserves = protocolReserves + reserveAmount
+
+        return (newService, newDebtCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  WITHDRAW COLLATERAL
+    -- ──────────────────────────────────────────────────────
+
+    -- | Withdraw collateral. Must pass health check after withdrawal.
+    -- Returns the recreated token to the user.
+    choice Lending_WithdrawCTN : (ContractId CantonLendingService, ContractId CantonCoin)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        -- All remaining escrow positions + feeds for health check
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId TemplePriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
+
+        -- Check health AFTER withdrawal
+        existingDebt <- getExistingDebt operator user
+        if existingDebt > 0.0 then do
+          -- Must check remaining collateral covers debt
+          remainingValue <- computeWeightedCollateralValue operator configs otherEscrowCids priceFeedCids True
+          -- Add value of remaining portion of this escrow (if partial withdrawal)
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_Coin configs
+            -- Get CTN price
+            ctnPrice <- getCtxPrice operator "CTN" priceFeedCids True
+            return (remainingThisEscrow * ctnPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        -- Execute withdrawal
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          pure ()
+
+        -- Recreate the CantonCoin token for the user
+        coinCid <- create CantonCoin with
+          issuer = operator
+          owner = user
+          amount = withdrawAmount
+
+        newService <- create this with {}
+        return (newService, coinCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  LIQUIDATION
+    -- ──────────────────────────────────────────────────────
+
+    -- | Liquidate an undercollateralized position.
+    -- Liquidator repays part of the borrower's debt and receives
+    -- seized collateral at a discount (penalty).
+    -- Uses unsafe price (no staleness check) — liquidations must always proceed.
+    choice Lending_Liquidate : (ContractId CantonLendingService, ContractId CantonLiquidationReceipt)
+      with
+        liquidator       : Party
+        borrower         : Party
+        repayAmount      : Money
+        targetEscrowCid  : ContractId EscrowedCollateral  -- Which collateral to seize
+        debtCid          : ContractId CantonDebtPosition
+        musdCid          : ContractId CantonMUSD           -- Liquidator's mUSD for repayment
+        escrowCids       : [ContractId EscrowedCollateral] -- All borrower's collateral
+        priceFeedCids    : [ContractId TemplePriceFeed]
+      controller liquidator
+      do
+        -- Verify liquidator owns the repayment mUSD
+        musd <- fetch musdCid
+        assertMsg "NOT_MUSD_OWNER" (musd.owner == liquidator)
+        assertMsg "REPAY_AMOUNT_MISMATCH" (musd.amount >= repayAmount)
+
+        -- Fetch debt and accrue interest
+        debt <- fetch debtCid
+        assertMsg "DEBT_OWNER_MISMATCH" (debt.borrower == borrower)
+        accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = liquidator
+
+        -- Check position is actually undercollateralized (UNSAFE price — no staleness check)
+        totalRawValue <- computeRawCollateralValue operator configs escrowCids priceFeedCids False
+        accruedDebt <- fetch accruedDebtCid
+        let totalDebt = accruedDebt.principalDebt + accruedDebt.accruedInterest
+
+        -- Health factor: rawValue weighted by liquidationThreshold / totalDebt
+        totalLiqValue <- computeLiquidationThresholdValue operator configs escrowCids priceFeedCids False
+        let healthFactor = if totalDebt > 0.0 then totalLiqValue / totalDebt else 999.0
+        assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
+
+        -- Close factor limits
+        let maxRepay = totalDebt * intToNumeric closeFactorBps / 10000.0
+        let actualRepay = min repayAmount maxRepay
+
+        -- Seize collateral with penalty
+        targetEscrow <- fetch targetEscrowCid
+        let cfg = getConfig targetEscrow.collateralType configs
+        colPrice <- getCtxPriceByType operator targetEscrow.collateralType priceFeedCids False
+
+        let seizeValueUsd = actualRepay * (10000.0 + intToNumeric cfg.liquidationPenaltyBps) / 10000.0
+        let seizeAmount = seizeValueUsd / colPrice
+        let actualSeize = min seizeAmount targetEscrow.amount
+
+        -- Execute seizure
+        (remainingEscrow, seized) <- exercise targetEscrowCid Escrow_Seize with
+          seizeAmount = actualSeize
+
+        -- Reduce debt
+        newDebtCid <- exercise accruedDebtCid Debt_ReduceForLiquidation with
+          reductionAmount = actualRepay
+
+        -- Burn liquidator's mUSD (repayment)
+        exercise musdCid CantonMUSD_Burn
+
+        -- Calculate keeper bonus vs protocol fee
+        let penaltyValue = actualSeize * colPrice - actualRepay
+        let keeperBonus = penaltyValue * intToNumeric cfg.liquidationBonusBps / intToNumeric cfg.liquidationPenaltyBps
+        let protocolFee = penaltyValue - keeperBonus
+
+        now <- getTime
+        -- Create immutable receipt
+        receiptCid <- create CantonLiquidationReceipt with
+          operator
+          borrower
+          liquidator
+          collateralType = targetEscrow.collateralType
+          debtRepaid = actualRepay
+          collateralSeized = actualSeize
+          collateralPrice = colPrice
+          penalty = penaltyValue
+          keeperBonus
+          protocolFee
+          healthFactorBefore = healthFactor
+          timestamp = now
+
+        let repayFromBorrows = min actualRepay totalBorrows
+        newService <- create this with
+          totalBorrows = totalBorrows - repayFromBorrows
+          protocolReserves = protocolReserves + protocolFee
+
+        return (newService, receiptCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  ADMIN
+    -- ──────────────────────────────────────────────────────
+
+    -- | Update collateral config
+    choice Lending_UpdateConfig : ContractId CantonLendingService
+      with
+        newConfig : CollateralConfig
+      controller operator
+      do
+        let updatedConfigs = map (\c -> if c.collateralType == newConfig.collateralType then newConfig else c) configs
+        create this with configs = updatedConfigs
+
+    -- | Update interest rate (synced from InterestRateService)
+    choice Lending_UpdateRate : ContractId CantonLendingService
+      with
+        newRateBps : Bps
+      controller operator
+      do
+        assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
+        assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
+        create this with interestRateBps = newRateBps
+
+    -- | Pause / unpause
+    choice Lending_SetPaused : ContractId CantonLendingService
+      with
+        newPaused : Bool
+      controller operator
+      do create this with paused = newPaused
+
+    -- | Withdraw protocol reserves
+    choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
+      with
+        amount : Money
+      controller operator
+      do
+        assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = operator
+          amount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+        newService <- create this with
+          protocolReserves = protocolReserves - amount
+        return (newService, musdCid)
+
+-- ============================================================
+--                     SECTION 6: LIQUIDATION RECEIPT
+-- ============================================================
+
+-- | CantonLiquidationReceipt — Immutable audit trail per liquidation.
+template CantonLiquidationReceipt
+  with
+    operator         : Party
+    borrower         : Party
+    liquidator       : Party
+    collateralType   : CollateralType
+    debtRepaid       : Money
+    collateralSeized : Money
+    collateralPrice  : Money
+    penalty          : Money
+    keeperBonus      : Money
+    protocolFee      : Money
+    healthFactorBefore : Money
+    timestamp        : Time
+  where
+    signatory operator
+    observer borrower, liquidator
+
+    ensure debtRepaid > 0.0 && collateralSeized > 0.0
+
+-- ============================================================
+--                     HELPER FUNCTIONS
+-- ============================================================
+
+-- | Look up config for a given collateral type
+getConfig : CollateralType -> [CollateralConfig] -> CollateralConfig
+getConfig ct [] = error ("CONFIG_NOT_FOUND: " <> show ct)
+getConfig ct (c :: cs) = if c.collateralType == ct then c else getConfig ct cs
+
+-- | Get existing debt for a user (returns 0 if no position)
+getExistingDebt : Party -> Party -> Update Money
+getExistingDebt operator user = do
+  debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
+  case debtOpt of
+    None -> return 0.0
+    Some debtCid -> do
+      debt <- fetch debtCid
+      return (debt.principalDebt + debt.accruedInterest)
+
+-- | Get price from feed list by symbol (with staleness check option)
+getCtxPrice : Party -> Text -> [ContractId TemplePriceFeed] -> Bool -> Update Money
+getCtxPrice _ symbol [] _ = error ("PRICE_FEED_NOT_FOUND: " <> symbol)
+getCtxPrice operator symbol (fCid :: rest) safe = do
+  feed <- fetch fCid
+  if feed.symbol == symbol
+    then if safe
+      then exercise fCid PriceFeed_GetPrice with
+        requester = operator
+        maxStaleness = hours 1
+      else exercise fCid PriceFeed_GetPriceUnsafe with
+        requester = operator
+    else getCtxPrice operator symbol rest safe
+
+-- | Get price by collateral type
+getCtxPriceByType : Party -> CollateralType -> [ContractId TemplePriceFeed] -> Bool -> Update Money
+getCtxPriceByType operator CTN_Coin feeds safe = getCtxPrice operator "CTN" feeds safe
+getCtxPriceByType operator CTN_USDC feeds safe = getCtxPrice operator "USDC" feeds safe
+getCtxPriceByType operator CTN_USDCx feeds safe = getCtxPrice operator "USDCx" feeds safe
+getCtxPriceByType operator CTN_SMUSD feeds safe = getCtxPrice operator "sMUSD" feeds safe
+
+-- | Compute total collateral value weighted by collateralFactorBps
+computeWeightedCollateralValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId TemplePriceFeed] -> Bool -> Update Money
+computeWeightedCollateralValue _ _ [] _ _ = return 0.0
+computeWeightedCollateralValue operator cfgs (eCid :: eRest) feeds safe = do
+  escrow <- fetch eCid
+  let cfg = getConfig escrow.collateralType cfgs
+  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  let value = escrow.amount * price * intToNumeric cfg.collateralFactorBps / 10000.0
+  rest <- computeWeightedCollateralValue operator cfgs eRest feeds safe
+  return (value + rest)
+
+-- | Compute total raw collateral value (no LTV weighting)
+computeRawCollateralValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId TemplePriceFeed] -> Bool -> Update Money
+computeRawCollateralValue _ _ [] _ _ = return 0.0
+computeRawCollateralValue operator cfgs (eCid :: eRest) feeds safe = do
+  escrow <- fetch eCid
+  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  let value = escrow.amount * price
+  rest <- computeRawCollateralValue operator cfgs eRest feeds safe
+  return (value + rest)
+
+-- | Compute total collateral value weighted by liquidationThresholdBps
+computeLiquidationThresholdValue : Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId TemplePriceFeed] -> Bool -> Update Money
+computeLiquidationThresholdValue _ _ [] _ _ = return 0.0
+computeLiquidationThresholdValue operator cfgs (eCid :: eRest) feeds safe = do
+  escrow <- fetch eCid
+  let cfg = getConfig escrow.collateralType cfgs
+  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  let value = escrow.amount * price * intToNumeric cfg.liquidationThresholdBps / 10000.0
+  rest <- computeLiquidationThresholdValue operator cfgs eRest feeds safe
+  return (value + rest)
