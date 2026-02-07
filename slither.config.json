@@ -17,10 +17,7 @@
     "events-maths",
     "missing-zero-check"
   ],
-  "filter_paths": [
-    "node_modules",
-    "contracts/mocks"
-  ],
+  "filter_paths": "node_modules,contracts/mocks",
   "exclude_informational": true,
   "exclude_low": true,
   "exclude_optimization": true
