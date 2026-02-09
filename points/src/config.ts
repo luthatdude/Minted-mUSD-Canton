@@ -140,6 +140,65 @@ export const SNAPSHOT_INTERVAL_MS = 60 * 60 * 1000; // Every 1 hour
 export const MIN_VALUE_USD = 1.0;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TOKENOMICS — for implied APY calculation
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const TOKENOMICS = {
+  /** Total supply of Minted token */
+  totalSupply: 1_000_000_000,
+
+  /** Fully diluted valuation at launch ($) */
+  launchFDV: 100_000_000,
+
+  /** Token price at launch FDV */
+  get tokenPrice(): number {
+    return this.launchFDV / this.totalSupply; // $0.10
+  },
+
+  /** Percentage of supply allocated to points airdrop */
+  airdropPct: 0.05, // 5%
+
+  /** Tokens allocated to airdrop */
+  get airdropTokens(): number {
+    return this.totalSupply * this.airdropPct; // 50,000,000
+  },
+
+  /** USD value of airdrop at launch FDV */
+  get airdropValueUsd(): number {
+    return this.airdropTokens * this.tokenPrice; // $5,000,000
+  },
+
+  /** Total program duration in days (Mar 1 – Dec 1, 2026) */
+  get programDays(): number {
+    const start = SEASONS[0].startDate.getTime();
+    const end = SEASONS[SEASONS.length - 1].endDate.getTime();
+    return (end - start) / (1000 * 60 * 60 * 24);
+  },
+};
+
+/**
+ * Get the time-weighted effective multiplier for an action across
+ * all seasons (or remaining seasons from now).
+ *
+ * This is what a user would earn on average if they stayed in for
+ * the entire program.
+ */
+export function getEffectiveMultiplier(action: PointAction): number {
+  let totalWeightedMult = 0;
+  let totalDays = 0;
+
+  for (const season of SEASONS) {
+    const days =
+      (season.endDate.getTime() - season.startDate.getTime()) / (1000 * 60 * 60 * 24);
+    const mult = season.multipliers[action] ?? 0;
+    totalWeightedMult += mult * days;
+    totalDays += days;
+  }
+
+  return totalDays > 0 ? totalWeightedMult / totalDays : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CONTRACT ADDRESSES (Sepolia — update for mainnet)
 // ═══════════════════════════════════════════════════════════════════════════
 
