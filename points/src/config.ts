@@ -156,16 +156,16 @@ export const TOKENOMICS = {
   },
 
   /** Percentage of supply allocated to points airdrop */
-  airdropPct: 0.05, // 5%
+  airdropPct: 0.01, // 1%
 
   /** Tokens allocated to airdrop */
   get airdropTokens(): number {
-    return this.totalSupply * this.airdropPct; // 50,000,000
+    return this.totalSupply * this.airdropPct; // 10,000,000
   },
 
   /** USD value of airdrop at launch FDV */
   get airdropValueUsd(): number {
-    return this.airdropTokens * this.tokenPrice; // $5,000,000
+    return this.airdropTokens * this.tokenPrice; // $1,000,000
   },
 
   /** Total program duration in days (Mar 1 – Dec 1, 2026) */
