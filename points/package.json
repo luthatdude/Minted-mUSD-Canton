@@ -1,0 +1,28 @@
+{
+  "name": "@minted/points",
+  "version": "1.0.0",
+  "description": "Minted Points System — Off-chain points tracking for Minted token airdrop",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "snapshot": "ts-node -e \"import { takeSnapshot } from './src/snapshot'; import { processSnapshots } from './src/calculator'; takeSnapshot().then(processSnapshots)\"",
+    "stats": "ts-node -e \"import { printActionBreakdown } from './src/calculator'; import { SEASONS } from './src/config'; SEASONS.forEach(s => printActionBreakdown(s.id))\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
