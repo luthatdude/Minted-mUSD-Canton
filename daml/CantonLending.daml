@@ -2,7 +2,7 @@
 -- Canton-native lending module with actual token escrowing
 --
 -- Architecture:
---   Users deposit Canton-native assets (CantonCoin, CantonUSDC, USDCx, CantonSMUSD)
+--   Users deposit Canton-native assets (CantonCoin, CantonSMUSD)
 --   as collateral into escrowed positions. They borrow CantonMUSD against this collateral.
 --
 --   Price feeds from Tradecraft DEX API (primary, no auth) and Temple DEX API (fallback).
@@ -13,9 +13,11 @@
 --
 -- Supported Collateral:
 --   - CantonCoin (CTN)   — volatile, Temple DEX price feed, ~65% LTV
---   - CantonUSDC         — stable 1:1, hardcoded price, ~95% LTV
---   - USDCx              — stable 1:1 (xReserve bridged), ~95% LTV
 --   - CantonSMUSD        — yield-bearing, globalSharePrice feed, ~90% LTV
+--
+-- Deprecated Collateral (use CantonDirectMint instead for 1:1 minting):
+--   - CantonUSDC         — disabled, DirectMint_Mint gives 1:1
+--   - USDCx              — disabled, DirectMint_MintWithUSDCx gives 1:1
 --
 -- Revenue Model:
 --   Interest on borrows → routed to sMUSD stakers (mirroring Ethereum BorrowModule)
@@ -64,19 +66,21 @@ defaultCTNConfig = CollateralConfig with
     liquidationPenaltyBps = 1000     -- 10% penalty
     liquidationBonusBps = 500        -- 5% keeper bonus
 
+-- | DEPRECATED: Use CantonDirectMint.DirectMint_Mint for USDC → mUSD (1:1, no borrow cost)
 defaultUSDCConfig : CollateralConfig
 defaultUSDCConfig = CollateralConfig with
     collateralType = CTN_USDC
-    enabled = True
+    enabled = False                  -- Disabled: DirectMint gives 1:1, no reason to borrow
     collateralFactorBps = 9500       -- 95% LTV — stable
     liquidationThresholdBps = 9700   -- 97% — tight spread
     liquidationPenaltyBps = 300      -- 3% penalty
     liquidationBonusBps = 150        -- 1.5% keeper bonus
 
+-- | DEPRECATED: Use CantonDirectMint.DirectMint_MintWithUSDCx for USDCx → mUSD (1:1, no borrow cost)
 defaultUSDCxConfig : CollateralConfig
 defaultUSDCxConfig = CollateralConfig with
     collateralType = CTN_USDCx
-    enabled = True
+    enabled = False                  -- Disabled: DirectMint gives 1:1, no reason to borrow
     collateralFactorBps = 9500
     liquidationThresholdBps = 9700
     liquidationPenaltyBps = 300
