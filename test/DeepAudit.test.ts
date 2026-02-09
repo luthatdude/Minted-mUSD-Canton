@@ -718,7 +718,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const reserve = await treasury.reserveBalance();
       const total = await treasury.totalValue();
       const reservePct = (reserve * 10000n) / total;
-      // Default reserve is 10% (1000 bps)
+      // TreasuryV2 reserve buffer is 10% (1000 bps) — separate from InterestRateModel reserveFactor
       expect(reservePct).to.be.gte(900n);
       expect(reservePct).to.be.lte(1100n);
     });
