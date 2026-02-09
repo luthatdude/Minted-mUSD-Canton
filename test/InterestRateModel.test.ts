@@ -24,7 +24,7 @@ describe("InterestRateModel", function () {
       expect(await model.multiplierBps()).to.equal(1000);       // 10%
       expect(await model.kinkBps()).to.equal(8000);             // 80%
       expect(await model.jumpMultiplierBps()).to.equal(5000);   // 50%
-      expect(await model.reserveFactorBps()).to.equal(1000);    // 10%
+      expect(await model.reserveFactorBps()).to.equal(5000);    // 50%
     });
 
     it("Should grant RATE_ADMIN_ROLE to admin", async function () {
@@ -123,8 +123,8 @@ describe("InterestRateModel", function () {
       const borrows = ethers.parseEther("500"); // 50% util
       
       // BorrowRate = 700 bps
-      // SupplyRate = 700 * 5000 * 9000 / (10000 * 10000) = 315 bps
-      expect(await model.getSupplyRateAnnual(borrows, supply)).to.equal(315);
+      // SupplyRate = 700 * 5000 * 5000 / (10000 * 10000) = 175 bps
+      expect(await model.getSupplyRateAnnual(borrows, supply)).to.equal(175);
     });
   });
 
@@ -158,9 +158,9 @@ describe("InterestRateModel", function () {
       const interest = ethers.parseEther("100");
       const [supplierAmount, reserveAmount] = await model.splitInterest(interest);
 
-      // 10% reserve factor
-      expect(reserveAmount).to.equal(ethers.parseEther("10"));
-      expect(supplierAmount).to.equal(ethers.parseEther("90"));
+      // 50% reserve factor
+      expect(reserveAmount).to.equal(ethers.parseEther("50"));
+      expect(supplierAmount).to.equal(ethers.parseEther("50"));
     });
   });
 
@@ -247,7 +247,7 @@ describe("InterestRateModel", function () {
       expect(multiplier).to.equal(1000);
       expect(kink).to.equal(8000);
       expect(jump).to.equal(5000);
-      expect(reserve).to.equal(1000);
+      expect(reserve).to.equal(5000);
     });
   });
 });
