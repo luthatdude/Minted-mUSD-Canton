@@ -77,8 +77,7 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
 
   collateralConfigs: {
     "CTN_Coin": { ltvBps: 6500, liqThresholdBps: 7500, penaltyBps: 1000, bonusBps: 500 },
-    "CTN_USDC": { ltvBps: 9500, liqThresholdBps: 9700, penaltyBps: 300, bonusBps: 150 },
-    "CTN_USDCx": { ltvBps: 9500, liqThresholdBps: 9700, penaltyBps: 300, bonusBps: 150 },
+    // CTN_USDC and CTN_USDCx removed — users should use DirectMint for 1:1 stablecoin→mUSD
     "CTN_SMUSD": { ltvBps: 9000, liqThresholdBps: 9300, penaltyBps: 400, bonusBps: 200 },
   },
 
@@ -227,9 +226,6 @@ export class LendingKeeperBot {
     switch (collateralType) {
       case "CTN_Coin":
         return this.oracle.getLastCTNPrice();
-      case "CTN_USDC":
-      case "CTN_USDCx":
-        return 1.0;  // Stablecoins hardcoded
       case "CTN_SMUSD":
         return this.config.smusdPrice; // FIX LK-03: Configurable via SMUSD_PRICE env var
       default:

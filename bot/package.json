@@ -7,7 +7,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "monitor": "ts-node src/monitor.ts"
+    "monitor": "ts-node src/monitor.ts",
+    "sniper": "ts-node src/pendle-sniper.ts",
+    "sniper:prod": "node dist/pendle-sniper.js",
+    "alerts": "ts-node src/pool-alerts.ts",
+    "alerts:prod": "node dist/pool-alerts.js",
+    "scanner": "ts-node src/yield-scanner.ts",
+    "scanner:prod": "node dist/yield-scanner.js"
   },
   "dependencies": {
     "ethers": "^6.9.0",

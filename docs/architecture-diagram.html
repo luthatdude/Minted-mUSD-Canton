@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Minted mUSD Protocol Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0A0A0F;
+    color: #E6E6E6;
+    font-family: 'Inter', -apple-system, sans-serif;
+    padding: 60px;
+    min-width: 1400px;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .logo svg { flex-shrink: 0; }
+
+  .header h1 {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #FFFFFF;
+  }
+
+  .header .subtitle {
+    font-size: 14px;
+    color: #888;
+    max-width: 800px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  .header .subtitle strong {
+    color: #BBB;
+  }
+
+  /* Layer blocks */
+  .layer {
+    border-radius: 16px;
+    padding: 32px;
+    margin-bottom: 0;
+    position: relative;
+  }
+
+  .layer-canton {
+    background: linear-gradient(135deg, #0D1B2A 0%, #0F1F30 100%);
+    border: 1px solid #1A3A5C;
+  }
+
+  .layer-relay {
+    background: linear-gradient(135deg, #1A1A24 0%, #1E1E2A 100%);
+    border: 1px solid #2A2A3C;
+  }
+
+  .layer-ethereum {
+    background: linear-gradient(135deg, #1A0D2E 0%, #1F1035 100%);
+    border: 1px solid #3A1A5C;
+  }
+
+  .layer-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .layer-canton .layer-label { color: #4DA6FF; }
+  .layer-relay .layer-label { color: #A0A0B0; }
+  .layer-ethereum .layer-label { color: #A855F7; }
+
+  .layer-label .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .layer-canton .dot { background: #4DA6FF; box-shadow: 0 0 8px #4DA6FF88; }
+  .layer-relay .dot { background: #A0A0B0; box-shadow: 0 0 8px #A0A0B088; }
+  .layer-ethereum .dot { background: #A855F7; box-shadow: 0 0 8px #A855F788; }
+
+  /* Module cards */
+  .modules {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .module {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+
+  .module:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .module-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin-bottom: 4px;
+  }
+
+  .module-type {
+    font-size: 11px;
+    font-weight: 500;
+    color: #666;
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .layer-canton .module-type { color: #4DA6FF88; }
+  .layer-ethereum .module-type { color: #A855F788; }
+
+  .module-features {
+    list-style: none;
+    padding: 0;
+  }
+
+  .module-features li {
+    font-size: 12px;
+    color: #999;
+    padding: 3px 0;
+    padding-left: 16px;
+    position: relative;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .module-features li::before {
+    content: '›';
+    position: absolute;
+    left: 4px;
+    color: #555;
+  }
+
+  /* Wide module (bridge, compliance) */
+  .module-wide {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+
+  .module-wide .module-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #FFFFFF;
+    margin-bottom: 6px;
+  }
+
+  .module-wide p {
+    font-size: 12px;
+    color: #888;
+    line-height: 1.5;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .module-wide .flow-arrows {
+    display: flex;
+    gap: 24px;
+    margin-top: 8px;
+  }
+
+  .flow-arrows .flow {
+    font-size: 11px;
+    color: #666;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .flow-arrows .flow span {
+    color: #999;
+  }
+
+  /* Connector between layers */
+  .connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px 0;
+    position: relative;
+  }
+
+  .connector-line {
+    width: 2px;
+    height: 40px;
+    position: relative;
+  }
+
+  .connector-canton .connector-line {
+    background: linear-gradient(to bottom, #4DA6FF44, #A0A0B044);
+  }
+
+  .connector-ethereum .connector-line {
+    background: linear-gradient(to bottom, #A0A0B044, #A855F744);
+  }
+
+  .connector-labels {
+    display: flex;
+    gap: 48px;
+    align-items: center;
+  }
+
+  .connector-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #555;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+  }
+
+  .connector-icon {
+    font-size: 16px;
+    color: #444;
+  }
+
+  /* Relay layer specifics */
+  .relay-content {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  .relay-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+
+  .relay-item .ri-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #CCC;
+    margin-bottom: 4px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .relay-item .ri-desc {
+    font-size: 11px;
+    color: #777;
+    line-height: 1.4;
+  }
+
+  /* Treasury special card */
+  .treasury-area {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 12px;
+  }
+
+  .treasury-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    color: #555;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    gap: 4px;
+  }
+
+  .treasury-arrow .arrow-line {
+    width: 2px;
+    height: 30px;
+    background: rgba(168, 85, 247, 0.3);
+  }
+
+  /* Footer note */
+  .footer-note {
+    text-align: center;
+    margin-top: 32px;
+    padding: 16px 24px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+  }
+
+  .footer-note p {
+    font-size: 13px;
+    color: #888;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .footer-note strong {
+    color: #CCC;
+  }
+
+  /* Ethereum bottom section with treasury */
+  .eth-bottom {
+    display: grid;
+    grid-template-columns: 3fr 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+
+  .eth-bottom .modules {
+    margin-bottom: 0;
+  }
+
+  .treasury-card {
+    background: rgba(168, 85, 247, 0.06);
+    border: 1px solid rgba(168, 85, 247, 0.2);
+    border-radius: 12px;
+    padding: 20px;
+    position: relative;
+  }
+
+  .treasury-card .module-name { color: #C084FC; }
+  .treasury-card .module-type { color: #A855F766; }
+
+  .treasury-connector {
+    position: absolute;
+    left: -32px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .treasury-connector .tc-line {
+    width: 24px;
+    height: 2px;
+    background: rgba(168, 85, 247, 0.25);
+  }
+
+  .treasury-connector .tc-arrow {
+    color: #A855F766;
+    font-size: 12px;
+  }
+
+  /* Tags */
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-right: 6px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .tag-canton { background: #4DA6FF15; color: #4DA6FF; border: 1px solid #4DA6FF33; }
+  .tag-eth { background: #A855F715; color: #A855F7; border: 1px solid #A855F733; }
+  .tag-relay { background: #A0A0B015; color: #A0A0B0; border: 1px solid #A0A0B033; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="41" viewBox="0 0 96 97" fill="none">
+        <path d="M0 96.3209V0H14.515L47.826 68.2279L81.137 0H95.652V96.3209H80.602V34.5819L51.037 96.3209H44.615L15.117 34.5819V96.3209H0Z" fill="#E6E6E6"/>
+      </svg>
+      <h1>Minted mUSD Protocol</h1>
+    </div>
+    <p class="subtitle">
+      Cross-chain stablecoin protocol spanning <strong>Canton Network</strong> (DAML) and <strong>Ethereum</strong> (Solidity). 
+      mUSD is minted 1:1 against stablecoins. Canton serves as the institutional-grade accounting, compliance, and settlement layer; 
+      Ethereum serves as the yield and DeFi execution layer.
+    </p>
+  </div>
+
+  <!-- Canton Layer -->
+  <div class="layer layer-canton">
+    <div class="layer-label"><span class="dot"></span> Canton Network — DAML</div>
+
+    <div class="modules">
+      <div class="module">
+        <div class="module-name">MintedMUSD</div>
+        <div class="module-type">DAML Asset</div>
+        <ul class="module-features">
+          <li>Split / Merge</li>
+          <li>Transfer</li>
+          <li>MPA agreement</li>
+          <li>BridgeToETH</li>
+        </ul>
+      </div>
+      <div class="module">
+        <div class="module-name">CantonSMUSD</div>
+        <div class="module-type">Yield Vault</div>
+        <ul class="module-features">
+          <li>Deposit</li>
+          <li>Withdraw</li>
+          <li>Yield accrual</li>
+          <li>CooldownTicket</li>
+        </ul>
+      </div>
+      <div class="module">
+        <div class="module-name">Leveraged Vault</div>
+        <div class="module-type">CDP</div>
+        <ul class="module-features">
+          <li>AdjustLeverage (atomic)</li>
+          <li>Repay / Withdraw</li>
+          <li>Liquidate</li>
+        </ul>
+      </div>
+      <div class="module">
+        <div class="module-name">CantonDirectMint</div>
+        <div class="module-type">Mint / Redeem</div>
+        <ul class="module-features">
+          <li>Deposit stables</li>
+          <li>Mint / Burn mUSD</li>
+          <li>Rate limiting</li>
+          <li>Compliance hook</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="module-wide">
+      <div class="module-name">Canton Bridge Module</div>
+      <div class="flow-arrows">
+        <div class="flow">bridgeToEthereum() <span>→ Burns mUSD → Attestation → Validators sign → Relay</span></div>
+      </div>
+      <div class="flow-arrows" style="margin-top: 4px;">
+        <div class="flow">receiveFromEthereum() <span>← Validates attestation → Mints Canton mUSD</span></div>
+      </div>
+    </div>
+
+    <div class="module-wide">
+      <div class="module-name">ComplianceRegistry</div>
+      <p>Blacklist · Freeze · ValidateMint · ValidateTransfer · ValidateRedemption</p>
+    </div>
+  </div>
+
+  <!-- Connector Canton → Relay -->
+  <div class="connector connector-canton">
+    <div class="connector-line"></div>
+    <div class="connector-labels">
+      <div class="connector-label">3-of-5 Attestation ↓</div>
+      <div class="connector-label">↑ 3-of-5 Attestation</div>
+    </div>
+    <div class="connector-line"></div>
+  </div>
+
+  <!-- Relay Layer -->
+  <div class="layer layer-relay">
+    <div class="layer-label"><span class="dot"></span> Relay Service — TypeScript</div>
+
+    <div class="relay-content">
+      <div class="relay-item">
+        <div class="ri-name">relay-service.ts</div>
+        <div class="ri-desc">Watches Canton for finalized attestations, submits to BLEBridgeV9</div>
+      </div>
+      <div class="relay-item">
+        <div class="ri-name">validator-node-v2.ts</div>
+        <div class="ri-desc">Canton Asset API + AWS KMS signing + collateral ratio checks</div>
+      </div>
+      <div class="relay-item">
+        <div class="ri-name">Docker Compose</div>
+        <div class="ri-desc">Relay + 3 validators, secrets, health checks, resource limits</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector Relay → Ethereum -->
+  <div class="connector connector-ethereum">
+    <div class="connector-line"></div>
+    <div class="connector-labels">
+      <div class="connector-label">Attestation ↓</div>
+      <div class="connector-label">↑ Attestation</div>
+    </div>
+    <div class="connector-line"></div>
+  </div>
+
+  <!-- Ethereum Layer -->
+  <div class="layer layer-ethereum">
+    <div class="layer-label"><span class="dot"></span> Ethereum — Solidity</div>
+
+    <div class="module-wide" style="border-color: rgba(168, 85, 247, 0.2); background: rgba(168, 85, 247, 0.03);">
+      <div class="module-name" style="color: #C084FC;">BLEBridgeV9</div>
+      <p>24h rate-limited supply cap · Validates sigs · Collateral ratio enforcement · Nonce replay protection · Emergency controls</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 3fr 1fr; gap: 16px;">
+      <div class="modules" style="margin-bottom: 0;">
+        <div class="module">
+          <div class="module-name">MUSD</div>
+          <div class="module-type">ERC-20</div>
+          <ul class="module-features">
+            <li>Transfer</li>
+            <li>Approve</li>
+            <li>Blacklist</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="module-name">SMUSD</div>
+          <div class="module-type">ERC-4626</div>
+          <ul class="module-features">
+            <li>Deposit</li>
+            <li>Withdraw</li>
+            <li>Yield accrual</li>
+          </ul>
+        </div>
+        <div class="module">
+          <div class="module-name">Leveraged Vaults</div>
+          <div class="module-type">CDP Suite</div>
+          <ul class="module-features">
+            <li>CollateralVault</li>
+            <li>BorrowModule</li>
+            <li>LiquidationEngine</li>
+            <li>PriceOracle</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="treasury-card">
+        <div class="module-name">TreasuryV2</div>
+        <div class="module-type">USDC Pool</div>
+        <ul class="module-features">
+          <li>Strategies</li>
+          <li>Yield → sMUSD</li>
+          <li>PendleSelector</li>
+          <li>MorphoLoop</li>
+        </ul>
+        <div class="treasury-connector">
+          <div class="tc-arrow">◂</div>
+          <div class="tc-line"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 16px;">
+      <div class="module" style="max-width: 320px;">
+        <div class="module-name">DirectMintV2</div>
+        <div class="module-type">Mint / Redeem</div>
+        <ul class="module-features">
+          <li>Deposit USDC</li>
+          <li>Mint / Burn mUSD</li>
+          <li>Redeem USDC</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer-note">
+    <p><strong>Global Supply</strong> = Canton mUSD + Ethereum mUSD <span style="color: #555;">( conserved across bridge operations )</span></p>
+  </div>
+
+</div>
+</body>
+</html>
