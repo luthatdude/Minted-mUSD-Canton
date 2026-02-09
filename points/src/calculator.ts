@@ -15,6 +15,8 @@ import {
   getCurrentSeason,
   getSeasonById,
   SEASONS,
+  TOKENOMICS,
+  getEffectiveMultiplier,
   type SeasonConfig,
 } from "./config";
 import {
@@ -258,4 +260,113 @@ export function printActionBreakdown(seasonId: number): void {
   }
 
   console.log(`\n  ${"TOTAL".padEnd(30)}     ${grandTotal.toLocaleString().padStart(15)} pts\n`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMPLIED APY — based on tokenomics
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Implied APY from points airdrop, given an assumed weighted TVL.
+ *
+ * The math:
+ *   - Total airdrop = $5,000,000 (50M tokens × $0.10)
+ *   - Weighted TVL = Σ(user_value × user_multiplier) across all users
+ *   - Your share = (your_value × your_multiplier) / weighted_TVL
+ *   - Your airdrop $ = $5M × your_share
+ *   - Annualized APY = (airdrop_$ / your_value) × (365 / program_days)
+ *
+ * Note: your_value cancels out — APY depends only on your multiplier
+ * and total weighted TVL. A whale and a shrimp in the same action
+ * get the same APY %.
+ *
+ * APY = (airdrop_$ × effective_multiplier / weighted_TVL) × (365 / program_days)
+ */
+export interface ImpliedAPY {
+  action: PointAction;
+  effectiveMultiplier: number;
+  impliedApyPct: number;
+  weightedTvl: number;
+  airdropValueUsd: number;
+  /** Per-season breakdown */
+  perSeason: Array<{
+    seasonId: number;
+    seasonName: string;
+    multiplier: number;
+    seasonApyPct: number;
+  }>;
+}
+
+export function getImpliedAPY(
+  action: PointAction,
+  weightedTvl: number
+): ImpliedAPY | null {
+  if (weightedTvl <= 0) return null;
+
+  const mEff = getEffectiveMultiplier(action);
+  const { airdropValueUsd, programDays } = TOKENOMICS;
+
+  // Full-program annualized APY
+  const impliedApyPct =
+    (airdropValueUsd * mEff / weightedTvl) * (365 / programDays) * 100;
+
+  // Per-season APY (each season is a slice of the total airdrop)
+  const perSeason = SEASONS.map((s) => {
+    const seasonDays =
+      (s.endDate.getTime() - s.startDate.getTime()) / (1000 * 60 * 60 * 24);
+    const mult = s.multipliers[action] ?? 0;
+    // This season's share of total airdrop is proportional to points generated
+    // APY for THIS season only (annualized)
+    const seasonApyPct =
+      (airdropValueUsd * mult / weightedTvl) * (365 / programDays) * 100;
+
+    return {
+      seasonId: s.id,
+      seasonName: s.name,
+      multiplier: mult,
+      seasonApyPct,
+    };
+  });
+
+  return {
+    action,
+    effectiveMultiplier: Math.round(mEff * 100) / 100,
+    impliedApyPct: Math.round(impliedApyPct * 10) / 10,
+    weightedTvl,
+    airdropValueUsd,
+    perSeason,
+  };
+}
+
+/**
+ * Generate a full implied APY table across all actions and TVL scenarios.
+ */
+export function getImpliedAPYTable(
+  weightedTvl: number
+): ImpliedAPY[] {
+  return Object.values(PointAction)
+    .map((action) => getImpliedAPY(action, weightedTvl))
+    .filter((a): a is ImpliedAPY => a !== null)
+    .sort((a, b) => b.impliedApyPct - a.impliedApyPct);
+}
+
+/**
+ * Convenience: show APY across multiple TVL scenarios
+ */
+export interface APYScenario {
+  weightedTvl: number;
+  actions: Record<string, number>; // action → APY %
+}
+
+export function getAPYScenarios(
+  tvlLevels: number[] = [5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
+): APYScenario[] {
+  return tvlLevels.map((tvl) => {
+    const actions: Record<string, number> = {};
+    for (const action of Object.values(PointAction)) {
+      const apy = getImpliedAPY(action, tvl);
+      if (apy) actions[action] = apy.impliedApyPct;
+    }
+    return { weightedTvl: tvl, actions };
+  });
 }

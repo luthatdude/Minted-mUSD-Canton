@@ -9,6 +9,7 @@
  *   GET  /api/seasons                 — All seasons overview
  *   GET  /api/stats/:seasonId         — Season statistics
  *   GET  /api/projection              — Points projection calculator
+ *   GET  /api/apy                     — Implied APY from token airdrop
  *   GET  /health                      — Health check
  */
 
@@ -31,7 +32,11 @@ import {
   compareActions,
   projectPoints,
   getSeasonStats,
+  getImpliedAPY,
+  getImpliedAPYTable,
+  getAPYScenarios,
 } from "./calculator";
+import { TOKENOMICS } from "./config";
 import { startSnapshotLoop, takeSnapshot } from "./snapshot";
 
 const app = express();
@@ -254,6 +259,77 @@ app.get("/api/projection", (req, res) => {
     });
   } catch (e) {
     console.error("[API] Error computing projection:", e);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IMPLIED APY
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/apy?weightedTvl=25000000
+ * GET /api/apy?weightedTvl=25000000&action=CTN_BOOST_POOL
+ * GET /api/apy/scenarios — APY across multiple TVL levels
+ */
+app.get("/api/apy/scenarios", (_req, res) => {
+  try {
+    const scenarios = getAPYScenarios();
+    res.json({
+      tokenomics: {
+        totalSupply: TOKENOMICS.totalSupply,
+        launchFDV: TOKENOMICS.launchFDV,
+        tokenPrice: TOKENOMICS.tokenPrice,
+        airdropPct: TOKENOMICS.airdropPct,
+        airdropTokens: TOKENOMICS.airdropTokens,
+        airdropValueUsd: TOKENOMICS.airdropValueUsd,
+        programDays: TOKENOMICS.programDays,
+      },
+      note: "Implied APY assumes full-program participation and constant TVL. Actual returns depend on total weighted TVL at time of airdrop.",
+      scenarios,
+    });
+  } catch (e) {
+    console.error("[API] Error fetching APY scenarios:", e);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.get("/api/apy", (req, res) => {
+  try {
+    const weightedTvl = parseFloat(req.query.weightedTvl as string);
+    const action = req.query.action as string | undefined;
+
+    if (isNaN(weightedTvl) || weightedTvl <= 0) {
+      return res.status(400).json({
+        error: "Query param 'weightedTvl' is required (total weighted TVL in USD)",
+        example: "/api/apy?weightedTvl=25000000",
+      });
+    }
+
+    if (action) {
+      if (!Object.values(PointAction).includes(action as PointAction)) {
+        return res.status(400).json({
+          error: `Invalid action. Valid: ${Object.values(PointAction).join(", ")}`,
+        });
+      }
+
+      const apy = getImpliedAPY(action as PointAction, weightedTvl);
+      return res.json(apy);
+    }
+
+    // All actions
+    const table = getImpliedAPYTable(weightedTvl);
+    res.json({
+      weightedTvl,
+      tokenomics: {
+        airdropValueUsd: TOKENOMICS.airdropValueUsd,
+        tokenPrice: TOKENOMICS.tokenPrice,
+        programDays: TOKENOMICS.programDays,
+      },
+      actions: table,
+    });
+  } catch (e) {
+    console.error("[API] Error computing APY:", e);
     res.status(500).json({ error: "Internal server error" });
   }
 });
