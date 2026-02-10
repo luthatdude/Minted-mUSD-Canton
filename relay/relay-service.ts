@@ -189,6 +189,10 @@ class RelayService {
   private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
 
+  // FIX: Dead-letter queue — track retry counts and persist permanently-failed attestations
+  private retryCounts: Map<string, number> = new Map();
+  private static readonly DEAD_LETTER_FILE = "dead-letter-queue.json";
+
   constructor(config: RelayConfig) {
     this.config = config;
 
@@ -544,8 +548,29 @@ class RelayService {
         console.error(`[Relay] Revert reason: ${error.reason}`);
       }
 
-      // Don't mark as processed so we can retry
-      throw error;
+      // FIX: Track retry count and move to dead-letter queue after maxRetries
+      const currentRetries = (this.retryCounts.get(attestationId) || 0) + 1;
+      this.retryCounts.set(attestationId, currentRetries);
+
+      if (currentRetries >= this.config.maxRetries) {
+        console.error(
+          `[Relay] Attestation ${attestationId} exhausted ${this.config.maxRetries} retries — sending to dead-letter queue`
+        );
+        await this.sendToDeadLetterQueue(
+          attestationId,
+          error.reason || error.message || "Unknown error",
+          currentRetries
+        );
+        // Mark as processed so we stop retrying
+        this.processedAttestations.add(attestationId);
+        this.retryCounts.delete(attestationId);
+      } else {
+        console.log(
+          `[Relay] Attestation ${attestationId}: retry ${currentRetries}/${this.config.maxRetries} — will retry on next poll`
+        );
+        // Don't mark as processed so we can retry
+        throw error;
+      }
     }
   }
 
@@ -660,6 +685,56 @@ class RelayService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * FIX: Dead-letter queue — persist permanently-failed attestations to disk
+   * so they can be investigated and manually retried by operators.
+   */
+  private async sendToDeadLetterQueue(
+    attestationId: string,
+    error: string,
+    retryCount: number
+  ): Promise<void> {
+    const fs = await import("fs");
+    const path = await import("path");
+
+    const dlqPath = path.join(process.cwd(), RelayService.DEAD_LETTER_FILE);
+
+    // Load existing dead-letter entries
+    let entries: Array<{
+      attestationId: string;
+      error: string;
+      retryCount: number;
+      timestamp: string;
+    }> = [];
+
+    try {
+      if (fs.existsSync(dlqPath)) {
+        const raw = fs.readFileSync(dlqPath, "utf-8");
+        entries = JSON.parse(raw);
+      }
+    } catch {
+      // If file is corrupt, start fresh
+      entries = [];
+    }
+
+    // Append failed attestation
+    entries.push({
+      attestationId,
+      error,
+      retryCount,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Write atomically (write to temp, then rename)
+    const tmpPath = dlqPath + ".tmp";
+    fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2));
+    fs.renameSync(tmpPath, dlqPath);
+
+    console.error(
+      `[Relay] DEAD-LETTER: Attestation ${attestationId} moved to ${RelayService.DEAD_LETTER_FILE} after ${retryCount} retries`
+    );
   }
 
   /**
