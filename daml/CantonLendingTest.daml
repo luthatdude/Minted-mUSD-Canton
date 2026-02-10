@@ -177,6 +177,10 @@ testDepositCTN = do
 testDepositUSDC : Script ()
 testDepositUSDC = do
   setup <- setupTest
+  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
+  enabledSvcCid <- submit setup.operator do
+    exerciseCmd setup.serviceCid Lending_UpdateConfig with
+      newConfig = defaultUSDCConfig with enabled = True
   -- Create CantonUSDC
   usdcCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonUSDC with
@@ -186,7 +190,7 @@ testDepositUSDC = do
       privacyObservers = []
 
   (newServiceCid, escrowCid) <- submit setup.user do
-    exerciseCmd setup.serviceCid Lending_DepositUSDC with
+    exerciseCmd enabledSvcCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
 
@@ -533,6 +537,10 @@ testLiquidationHealthyPositionFails = do
 testMultiCollateralBorrow : Script ()
 testMultiCollateralBorrow = do
   setup <- setupTest
+  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
+  enabledSvcCid <- submit setup.operator do
+    exerciseCmd setup.serviceCid Lending_UpdateConfig with
+      newConfig = defaultUSDCConfig with enabled = True
   -- Deposit CTN + USDC
   coinCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonCoin with
@@ -549,7 +557,7 @@ testMultiCollateralBorrow = do
       privacyObservers = []
 
   (svc1, ctnEscrowCid) <- submit setup.user do
-    exerciseCmd setup.serviceCid Lending_DepositCTN with
+    exerciseCmd enabledSvcCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
@@ -826,6 +834,10 @@ testUnauthorizedDeposit = do
 testBorrowAgainstUSDCHighLTV : Script ()
 testBorrowAgainstUSDCHighLTV = do
   setup <- setupTest
+  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
+  enabledSvcCid <- submit setup.operator do
+    exerciseCmd setup.serviceCid Lending_UpdateConfig with
+      newConfig = defaultUSDCConfig with enabled = True
   -- Deposit 10000 USDC → 95% LTV → max borrow = 9500
   usdcCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonUSDC with
@@ -835,7 +847,7 @@ testBorrowAgainstUSDCHighLTV = do
       privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
-    exerciseCmd setup.serviceCid Lending_DepositUSDC with
+    exerciseCmd enabledSvcCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
 
