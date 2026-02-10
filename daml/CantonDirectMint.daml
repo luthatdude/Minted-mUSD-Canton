@@ -189,11 +189,10 @@ template CantonMUSD
       controller owner
       do create this with privacyObservers = newObservers
 
-    agreement
-      "By holding or transferring this Canton mUSD token, the owner acknowledges "
-      <> "they are bound by the Master Participation Agreement. "
-      <> "Agreement hash: " <> agreementHash
-      <> " | URI: " <> agreementUri
+    -- NOTE: agreement declaration removed (deprecated in Daml 3.x)
+    -- By holding or transferring this Canton mUSD token, the owner acknowledges
+    -- they are bound by the Master Participation Agreement.
+    -- Agreement hash and URI are stored in the agreementHash / agreementUri fields.
 
     -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal

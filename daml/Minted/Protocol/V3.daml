@@ -222,11 +222,10 @@ template MintedMUSD
       && T.length agreementHash == 64
       && T.length agreementUri > 0
 
-    agreement
-      "By holding or transferring this MintedMUSD token, the owner acknowledges "
-      <> "they are bound by the Master Participation Agreement. "
-      <> "Agreement hash: " <> agreementHash
-      <> " | URI: " <> agreementUri
+    -- NOTE: agreement declaration removed (deprecated in Daml 3.x)
+    -- By holding or transferring this MintedMUSD token, the owner acknowledges
+    -- they are bound by the Master Participation Agreement.
+    -- Agreement hash and URI are stored in the agreementHash / agreementUri fields.
 
     -- | Transfer mUSD to another party (FIX C-2: Proposal pattern for proper authorization)
     -- Creates a TransferProposal that the newOwner must accept
