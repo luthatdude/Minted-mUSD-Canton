@@ -1063,9 +1063,9 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const interest = ethers.parseEther("1000");
       const [supplierAmt, reserveAmt] = await interestRateModel.splitInterest(interest);
 
-      // 10% reserve factor
-      expect(reserveAmt).to.equal(ethers.parseEther("100"));
-      expect(supplierAmt).to.equal(ethers.parseEther("900"));
+      // Default reserve factor is 20% (2000 bps)
+      expect(reserveAmt).to.equal(ethers.parseEther("200"));
+      expect(supplierAmt).to.equal(ethers.parseEther("800"));
     });
   });
 
