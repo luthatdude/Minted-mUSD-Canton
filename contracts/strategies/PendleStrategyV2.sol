@@ -787,13 +787,15 @@ contract PendleStrategyV2 is
     function emergencyWithdraw() external onlyRole(GUARDIAN_ROLE) {
         _pause();
 
+        // FIX: Capture ptBalance before _redeemPt() zeroes it
+        uint256 ptRedeemed = ptBalance;
         uint256 usdcOut = 0;
-        if (ptBalance > 0) {
-            usdcOut = _redeemPt(ptBalance);
+        if (ptRedeemed > 0) {
+            usdcOut = _redeemPt(ptRedeemed);
         }
 
         uint256 balance = usdc.balanceOf(address(this));
-        emit EmergencyWithdraw(ptBalance, balance);
+        emit EmergencyWithdraw(ptRedeemed, balance);
 
         // Keep USDC in contract for treasury to withdraw
     }
