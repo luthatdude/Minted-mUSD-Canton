@@ -424,6 +424,7 @@ template CantonDirectMintService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "NOT_AUTHORIZED_MINTER" (user `elem` authorizedMinters)
 
         -- Compliance check: verify minter is not blacklisted
         whenSome complianceRegistryCid $ \cid ->
@@ -504,6 +505,7 @@ template CantonDirectMintService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "NOT_AUTHORIZED_MINTER" (user `elem` authorizedMinters)
         assertMsg "USDCX_MINTING_DISABLED" (isSome usdcxIssuer)
 
         -- Compliance check: verify minter is not blacklisted
