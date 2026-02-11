@@ -418,14 +418,16 @@ template CantonBoostPoolService
     -- | Operator distributes Canton validator rewards to the pool.
     -- Split: 60% added to pool balance (increases LP share value)
     --        40% accrued to protocol (withdrawable separately)
-    nonconsuming choice DistributeRewards : ContractId CantonBoostPoolService
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice DistributeRewards : ContractId CantonBoostPoolService
       with
         rewardAmount : Money
         epochNumber  : Int
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
         -- FIX M-11: Limit max epoch gap to prevent accounting anomalies from large skips
@@ -436,8 +438,6 @@ template CantonBoostPoolService
         let protocolShare = rewardAmount - lpShare
 
         -- LP share goes into pool Canton balance (share price increases)
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
 
         create this with
           totalCantonDeposited = totalCantonDeposited + lpShare
@@ -452,14 +452,16 @@ template CantonBoostPoolService
 
     -- | Update Canton/mUSD price (from oracle or market data).
     -- Used for deposit cap calculations.
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice SyncCantonPrice : ContractId CantonBoostPoolService
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming
+    choice SyncCantonPrice : ContractId CantonBoostPoolService
       with
         newPriceMusd : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "PRICE_POSITIVE" (newPriceMusd > 0.0)
         -- Cap price change at 20% per update
@@ -467,29 +469,27 @@ template CantonBoostPoolService
         let minPrice = cantonPriceMusd * 0.8
         assertMsg "PRICE_CHANGE_TOO_LARGE" (newPriceMusd >= minPrice && newPriceMusd <= maxPrice)
 
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
 
         create this with cantonPriceMusd = newPriceMusd
 
     -- | Sync the global sMUSD share price (from CantonStakingService).
     -- Keeps deposit cap calculation current as sMUSD yield accrues.
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice SyncSharePrice : ContractId CantonBoostPoolService
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming
+    choice SyncSharePrice : ContractId CantonBoostPoolService
       with
         newGlobalSharePrice : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "SHARE_PRICE_POSITIVE" (newGlobalSharePrice > 0.0)
         -- Cap at 10% decrease (same guard as CantonStakingService)
         let minAllowed = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowed)
 
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
 
         create this with globalSharePrice = newGlobalSharePrice
 
@@ -498,14 +498,16 @@ template CantonBoostPoolService
     -- ──────────────────────────────────────────────
 
     -- | Operator withdraws accumulated protocol Canton rewards (the 40% share).
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice WithdrawProtocolRewards : (ContractId CantonBoostPoolService, ContractId CantonCoin)
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming
+    choice WithdrawProtocolRewards : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         withdrawAmount : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
         assertMsg "INSUFFICIENT_PROTOCOL_REWARDS" (withdrawAmount <= protocolRewardsAccrued)
@@ -516,8 +518,6 @@ template CantonBoostPoolService
           amount = withdrawAmount
           privacyObservers = []  -- Protocol wallet, fully private
 
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
 
         newService <- create this with
           protocolRewardsAccrued = protocolRewardsAccrued - withdrawAmount
@@ -526,14 +526,16 @@ template CantonBoostPoolService
 
     -- | Operator withdraws accumulated protocol fees (entry + exit fees from C-B3 fix).
     -- FIX H-BP2: Without this, protocolFeesAccrued was permanently locked.
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice WithdrawProtocolFees : (ContractId CantonBoostPoolService, ContractId CantonCoin)
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice WithdrawProtocolFees : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         withdrawAmount : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
         assertMsg "INSUFFICIENT_PROTOCOL_FEES" (withdrawAmount <= protocolFeesAccrued)
@@ -544,8 +546,6 @@ template CantonBoostPoolService
           amount = withdrawAmount
           privacyObservers = []  -- Protocol wallet, fully private
 
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
 
         newService <- create this with
           protocolFeesAccrued = protocolFeesAccrued - withdrawAmount
@@ -556,56 +556,55 @@ template CantonBoostPoolService
     --  ADMIN
     -- ──────────────────────────────────────────────
 
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice BoostPool_SetPaused : ContractId CantonBoostPoolService
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice BoostPool_SetPaused : ContractId CantonBoostPoolService
       with
         newPaused : Bool
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
         create this with paused = newPaused
 
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice BoostPool_UpdateFees : ContractId CantonBoostPoolService
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice BoostPool_UpdateFees : ContractId CantonBoostPoolService
       with
         newEntryFeeBps : Bps
         newExitFeeBps  : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "ENTRY_FEE_VALID" (newEntryFeeBps >= 0 && newEntryFeeBps <= 500)
         assertMsg "EXIT_FEE_VALID" (newExitFeeBps >= 0 && newExitFeeBps <= 500)
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
         create this with
           entryFeeBps = newEntryFeeBps
           exitFeeBps = newExitFeeBps
 
-    -- FIX D-H2: Governance-gated + archive self
-    nonconsuming choice BoostPool_UpdateCapRatio : ContractId CantonBoostPoolService
+    -- FIX D-H2: Governance-gated
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice BoostPool_UpdateCapRatio : ContractId CantonBoostPoolService
       with
         newCapRatio : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "CAP_RATIO_VALID" (newCapRatio > 0.0 && newCapRatio <= 1.0)
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
         create this with cantonCapRatio = newCapRatio
 
-    -- FIX D-H2: Archive self (no governance needed — just observer list)
-    nonconsuming choice BoostPool_UpdateObservers : ContractId CantonBoostPoolService
+    -- FIX D-H2: Observer list update
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice BoostPool_UpdateObservers : ContractId CantonBoostPoolService
       with newObservers : [Party]
       controller operator
       do
-        -- FIX D-H2: Archive old service before creating new one
-        archive self
         create this with observers = newObservers

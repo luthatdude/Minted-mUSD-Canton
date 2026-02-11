@@ -646,7 +646,8 @@ template CantonDirectMintService
       controller operator
       do
         -- Verify governance approval
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         -- FIX D-M02: Limit cap changes to max 20% increase per update
@@ -656,20 +657,30 @@ template CantonDirectMintService
         archive self
         create this with supplyCap = newCap
 
+    -- FIX DAML-S6: Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
 
+    -- FIX DAML-S6: Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
@@ -683,7 +694,8 @@ template CantonDirectMintService
       controller operator
       do
         -- Verify governance approval for compliance changes
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self

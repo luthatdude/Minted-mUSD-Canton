@@ -84,54 +84,58 @@ template CantonLoopStrategyConfig
     maintainer key
 
     -- | Update max loops (governance-gated)
-    nonconsuming choice LoopConfig_UpdateMaxLoops : ContractId CantonLoopStrategyConfig
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice LoopConfig_UpdateMaxLoops : ContractId CantonLoopStrategyConfig
       with
         newMaxLoops : Int
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "MAX_LOOPS_RANGE" (newMaxLoops >= 1 && newMaxLoops <= 10)
-        archive self
         create this with config = config with maxLoops = newMaxLoops
 
     -- | Update target LTV (governance-gated)
-    nonconsuming choice LoopConfig_UpdateTargetLtv : ContractId CantonLoopStrategyConfig
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice LoopConfig_UpdateTargetLtv : ContractId CantonLoopStrategyConfig
       with
         newTargetLtvBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "TARGET_LTV_RANGE" (newTargetLtvBps >= 1000 && newTargetLtvBps <= 9500)
-        archive self
         create this with config = config with targetLtvBps = newTargetLtvBps
 
     -- | Update min health factor (governance-gated)
-    nonconsuming choice LoopConfig_UpdateMinHealthFactor : ContractId CantonLoopStrategyConfig
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice LoopConfig_UpdateMinHealthFactor : ContractId CantonLoopStrategyConfig
       with
         newMinHealthFactorBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "MIN_HF_RANGE" (newMinHealthFactorBps >= 11000 && newMinHealthFactorBps <= 30000)
-        archive self
         create this with config = config with minHealthFactorBps = newMinHealthFactorBps
 
     -- | Update compliance registry (governance-gated)
-    nonconsuming choice LoopConfig_SetComplianceRegistry : ContractId CantonLoopStrategyConfig
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice LoopConfig_SetComplianceRegistry : ContractId CantonLoopStrategyConfig
       with
         newComplianceRegistryCid : Optional (ContractId ComplianceRegistry)
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        archive self
         create this with complianceRegistryCid = newComplianceRegistryCid
 
     -- | Read config (nonconsuming, no governance needed)

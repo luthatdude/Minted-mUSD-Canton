@@ -235,7 +235,8 @@ template CantonStakingService
     -- | Sync global share price from Ethereum (replaces old SyncYield)
     -- Called by operator after YieldSyncService calculates global share price
     -- FIX D-H3: Governance-gated admin choice
-    nonconsuming choice SyncGlobalSharePrice : ContractId CantonStakingService
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
         newGlobalSharePrice : Money   -- Global share price from Ethereum
         newGlobalTotalAssets : Money  -- Total assets across both chains
@@ -244,16 +245,14 @@ template CantonStakingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
-
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
 
         create this with
           globalSharePrice = newGlobalSharePrice
@@ -263,7 +262,8 @@ template CantonStakingService
 
     -- | Legacy SyncYield for backwards compatibility (deprecated)
     -- FIX D-H3: Governance-gated admin choice
-    nonconsuming choice SyncYield : ContractId CantonStakingService
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
         yieldAccrued : Money
@@ -271,15 +271,14 @@ template CantonStakingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         -- Convert to global share price model
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
         create this with
           globalSharePrice = newSharePrice
           globalTotalAssets = newTotalTreasuryAssets
@@ -287,14 +286,14 @@ template CantonStakingService
 
     -- | Admin: Pause/unpause
     -- FIX D-H3: Governance-gated admin choice
-    nonconsuming choice Staking_SetPaused : ContractId CantonStakingService
+    -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    choice Staking_SetPaused : ContractId CantonStakingService
       with
         newPaused : Bool
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
         create this with paused = newPaused

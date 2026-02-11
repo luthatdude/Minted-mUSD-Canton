@@ -333,9 +333,13 @@ setInterval(() => {
 }, 300_000);
 
 const server = http.createServer((req, res) => {
-  // FIX INSTITUTIONAL: Rate limit check
-  const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
-    || req.socket.remoteAddress || "unknown";
+  // FIX BE-RATE-01: Use socket.remoteAddress as primary IP source to prevent
+  // X-Forwarded-For spoofing. Only trust X-Forwarded-For behind a known reverse proxy.
+  const trustedProxy = process.env.TRUSTED_PROXY_SUBNET || "";
+  const socketIp = req.socket.remoteAddress || "unknown";
+  const clientIp = trustedProxy && socketIp.startsWith(trustedProxy)
+    ? (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || socketIp
+    : socketIp;
   if (isRateLimited(clientIp)) {
     res.writeHead(429, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Too many requests. Try again later." }));

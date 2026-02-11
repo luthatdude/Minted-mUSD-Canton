@@ -254,7 +254,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
         
@@ -268,7 +269,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
         
@@ -302,7 +304,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
         
@@ -330,7 +333,11 @@ template GovernanceActionLog
   where
     signatory operator, executedBy
 
-    -- No choices - immutable audit record
+    -- FIX DAML-S1: Consuming choice to archive proof after use.
+    -- Prevents governance proof replay — each approval is single-use.
+    choice ConsumeProof : GovernanceActionLog
+      controller operator
+      do return this
 
 -- ============================================================
 --                     5. EMERGENCY PAUSE
@@ -379,7 +386,8 @@ template EmergencyPauseState
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         assertMsg "NOT_PAUSED" isPaused
         now <- getTime
