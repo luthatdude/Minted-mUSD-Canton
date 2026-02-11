@@ -620,8 +620,10 @@ class RelayService {
     messageHash: string
   ): Promise<string[]> {
     const formatted: string[] = [];
-    // FIX IC-08: Use Ethereum-signed message hash for ecrecover validation
-    const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
+    // FIX BE-002: Use raw messageHash for ecrecover validation (NOT EIP-191 prefixed).
+    // Validators sign the raw keccak256 hash. Using hashMessage() would add an EIP-191
+    // prefix, causing ecrecover to recover the wrong address. The on-chain BLEBridgeV9
+    // contract also verifies against the raw hash.
 
     for (const sig of validatorSigs) {
       try {
@@ -661,10 +663,10 @@ class RelayService {
           );
         }
 
-        // FIX IC-08: Pre-verify signature using ecrecover before including
-        // This catches invalid signatures before wasting gas on-chain
+        // FIX IC-08 + BE-002: Pre-verify signature using ecrecover before including.
+        // Use raw messageHash (not EIP-191 prefixed) to match what validators actually signed.
         try {
-          const recoveredAddress = ethers.recoverAddress(ethSignedHash, rsvSignature);
+          const recoveredAddress = ethers.recoverAddress(messageHash, rsvSignature);
           // FIX CRITICAL: Compare to mapped Ethereum address, not DAML Party
           const expectedAddress = validatorEthAddress.toLowerCase();
 
