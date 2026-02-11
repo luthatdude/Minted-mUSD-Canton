@@ -220,11 +220,51 @@ Long-form scroll explainer. Presents the problem with utility tokens → introdu
 
 #### 3.1 Navigation
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ← Back to Minted.app                            [Logo] Minted │
+│  (text link, hover underline)            (wordmark, right-align)│
+└─────────────────────────────────────────────────────────────────┘
+  Sticky · backdrop-blur · z-50 · border-b subtle
+```
+
 - Sticky nav bar at top with backdrop blur
 - Left: "← Back to Minted.app" link
 - Right: "Minted" logo/wordmark
 
 #### 3.2 Section 1 — The Problem
+
+```
+═══ SECTION 1 — THE PROBLEM ══════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│    "Forget everything you know about                            │
+│     ownership in Web3"                                          │
+│    (large hero headline, emphasized)                            │
+│                                                                 │
+│    "Utility tokens lack intrinsic value because they have       │
+│     no equity, ownership, or fundamental link to company        │
+│     performance."                                               │
+│    (sub-headline, muted text)                                   │
+│                                                                 │
+│  ┌─── For Projects ──────────┐  ┌─── For Investors ───────────┐ │
+│  │  ⚠️  (icon, warning tint)  │  │  ⚠️  (icon, warning tint)   │ │
+│  │                            │  │                             │ │
+│  │  • Pure speculation        │  │  • Illiquid speculation     │ │
+│  │  • Regulatory uncertainty  │  │    divorced from performance│ │
+│  │  • Fragmented markets      │  │  • No compliant access to   │ │
+│  │  • No intrinsic value      │  │    equity upside            │ │
+│  │  • Price can never truly   │  │  • Nonsensical valuations   │ │
+│  │    reflect organizational  │  │    for companies earning    │ │
+│  │    performance             │  │    revenue, lacking revenue │ │
+│  │                            │  │    or network effects       │ │
+│  └────────────────────────────┘  └─────────────────────────────┘ │
+│     glass card, negative tint       glass card, negative tint    │
+│     (sm: stacked, lg: side-by-side)                              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **Hero headline — EXACT COPY:**
 > "Forget everything you know about ownership in Web3"
@@ -246,6 +286,27 @@ Long-form scroll explainer. Presents the problem with utility tokens → introdu
 
 #### 3.3 Section 2 — The Answer
 
+```
+═══ SECTION 2 — THE ANSWER ═══════════════════════════════════════
+
+              ── decorative divider / horizontal rule ──
+
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│         "The Answer?"                                           │
+│         (section label, smaller, muted)                         │
+│                                                                 │
+│    "Minted bridges decentralization and **material              │
+│     ownership** through a simple, compliant infrastructure,     │
+│     that unifies utility speculation with **legally backed      │
+│     issuer material events** tied to real valuations."           │
+│                                                                 │
+│    (large text block, max-w-3xl centered, generous              │
+│     vertical padding — this is a visual turning point)          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 **Headline — EXACT COPY:**
 > "Minted bridges decentralization and material ownership through a simple, compliant infrastructure, that unifies utility speculation with legally backed issuer material events tied to real valuations."
 
@@ -256,6 +317,41 @@ Key phrases to emphasize: "material ownership", "legally backed issuer material 
 - Larger vertical padding for visual breathing room
 
 #### 3.4 Section 3 — How It Works
+
+```
+═══ SECTION 3 — HOW IT WORKS ═════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│    "A Modular Staking Pool that can be implemented              │
+│     within any Web3 environment."                               │
+│    (sub-headline, emphasized)                                   │
+│                                                                 │
+│    ┌── Paragraph 1 ──────────────────────────────────────────┐  │
+│    │  When project tokens deposit into the BLE, holders are  │  │
+│    │  recorded via a revolving smart contract registrar…     │  │
+│    │  **Equity Beneficiary changes, Revenue Sharing,         │  │
+│    │  and Acquisition tag-a-long exposure** (bolded)         │  │
+│    └─────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│    ┌── Paragraph 2 ──────────────────────────────────────────┐  │
+│    │  Users are **NOT locked**… freely arbitrage against      │  │
+│    │  the company's NAV… KYC only upon issuer execution…     │  │
+│    └─────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│    ┌── Flow Diagram (optional visual) ───────────────────────┐  │
+│    │                                                         │  │
+│    │  [Token Holders] → [BLE Staking Pool] → [Registrar]     │  │
+│    │                                            ↓            │  │
+│    │                                     [NAV Calculation]    │  │
+│    │                                            ↓            │  │
+│    │                                    [Material Events]     │  │
+│    │                              (Equity · Revenue · Acq.)   │  │
+│    │                                                         │  │
+│    └─────────────────────────────────────────────────────────┘  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **Sub-headline — EXACT COPY:**
 > "A Modular Staking Pool that can be implemented within any Web3 environment."
@@ -277,6 +373,38 @@ Key phrases to bold: "NOT locked", "Equity Beneficiary changes, Revenue Sharing,
 ```
 
 #### 3.5 Section 4 — Ethos
+
+```
+═══ SECTION 4 — ETHOS ════════════════════════════════════════════
+
+              ── decorative border-top divider ──
+
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│    "Ethos"                                                      │
+│    (section label, smaller, muted)                              │
+│                                                                 │
+│    ¶1  Tokens have always acted as representations of           │
+│        access, utility, or governance — but not as an           │
+│        access marker to actual equity…                          │
+│                                                                 │
+│    ¶2  The Web3 world has lacked an infrastructure layer…       │
+│        Minted introduces the first solution…                    │
+│                                                                 │
+│    ¶3  Through Minted's first mover BLE, every token holder     │
+│        can choose… **actual owners** (emphasized)               │
+│                                                                 │
+│    ¶4  By merging permissionless blockchain markets with        │
+│        real-world equity frameworks, Minted redefines what      │
+│        a token can represent and unlocks a future where         │
+│        ownership is **accessible, programmable, and             │
+│        borderless.** ← LARGER TEXT, FINAL SENTENCE              │
+│                                                                 │
+│    (scroll-triggered fade-in for each paragraph)                │
+│    (generous vertical spacing between paragraphs)               │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **Body — EXACT COPY (4 paragraphs):**
 
