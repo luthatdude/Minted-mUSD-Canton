@@ -100,6 +100,7 @@ setupTest = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       complianceRegistryCid = None
+      minKeeperBond = 100.0      -- FIX DAML-R03: Minimum keeper bond
       observers = [user, liquidator]
 
   return TestSetup with ..
@@ -495,6 +496,17 @@ testLiquidation = do
       agreementUri = testMpaUri
       privacyObservers = []
 
+  -- FIX DAML-R03: Create keeper bond for liquidator
+  now <- getTime
+  keeperBondCid <- submitMulti [setup.operator, setup.liquidator] [] do
+    createCmd KeeperBond with
+      operator = setup.operator
+      keeper = setup.liquidator
+      bondAmount = 500.0
+      registeredAt = now
+      slashCount = 0
+      active = True
+
   -- Liquidate (50% close factor → max repay = $550)
   (svc3, receiptCid) <- submit setup.liquidator do
     exerciseCmd svc2 Lending_Liquidate with
@@ -506,6 +518,7 @@ testLiquidation = do
       musdCid = liqMusdCid
       escrowCids = [escrowCid]
       priceFeedCids = [crashedFeedCid]
+      keeperBondCid
 
   -- Verify receipt
   receipt <- queryContractId setup.operator receiptCid
@@ -548,6 +561,17 @@ testLiquidationHealthyPositionFails = do
       agreementUri = testMpaUri
       privacyObservers = []
 
+  -- FIX DAML-R03: Create keeper bond for liquidator
+  now <- getTime
+  keeperBondCid <- submitMulti [setup.operator, setup.liquidator] [] do
+    createCmd KeeperBond with
+      operator = setup.operator
+      keeper = setup.liquidator
+      bondAmount = 500.0
+      registeredAt = now
+      slashCount = 0
+      active = True
+
   -- Liquidation should fail — position is healthy
   submitMustFail setup.liquidator do
     exerciseCmd svc2 Lending_Liquidate with
@@ -559,6 +583,7 @@ testLiquidationHealthyPositionFails = do
       musdCid = liqMusdCid
       escrowCids = [escrowCid]
       priceFeedCids = [setup.ctnFeedCid]
+      keeperBondCid
   debug "✅ 16. Liquidation of healthy position rejected"
 
 -- ============================================================
@@ -832,6 +857,7 @@ testWithdrawReserves = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       complianceRegistryCid = None
+      minKeeperBond = 100.0      -- FIX DAML-R03: Minimum keeper bond
       observers = [setup.user]
 
   govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "withdraw-reserves"
