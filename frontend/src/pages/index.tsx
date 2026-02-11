@@ -6,8 +6,7 @@ import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 // Ethereum pages
-import { DashboardPage } from "./DashboardPage";
-import { MintPage } from "./MintPage";
+import { DashboardMintPage } from "./DashboardMintPage";
 import { StakePage } from "./StakePage";
 import { BorrowPage } from "./BorrowPage";
 import { BridgePage } from "./BridgePage";
@@ -15,8 +14,7 @@ import { AdminPage } from "./AdminPage";
 import { PointsPage } from "./PointsPage";
 
 // Canton pages
-import { CantonDashboard } from "@/components/canton/CantonDashboard";
-import { CantonMint } from "@/components/canton/CantonMint";
+import { CantonDashboardMint } from "@/components/canton/CantonDashboardMint";
 import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
@@ -33,9 +31,7 @@ export default function Home() {
     if (chainState.chain === "canton") {
       switch (page) {
         case "dashboard":
-          return <CantonDashboard />;
-        case "mint":
-          return <CantonMint />;
+          return <CantonDashboardMint />;
         case "stake":
           return <CantonStake />;
         case "borrow":
@@ -47,16 +43,14 @@ export default function Home() {
         case "points":
           return <PointsPage />;
         default:
-          return <CantonDashboard />;
+          return <CantonDashboardMint />;
       }
     }
 
     // Ethereum - pages will use hooks internally
     switch (page) {
       case "dashboard":
-        return <DashboardPage />;
-      case "mint":
-        return <MintPage />;
+        return <DashboardMintPage />;
       case "stake":
         return <StakePage />;
       case "borrow":
@@ -68,7 +62,7 @@ export default function Home() {
       case "admin":
         return <AdminPage />;
       default:
-        return <DashboardPage />;
+        return <DashboardMintPage />;
     }
   }
 
