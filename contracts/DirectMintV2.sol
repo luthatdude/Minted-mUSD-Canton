@@ -223,10 +223,15 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Preview how much USDC user will receive for mUSD redemption
+    /// FIX DM-M01: Include min-fee-of-1 logic to match actual redeem() behavior
     function previewRedeem(uint256 musdAmount) external view returns (uint256 usdcOut, uint256 feeUsdc) {
         uint256 usdcEquivalent = musdAmount / 1e12;
         // Combined calculation to avoid precision loss
         feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
+        // FIX DM-M01: Match redeem() min-fee logic — if fee BPS > 0 but rounds to 0, charge 1 wei
+        if (redeemFeeBps > 0 && feeUsdc == 0 && usdcEquivalent > 0) {
+            feeUsdc = 1;
+        }
         usdcOut = usdcEquivalent - feeUsdc;
     }
 

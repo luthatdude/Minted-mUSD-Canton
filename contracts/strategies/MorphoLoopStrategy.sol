@@ -264,8 +264,8 @@ contract MorphoLoopStrategy is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // Approve Morpho to spend USDC
-        usdc.forceApprove(_morpho, type(uint256).max);
+        // FIX ML-M02: Don't grant infinite approval — use per-operation approvals instead
+        // Approvals are set before each morpho.supply/repay call
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -323,7 +323,12 @@ contract MorphoLoopStrategy is
         // Deleverage to free up the requested amount
         withdrawn = _deleverage(principalToWithdraw);
 
-        totalPrincipal -= principalToWithdraw;
+        // FIX ML-H01: Use actual freed amount, not requested, to prevent principal desync
+        uint256 actualPrincipalReduction = withdrawn > totalPrincipal ? totalPrincipal : withdrawn;
+        if (actualPrincipalReduction > principalToWithdraw) {
+            actualPrincipalReduction = principalToWithdraw;
+        }
+        totalPrincipal -= actualPrincipalReduction;
 
         // Transfer USDC back to Treasury
         usdc.safeTransfer(msg.sender, withdrawn);
@@ -481,6 +486,8 @@ contract MorphoLoopStrategy is
         }
 
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
+            // FIX ML-M02: Per-operation approval instead of infinite
+            usdc.forceApprove(address(morpho), amountToSupply);
             // Supply USDC as collateral
             morpho.supplyCollateral(marketParams, amountToSupply, address(this), "");
             totalSupplied += amountToSupply;
@@ -540,6 +547,8 @@ contract MorphoLoopStrategy is
                 // Only use newly withdrawn funds for repayment
                 uint256 available = balance - startingBalance;
                 uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
+                // FIX ML-M02: Per-operation approval
+                usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
             }
@@ -563,7 +572,8 @@ contract MorphoLoopStrategy is
         // FIX: Track starting balance to calculate actual net freed
         uint256 startingBalance = usdc.balanceOf(address(this));
         
-        for (uint256 i = 0; i < MAX_LOOPS * 2; i++) {
+        // FIX ML-M01: Increase loop count from MAX_LOOPS*2 to MAX_LOOPS*3 to ensure full deleverage
+        for (uint256 i = 0; i < MAX_LOOPS * 3; i++) {
             IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
             
             // Get current borrow
@@ -593,6 +603,8 @@ contract MorphoLoopStrategy is
             uint256 balance = usdc.balanceOf(address(this));
             if (balance > 0) {
                 uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
+                // FIX ML-M02: Per-operation approval for _fullDeleverage repay
+                usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }
         }
@@ -801,11 +813,45 @@ contract MorphoLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════════
     
     /// @dev FIX HIGH: Storage gap for future upgrades - prevents storage collision
-    uint256[40] private __gap;
+    /// FIX: Adjusted from 40 to 38 after adding pendingImplementation + upgradeRequestTime
+    uint256[38] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // UPGRADES
+    // UPGRADES (TIMELOCKED)
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    address public pendingImplementation;
+
+    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
+    uint256 public upgradeRequestTime;
+
+    /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
+    uint256 public constant UPGRADE_DELAY = 48 hours;
+
+    event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
+    event UpgradeCancelled(address indexed cancelledImplementation);
+
+    /// @notice Request a timelocked upgrade
+    function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newImplementation != address(0), "ZERO_ADDRESS");
+        pendingImplementation = newImplementation;
+        upgradeRequestTime = block.timestamp;
+        emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /// @notice Cancel a pending upgrade
+    function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingImplementation;
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+        emit UpgradeCancelled(cancelled);
+    }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
+        require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+    }
 }

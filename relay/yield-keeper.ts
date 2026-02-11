@@ -211,8 +211,9 @@ class YieldKeeper {
       const gasCostWei = gasEstimate * gasPrice;
       const gasCostEth = Number(gasCostWei) / 1e18;
 
-      // Rough ETH price assumption ($2000) - in production, fetch from oracle
-      const gasCostUsd = gasCostEth * 2000;
+      // FIX: Use env-driven ETH price instead of hardcoded constant
+      const ethPriceUsd = parseFloat(process.env.ETH_PRICE_USD || "2000");
+      const gasCostUsd = gasCostEth * ethPriceUsd;
 
       // Estimate daily yield on deployed amount (assume 10% APY)
       const deployableUsd = Number(deployable) / 1e6;

@@ -96,6 +96,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Total interest paid to suppliers (for analytics)
     uint256 public totalInterestPaidToSuppliers;
+
+    /// @notice Interest that accrued as debt but couldn't be minted (supply cap hit)
+    /// @dev Tracked separately so totalBorrows stays in sync with actual mUSD supply.
+    ///      Cleared when a subsequent mint succeeds or admin calls drainUnroutedInterest().
+    uint256 public unroutedInterest;
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -359,7 +364,16 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // as long as the token was properly configured (liqThreshold > 0).
             // Blocking withdrawal traps collateral permanently for indebted users.
             require(enabled || liqThreshold > 0, "TOKEN_NOT_SUPPORTED");
-            uint256 withdrawnValue = oracle.getValueUsd(token, amount);
+            // FIX BM-M02: Use try/catch to handle circuit breaker gracefully
+            // If circuit breaker trips during withdrawal, fall back to unsafe price
+            // rather than DoS-ing the withdrawal entirely
+            uint256 withdrawnValue;
+            try oracle.getValueUsd(token, amount) returns (uint256 val) {
+                withdrawnValue = val;
+            } catch {
+                // Circuit breaker tripped — use unsafe price for withdrawal safety check
+                withdrawnValue = oracle.getValueUsdUnsafe(token, amount);
+            }
             uint256 weightedReduction = (withdrawnValue * liqThreshold) / 10000;
 
             uint256 currentWeighted = _weightedCollateralValue(msg.sender);
@@ -472,7 +486,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                         emit InterestRoutingFailed(supplierAmount, reason);
                     }
                 } catch (bytes memory reason) {
-                    // Supply cap hit — skip routing, interest still accrues as debt
+                    // FIX: Supply cap hit — track as unrouted so totalBorrows stays
+                    // in sync with actual mUSD supply.  The debt still exists but
+                    // the corresponding mUSD was never minted.
+                    unroutedInterest += supplierAmount;
                     emit InterestRoutingFailed(supplierAmount, reason);
                 }
             }

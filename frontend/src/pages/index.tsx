@@ -12,6 +12,7 @@ import { StakePage } from "./StakePage";
 import { BorrowPage } from "./BorrowPage";
 import { BridgePage } from "./BridgePage";
 import { AdminPage } from "./AdminPage";
+import { PointsPage } from "./PointsPage";
 
 // Canton pages
 import { CantonDashboard } from "@/components/canton/CantonDashboard";
@@ -43,6 +44,8 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
+        case "points":
+          return <PointsPage />;
         default:
           return <CantonDashboard />;
       }
@@ -60,6 +63,8 @@ export default function Home() {
         return <BorrowPage />;
       case "bridge":
         return <BridgePage />;
+      case "points":
+        return <PointsPage />;
       case "admin":
         return <AdminPage />;
       default:

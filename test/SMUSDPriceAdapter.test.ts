@@ -162,16 +162,18 @@ describe("SMUSDPriceAdapter", function () {
   // ============================================================
 
   describe("Price Bounds", function () {
-    it("should revert when share price is below minimum (0.95 USD)", async function () {
+    it("should clamp when share price is below minimum (0.95 USD)", async function () {
       await setSharePrice("0.90");
-      await expect(adapter.latestRoundData())
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.latestRoundData();
+      // FIX SPA-M03: price is clamped to minSharePrice instead of reverting
+      expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
 
-    it("should revert when share price exceeds maximum (2.0 USD)", async function () {
+    it("should clamp when share price exceeds maximum (2.0 USD)", async function () {
       await setSharePrice("2.5");
-      await expect(adapter.latestRoundData())
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.latestRoundData();
+      // FIX SPA-M03: price is clamped to maxSharePrice instead of reverting
+      expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
 
     it("should accept price right at minimum bound (0.95 USD)", async function () {
@@ -186,16 +188,18 @@ describe("SMUSDPriceAdapter", function () {
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
 
-    it("should revert when price is just below minimum", async function () {
+    it("should clamp when price is just below minimum", async function () {
       await setSharePrice("0.94");
-      await expect(adapter.latestRoundData())
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.latestRoundData();
+      // FIX SPA-M03: price is clamped to minSharePrice
+      expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
 
-    it("should revert when price is just above maximum", async function () {
+    it("should clamp when price is just above maximum", async function () {
       await setSharePrice("2.01");
-      await expect(adapter.latestRoundData())
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.latestRoundData();
+      // FIX SPA-M03: price is clamped to maxSharePrice
+      expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
 
     it("should respect updated bounds", async function () {
@@ -210,22 +214,23 @@ describe("SMUSDPriceAdapter", function () {
       expect(answer).to.equal(ethers.parseUnits("0.60", 8));
     });
 
-    it("should revert with tightened bounds", async function () {
+    it("should clamp with tightened bounds", async function () {
       await adapter.connect(admin).setSharePriceBounds(
         ethers.parseUnits("1.05", 8),
         ethers.parseUnits("2.0", 8)
       );
 
-      // 1.0 is below the new 1.05 min
+      // 1.0 is below the new 1.05 min — clamps to 1.05
       await setSharePrice("1.0");
-      await expect(adapter.latestRoundData())
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.latestRoundData();
+      expect(answer).to.equal(ethers.parseUnits("1.05", 8));
     });
 
-    it("should revert on getRoundData when price out of bounds", async function () {
+    it("should clamp on getRoundData when price out of bounds", async function () {
       await setSharePrice("0.50");
-      await expect(adapter.getRoundData(1))
-        .to.be.revertedWithCustomError(adapter, "InvalidSharePrice");
+      const [, answer] = await adapter.getRoundData(1);
+      // FIX SPA-M03: clamps to minSharePrice instead of reverting
+      expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
   });
 

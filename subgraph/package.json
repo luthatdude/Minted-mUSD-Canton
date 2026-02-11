@@ -1,0 +1,17 @@
+{
+  "name": "minted-musd-subgraph",
+  "version": "1.0.0",
+  "description": "Subgraph for the Minted mUSD Protocol — indexes all on-chain events for the frontend",
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "graph deploy --node https://api.thegraph.com/deploy/ minted/musd-protocol",
+    "create-local": "graph create --node http://localhost:8020/ minted/musd-protocol",
+    "remove-local": "graph remove --node http://localhost:8020/ minted/musd-protocol",
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 minted/musd-protocol"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-cli": "^0.68.0",
+    "@graphprotocol/graph-ts": "^0.32.0"
+  }
+}

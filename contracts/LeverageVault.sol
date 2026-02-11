@@ -708,8 +708,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice FIX C-4: Emergency close a position when normal close fails (e.g., bad debt)
-    /// @dev Admin can forcibly close, returning whatever collateral remains to the user.
-    ///      Debt is written off — protocol takes the loss rather than trapping user funds.
+    /// @dev Admin can forcibly close. If full repayment fails, collateral stays in
+    ///      the contract for the protocol to recover — NOT returned to user.
+    ///      FIX SOL-C03: Prevents orphaned bad debt (debt in BorrowModule with no backing).
     /// @param user The user whose position to emergency-close
     function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         LeveragePosition storage pos = positions[user];
@@ -720,37 +721,45 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw all collateral from vault to this contract
         uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);
         if (totalCollateralInVault > 0) {
-            // FIX C-04: skipHealthCheck=true — emergency close, debt repaid below
             collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this), true);
         }
 
         // Attempt to repay as much debt as possible
         uint256 debtToRepay = borrowModule.totalDebt(user);
+        bool repaySucceeded = false;
+
         if (debtToRepay > 0 && totalCollateralInVault > 0) {
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, totalCollateralInVault);
             if (musdReceived > 0) {
                 uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
-                // FIX S-C02: Use repayFor to reduce USER's debt, not vault's debt
-                // Previously called repay() which operated on msg.sender (vault), leaving user debt intact
-                // FIX S-H03: Emit event on failure instead of silent catch
-                try borrowModule.repayFor(user, repayAmount) {} catch {
+                // FIX SOL-C03: If repay fails, DO NOT return collateral to user.
+                // Orphaned bad debt is worse than temporarily holding user funds.
+                try borrowModule.repayFor(user, repayAmount) {
+                    repaySucceeded = true;
+                } catch {
                     emit EmergencyRepayFailed(user, repayAmount, musdReceived);
                 }
             }
+        } else if (debtToRepay == 0) {
+            repaySucceeded = true;
         }
 
-        // Send any remaining collateral + mUSD back to the user
-        uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));
-        if (remainingCollateral > 0) {
-            IERC20(collateralToken).safeTransfer(user, remainingCollateral);
-        }
-        uint256 remainingMusd = musd.balanceOf(address(this));
-        if (remainingMusd > 0) {
-            IERC20(address(musd)).safeTransfer(user, remainingMusd);
+        // FIX SOL-C03: Only return remaining assets to user if repay succeeded.
+        // If repay failed, collateral stays in contract for admin recovery via
+        // emergencyWithdraw() — preventing orphaned bad debt.
+        if (repaySucceeded) {
+            uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));
+            if (remainingCollateral > 0) {
+                IERC20(collateralToken).safeTransfer(user, remainingCollateral);
+            }
+            uint256 remainingMusd = musd.balanceOf(address(this));
+            if (remainingMusd > 0) {
+                IERC20(address(musd)).safeTransfer(user, remainingMusd);
+            }
         }
 
-        emit LeverageClosed(user, collateralToken, remainingCollateral, debtToRepay, 0);
+        emit LeverageClosed(user, collateralToken, 0, debtToRepay, 0);
         delete positions[user];
     }
 

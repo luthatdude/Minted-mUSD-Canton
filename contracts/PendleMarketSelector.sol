@@ -523,12 +523,46 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // UPGRADEABILITY
+    // UPGRADEABILITY (TIMELOCKED)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX C-01: UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    address public pendingImplementation;
+
+    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
+    uint256 public upgradeRequestTime;
+
+    /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
+    uint256 public constant UPGRADE_DELAY = 48 hours;
+
+    event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
+    event UpgradeCancelled(address indexed cancelledImplementation);
+
+    /// @notice Request a timelocked upgrade
+    function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newImplementation != address(0), "ZERO_ADDRESS");
+        pendingImplementation = newImplementation;
+        upgradeRequestTime = block.timestamp;
+        emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /// @notice Cancel a pending upgrade
+    function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingImplementation;
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+        emit UpgradeCancelled(cancelled);
+    }
+
+    /// @notice FIX C-01: UUPS upgrade authorization with 48h timelock
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
+        require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+    }
 
     /// @dev FIX H-02: Storage gap for future upgrades
-    uint256[40] private __gap;
+    /// Adjusted from 40 to 38 after adding pendingImplementation + upgradeRequestTime
+    uint256[38] private __gap;
 }

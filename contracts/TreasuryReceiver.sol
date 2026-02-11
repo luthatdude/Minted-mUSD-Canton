@@ -109,6 +109,20 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    /// @notice FIX TR-H01: Event for retry of failed mints
+    event FailedMintRetried(address indexed recipient, uint256 amount, uint256 musdMinted);
+
+    // ============ FIX TR-H01: Failed Mint Tracking ============
+
+    struct FailedMint {
+        address recipient;
+        uint256 amount;
+        uint256 timestamp;
+    }
+
+    /// @notice FIX TR-H01: Track failed mints for admin retry
+    mapping(bytes32 => FailedMint) public failedMints;
+    bytes32[] public failedMintIds;
 
     // ============ Errors ============
     
@@ -198,6 +212,13 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
             // If minting fails, forward to treasury as fallback (funds not lost)
             usdc.forceApprove(directMint, 0);
             usdc.safeTransfer(treasury, received);
+            // FIX TR-H01: Track failed mint for admin retry
+            failedMints[vm.hash] = FailedMint({
+                recipient: recipient,
+                amount: received,
+                timestamp: block.timestamp
+            });
+            failedMintIds.push(vm.hash);
             // Mark processed after successful fallback transfer
             processedVAAs[vm.hash] = true;
             emit MintFallbackToTreasury(recipient, received, vm.hash);
@@ -277,7 +298,30 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      */
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
+        // FIX TR-M01: Block USDC withdrawal unless contract is paused (true emergency).
+        // When paused, admin needs full access to recover all tokens.
+        require(token != address(usdc) || paused(), "USDC_WITHDRAW_ONLY_WHEN_PAUSED");
         IERC20(token).safeTransfer(to, amount);
+    }
+
+    /// @notice FIX TR-H01: Retry a failed mint by pulling USDC from treasury
+    /// @param vaaHash The VAA hash of the failed mint to retry
+    function retryFailedMint(bytes32 vaaHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        FailedMint storage fm = failedMints[vaaHash];
+        require(fm.amount > 0, "NO_FAILED_MINT");
+
+        address recipient = fm.recipient;
+        uint256 amount = fm.amount;
+
+        // Clear before external calls (CEI)
+        delete failedMints[vaaHash];
+
+        // Pull USDC from treasury and mint
+        usdc.safeTransferFrom(treasury, address(this), amount);
+        usdc.forceApprove(directMint, amount);
+        uint256 musdMinted = IDirectMint(directMint).mintFor(recipient, amount);
+
+        emit FailedMintRetried(recipient, amount, musdMinted);
     }
 
     // ============ Emergency Controls (FIX H-02) ============

@@ -192,6 +192,10 @@ class RelayService {
   // FIX: Dead-letter queue — track retry counts and persist permanently-failed attestations
   private retryCounts: Map<string, number> = new Map();
   private static readonly DEAD_LETTER_FILE = "dead-letter-queue.json";
+  // FIX R-H01: Cap DLQ file to prevent unbounded growth
+  private static readonly MAX_DLQ_ENTRIES = 1000;
+  // FIX R-H02: Cap retryCounts map to prevent memory leak
+  private static readonly MAX_RETRY_CACHE = 500;
 
   constructor(config: RelayConfig) {
     this.config = config;
@@ -536,6 +540,18 @@ class RelayService {
             evicted++;
           }
         }
+
+        // FIX R-H02: Sweep retryCounts map to prevent memory leak
+        if (this.retryCounts.size > RelayService.MAX_RETRY_CACHE) {
+          const toSweep = Math.floor(RelayService.MAX_RETRY_CACHE * 0.5);
+          let swept = 0;
+          for (const key of this.retryCounts.keys()) {
+            if (swept >= toSweep) break;
+            this.retryCounts.delete(key);
+            swept++;
+          }
+          console.log(`[Relay] Swept ${swept} stale entries from retryCounts map`);
+        }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
       }
@@ -568,8 +584,8 @@ class RelayService {
         console.log(
           `[Relay] Attestation ${attestationId}: retry ${currentRetries}/${this.config.maxRetries} — will retry on next poll`
         );
-        // Don't mark as processed so we can retry
-        throw error;
+        // FIX R-M01: Don't re-throw — it aborts the entire poll cycle for remaining attestations
+        // Instead, just skip this attestation and continue processing others
       }
     }
   }
@@ -727,6 +743,13 @@ class RelayService {
       timestamp: new Date().toISOString(),
     });
 
+    // FIX R-H01: Cap DLQ entries to prevent unbounded file growth
+    if (entries.length > RelayService.MAX_DLQ_ENTRIES) {
+      // Keep most recent entries, drop oldest
+      entries = entries.slice(entries.length - RelayService.MAX_DLQ_ENTRIES);
+      console.warn(`[Relay] DLQ capped at ${RelayService.MAX_DLQ_ENTRIES} entries — oldest entries dropped`);
+    }
+
     // Write atomically (write to temp, then rename)
     const tmpPath = dlqPath + ".tmp";
     fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2));
@@ -803,16 +826,47 @@ class RelayService {
 // ============================================================
 
 import * as http from "http";
+import * as crypto from "crypto";
 
 // FIX H-15: Health server with optional bearer token authentication
 function startHealthServer(port: number, relay: RelayService): http.Server {
   const healthToken = process.env.HEALTH_AUTH_TOKEN || "";
 
+  // FIX INSTITUTIONAL: Rate limiting for health/metrics endpoints
+  const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  const RATE_LIMIT_WINDOW_MS = 60_000;
+  const RATE_LIMIT_MAX = 30;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of rateLimitMap) {
+      if (now >= entry.resetAt) rateLimitMap.delete(ip);
+    }
+  }, 300_000);
+
   const server = http.createServer(async (req, res) => {
+    // Rate limit check
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+      || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const rlEntry = rateLimitMap.get(clientIp);
+    if (!rlEntry || now >= rlEntry.resetAt) {
+      rateLimitMap.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    } else {
+      rlEntry.count++;
+      if (rlEntry.count > RATE_LIMIT_MAX) {
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Too many requests" }));
+        return;
+      }
+    }
+
     // FIX H-15: Require auth token for metrics endpoint (operational state)
     if (healthToken && req.url === "/metrics") {
       const authHeader = req.headers.authorization;
-      if (!authHeader || authHeader !== `Bearer ${healthToken}`) {
+      const expected = `Bearer ${healthToken}`;
+      // FIX: Use constant-time comparison to prevent timing attacks
+      if (!authHeader || authHeader.length !== expected.length ||
+          !crypto.timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))) {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Unauthorized" }));
         return;

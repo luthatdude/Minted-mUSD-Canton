@@ -316,6 +316,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     function withdrawFees(address to) external onlyRole(ROUTER_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         uint256 amount = accumulatedFees;
+        // FIX DR-M02: Prevent zero-amount withdrawal (wastes gas + emits misleading event)
+        require(amount > 0, "NO_FEES");
         accumulatedFees = 0;
         usdc.safeTransfer(to, amount);
         emit FeesWithdrawn(to, amount);

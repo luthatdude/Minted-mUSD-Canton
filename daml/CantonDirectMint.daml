@@ -20,7 +20,8 @@ import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
-import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -195,11 +196,18 @@ template CantonMUSD
     -- Agreement hash and URI are stored in the agreementHash / agreementUri fields.
 
     -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
+    -- FIX INSTITUTIONAL: Added compliance check for transfers (anti-blacklist/freeze)
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : Optional (ContractId ComplianceRegistry)
       controller owner
       do
+        -- Compliance check: verify sender and receiver are not blacklisted/frozen
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateTransfer with
+            sender = owner
+            receiver = newOwner
         create CantonMUSDTransferProposal with
           musd = this
           newOwner
@@ -630,11 +638,16 @@ template CantonDirectMintService
 
     -- Admin controls
     -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
+    -- FIX INSTITUTIONAL: Requires governance proof for supply cap changes
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- Verify governance approval
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         -- FIX D-M02: Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
@@ -662,11 +675,16 @@ template CantonDirectMintService
         archive self
         create this with dailyMintLimit = newLimit
 
+    -- FIX INSTITUTIONAL: Compliance registry changes require governance proof
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
         newRegistryCid : Optional (ContractId ComplianceRegistry)
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- Verify governance approval for compliance changes
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with complianceRegistryCid = newRegistryCid

@@ -74,16 +74,16 @@ function loadConfig(): ScannerConfig {
   return {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
     telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
-    scanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS || String(8 * 60 * 60 * 1000)), // 8 hours
+    scanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS || String(8 * 60 * 60 * 1000), 10), // 8 hours
 
     chains: (process.env.SCANNER_CHAINS || "Ethereum,Arbitrum,Base").split(","),
     minTvlUsd: parseFloat(process.env.SCANNER_MIN_TVL || "1000000"),       // $1M
     minApyPct: parseFloat(process.env.SCANNER_MIN_APY || "3"),              // 3%
     stablecoinsOnly: process.env.SCANNER_STABLECOINS_ONLY !== "false",      // default ON
-    maxResults: parseInt(process.env.SCANNER_MAX_RESULTS || "15"),
+    maxResults: parseInt(process.env.SCANNER_MAX_RESULTS || "15", 10),
 
     defaultLtv: parseFloat(process.env.SCANNER_DEFAULT_LTV || "0.50"),
-    maxLoops: parseInt(process.env.SCANNER_MAX_LOOPS || "5"),
+    maxLoops: parseInt(process.env.SCANNER_MAX_LOOPS || "5", 10),
     minNetLoopApy: parseFloat(process.env.SCANNER_MIN_LOOP_APY || "8"),     // 8%
   };
 }
@@ -180,15 +180,32 @@ const PROTOCOL_SECURITY: Record<string, {
 };
 
 // Known borrow rates by protocol (updated each scan from on-chain or API)
-// These are fallback estimates — the scanner will try to fetch live rates
-const BORROW_RATE_ESTIMATES: Record<string, Record<string, number>> = {
-  "aave-v3": { "USDC": 3.5, "USDT": 3.8, "DAI": 4.0, "USDe": 2.8, "GHO": 5.0 },
-  "morpho-blue": { "USDC": 6.0, "USDT": 5.5 },
-  "compound-v3": { "USDC": 4.2, "USDT": 4.5 },
-  "spark": { "DAI": 5.5, "USDC": 4.0 },
-  "euler": { "USDC": 4.5, "USDT": 4.8 },
-  "fluid": { "USDC": 4.0 },
-};
+// FIX V6-HIGH: These are FALLBACK ESTIMATES ONLY — the scanner attempts to fetch
+// live rates from on-chain/API first. These are used when live data is unavailable.
+// Values should be updated periodically via BORROW_RATE_OVERRIDES env var.
+const BORROW_RATE_ESTIMATES: Record<string, Record<string, number>> = (() => {
+  // Allow env-driven overrides: BORROW_RATE_OVERRIDES='{"aave-v3":{"USDC":4.1}}'
+  const overrides = process.env.BORROW_RATE_OVERRIDES;
+  const defaults: Record<string, Record<string, number>> = {
+    "aave-v3": { "USDC": 3.5, "USDT": 3.8, "DAI": 4.0, "USDe": 2.8, "GHO": 5.0 },
+    "morpho-blue": { "USDC": 6.0, "USDT": 5.5 },
+    "compound-v3": { "USDC": 4.2, "USDT": 4.5 },
+    "spark": { "DAI": 5.5, "USDC": 4.0 },
+    "euler": { "USDC": 4.5, "USDT": 4.8 },
+    "fluid": { "USDC": 4.0 },
+  };
+  if (overrides) {
+    try {
+      const parsed = JSON.parse(overrides);
+      for (const [protocol, rates] of Object.entries(parsed)) {
+        defaults[protocol] = { ...(defaults[protocol] || {}), ...(rates as Record<string, number>) };
+      }
+    } catch (e) {
+      console.error("[Scanner] Invalid BORROW_RATE_OVERRIDES JSON:", e);
+    }
+  }
+  return defaults;
+})();
 
 // Stablecoin keywords for filtering
 const STABLECOIN_KEYWORDS = [
@@ -316,8 +333,11 @@ class YieldScanner {
       await this.sendReport(scored, loops, deltas);
 
       // 8. Save state
+      // FIX BOT-M03: Cap previousState to maxResults * 5 to prevent unbounded growth
+      const maxStateEntries = this.config.maxResults * 5;
+      const poolsToSave = scored.slice(0, maxStateEntries);
       this.previousState = {
-        pools: new Map(scored.map((p) => [p.pool, p])),
+        pools: new Map(poolsToSave.map((p) => [p.pool, p])),
         timestamp: Date.now(),
       };
 
@@ -334,10 +354,23 @@ class YieldScanner {
   // ─────────────────────────────────────────────────────────────────────
 
   private async fetchDefiLlamaPools(): Promise<YieldPool[]> {
-    const res = await fetch("https://yields.llama.fi/pools");
-    if (!res.ok) throw new Error(`DeFi Llama API error: ${res.status}`);
-    const data: any = await res.json();
-    return data.data as YieldPool[];
+    // FIX BOT-M01: Add timeout to prevent indefinite hangs
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000); // 30s timeout
+    try {
+      const res = await fetch("https://yields.llama.fi/pools", { signal: controller.signal });
+      if (!res.ok) throw new Error(`DeFi Llama API error: ${res.status}`);
+      // FIX BOT-M04: Guard against excessively large responses
+      const text = await res.text();
+      const MAX_RESPONSE_SIZE = 50 * 1024 * 1024; // 50MB
+      if (text.length > MAX_RESPONSE_SIZE) {
+        throw new Error(`Response too large: ${(text.length / 1e6).toFixed(1)}MB exceeds ${MAX_RESPONSE_SIZE / 1e6}MB limit`);
+      }
+      const data = JSON.parse(text);
+      return data.data as YieldPool[];
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────
