@@ -127,6 +127,29 @@ function readSecret(name: string, envVar: string): string {
   return process.env[envVar] || "";
 }
 
+// FIX BE-001: secp256k1 curve order — private keys must be in range [1, n-1]
+const SECP256K1_N = BigInt(
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+);
+
+/** FIX BE-001: Validate private key is in valid secp256k1 range and read from secret/env */
+function readAndValidatePrivateKey(secretName: string, envVar: string): string {
+  const key = readSecret(secretName, envVar);
+  if (!key) return "";
+  const normalized = key.startsWith("0x") ? key.slice(2) : key;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`SECURITY: ${envVar} is not a valid private key (expected 64 hex chars)`);
+  }
+  const keyValue = BigInt("0x" + normalized);
+  if (keyValue === 0n || keyValue >= SECP256K1_N) {
+    throw new Error(
+      `SECURITY: ${envVar} is not a valid secp256k1 private key. ` +
+      `Key must be in range [1, curve order-1]`
+    );
+  }
+  return key;
+}
+
 export class OracleKeeper {
   private config: OracleKeeperConfig;
   private provider: ethers.JsonRpcProvider;
@@ -306,7 +329,8 @@ export class OracleKeeper {
 // ============================================================
 
 async function main(): Promise<void> {
-  const privateKey = readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY");
+  // FIX BE-001: Validate private key is in valid secp256k1 range
+  const privateKey = readAndValidatePrivateKey("keeper_private_key", "KEEPER_PRIVATE_KEY");
   if (!privateKey) {
     console.error("FATAL: KEEPER_PRIVATE_KEY is required");
     process.exit(1);
