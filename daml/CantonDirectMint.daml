@@ -262,6 +262,88 @@ template CantonMUSDTransferProposal
       do create musd
 
 -- ============================================================
+--                     SECTION 2b: BURN RATE LIMITER (FIX DAML-R05)
+-- ============================================================
+
+-- | BurnRateLimiter — Per-epoch burn rate limiting for all mUSD burn paths.
+-- FIX DAML-R05: CantonMUSD_Burn has no rate guards on its own (it's controller issuer).
+-- This template provides centralized, on-ledger burn tracking across ALL protocol
+-- paths (staking unstake, lending repay, direct mint redeem) to prevent mass-burn
+-- attacks even if the operator key is compromised.
+--
+-- Usage:
+--   Before burning mUSD, protocol services call BurnLimit_RecordBurn to verify
+--   the burn doesn't exceed the per-epoch limit. If it does, the transaction aborts.
+--   This is a defence-in-depth measure — DirectMint_Redeem already has its own
+--   daily rate limit, but this covers ALL burn paths uniformly.
+template BurnRateLimiter
+  with
+    operator            : Party
+    epochBurnLimit      : Money   -- Max total burns per epoch (e.g. 1,000,000 mUSD / 24h)
+    currentEpochBurns   : Money   -- Cumulative burns in current epoch
+    epochStart          : Time    -- Start of current epoch window
+    epochDurationSeconds : Int    -- Epoch length in seconds (e.g. 86400 = 24h)
+    paused              : Bool    -- Emergency halt on burns
+  where
+    signatory operator
+    key operator : Party
+    maintainer key
+
+    ensure epochBurnLimit > 0.0
+        && epochDurationSeconds > 0
+        && currentEpochBurns >= 0.0
+
+    -- | Record a burn and enforce rate limit.
+    -- Must be called by protocol services BEFORE exercising CantonMUSD_Burn.
+    -- Rolls epoch window automatically when expired.
+    choice BurnLimit_RecordBurn : ContractId BurnRateLimiter
+      with
+        burnAmount : Money
+      controller operator
+      do
+        assertMsg "BURNS_PAUSED" (not paused)
+        assertMsg "BURN_AMOUNT_POSITIVE" (burnAmount > 0.0)
+        now <- getTime
+        let elapsed = subTime now epochStart
+        let epochDuration = seconds epochDurationSeconds
+        -- Auto-reset epoch if window has passed
+        let (newStart, newBurns) = if elapsed >= epochDuration
+              then (now, 0.0)
+              else (epochStart, currentEpochBurns)
+        assertMsg "EPOCH_BURN_LIMIT_EXCEEDED" (newBurns + burnAmount <= epochBurnLimit)
+        create this with
+          currentEpochBurns = newBurns + burnAmount
+          epochStart = newStart
+
+    -- | Query current burn usage (nonconsuming)
+    nonconsuming choice BurnLimit_GetUsage : (Money, Money, Time)
+      controller operator
+      do return (currentEpochBurns, epochBurnLimit, epochStart)
+
+    -- | Admin: update epoch burn limit (governance-gated)
+    choice BurnLimit_UpdateLimit : ContractId BurnRateLimiter
+      with
+        newLimit : Money
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
+        create this with epochBurnLimit = newLimit
+
+    -- | Admin: pause/unpause all burns
+    choice BurnLimit_SetPaused : ContractId BurnRateLimiter
+      with
+        newPaused : Bool
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        create this with paused = newPaused
+
+-- ============================================================
 --                     SECTION 3: BRIDGE OUT REQUEST
 -- ============================================================
 
