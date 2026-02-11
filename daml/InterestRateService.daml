@@ -65,10 +65,10 @@ template InterestRateService
     signatory operator, governance
     observer observers
 
-    ensure params.baseRateBps >= 0
-        && params.multiplierBps >= 0
-        && params.kinkBps >= 0 && params.kinkBps <= 10000
-        && params.jumpMultiplierBps >= 0
+    ensure params.baseRateBps >= 0 && params.baseRateBps <= 2000
+        && params.multiplierBps >= 0 && params.multiplierBps <= 10000
+        && params.kinkBps >= 1000 && params.kinkBps <= 10000
+        && params.jumpMultiplierBps >= 0 && params.jumpMultiplierBps <= 10000
         && params.reserveFactorBps >= 0 && params.reserveFactorBps <= 5000
 
     -- | Calculate utilization rate (0-10000 BPS)
@@ -110,6 +110,7 @@ template InterestRateService
         return ((borrowRate * util * oneMinusReserve) / (10000 * 10000))
 
     -- | Calculate interest for a given principal and duration
+    -- FIX IRS-02: Return 0 for zero/negative principal or duration to match Solidity behavior
     nonconsuming choice RateService_CalculateInterest : Decimal
       with
         requester : Party
@@ -117,13 +118,13 @@ template InterestRateService
         durationSeconds : Int
       controller requester
       do
-        assertMsg "PRINCIPAL_MUST_BE_POSITIVE" (principal > 0.0)
-        assertMsg "DURATION_MUST_BE_POSITIVE" (durationSeconds > 0)
-        
-        borrowRateBps <- exercise self RateService_GetBorrowRate with requester
-        let secondsPerYear = 31536000.0  -- 365 * 24 * 60 * 60
-        let ratePerSecond = intToDecimal borrowRateBps / (10000.0 * secondsPerYear)
-        return (principal * ratePerSecond * intToDecimal durationSeconds)
+        if principal <= 0.0 || durationSeconds <= 0
+          then return 0.0
+          else do
+            borrowRateBps <- exercise self RateService_GetBorrowRate with requester
+            let secondsPerYear = 31536000.0  -- 365 * 24 * 60 * 60
+            let ratePerSecond = intToDecimal borrowRateBps / (10000.0 * secondsPerYear)
+            return (principal * ratePerSecond * intToDecimal durationSeconds)
 
     -- | Split interest into supplier and reserve portions
     nonconsuming choice RateService_SplitInterest : (Decimal, Decimal)
@@ -145,6 +146,8 @@ template InterestRateService
       controller operator
       do
         assertMsg "STALE_DATA" (ethBlockNumber > marketState.ethBlockNumber)
+        assertMsg "INVALID_BORROWS" (newTotalBorrows >= 0.0)
+        assertMsg "INVALID_SUPPLY" (newTotalSupply >= 0.0)
         now <- getTime
         create this with
           marketState = MarketState with

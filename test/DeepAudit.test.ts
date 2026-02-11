@@ -657,16 +657,19 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const hf = await borrowModule.healthFactor(user1.address);
 
-      if (hf < 10000n) {
-        await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+      // FIX DA-03: Assert health factor is actually below threshold instead of
+      // silently skipping all assertions when it's not
+      expect(hf).to.be.lt(10000n, "Health factor should be below 1.0 for liquidation test");
 
-        const btcBefore = await wbtc.balanceOf(liquidator.address);
-        await liquidationEngine.connect(liquidator).liquidate(
-          user1.address,
-          await wbtc.getAddress(),
-          ethers.parseEther("5000")
-        );
-        const btcAfter = await wbtc.balanceOf(liquidator.address);
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+
+      const btcBefore = await wbtc.balanceOf(liquidator.address);
+      await liquidationEngine.connect(liquidator).liquidate(
+        user1.address,
+        await wbtc.getAddress(),
+        ethers.parseEther("5000")
+      );
+      const btcAfter = await wbtc.balanceOf(liquidator.address);
 
         expect(btcAfter).to.be.gt(btcBefore);
 
@@ -675,7 +678,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         // Use 5% tolerance due to stepped circuit-breaker prices
         expect(seized).to.be.gt(0n);
         expect(seized).to.be.lt(ethers.parseUnits("1", WBTC_DECIMALS));
-      }
     });
   });
 
