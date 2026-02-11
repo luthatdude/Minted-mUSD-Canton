@@ -34,7 +34,7 @@ defaultRateParams = RateParams with
     multiplierBps = 1000        -- 10% at 100% util (pre-kink)
     kinkBps = 8000              -- 80% kink
     jumpMultiplierBps = 5000    -- 50% above kink
-    reserveFactorBps = 2000     -- 20% to reserves
+    reserveFactorBps = 1000     -- 10% to reserves
 
 -- ============================================================
 --                     UTILIZATION DATA

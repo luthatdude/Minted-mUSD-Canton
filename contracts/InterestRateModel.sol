@@ -40,7 +40,7 @@ contract InterestRateModel is AccessControl {
     /// @notice Multiplier per utilization above kink (e.g., 5000 = 50% additional)
     uint256 public jumpMultiplierBps;
 
-    /// @notice Portion of interest that goes to protocol reserves (e.g., 2000 = 20%)
+    /// @notice Portion of interest that goes to protocol reserves (e.g., 1000 = 10%)
     uint256 public reserveFactorBps;
 
     // ============================================================
@@ -83,7 +83,7 @@ contract InterestRateModel is AccessControl {
         multiplierBps = 1000;        // 10% at 100% utilization (pre-kink slope)
         kinkBps = 8000;              // 80% utilization kink point
         jumpMultiplierBps = 5000;    // 50% additional above kink
-        reserveFactorBps = 2000;     // 20% to protocol reserves
+        reserveFactorBps = 1000;     // 10% to protocol reserves
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(RATE_ADMIN_ROLE, _admin);
