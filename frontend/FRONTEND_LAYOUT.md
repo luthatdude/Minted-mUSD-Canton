@@ -55,6 +55,7 @@
 | `borrow`    | Borrow & Lend  | Building            | `BorrowPage`          | `CantonBorrow`           |
 | `bridge`    | Bridge         | Arrows left-right   | `BridgePage`          | `CantonBridge`           |
 | `admin`     | Admin          | Settings gear       | `AdminPage`           | `CantonAdmin`            |
+| `points`    | Points         | Star                | `PointsPage`          | `PointsPage`             |
 
 ---
 
@@ -175,7 +176,9 @@ Action Card (card-gradient-border):
   │  Success/Error alerts with Etherscan link               │
   └────────────────────────────────────────────────────────┘
 
-"How Minting Works" — 3 step cards
+"How It Works" Explainer Card:
+  "Mint mUSD 1:1 against selected collateral, validated in real time by
+  attestations on the Canton Network, then stake to begin earning."
 ```
 
 ---
@@ -226,6 +229,23 @@ Action Card (card-gradient-border):
 
 "How Staking Works" — 3 step cards:
   ① Deposit mUSD → ② Earn Yield → ③ Withdraw Anytime
+
+"AI Yield Aggregation Engine" Explainer Card:
+  Staking distributes generated yield exclusively to mUSD stakers, using our
+  AI yield aggregation engine. The AI deliberates across hundreds of protocols
+  in Web3 using a proprietary algorithm — Highest Yield, Pool Liquidity,
+  Weighted Performance Over Time, Security/Risk Profile, Oracle Stability, Curators.
+
+CantonStake — Additional Canton-Only Widget:
+  ┌─── Stake Canton Coin (Boost Pool) ──────────────────┐
+  │  Explainer: "Stake 20% of your mUSD stake in Canton │
+  │  Coin to receive boosted yield of 2-4% PLUS 60% of  │
+  │  all validator rewards…"                             │
+  │  3 StatCards: Boost Pool APY · Validator Rewards ·   │
+  │  Points Multiplier                                    │
+  │  Canton Coin Amount input                             │
+  │  [Stake Canton Coin (Coming Soon)]                    │
+  └──────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -276,17 +296,38 @@ Collateral Positions Table (card):
   └───────────────────────────────────────────────────┘
 
 Action Card (card-gradient-border):
-  ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] ─┐
-  │                                                        │
-  │  Token selector (deposit/withdraw only)                │
-  │  Input: amount [MAX] [Token badge]                     │
-  │  Hints: Max borrowable / Current debt                  │
-  │  [ ====== Deposit / Borrow / Repay / Withdraw ===== ] │
-  │  Success/Error alerts with Etherscan link               │
-  └────────────────────────────────────────────────────────┘
+  ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] [📈 Leverage] ─┐
+  │                                                                      │
+  │  ── Deposit/Borrow/Repay/Withdraw tabs ──                           │
+  │  Token selector (deposit/withdraw only)                              │
+  │  Input: amount [MAX] [Token badge]                                   │
+  │  Hints: Max borrowable / Current debt                                │
+  │  [ ====== Deposit / Borrow / Repay / Withdraw ===== ]               │
+  │  Success/Error alerts with Etherscan link                            │
+  │                                                                      │
+  │  ── Leverage tab ──                                                  │
+  │  Error banner (red, dismissible)                                     │
+  │  4 StatCards: WETH Balance · Max Leverage · Position · Debt          │
+  │  If no position:                                                     │
+  │    WETH deposit input [MAX]                                          │
+  │    LeverageSlider (1x-3x with presets)                               │
+  │    Position Preview (collateral/debt/loops/leverage)                  │
+  │    [Open X.Xx Leveraged Position]                                    │
+  │  If has position:                                                    │
+  │    Position grid: Deposit · Collateral · Debt · Leverage · Loops     │
+  │    [Close Position & Repay Debt] (danger variant)                    │
+  └────────────────────────────────────────────────────────────────────────┘
 
 "How Borrowing Works" — 4 step cards:
   ① Deposit → ② Borrow → ③ Repay → ④ Withdraw
+
+"Looping Strategies" — 2 strategy cards (sm:grid-cols-2):
+  ┌─── sMUSD Maxi ─────────────────┐  ┌─── Canton Maxi ────────────────┐
+  │  Low-Medium Risk                │  │  Medium Risk                    │
+  │  Deposit → Mint → Stake → Loop  │  │  Deposit → Stake → Loop → Boost│
+  │  APY table: 1x-4x loops         │  │  APY table: 1x-4x + Boost Pool │
+  │  34-174% total APY               │  │  34-235% total APY              │
+  └──────────────────────────────────┘  └─────────────────────────────────┘
 ```
 
 ---
@@ -334,11 +375,83 @@ Attestation History Table (card):
 "How the Bridge Works" — 6 step pipeline (3x2 or 6-col):
   ① Observe → ② Verify → ③ Sign → ④ Aggregate → ⑤ Update → ⑥ Mint
   (each with color-coded number circle: blue→purple→brand→emerald→yellow→green)
+
+"Beneficiary Locked Environment (BLE)" Explainer Card:
+  Move mUSD and sMUSD between Ethereum and Canton. Your yield never stops.
+  Powered by Minted's proprietary BLE — a multi-sig attestation system where
+  institutional validators verify every cross-chain transfer. No relayers,
+  no optimistic windows. Every bridge action is cryptographically attested,
+  validating assets on Canton, supply-cap enforced, and settled with finality.
 ```
 
 ---
 
-### 6. Admin Page (`/admin`)  — max-w-4xl
+### 6. Points Page (`/points`)
+
+```
+PageHeader: "Points Program" · "Earn points for using the protocol. Points convert to MNTD token airdrop." · badge: season name
+
+Season Progress Bar (card):
+  ┌───────────────────────────────────────────────────┐
+  │  Season 1 — Genesis                               │
+  │  2x multiplier · 45 days remaining                │
+  │  [██████████████░░░░░░░░░░░░] 58% Complete        │
+  │  ● Season 1 (active) · ○ Season 2 · ○ Season 3   │
+  └───────────────────────────────────────────────────┘
+
+Tab Nav: [Overview] [Leaderboard] [Calculator]
+
+OVERVIEW TAB:
+  Your Points (4 StatCards):
+    • Total Points   (glow, blue)
+    • Global Rank    (purple)
+    • Current Season (default)
+    • Seasons Active (green)
+
+  Points Breakdown (card): per-action breakdown by season
+
+  How It Works (card):
+    "Your Points = USD Value × Multiplier × Hours"
+
+  3 Seasons Multiplier Table:
+    ┌──────────────┬──────────┬───────┬──────────┬────────┐
+    │ Season       │ Boost    │ sMUSD │ Collat.  │ Borrow │
+    │ 1 — Genesis  │ 10× 🔥   │ 4×    │ 3×       │ 2×     │
+    │ 2 — Growth   │ 6×       │ 2.5×  │ 2×       │ 1.5×   │
+    │ 3 — Maturity │ 4×       │ 1.5×  │ 1×       │ 1×     │
+    └──────────────┴──────────┴───────┴──────────┴────────┘
+
+  What Earns Points (2-col grid):
+    Canton (higher multipliers): Stake mUSD, Deposit sMUSD/CTN, Borrow, Boost Pool
+    Ethereum: Hold sMUSD, Deposit ETH/WBTC/sMUSD, Borrow, Leverage Vault
+
+  Points APY by TVL (table):
+    ┌──────────┬───────────────┬──────────────┬───────────────┐
+    │ TVL      │ Boost Pool 🔥 │ sMUSD (CTN)  │ sMUSD (ETH)   │
+    │ $5M      │ 354%          │ 142%         │ 106%          │
+    │ $10M     │ 177%          │ 71%          │ 53%           │
+    │ $25M     │ 71%           │ 28%          │ 21%           │
+    │ $50M     │ 35%           │ 14%          │ 11%           │
+    └──────────┴───────────────┴──────────────┴───────────────┘
+
+  Maximize Your Points (4 tips):
+    ① Get in early  ② Use Canton  ③ Loop your sMUSD  ④ Deposit $CC in Boost Pool
+
+  Airdrop Section:
+    Points → $MINT Tokens at TGE. Proportional to total points share.
+
+LEADERBOARD TAB:
+  Top 25 table: Rank · Address · Points (highlights user's own row)
+
+CALCULATOR TAB:
+  Implied APY (3 StatCards): APY · Token Price · Total Airdrop Value
+  Scenarios Table: deposit · est. points · allocation · value · APY
+  Multiplier Schedule: per-action cards with ETH/CTN badges
+```
+
+---
+
+### 7. Admin Page (`/admin`)  — max-w-4xl
 
 ```
 Tab bar: [mUSD] [DirectMint] [Treasury] [Bridge] [Borrow] [Oracle]
@@ -431,7 +544,7 @@ focus: border-brand-500/50 shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]
 Layout
 ├── Navbar
 │   ├── Logo (Minted Protocol)
-│   ├── NavItems × 6 (desktop)
+│   ├── NavItems × 7 (desktop)
 │   ├── ChainToggle (ETH ⟷ Canton)
 │   ├── Wallet Button / Connect Button
 │   └── Mobile Menu (hamburger → slide-down)
@@ -456,7 +569,8 @@ Layout
 │   │   │   ├── ExchangeInfo
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   └── HowItWorks × 3
+│   │   ├── HowItWorks Explainer Card
+│   │   └── Info Cards (Remaining Mintable + Available for Redemption)
 │   │
 │   ├── StakePage
 │   │   ├── PageHeader (badge: ERC-4626)
@@ -472,7 +586,8 @@ Layout
 │   │   │   ├── CooldownWarning
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   └── HowItWorks × 3
+│   │   ├── HowItWorks × 3
+│   │   └── AI Yield Aggregation Explainer Card
 │   │
 │   ├── BorrowPage
 │   │   ├── PageHeader (badge: Active/No Position)
@@ -481,12 +596,14 @@ Layout
 │   │   ├── StatCard × 4
 │   │   ├── HealthFactor + PositionSummary (gradient-border, 2-col)
 │   │   ├── CollateralTable (token rows with badge pills)
-│   │   ├── Action Card (deposit/borrow/repay/withdraw tabs)
+│   │   ├── Action Card (deposit/borrow/repay/withdraw/leverage tabs)
 │   │   │   ├── TokenSelector (deposit/withdraw)
 │   │   │   ├── AmountInput + MAX + TokenBadge
+│   │   │   ├── LeverageSlider + Position Preview (leverage tab)
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   └── HowItWorks × 4
+│   │   ├── HowItWorks × 4
+│   │   └── LoopingStrategies × 2 (sMUSD Maxi + Canton Maxi)
 │   │
 │   ├── BridgePage
 │   │   ├── PageHeader (badge: Active/PAUSED)
@@ -495,7 +612,27 @@ Layout
 │   │   ├── SupplyCapUtilization + HealthRatio (gradient-border, 2-col)
 │   │   ├── BridgeParameters (3-col grid)
 │   │   ├── AttestationHistory (table or empty state)
-│   │   └── HowItWorks × 6 (pipeline)
+│   │   ├── HowItWorks × 6 (pipeline)
+│   │   └── BLE Explainer Card
+│   │
+│   ├── PointsPage
+│   │   ├── PageHeader
+│   │   ├── Season Progress Bar
+│   │   ├── Tab Nav (Overview / Leaderboard / Calculator)
+│   │   ├── Overview Tab
+│   │   │   ├── Your Points (StatCard × 4)
+│   │   │   ├── Points Breakdown (per-action)
+│   │   │   ├── How It Works (formula card)
+│   │   │   ├── 3 Seasons Multiplier Table
+│   │   │   ├── What Earns Points (Canton vs Ethereum)
+│   │   │   ├── Points APY by TVL Table
+│   │   │   ├── Maximize Your Points (4 tips)
+│   │   │   └── Airdrop Info Card
+│   │   ├── Leaderboard Tab (top-25 table)
+│   │   └── Calculator Tab
+│   │       ├── Implied APY (StatCard × 3)
+│   │       ├── Scenarios Table
+│   │       └── Multiplier Schedule
 │   │
 │   └── AdminPage
 │       ├── Section Tab Bar (6 tabs)
@@ -543,15 +680,16 @@ frontend/src/
 │   ├── DashboardPage.tsx    — Protocol + portfolio dashboard
 │   ├── MintPage.tsx         — USDC ↔ mUSD mint/redeem
 │   ├── StakePage.tsx        — mUSD ↔ smUSD stake/unstake
-│   ├── BorrowPage.tsx       — Collateral deposit, borrow, repay, withdraw
+│   ├── BorrowPage.tsx       — Collateral deposit, borrow, repay, withdraw + leverage looping
 │   ├── BridgePage.tsx       — Canton attestation monitoring
 │   ├── AdminPage.tsx        — Protocol admin panel
-│   ├── LeveragePage.tsx     — (unused, not in nav)
+│   ├── PointsPage.tsx       — Points program, seasons, leaderboard, APY calculator
+│   ├── LeveragePage.tsx     — (standalone leverage, code now merged into BorrowPage)
 │   └── LiquidationsPage.tsx — (unused, not in nav)
 │
 ├── components/
 │   ├── Layout.tsx           — Shell: bg, navbar, main, footer
-│   ├── Navbar.tsx           — Top nav with 6 items + wallet + chain toggle
+│   ├── Navbar.tsx           — Top nav with 7 items + wallet + chain toggle
 │   ├── ChainToggle.tsx      — ETH ⟷ Canton pill switch
 │   ├── StatCard.tsx         — Metric card (color, icon, trend, sub, variant)
 │   ├── PageHeader.tsx       — Title + subtitle + badge
