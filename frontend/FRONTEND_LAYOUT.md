@@ -11,8 +11,8 @@
 │  NAVBAR  (sticky top, glass blur, z-50)                                     │
 │  ┌──────────┬────────────────────────────────────────┬───────────────────┐   │
 │  │  Logo    │  Navigation Tabs                       │  Right Controls   │   │
-│  │  Minted  │  Dashboard · Stake ·                   │  [ETH ⟷ Canton]  │   │
-│  │  Protocol│  Borrow & Lend · Bridge · Admin         │  [0x1a2b…3c4d]   │   │
+│  │  Minted  │  Mint · Stake ·                        │  [ETH ⟷ Canton]  │   │
+│  │  Protocol│  Borrow & Lend · Bridge · Admin         │  [Connect Wallet] │   │
 │  └──────────┴────────────────────────────────────────┴───────────────────┘   │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
@@ -44,7 +44,7 @@
 
 | Key         | Label          | Icon                | Page Component (ETH)     | Page Component (Canton)    |
 |-------------|----------------|---------------------|--------------------------|----------------------------|
-| `dashboard` | Dashboard      | Home                | `DashboardMintPage`      | `CantonDashboardMint`      |
+| `mint`      | Mint           | Coins               | `DashboardMintPage`      | `CantonDashboardMint`      |
 | `stake`     | Stake          | Trending up         | `StakePage`              | `CantonStake`              |
 | `borrow`    | Borrow & Lend  | Building            | `BorrowPage`             | `CantonBorrow`             |
 | `bridge`    | Bridge         | Arrows left-right   | `BridgePage`             | `CantonBridge`             |
