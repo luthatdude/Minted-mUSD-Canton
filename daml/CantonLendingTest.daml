@@ -86,6 +86,7 @@ setupTest = do
       operator
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
+      lendingSupplyCap = 10000000.0  -- 10M mUSD lending cap
       interestRateBps = 500       -- 5% APR
       reserveFactorBps = 1000    -- 10%
       protocolReserves = 0.0
@@ -817,6 +818,7 @@ testWithdrawReserves = do
       operator = setup.operator
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
+      lendingSupplyCap = 10000000.0  -- 10M mUSD lending cap
       interestRateBps = 500
       reserveFactorBps = 1000
       protocolReserves = 100.0  -- 100 mUSD in reserves

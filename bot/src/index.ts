@@ -3,10 +3,22 @@
 
 import { ethers } from "ethers";
 import * as dotenv from "dotenv";
+import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 
 dotenv.config();
+
+// FIX BE-SECRET-01: Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch { /* Fall through to env var */ }
+  return process.env[envVar] || "";
+}
 
 // ============================================================
 //                     CONFIGURATION
@@ -15,7 +27,8 @@ dotenv.config();
 const config = {
   rpcUrl: process.env.RPC_URL!,
   chainId: parseInt(process.env.CHAIN_ID || "1"),
-  privateKey: process.env.PRIVATE_KEY!,
+  // FIX BE-SECRET-01: Use Docker secret with env var fallback
+  privateKey: readSecret("bot_private_key", "PRIVATE_KEY"),
   
   // Contract addresses
   borrowModule: process.env.BORROW_MODULE_ADDRESS!,

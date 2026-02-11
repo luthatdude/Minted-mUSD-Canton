@@ -17,10 +17,22 @@
 
 import { ethers, Wallet, Contract, EventLog } from "ethers";
 import * as dotenv from "dotenv";
+import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor, { FlashbotsProvider, PrivateTxSender } from "./flashbots";
 
 dotenv.config();
+
+// FIX BE-SECRET-01: Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch { /* Fall through to env var */ }
+  return process.env[envVar] || "";
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //                          LOGGER
@@ -192,7 +204,8 @@ function loadConfig(): SniperConfig {
     rpcUrl: process.env.RPC_URL,
     wsRpcUrl: process.env.WS_RPC_URL,
     chainId: parseInt(process.env.CHAIN_ID || "1"),
-    privateKey: process.env.PRIVATE_KEY!,
+    // FIX BE-SECRET-01: Use Docker secret with env var fallback
+    privateKey: readSecret("bot_private_key", "PRIVATE_KEY"),
 
     depositToken: process.env.SNIPER_DEPOSIT_TOKEN || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
     depositAmountRaw: BigInt(process.env.SNIPER_DEPOSIT_AMOUNT || "1000000000"), // 1000 USDC default
@@ -208,7 +221,8 @@ function loadConfig(): SniperConfig {
     maxExpiryDays: parseInt(process.env.SNIPER_MAX_EXPIRY_DAYS || "365"),
 
     telegramEnabled: process.env.TELEGRAM_ENABLED === "true",
-    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
+    // FIX BE-SECRET-02: Use Docker secret for Telegram bot token
+    telegramBotToken: readSecret("telegram_bot_token", "TELEGRAM_BOT_TOKEN"),
     telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
 
     useTreasuryRoute: process.env.SNIPER_TREASURY_ROUTE === "true",

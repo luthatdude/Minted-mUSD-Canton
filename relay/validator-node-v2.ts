@@ -308,11 +308,16 @@ class ValidatorNode {
   }
 
   private async pollForAttestations(): Promise<void> {
-    // Query AttestationRequest contracts
-    const attestations = await (this.ledger.query as any)(
+    // FIX BE-INPUT-01: Add 30s timeout to Canton query (v1 has this, v2 was missing it)
+    const QUERY_TIMEOUT_MS = 30_000;
+    const queryPromise = (this.ledger.query as any)(
       "MintedProtocolV3:AttestationRequest",
       {}
-    ) as CreateEvent<AttestationRequest>[];
+    );
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Canton query timed out after 30s")), QUERY_TIMEOUT_MS)
+    );
+    const attestations = await Promise.race([queryPromise, timeoutPromise]) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
       const request = attestation.payload;
