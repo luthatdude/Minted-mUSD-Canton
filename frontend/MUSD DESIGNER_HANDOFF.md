@@ -1,4 +1,4 @@
-# Minted Protocol — Designer Handoff
+# mUSD Protocol — Designer Handoff
 
 > Complete section-by-section breakdown for designing the mUSD dApp.
 > Dark theme only. Single-page application. Two-chain architecture (Ethereum + Canton).
@@ -7,7 +7,7 @@
 
 ## Brand Identity
 
-- **Product Name:** Minted Protocol
+- **Product Name:** mUSD
 - **Tagline:** "The Institutional Ownership Reserve Currency, powered by Canton Network"
 - **Hero Headline:** "The currency for the Web3 Ownership Economy"
 - **Tokens:** mUSD (stablecoin), smUSD (staked mUSD), $MINT (governance — future TGE)
