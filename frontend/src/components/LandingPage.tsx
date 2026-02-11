@@ -294,30 +294,6 @@ function useThreeScene(containerRef: React.RefObject<HTMLDivElement | null>) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Animated Counter
-// ════════════════════════════════════════════════════════════════
-
-function AnimatedCounter({ value, duration = 2000 }: { value: number; duration?: number }) {
-  const [display, setDisplay] = useState(0);
-
-  useEffect(() => {
-    const start = Date.now();
-    const startVal = 0;
-    function tick() {
-      const elapsed = Date.now() - start;
-      const progress = Math.min(elapsed / duration, 1);
-      // Ease out cubic
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.floor(startVal + (value - startVal) * eased));
-      if (progress < 1) requestAnimationFrame(tick);
-    }
-    tick();
-  }, [value, duration]);
-
-  return <>{display.toLocaleString()}</>;
-}
-
-// ════════════════════════════════════════════════════════════════
 // Landing Page Component
 // ════════════════════════════════════════════════════════════════
 
@@ -371,34 +347,19 @@ export function LandingPage({ onLaunchApp }: LandingPageProps) {
           </span>
         </div>
 
-        {/* Nav links + Launch App */}
-        <div className="flex items-center gap-8">
-          <div className="hidden items-center gap-6 sm:flex">
-            {["About", "Docs", "Community"].map((item) => (
-              <a
-                key={item}
-                href="#"
-                className="text-sm font-medium text-gray-400 transition-colors hover:text-white"
-              >
-                {item}
-              </a>
-            ))}
-          </div>
-
-          <button
-            onClick={onLaunchApp}
-            className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-brand-500 to-purple-600 px-6 py-2.5 text-sm font-bold text-white shadow-[0_0_24px_rgba(51,139,255,0.4)] transition-all duration-300 hover:shadow-[0_0_40px_rgba(51,139,255,0.6)] hover:scale-105"
-          >
-            <span className="relative z-10 flex items-center gap-2">
-              Launch App
-              <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-            </span>
-            {/* Shine sweep */}
-            <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
-          </button>
-        </div>
+        {/* Enter App */}
+        <button
+          onClick={onLaunchApp}
+          className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-brand-500 to-purple-600 px-6 py-2.5 text-sm font-bold text-white shadow-[0_0_24px_rgba(51,139,255,0.4)] transition-all duration-300 hover:shadow-[0_0_40px_rgba(51,139,255,0.6)] hover:scale-105"
+        >
+          <span className="relative z-10 flex items-center gap-2">
+            Enter App
+            <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </span>
+          <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
+        </button>
       </nav>
 
       {/* ═══════ HERO SECTION ═══════ */}
@@ -407,17 +368,6 @@ export function LandingPage({ onLaunchApp }: LandingPageProps) {
           visible ? "translate-y-0 opacity-100" : "translate-y-8 opacity-0"
         }`}
       >
-        {/* Badge */}
-        <div className="mb-6 flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 backdrop-blur-sm">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-400" />
-          </span>
-          <span className="text-xs font-medium text-gray-300">
-            Powered by Canton Network × Ethereum
-          </span>
-        </div>
-
         {/* Main headline */}
         <h1 className="max-w-4xl text-center">
           <span className="block text-5xl font-extrabold leading-tight tracking-tight text-white sm:text-6xl lg:text-7xl">
@@ -429,38 +379,6 @@ export function LandingPage({ onLaunchApp }: LandingPageProps) {
             </span>
           </span>
         </h1>
-
-        {/* Subtitle */}
-        <p className="mt-6 max-w-2xl text-center text-lg text-gray-400 sm:text-xl">
-          Mint, stake, and earn with a fully-backed stablecoin — validated in real time
-          by attestations on the Canton Network.
-        </p>
-
-        {/* CTA buttons */}
-        <div className="mt-10 flex items-center gap-4">
-          <button
-            onClick={onLaunchApp}
-            className="group relative overflow-hidden rounded-2xl bg-gradient-to-r from-brand-500 via-purple-500 to-brand-500 bg-[length:200%_100%] px-8 py-4 text-lg font-bold text-white shadow-[0_0_30px_rgba(51,139,255,0.5)] transition-all duration-500 hover:bg-right hover:shadow-[0_0_50px_rgba(51,139,255,0.7)] hover:scale-105"
-          >
-            <span className="relative z-10 flex items-center gap-3">
-              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              Launch App
-              <svg className="h-5 w-5 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-            </span>
-            <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-1000 group-hover:translate-x-full" />
-          </button>
-
-          <a
-            href="#"
-            className="rounded-2xl border border-white/10 bg-white/5 px-8 py-4 text-lg font-semibold text-white backdrop-blur-sm transition-all duration-300 hover:border-white/20 hover:bg-white/10"
-          >
-            Read Docs
-          </a>
-        </div>
 
         {/* ═══════ GLOBAL STATS ═══════ */}
         <div
@@ -501,129 +419,6 @@ export function LandingPage({ onLaunchApp }: LandingPageProps) {
           </div>
         </div>
 
-        {/* Scroll indicator */}
-        <div
-          className={`mt-16 flex flex-col items-center gap-2 transition-all duration-1000 delay-700 ${
-            visible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
-          }`}
-        >
-          <span className="text-xs font-medium uppercase tracking-widest text-gray-600">
-            Scroll to explore
-          </span>
-          <div className="flex h-8 w-5 items-start justify-center rounded-full border border-gray-700 p-1">
-            <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-500" />
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ FEATURES SECTION (below fold) ═══════ */}
-      <div className="relative z-10 border-t border-white/5 bg-gradient-to-b from-[#030712] to-[#0a0f1e]">
-        <div className="mx-auto max-w-6xl px-6 py-24 sm:px-10">
-          <div className="mb-16 text-center">
-            <h2 className="text-3xl font-bold text-white sm:text-4xl">
-              Built for the future of{" "}
-              <span className="bg-gradient-to-r from-brand-400 to-purple-400 bg-clip-text text-transparent">
-                digital finance
-              </span>
-            </h2>
-            <p className="mt-4 text-gray-500">
-              A fully-backed stablecoin with institutional-grade infrastructure
-            </p>
-          </div>
-
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              {
-                icon: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
-                title: "1:1 Fully Backed",
-                desc: "Every mUSD is backed by USDC held in the protocol treasury, verified on-chain at all times.",
-                color: "from-brand-500 to-blue-600",
-              },
-              {
-                icon: "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
-                title: "Canton Attestations",
-                desc: "Real-time validation via the Canton Network ensures every mint, redeem, and transfer is verifiable.",
-                color: "from-amber-500 to-yellow-500",
-              },
-              {
-                icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6",
-                title: "AI Yield Engine",
-                desc: "Our AI aggregation engine optimizes yield across hundreds of DeFi protocols automatically.",
-                color: "from-emerald-500 to-cyan-500",
-              },
-              {
-                icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4",
-                title: "Cross-Chain Bridge",
-                desc: "Seamlessly move assets between Ethereum, Canton, and L2 networks with a single click.",
-                color: "from-purple-500 to-pink-500",
-              },
-              {
-                icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
-                title: "Borrow & Leverage",
-                desc: "Deposit collateral, borrow mUSD, and access leveraged positions up to 3x.",
-                color: "from-red-500 to-orange-500",
-              },
-              {
-                icon: "M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z",
-                title: "Points & Rewards",
-                desc: "Earn points for protocol participation with multipliers for early adopters and active users.",
-                color: "from-brand-500 to-purple-500",
-              },
-            ].map((feature) => (
-              <div
-                key={feature.title}
-                className="group rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6 transition-all duration-300 hover:border-white/10 hover:bg-white/[0.04]"
-              >
-                <div
-                  className={`mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${feature.color} shadow-lg`}
-                >
-                  <svg className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={feature.icon} />
-                  </svg>
-                </div>
-                <h3 className="mb-2 text-lg font-semibold text-white">{feature.title}</h3>
-                <p className="text-sm leading-relaxed text-gray-500">{feature.desc}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Bottom CTA */}
-          <div className="mt-20 text-center">
-            <button
-              onClick={onLaunchApp}
-              className="group relative overflow-hidden rounded-2xl bg-gradient-to-r from-brand-500 to-purple-600 px-10 py-4 text-lg font-bold text-white shadow-[0_0_30px_rgba(51,139,255,0.4)] transition-all duration-300 hover:shadow-[0_0_50px_rgba(51,139,255,0.6)] hover:scale-105"
-            >
-              <span className="relative z-10 flex items-center gap-2">
-                Start Earning Now
-                <svg className="h-5 w-5 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </span>
-              <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-700 group-hover:translate-x-full" />
-            </button>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <footer className="border-t border-white/5 px-6 py-8 sm:px-10">
-          <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 sm:flex-row">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-purple-600">
-                <svg className="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <span className="text-sm text-gray-600">© 2026 Minted Protocol. All rights reserved.</span>
-            </div>
-            <div className="flex items-center gap-6">
-              {["Docs", "GitHub", "Discord", "Terms"].map((link) => (
-                <a key={link} href="#" className="text-sm text-gray-600 transition-colors hover:text-gray-300">
-                  {link}
-                </a>
-              ))}
-            </div>
-          </div>
-        </footer>
       </div>
     </div>
   );
