@@ -28,11 +28,13 @@ module CantonLending where
 
 import DA.Time
 import DA.Text qualified as DA.Text
-import DA.Optional (fromOptional)
+import DA.Optional (fromOptional, whenSome)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
 
 -- ============================================================
 --                     SECTION 1: COLLATERAL CONFIG
@@ -414,6 +416,8 @@ template CantonLendingService
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
+    -- FIX INSTITUTIONAL: Compliance registry for blacklist/freeze checks on borrows
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
     observers          : [Party]
   where
     signatory operator
@@ -586,6 +590,12 @@ template CantonLendingService
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
+
+        -- FIX INSTITUTIONAL: Compliance check — verify borrower is not blacklisted/frozen
+        whenSome complianceRegistryCid $ \cid ->
+          exercise cid ValidateTransfer with
+            sender = operator
+            receiver = user
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
         -- FIX N-H3: Pass user as expectedOwner to verify all escrows belong to this user
@@ -1035,72 +1045,117 @@ template CantonLendingService
         return (newService, receiptCid)
 
     -- ──────────────────────────────────────────────────────
-    --  ADMIN
+    --  ADMIN (FIX D-H1: All admin choices require governance proof)
     -- ──────────────────────────────────────────────────────
 
     -- | Update collateral config
     -- FIX M-2: Validate config bounds to prevent operator misconfiguration
-    choice Lending_UpdateConfig : ContractId CantonLendingService
+    -- FIX D-H1: Requires GovernanceActionLog proof with ParameterUpdate action
+    nonconsuming choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
         assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
         assertMsg "LIQ_PENALTY_RANGE" (newConfig.liquidationPenaltyBps >= 0 && newConfig.liquidationPenaltyBps <= 2000)
         assertMsg "LIQ_BONUS_RANGE" (newConfig.liquidationBonusBps >= 0 && newConfig.liquidationBonusBps <= newConfig.liquidationPenaltyBps)
         let updatedConfigs = map (\c -> if c.collateralType == newConfig.collateralType then newConfig else c) configs
+        archive self
         create this with configs = updatedConfigs
 
     -- | Update interest rate (synced from InterestRateService)
-    choice Lending_UpdateRate : ContractId CantonLendingService
+    -- FIX D-H1: Requires GovernanceActionLog proof
+    nonconsuming choice Lending_UpdateRate : ContractId CantonLendingService
       with
         newRateBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
+        archive self
         create this with interestRateBps = newRateBps
 
     -- | Pause / unpause
-    choice Lending_SetPaused : ContractId CantonLendingService
+    -- FIX D-H1: Requires GovernanceActionLog proof (EmergencyPause action type)
+    nonconsuming choice Lending_SetPaused : ContractId CantonLendingService
       with
         newPaused : Bool
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
-      do create this with paused = newPaused
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == EmergencyPause)
+        archive self
+        create this with paused = newPaused
+
+    -- | FIX D-C2: Set/unset compliance registry — requires governance proof
+    nonconsuming choice Lending_SetComplianceRegistry : ContractId CantonLendingService
+      with
+        newRegistryCid : Optional (ContractId ComplianceRegistry)
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        archive self
+        create this with complianceRegistryCid = newRegistryCid
 
     -- FIX M-3: Admin choices for operational parameters
-    choice Lending_UpdateMinBorrow : ContractId CantonLendingService
+    -- FIX D-H1: Requires GovernanceActionLog proof
+    nonconsuming choice Lending_UpdateMinBorrow : ContractId CantonLendingService
       with
         newMinBorrow : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
+        archive self
         create this with minBorrow = newMinBorrow
 
-    choice Lending_UpdateReserveFactor : ContractId CantonLendingService
+    nonconsuming choice Lending_UpdateReserveFactor : ContractId CantonLendingService
       with
         newReserveFactorBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
+        archive self
         create this with reserveFactorBps = newReserveFactorBps
 
-    choice Lending_UpdateCloseFactor : ContractId CantonLendingService
+    nonconsuming choice Lending_UpdateCloseFactor : ContractId CantonLendingService
       with
         newCloseFactorBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
+        archive self
         create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
-    choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
+    -- FIX D-H1: Requires GovernanceActionLog proof (TreasuryWithdrawal action type)
+    nonconsuming choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == TreasuryWithdrawal)
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator
@@ -1109,6 +1164,7 @@ template CantonLendingService
           agreementHash = mpaHash
           agreementUri = mpaUri
           privacyObservers = []  -- Protocol reserves, fully private
+        archive self
         newService <- create this with
           protocolReserves = protocolReserves - amount
         return (newService, musdCid)

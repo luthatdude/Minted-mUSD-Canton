@@ -19,6 +19,8 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
+import Governance (GovernanceActionLog(..), ActionType(..))
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -121,6 +123,8 @@ template CantonStakingService
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
     paused : Bool
+    -- Compliance integration
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
     -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
     mpaHash : Text
     mpaUri : Text
@@ -147,6 +151,11 @@ template CantonStakingService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
+        -- FIX D-H5: Compliance check before staking
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
+
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
@@ -170,9 +179,6 @@ template CantonStakingService
           stakedAt = now
           privacyObservers = userObs
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
         -- Update pool state (local shares only - global sync happens via bridge)
         newService <- create this with
           totalShares = totalShares + newShares
@@ -189,6 +195,11 @@ template CantonStakingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- FIX D-H5: Compliance check before unstaking
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = operator; receiver = user
+          None -> pure ()
 
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
@@ -215,9 +226,6 @@ template CantonStakingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
         -- Update pool state
         newService <- create this with
           totalShares = totalShares - smusd.shares
@@ -226,14 +234,18 @@ template CantonStakingService
 
     -- | Sync global share price from Ethereum (replaces old SyncYield)
     -- Called by operator after YieldSyncService calculates global share price
-    choice SyncGlobalSharePrice : ContractId CantonStakingService
+    -- FIX D-H3: Governance-gated admin choice
+    nonconsuming choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
         newGlobalSharePrice : Money   -- Global share price from Ethereum
         newGlobalTotalAssets : Money  -- Total assets across both chains
         newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
@@ -250,13 +262,17 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Legacy SyncYield for backwards compatibility (deprecated)
-    choice SyncYield : ContractId CantonStakingService
+    -- FIX D-H3: Governance-gated admin choice
+    nonconsuming choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
         yieldAccrued : Money
         epochNumber : Int
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         -- Convert to global share price model
         let newSharePrice = if globalTotalShares > 0.0
@@ -270,11 +286,15 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Admin: Pause/unpause
-    choice Staking_SetPaused : ContractId CantonStakingService
+    -- FIX D-H3: Governance-gated admin choice
+    nonconsuming choice Staking_SetPaused : ContractId CantonStakingService
       with
         newPaused : Bool
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
