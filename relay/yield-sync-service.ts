@@ -22,7 +22,7 @@
 import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
-import { readSecret } from "./utils";
+import { readSecret, readAndValidatePrivateKey } from "./utils";
 
 // ============================================================
 //                     CONFIGURATION
@@ -54,7 +54,8 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
-  bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
+  // FIX BE-001: Validate private key is in valid secp256k1 range
+  bridgePrivateKey: readAndValidatePrivateKey("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
 
   cantonHost: process.env.CANTON_HOST || "localhost",
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),

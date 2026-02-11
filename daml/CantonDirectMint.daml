@@ -790,9 +790,15 @@ template CantonDirectMintService
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
+    -- FIX DAML-010: Governance-gated fee withdrawal (was previously operator-only bypass)
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
+      with
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX DAML-010: Consume governance proof (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self

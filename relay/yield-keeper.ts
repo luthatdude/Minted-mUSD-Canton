@@ -12,7 +12,7 @@
  */
 
 import { ethers } from "ethers";
-import { readSecret } from "./utils";
+import { readSecret, readAndValidatePrivateKey } from "./utils";
 
 // ============================================================
 //                     CONFIGURATION
@@ -30,7 +30,8 @@ interface KeeperConfig {
 const DEFAULT_CONFIG: KeeperConfig = {
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
-  keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
+  // FIX BE-001: Validate private key is in valid secp256k1 range
+  keeperPrivateKey: readAndValidatePrivateKey("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
