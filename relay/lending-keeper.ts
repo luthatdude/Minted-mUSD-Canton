@@ -553,6 +553,23 @@ export class LendingKeeperBot {
         };
       }
 
+      // FIX BE-H03: Re-compute health factor with fresh data before executing liquidation
+      // The original scan data may be stale (user may have repaid or added collateral)
+      const freshDebt = parseFloat((freshDebtPositions[0] as any).payload.totalBorrowed || "0");
+      const freshCollateralValue = freshEscrows.reduce((sum, e) => {
+        const price = this.getPrice(e.collateralType);
+        return sum + e.amount * price;
+      }, 0);
+      const freshHF = freshDebt > 0 ? freshCollateralValue / freshDebt : Infinity;
+      if (freshHF >= 1.0) {
+        return {
+          borrower: candidate.borrower, debtRepaid: 0, collateralSeized: 0,
+          collateralType: candidate.bestTarget.collateralType, keeperBonus: 0,
+          success: false, error: `Position no longer liquidatable after refresh (HF=${freshHF.toFixed(4)})`,
+          timestamp,
+        };
+      }
+
       // Collect all price feed contract IDs
       const priceFeeds = await this.ledger.query(
         "CantonLending:CantonPriceFeed" as any,

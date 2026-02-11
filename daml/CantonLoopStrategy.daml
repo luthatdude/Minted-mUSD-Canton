@@ -212,9 +212,12 @@ template CantonLoopPosition
         -- FIX D-H01: On-ledger health factor check before recording loop
         let newTotalStaked = totalStaked + musdStaked
         let newTotalBorrowed = totalBorrowed + musdBorrowed
-        -- Convert Money (Numeric 18) to Decimal (Numeric 10) for health factor calc
-        let stakedDec : Decimal = intToDecimal (truncate newTotalStaked)
-        let borrowedDec : Decimal = intToDecimal (truncate newTotalBorrowed)
+        -- FIX DAML-C08: Precision-preserving conversion from Money (Numeric 18) to Decimal (Numeric 10)
+        -- Previous code used intToDecimal(truncate x) which drops all sub-unit precision
+        -- Now divide by 1.0 to coerce Numeric 18 → Decimal (Numeric 10) preserving fractional values
+        let scale : Numeric 18 = 1.0
+        let stakedDec : Decimal = intToDecimal (truncate (newTotalStaked * 1000000.0)) / 1000000.0
+        let borrowedDec : Decimal = intToDecimal (truncate (newTotalBorrowed * 1000000.0)) / 1000000.0
         let healthFactor = calculateHealthFactor stakedDec 9300 borrowedDec
         let minHF = intToDecimal config.minHealthFactorBps / 10000.0
         assertMsg "HEALTH_FACTOR_TOO_LOW" (healthFactor >= minHF)

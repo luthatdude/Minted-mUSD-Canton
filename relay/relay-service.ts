@@ -845,8 +845,14 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
 
   const server = http.createServer(async (req, res) => {
     // Rate limit check
-    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
-      || req.socket.remoteAddress || "unknown";
+    // FIX BE-H01: Don't blindly trust X-Forwarded-For header (IP spoofing risk)
+    // Only use XFF if running behind a trusted proxy (configured via TRUSTED_PROXY env)
+    const trustedProxy = process.env.TRUSTED_PROXY || "";
+    const socketIp = req.socket.remoteAddress || "unknown";
+    let clientIp = socketIp;
+    if (trustedProxy && (socketIp === trustedProxy || socketIp === "127.0.0.1" || socketIp === "::1")) {
+      clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || socketIp;
+    }
     const now = Date.now();
     const rlEntry = rateLimitMap.get(clientIp);
     if (!rlEntry || now >= rlEntry.resetAt) {

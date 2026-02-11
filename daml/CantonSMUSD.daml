@@ -359,6 +359,7 @@ template CantonStakingService
     -- | Legacy SyncYield for backwards compatibility (deprecated)
     -- FIX D-H3: Governance-gated admin choice
     -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
+    -- FIX DAML-C04: Added same guards as SyncGlobalSharePrice (10% decrease cap, positivity)
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
@@ -375,6 +376,10 @@ template CantonStakingService
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
+        -- FIX DAML-C04: Apply same safety guards as SyncGlobalSharePrice
+        assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newSharePrice > 0.0)
+        let minAllowedPrice = globalSharePrice * 0.9
+        assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newSharePrice >= minAllowedPrice)
         create this with
           globalSharePrice = newSharePrice
           globalTotalAssets = newTotalTreasuryAssets
