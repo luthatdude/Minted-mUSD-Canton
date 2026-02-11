@@ -183,6 +183,51 @@ export function CantonStake() {
           {result && <p className="text-sm text-green-400">{result}</p>}
         </div>
       </div>
+
+      {/* Canton Coin Staking Widget — Canton Only */}
+      <div className="card border border-emerald-500/20">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-500">
+            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-white">Stake Canton Coin</h2>
+            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">Canton Only — Boost Pool</span>
+          </div>
+        </div>
+        <div className="rounded-xl bg-emerald-900/20 border border-emerald-500/10 p-4 mb-4">
+          <p className="text-sm text-emerald-300/90 leading-relaxed">
+            Stake 20% of your mUSD stake in Canton Coin to receive <span className="font-semibold text-emerald-200">boosted yield of 2-4%</span> PLUS{" "}
+            <span className="font-semibold text-emerald-200">60% of all validator rewards</span> mUSD generates. You&apos;ll also earn exclusive Minted Points
+            which earn you an airdrop for the $MINT TGE.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3 mb-4">
+          <StatCard label="Boost Pool APY" value="2-4%" color="green" />
+          <StatCard label="Validator Rewards" value="60% share" color="green" />
+          <StatCard label="Points Multiplier" value="10× (Season 1)" color="green" />
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="label">Canton Coin Amount</label>
+            <input
+              type="number"
+              className="input"
+              placeholder="0.00"
+              disabled
+            />
+          </div>
+          <button
+            disabled
+            className="btn-primary w-full opacity-60 cursor-not-allowed"
+          >
+            Stake Canton Coin (Coming Soon)
+          </button>
+          <p className="text-xs text-gray-500 text-center">Canton Coin staking activates when the Boost Pool launches.</p>
+        </div>
+      </div>
     </div>
   );
 }

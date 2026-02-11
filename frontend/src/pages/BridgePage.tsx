@@ -410,6 +410,27 @@ export function BridgePage() {
           })}
         </div>
       </div>
+
+      {/* BLE Explainer */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500/20">
+            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">Beneficiary Locked Environment (BLE)</h2>
+        </div>
+        <p className="text-sm text-gray-400 leading-relaxed mb-3">
+          Move mUSD and sMUSD between Ethereum and Canton. Your yield never stops.
+        </p>
+        <p className="text-sm text-gray-400 leading-relaxed">
+          Powered by Minted&apos;s proprietary <span className="text-white font-medium">BLE (Beneficiary Locked Environment)</span> — a
+          multi-sig attestation system where institutional validators verify every cross-chain transfer. No relayers, no optimistic windows.
+          Every bridge action is cryptographically attested, validating assets on Canton, supply-cap enforced, and settled with finality
+          on both chains.
+        </p>
+      </div>
     </div>
   );
 }
