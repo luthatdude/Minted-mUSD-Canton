@@ -107,7 +107,46 @@ Every page follows this structure:
 
 ---
 
-### 1. Dashboard / Mint Page (`/dashboard`) — Landing page after Launch App
+### 0. Landing Page (pre-app gate) — `LandingPage.tsx`
+
+Shown before the user enters the app. Full-screen, no scrollable content below.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  THREE.js Animated Scene (full viewport, behind all content)     │
+│  • 2000 particles (spherical distribution, additive blending)    │
+│  • Central glowing orb (fresnel shader, pulsing)                 │
+│  • 3 orbiting torus rings (brand-blue, purple, amber)            │
+│  • Neural-network connection lines between nearby particles      │
+│  • Mouse-follow camera (smooth lerp)                             │
+│  • Dark vignette overlay for text legibility                     │
+├──────────────────────────────────────────────────────────────────┤
+│  NAV BAR (z-20, minimal)                                         │
+│  ┌──────────┐                                    ┌─────────────┐│
+│  │ Logo     │                                    │ [Enter App] ││
+│  │ Minted   │                                    │  gradient    ││
+│  │ Protocol │                                    │  button      ││
+│  └──────────┘                                    └─────────────┘│
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│          "The currency for the"                                  │
+│          "Web3 Ownership Economy"   (gradient text)              │
+│                                                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────────┐│
+│  │ mUSD     │ │ Staking  │ │ Active   │ │ Canton Attestation  ││
+│  │ Supply   │ │ APY      │ │ Users    │ │ Value               ││
+│  │ 24.8M    │ │ 12.4%    │ │ 3,847    │ │ 18.2M               ││
+│  └──────────┘ └──────────┘ └──────────┘ └─────────────────────┘│
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+
+No other buttons, links, features sections, or footer.
+"Enter App" → sets appLaunched=true → shows Dashboard.
+```
+
+---
+
+### 1. Dashboard / Mint Page (`/dashboard`) — First page after Enter App
 
 This is the FIRST page the user sees. Dashboard and Mint are merged into a single unified page.
 
@@ -528,7 +567,13 @@ focus: border-brand-500/50 shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]
 ## Component Hierarchy
 
 ```
-Layout
+LandingPage (pre-app gate, shown when appLaunched=false)
+├── THREE.js Scene (particles, orb, rings, neural lines)
+├── Navbar (logo + "Enter App" button only)
+├── Headline ("The currency for the Web3 Ownership Economy")
+└── 4 Global Stat Cards (mUSD Supply, APY, Users, Canton Attestation Value)
+
+Layout (shown when appLaunched=true)
 ├── Navbar
 │   ├── Logo (Minted Protocol)
 │   ├── NavItems × 7 (desktop)
@@ -688,6 +733,7 @@ frontend/src/
 │   └── LiquidationsPage.tsx — (unused, not in nav)
 │
 ├── components/
+│   ├── LandingPage.tsx      — Pre-app gate: THREE.js scene, headline, stats, Enter App
 │   ├── Layout.tsx           — Shell: bg, navbar, main, footer
 │   ├── Navbar.tsx           — Top nav with 7 items + wallet + chain toggle
 │   ├── ChainToggle.tsx      — ETH ⟷ Canton pill switch
