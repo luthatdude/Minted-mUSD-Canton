@@ -19,7 +19,7 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Governance (GovernanceActionLog(..), ActionType(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
@@ -81,7 +81,13 @@ template CantonSMUSD
         assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
         assertMsg "OWNER_MISMATCH" (other.owner == owner)
         archive otherCid
-        create this with shares = shares + other.shares
+        -- FIX HIGH-02: Use the MORE RECENT stakedAt to prevent cooldown bypass.
+        -- Without this, a user could merge recently-staked shares into an older position
+        -- to inherit the older stakedAt and bypass the cooldown period.
+        let mergedStakedAt = if other.stakedAt > stakedAt then other.stakedAt else stakedAt
+        create this with
+          shares = shares + other.shares
+          stakedAt = mergedStakedAt
 
 -- | FIX DL-C2: Transfer proposal for CantonSMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients

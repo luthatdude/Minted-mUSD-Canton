@@ -29,7 +29,7 @@ import DA.Text qualified as T
 import DA.Action (foldlA)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
-import Governance (GovernanceActionLog(..), ActionType(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================

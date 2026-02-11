@@ -56,6 +56,7 @@ interface IBorrowModule {
     function borrowFor(address user, uint256 amount) external;
     function repay(uint256 amount) external;
     function repayFor(address user, uint256 amount) external;
+    function reduceDebt(address user, uint256 amount) external;
     function totalDebt(address user) external view returns (uint256);
     function borrowCapacity(address user) external view returns (uint256);
     function maxBorrow(address user) external view returns (uint256);
@@ -738,7 +739,15 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
                 try borrowModule.repayFor(user, repayAmount) {
                     repaySucceeded = true;
                 } catch {
-                    emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+                    // FIX LV-H01: If repayFor fails, burn available mUSD and reduce debt
+                    // directly to prevent orphaned debt in BorrowModule.
+                    // Without this, debt stays in BorrowModule with no backing collateral.
+                    try borrowModule.reduceDebt(user, repayAmount) {
+                        // Debt cleared from BorrowModule; mUSD stays in contract for admin recovery
+                        repaySucceeded = true;
+                    } catch {
+                        emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+                    }
                 }
             }
         } else if (debtToRepay == 0) {
