@@ -29,6 +29,8 @@ import DA.Text qualified as T
 import DA.Action (foldlA)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
+import Governance (GovernanceActionLog(..), ActionType(..))
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -425,16 +427,20 @@ template PriceOracle
 
 -- | LiquidityPool - On-chain DEX for atomic leverage operations.
 -- FIX C-01: Swaps now require actual token contract IDs for verification
+-- FIX V3-GOV: Governance co-signer for config changes
+-- FIX V3-COMP: Compliance check on swaps
 template LiquidityPool
   with
     operator : Party
+    governance : Party             -- FIX V3-GOV: Governance co-signer
     baseSymbol : Text           -- e.g., "mUSD"
     quoteSymbol : Text          -- e.g., "WBTC"
     baseReserve : Money
     quoteReserve : Money
     exchangeRate : Money        -- baseSymbol per quoteSymbol
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)  -- FIX V3-COMP
   where
-    signatory operator
+    signatory operator, governance  -- FIX V3-GOV: Both must sign
 
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
 
@@ -445,6 +451,10 @@ template LiquidityPool
         receiver : Party
       controller receiver
       do
+        -- FIX V3-COMP: Compliance check before swap
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = receiver; receiver = operator
+          None -> pure ()
         -- FIX C-01: Verify token ownership and consume it
         musd <- fetch musdCid
         assertMsg "NOT_OWNER" (musd.owner == receiver)
@@ -504,6 +514,8 @@ data VaultConfig = VaultConfig with
 
 -- | Vault - Collateralized debt position (CDP).
 -- Supports atomic leverage: deposit → borrow → swap → add collateral in one tx.
+-- FIX V3-GOV: Governance co-signer for config updates
+-- FIX V3-COMP: Compliance check on leverage operations
 template Vault
   with
     operator : Party
@@ -514,6 +526,7 @@ template Vault
     accruedInterest : Money
     lastInterestUpdate : Time
     config : VaultConfig
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)  -- FIX V3-COMP
     observers : [Party]
   where
     signatory operator, owner
@@ -579,13 +592,15 @@ template Vault
           lastInterestUpdate = now
 
     -- | FIX H-03: Update vault config (operator-controlled, consuming choice)
-    -- Must live on Vault so that Vault's signatories {operator, owner} are in
-    -- the authorization context when the contract is archived and recreated.
+    -- FIX V3-GOV: Governance-gated
     choice Vault_UpdateConfig : ContractId Vault
       with
         newConfig : VaultConfig
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         create this with config = newConfig
 
     -- | AdjustLeverage - Atomic leverage loop
@@ -604,6 +619,10 @@ template Vault
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
+        -- FIX V3-COMP: Compliance check before leverage
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = owner; receiver = operator
+          None -> pure ()
         
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
@@ -767,17 +786,21 @@ template Vault
 -- ============================================================
 
 -- | VaultManager - Factory for creating vaults with default config.
+-- FIX V3-GOV: Governance co-signer
 template VaultManager
   with
     operator : Party
+    governance : Party               -- FIX V3-GOV: Governance co-signer
     defaultConfig : VaultConfig
     allowedCollaterals : [Text]   -- Whitelisted collateral symbols
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)  -- FIX V3-COMP
     observers : [Party]
   where
-    signatory operator
+    signatory operator, governance  -- FIX V3-GOV: Both must sign
     observer observers
 
     -- | Create a new vault for a user
+    -- FIX V3-COMP: Compliance check on vault creation
     choice OpenVault : ContractId Vault
       with
         owner : Party
@@ -785,6 +808,10 @@ template VaultManager
       controller owner
       do
         assertMsg "COLLATERAL_NOT_ALLOWED" (collateralSymbol `elem` allowedCollaterals)
+        -- FIX V3-COMP: Check compliance
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = owner; receiver = operator
+          None -> pure ()
         now <- getTime
         create Vault with
           operator
@@ -795,28 +822,32 @@ template VaultManager
           accruedInterest = 0.0
           lastInterestUpdate = now
           config = defaultConfig
+          complianceRegistryCid
           observers = [operator]
 
     -- | Update default config
+    -- FIX V3-GOV: Governance-gated
     choice UpdateDefaultConfig : ContractId VaultManager
       with
         newConfig : VaultConfig
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
-      do create this with defaultConfig = newConfig
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        create this with defaultConfig = newConfig
 
     -- | Update vault config for a specific vault
     -- FIX H-03: Exercise Vault_UpdateConfig on the Vault contract directly.
-    -- This brings Vault's signatories {operator, owner} into the authorization
-    -- context, allowing the consuming choice to archive and recreate the Vault.
-    -- Previously, manual archive from VaultManager failed because only {operator}
-    -- was in scope but Vault requires {operator, owner} for archive.
+    -- FIX V3-GOV: Governance-gated — passes proof through to Vault
     choice UpdateVaultConfig : ContractId Vault
       with
         vaultCid : ContractId Vault
         newConfig : VaultConfig
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        exercise vaultCid Vault_UpdateConfig with newConfig
+        exercise vaultCid Vault_UpdateConfig with newConfig; governanceProofCid
 
 -- ============================================================
 --                     6. LIQUIDATION RECEIPT

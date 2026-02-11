@@ -208,25 +208,6 @@ async function main() {
   // Mint test USDC to deployer
   console.log("Minting test USDC...");
   await mockUSDC.mint(deployer.address, 1000000n * 10n ** 6n); // 1M USDC
-
-  // ═══════════════════════════════════════════════════════════
-  // Deploy SMUSDPriceAdapter & add sMUSD as collateral
-  // ═══════════════════════════════════════════════════════════
-  console.log("Adding sMUSD as collateral...");
-
-  const SMUSDPriceAdapter = await ethers.getContractFactory("SMUSDPriceAdapter");
-  const smusdAdapter = await SMUSDPriceAdapter.deploy(smusdAddress, deployer.address);
-  await smusdAdapter.waitForDeployment();
-  const smusdAdapterAddress = await smusdAdapter.getAddress();
-  console.log(`     SMUSDPriceAdapter: ${smusdAdapterAddress}`);
-
-  // Register sMUSD price feed
-  await priceOracle.setFeed(smusdAddress, smusdAdapterAddress, 86400, 18);
-  console.log("     sMUSD feed registered in PriceOracle");
-
-  // Add sMUSD as collateral: 90% LTV, 93% liq threshold, 4% penalty
-  await vault.addCollateral(smusdAddress, 9000, 9300, 400);
-  console.log("     sMUSD added as collateral (90% LTV, 93% liq threshold, 4% penalty)");
   
   console.log("");
   console.log("═".repeat(60));

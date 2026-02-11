@@ -2,7 +2,7 @@
 -- Canton-native lending module with actual token escrowing
 --
 -- Architecture:
---   Users deposit Canton-native assets (CantonCoin, CantonSMUSD)
+--   Users deposit Canton-native assets (CantonCoin, CantonUSDC, USDCx, CantonSMUSD)
 --   as collateral into escrowed positions. They borrow CantonMUSD against this collateral.
 --
 --   Price feeds from Tradecraft DEX API (primary, no auth) and Temple DEX API (fallback).
@@ -13,11 +13,9 @@
 --
 -- Supported Collateral:
 --   - CantonCoin (CTN)   — volatile, Temple DEX price feed, ~65% LTV
+--   - CantonUSDC         — stable 1:1, hardcoded price, ~95% LTV
+--   - USDCx              — stable 1:1 (xReserve bridged), ~95% LTV
 --   - CantonSMUSD        — yield-bearing, globalSharePrice feed, ~90% LTV
---
--- Deprecated Collateral (use CantonDirectMint instead for 1:1 minting):
---   - CantonUSDC         — disabled, DirectMint_Mint gives 1:1
---   - USDCx              — disabled, DirectMint_MintWithUSDCx gives 1:1
 --
 -- Revenue Model:
 --   Interest on borrows → routed to sMUSD stakers (mirroring Ethereum BorrowModule)
@@ -28,13 +26,13 @@ module CantonLending where
 
 import DA.Time
 import DA.Text qualified as DA.Text
-import DA.Optional (fromOptional, whenSome)
+import DA.Optional (fromOptional)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry, ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: COLLATERAL CONFIG
@@ -68,21 +66,19 @@ defaultCTNConfig = CollateralConfig with
     liquidationPenaltyBps = 1000     -- 10% penalty
     liquidationBonusBps = 500        -- 5% keeper bonus
 
--- | DEPRECATED: Use CantonDirectMint.DirectMint_Mint for USDC → mUSD (1:1, no borrow cost)
 defaultUSDCConfig : CollateralConfig
 defaultUSDCConfig = CollateralConfig with
     collateralType = CTN_USDC
-    enabled = False                  -- Disabled: DirectMint gives 1:1, no reason to borrow
+    enabled = True
     collateralFactorBps = 9500       -- 95% LTV — stable
     liquidationThresholdBps = 9700   -- 97% — tight spread
     liquidationPenaltyBps = 300      -- 3% penalty
     liquidationBonusBps = 150        -- 1.5% keeper bonus
 
--- | DEPRECATED: Use CantonDirectMint.DirectMint_MintWithUSDCx for USDCx → mUSD (1:1, no borrow cost)
 defaultUSDCxConfig : CollateralConfig
 defaultUSDCxConfig = CollateralConfig with
     collateralType = CTN_USDCx
-    enabled = False                  -- Disabled: DirectMint gives 1:1, no reason to borrow
+    enabled = True
     collateralFactorBps = 9500
     liquidationThresholdBps = 9700
     liquidationPenaltyBps = 300
@@ -148,12 +144,16 @@ template CantonPriceFeed
         return priceUsd
 
     -- | Update price from Tradecraft/Temple DEX API
+    -- FIX LS-GOV: Governance-gated to prevent unilateral oracle manipulation
     choice PriceFeed_Update : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
         newSource   : Text
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         -- FIX M-4: Minimum 10-second interval between updates to prevent rapid oscillation
         now <- getTime
@@ -175,8 +175,11 @@ template CantonPriceFeed
       with
         newPriceUsd : Money
         reason      : Text
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
         now <- getTime
@@ -416,7 +419,7 @@ template CantonLendingService
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
-    -- FIX INSTITUTIONAL: Compliance registry for blacklist/freeze checks on borrows
+    -- FIX LS-COMP: Compliance integration for blacklist/freeze checks
     complianceRegistryCid : Optional (ContractId ComplianceRegistry)
     observers          : [Party]
   where
@@ -442,6 +445,10 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- FIX LS-COMP: Compliance check before deposit
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
         let cfg = getConfig CTN_Coin configs
@@ -477,6 +484,10 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- FIX LS-COMP: Compliance check before deposit
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
         usdc <- fetch usdcCid
         assertMsg "NOT_OWNER" (usdc.owner == user)
         let cfg = getConfig CTN_USDC configs
@@ -511,6 +522,10 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- FIX LS-COMP: Compliance check before deposit
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
         usdcx <- fetch usdcxCid
         assertMsg "NOT_OWNER" (usdcx.owner == user)
         let cfg = getConfig CTN_USDCx configs
@@ -545,6 +560,10 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- FIX LS-COMP: Compliance check before deposit
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
         let cfg = getConfig CTN_SMUSD configs
@@ -587,15 +606,13 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- FIX LS-COMP: Compliance check before borrow
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = operator; receiver = user
+          None -> pure ()
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
-
-        -- FIX INSTITUTIONAL: Compliance check — verify borrower is not blacklisted/frozen
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateTransfer with
-            sender = operator
-            receiver = user
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
         -- FIX N-H3: Pass user as expectedOwner to verify all escrows belong to this user
@@ -1045,117 +1062,101 @@ template CantonLendingService
         return (newService, receiptCid)
 
     -- ──────────────────────────────────────────────────────
-    --  ADMIN (FIX D-H1: All admin choices require governance proof)
+    --  ADMIN
     -- ──────────────────────────────────────────────────────
 
     -- | Update collateral config
     -- FIX M-2: Validate config bounds to prevent operator misconfiguration
-    -- FIX D-H1: Requires GovernanceActionLog proof with ParameterUpdate action
-    nonconsuming choice Lending_UpdateConfig : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
         assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
         assertMsg "LIQ_PENALTY_RANGE" (newConfig.liquidationPenaltyBps >= 0 && newConfig.liquidationPenaltyBps <= 2000)
         assertMsg "LIQ_BONUS_RANGE" (newConfig.liquidationBonusBps >= 0 && newConfig.liquidationBonusBps <= newConfig.liquidationPenaltyBps)
         let updatedConfigs = map (\c -> if c.collateralType == newConfig.collateralType then newConfig else c) configs
-        archive self
         create this with configs = updatedConfigs
 
     -- | Update interest rate (synced from InterestRateService)
-    -- FIX D-H1: Requires GovernanceActionLog proof
-    nonconsuming choice Lending_UpdateRate : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_UpdateRate : ContractId CantonLendingService
       with
         newRateBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
-        archive self
         create this with interestRateBps = newRateBps
 
     -- | Pause / unpause
-    -- FIX D-H1: Requires GovernanceActionLog proof (EmergencyPause action type)
-    nonconsuming choice Lending_SetPaused : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_SetPaused : ContractId CantonLendingService
       with
         newPaused : Bool
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == EmergencyPause)
-        archive self
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         create this with paused = newPaused
 
-    -- | FIX D-C2: Set/unset compliance registry — requires governance proof
-    nonconsuming choice Lending_SetComplianceRegistry : ContractId CantonLendingService
-      with
-        newRegistryCid : Optional (ContractId ComplianceRegistry)
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
-        archive self
-        create this with complianceRegistryCid = newRegistryCid
-
     -- FIX M-3: Admin choices for operational parameters
-    -- FIX D-H1: Requires GovernanceActionLog proof
-    nonconsuming choice Lending_UpdateMinBorrow : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_UpdateMinBorrow : ContractId CantonLendingService
       with
         newMinBorrow : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
-        archive self
         create this with minBorrow = newMinBorrow
 
-    nonconsuming choice Lending_UpdateReserveFactor : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_UpdateReserveFactor : ContractId CantonLendingService
       with
         newReserveFactorBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
-        archive self
         create this with reserveFactorBps = newReserveFactorBps
 
-    nonconsuming choice Lending_UpdateCloseFactor : ContractId CantonLendingService
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_UpdateCloseFactor : ContractId CantonLendingService
       with
         newCloseFactorBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
-        archive self
         create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
-    -- FIX D-H1: Requires GovernanceActionLog proof (TreasuryWithdrawal action type)
-    nonconsuming choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
+    -- FIX LS-GOV: Governance-gated
+    choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
         proof <- fetch governanceProofCid
-        assertMsg "GOVERNANCE_ACTION_MISMATCH" (proof.actionType == TreasuryWithdrawal)
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator
@@ -1164,7 +1165,6 @@ template CantonLendingService
           agreementHash = mpaHash
           agreementUri = mpaUri
           privacyObservers = []  -- Protocol reserves, fully private
-        archive self
         newService <- create this with
           protocolReserves = protocolReserves - amount
         return (newService, musdCid)
