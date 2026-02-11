@@ -1,0 +1,706 @@
+-- | CrossModuleIntegrationTest
+-- FIX DAML-R02: Cross-module integration tests covering multi-module flows.
+-- These tests verify that templates from different modules compose correctly
+-- and that security invariants hold across module boundaries.
+--
+-- Covered flows:
+--   1. Mint → Stake → Unstake (CantonDirectMint × CantonSMUSD)
+--   2. Deposit → Borrow → Repay → Withdraw (CantonLending full cycle)
+--   3. Multi-attestor share price sync (CantonSMUSD DAML-R01)
+--   4. Keeper bond liquidation flow (CantonLending DAML-R03)
+--   5. Burn rate limiter enforcement (CantonDirectMint DAML-R05)
+
+module CrossModuleIntegrationTest where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import DA.Optional (fromSome)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..), BurnLimit_SetPaused(..))
+import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SharePriceAttestation(..), ConsumeAttestation(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
+import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), KeeperBond(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_GetPrice(..), PriceFeed_EmergencyUpdate(..))
+import CantonBoostPool (CantonCoin(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
+import DA.Set qualified as Set
+
+-- ============================================================
+--                     TEST HELPERS
+-- ============================================================
+
+testMpaHash : Text
+testMpaHash = "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abc"
+
+testMpaUri : Text
+testMpaUri = "https://minted.app/terms"
+
+createGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator proposer actionType desc = do
+  now <- getTime
+  submitMulti [operator, proposer] [] do
+    createCmd GovernanceActionLog with
+      operator
+      proposer
+      proposalId = "integ-" <> desc
+      actionType
+      description = desc
+      payload = ""
+      payloadHash = ""
+      approvers = [proposer]
+      executedBy = proposer
+      executedAt = now
+
+-- ============================================================
+--  1. INTEGRATION: MINT mUSD → STAKE → UNSTAKE
+--     CantonDirectMint × CantonSMUSD cross-module
+-- ============================================================
+
+testMintStakeUnstakeFlow : Script ()
+testMintStakeUnstakeFlow = do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  governor <- allocateParty "Governor"
+  attestor1 <- allocateParty "Attestor1"
+  attestor2 <- allocateParty "Attestor2"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Step 1: Create mUSD for Alice (simulating a mint without full DirectMintService)
+  musdCid <- submitMulti [operator, alice] [] do
+    createCmd CantonMUSD with
+      issuer = operator
+      owner = alice
+      amount = 1000.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+  -- Step 2: Create staking service
+  stakingCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 0.0
+      globalSharePrice = 1.0
+      globalTotalAssets = 0.0
+      globalTotalShares = 0.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 0  -- No cooldown for test
+      minDeposit = 1.0
+      paused = False
+      authorizedAttestors = [attestor1, attestor2]
+      minAttestors = 2
+      maxAttestationDeviationBps = 100  -- 1% max deviation
+      complianceRegistryCid = None
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = [alice]
+
+  -- Step 3: Alice stakes mUSD → gets smUSD shares
+  (stakingCid2, smusdCid) <- submit alice do
+    exerciseCmd stakingCid Stake with
+      user = alice
+      musdCid
+
+  -- Verify smUSD
+  smusd <- queryContractId operator smusdCid
+  let s = fromSome smusd
+  assertMsg "Got 1000 shares" (s.shares == 1000.0)
+  assertMsg "Entry price is 1.0" (s.entrySharePrice == 1.0)
+
+  -- Step 4: Unstake → get mUSD back at current share price (1.0)
+  (stakingCid3, musdBackCid) <- submit alice do
+    exerciseCmd stakingCid2 Unstake with
+      user = alice
+      smusdCid
+
+  musdBack <- queryContractId operator musdBackCid
+  assertMsg "Got 1000 mUSD back" ((fromSome musdBack).amount == 1000.0)
+  debug "✅ Integration 1: Mint → Stake → Unstake flow"
+
+-- ============================================================
+--  2. INTEGRATION: DEPOSIT → BORROW → REPAY → WITHDRAW
+--     Full CantonLending lifecycle
+-- ============================================================
+
+testLendingFullCycleIntegration : Script ()
+testLendingFullCycleIntegration = do
+  operator <- allocateParty "Operator"
+  user <- allocateParty "User"
+  governor <- allocateParty "Governor"
+  liquidator <- allocateParty "Liquidator"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Create price feed
+  ctnFeedCid <- submit operator do
+    createCmd CantonPriceFeed with
+      operator
+      symbol = "CTN"
+      priceUsd = 0.17
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "test"
+      observers = [user, liquidator]
+
+  -- Create lending service
+  serviceCid <- submit operator do
+    createCmd CantonLendingService with
+      operator
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      totalBorrows = 0.0
+      lendingSupplyCap = 10000000.0
+      interestRateBps = 500
+      reserveFactorBps = 1000
+      protocolReserves = 0.0
+      minBorrow = 10.0
+      closeFactorBps = 5000
+      paused = False
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      complianceRegistryCid = None
+      minKeeperBond = 100.0
+      observers = [user, liquidator]
+
+  -- Step 1: Deposit 10000 CTN
+  coinCid <- submitMulti [operator, user] [] do
+    createCmd CantonCoin with
+      issuer = operator
+      owner = user
+      amount = 10000.0
+      privacyObservers = []
+
+  (svc1, escrowCid) <- submit user do
+    exerciseCmd serviceCid Lending_DepositCTN with
+      user
+      coinCid
+
+  -- Step 2: Borrow 500 mUSD
+  (svc2, debtCid, musdCid) <- submit user do
+    exerciseCmd svc1 Lending_Borrow with
+      user
+      borrowAmount = 500.0
+      escrowCids = [escrowCid]
+      priceFeedCids = [ctnFeedCid]
+
+  -- Verify debt
+  debt <- queryContractId operator debtCid
+  assertMsg "Borrowed 500" ((fromSome debt).principalDebt == 500.0)
+
+  -- Step 3: Repay
+  (svc3, newDebtCid) <- submit user do
+    exerciseCmd svc2 Lending_Repay with
+      user
+      musdCid
+      debtCid
+
+  -- Step 4: Withdraw
+  (svc4, returnedCoinCid) <- submit user do
+    exerciseCmd svc3 Lending_WithdrawCTN with
+      user
+      escrowCid
+      withdrawAmount = 10000.0
+      otherEscrowCids = []
+      priceFeedCids = [ctnFeedCid]
+
+  coin <- queryContractId operator returnedCoinCid
+  assertMsg "Got 10000 CTN back" ((fromSome coin).amount == 10000.0)
+  debug "✅ Integration 2: Deposit → Borrow → Repay → Withdraw lifecycle"
+
+-- ============================================================
+--  3. INTEGRATION: MULTI-ATTESTOR SHARE PRICE SYNC (DAML-R01)
+--     SharePriceAttestation × CantonStakingService
+-- ============================================================
+
+testMultiAttestorSync : Script ()
+testMultiAttestorSync = do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  governor <- allocateParty "Governor"
+  attestor1 <- allocateParty "Attestor1"
+  attestor2 <- allocateParty "Attestor2"
+  attestor3 <- allocateParty "Attestor3"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Create staking service requiring 2 of 3 attestors
+  stakingCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 100.0
+      globalSharePrice = 1.0
+      globalTotalAssets = 100.0
+      globalTotalShares = 100.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 86400
+      minDeposit = 1.0
+      paused = False
+      authorizedAttestors = [attestor1, attestor2, attestor3]
+      minAttestors = 2
+      maxAttestationDeviationBps = 100  -- 1% tolerance
+      complianceRegistryCid = None
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = [alice]
+
+  -- Attestor1 submits attestation (share price = 1.05)
+  att1Cid <- submit attestor1 do
+    createCmd SharePriceAttestation with
+      attestor = attestor1
+      operator
+      epochNumber = 1
+      attestedSharePrice = 1.05
+      attestedTotalAssets = 105.0
+      attestedTotalShares = 100.0
+      attestedAt = datetime 2026 Feb 6 12 0 0
+
+  -- Attestor2 submits attestation (share price = 1.045 — within 1% of 1.05)
+  att2Cid <- submit attestor2 do
+    createCmd SharePriceAttestation with
+      attestor = attestor2
+      operator
+      epochNumber = 1
+      attestedSharePrice = 1.045
+      attestedTotalAssets = 104.5
+      attestedTotalShares = 100.0
+      attestedAt = datetime 2026 Feb 6 12 0 0
+
+  -- Sync with quorum of 2 attestations
+  govProof <- createGovProof operator governor ParameterUpdate "sync-epoch-1"
+  stakingCid2 <- submit operator do
+    exerciseCmd stakingCid SyncGlobalSharePrice with
+      attestationCids = [att1Cid, att2Cid]
+      epochNumber = 1
+      governanceProofCid = govProof
+
+  -- Verify the median price was applied (sorted: [1.045, 1.05], mid=1 → 1.05)
+  price <- submit operator do
+    exerciseCmd stakingCid2 GetSharePrice
+  assertMsg "Median price applied" (price == 1.05)
+  debug "✅ Integration 3: Multi-attestor share price sync (DAML-R01)"
+
+-- ============================================================
+--  4. INTEGRATION: MULTI-ATTESTOR INSUFFICIENT QUORUM FAILS
+-- ============================================================
+
+testInsufficientAttestorsFails : Script ()
+testInsufficientAttestorsFails = do
+  operator <- allocateParty "Operator"
+  governor <- allocateParty "Governor"
+  attestor1 <- allocateParty "Attestor1"
+  attestor2 <- allocateParty "Attestor2"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  stakingCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 100.0
+      globalSharePrice = 1.0
+      globalTotalAssets = 100.0
+      globalTotalShares = 100.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 86400
+      minDeposit = 1.0
+      paused = False
+      authorizedAttestors = [attestor1, attestor2]
+      minAttestors = 2
+      maxAttestationDeviationBps = 100
+      complianceRegistryCid = None
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = []
+
+  -- Only 1 attestation (need 2)
+  att1Cid <- submit attestor1 do
+    createCmd SharePriceAttestation with
+      attestor = attestor1
+      operator
+      epochNumber = 1
+      attestedSharePrice = 1.05
+      attestedTotalAssets = 105.0
+      attestedTotalShares = 100.0
+      attestedAt = datetime 2026 Feb 6 12 0 0
+
+  govProof <- createGovProof operator governor ParameterUpdate "sync-fail"
+
+  -- Should fail — insufficient attestations
+  submitMustFail operator do
+    exerciseCmd stakingCid SyncGlobalSharePrice with
+      attestationCids = [att1Cid]
+      epochNumber = 1
+      governanceProofCid = govProof
+  debug "✅ Integration 4: Insufficient attestors rejected (DAML-R01)"
+
+-- ============================================================
+--  5. INTEGRATION: KEEPER BOND LIQUIDATION FLOW (DAML-R03)
+--     KeeperBond × Lending_Liquidate
+-- ============================================================
+
+testKeeperBondLiquidation : Script ()
+testKeeperBondLiquidation = do
+  operator <- allocateParty "Operator"
+  borrower <- allocateParty "Borrower"
+  keeper <- allocateParty "Keeper"
+  governor <- allocateParty "Governor"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Price feeds
+  ctnFeedCid <- submit operator do
+    createCmd CantonPriceFeed with
+      operator
+      symbol = "CTN"
+      priceUsd = 0.17
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "test"
+      observers = [borrower, keeper]
+
+  -- Lending service
+  serviceCid <- submit operator do
+    createCmd CantonLendingService with
+      operator
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      totalBorrows = 0.0
+      lendingSupplyCap = 10000000.0
+      interestRateBps = 500
+      reserveFactorBps = 1000
+      protocolReserves = 0.0
+      minBorrow = 10.0
+      closeFactorBps = 5000
+      paused = False
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      complianceRegistryCid = None
+      minKeeperBond = 100.0
+      observers = [borrower, keeper]
+
+  -- Deposit collateral + borrow near limit
+  coinCid <- submitMulti [operator, borrower] [] do
+    createCmd CantonCoin with
+      issuer = operator
+      owner = borrower
+      amount = 10000.0
+      privacyObservers = []
+
+  (svc1, escrowCid) <- submit borrower do
+    exerciseCmd serviceCid Lending_DepositCTN with
+      user = borrower
+      coinCid
+
+  (svc2, debtCid, _musdCid) <- submit borrower do
+    exerciseCmd svc1 Lending_Borrow with
+      user = borrower
+      borrowAmount = 1100.0
+      escrowCids = [escrowCid]
+      priceFeedCids = [ctnFeedCid]
+
+  -- Crash price → position undercollateralized
+  passTime (minutes 6)
+  emergProof <- createGovProof operator governor EmergencyPause "crash"
+  crashedFeedCid <- submit operator do
+    exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
+      newPriceUsd = 0.10
+      reason = "CTN crash"
+      governanceProofCid = emergProof
+
+  -- Keeper creates bond
+  now <- getTime
+  keeperBondCid <- submitMulti [operator, keeper] [] do
+    createCmd KeeperBond with
+      operator
+      keeper
+      bondAmount = 500.0
+      registeredAt = now
+      slashCount = 0
+      active = True
+
+  -- Keeper gets mUSD for repayment
+  liqMusdCid <- submitMulti [operator, keeper] [] do
+    createCmd CantonMUSD with
+      issuer = operator
+      owner = keeper
+      amount = 550.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+  -- Liquidate with keeper bond
+  (svc3, receiptCid) <- submit keeper do
+    exerciseCmd svc2 Lending_Liquidate with
+      liquidator = keeper
+      borrower
+      repayAmount = 550.0
+      targetEscrowCid = escrowCid
+      debtCid
+      musdCid = liqMusdCid
+      escrowCids = [escrowCid]
+      priceFeedCids = [crashedFeedCid]
+      keeperBondCid
+
+  -- Verify receipt
+  receipt <- queryContractId operator receiptCid
+  let r = fromSome receipt
+  assertMsg "Receipt records debt repaid" (r.debtRepaid > 0.0)
+  assertMsg "Receipt records seized collateral" (r.collateralSeized > 0.0)
+  debug "✅ Integration 5: Keeper bond liquidation flow (DAML-R03)"
+
+-- ============================================================
+--  6. INTEGRATION: UNBONDED KEEPER REJECTED (DAML-R03)
+-- ============================================================
+
+testUnbondedKeeperRejected : Script ()
+testUnbondedKeeperRejected = do
+  operator <- allocateParty "Operator"
+  borrower <- allocateParty "Borrower"
+  keeper <- allocateParty "Keeper"
+  governor <- allocateParty "Governor"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  ctnFeedCid <- submit operator do
+    createCmd CantonPriceFeed with
+      operator
+      symbol = "CTN"
+      priceUsd = 0.17
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "test"
+      observers = [borrower, keeper]
+
+  serviceCid <- submit operator do
+    createCmd CantonLendingService with
+      operator
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      totalBorrows = 0.0
+      lendingSupplyCap = 10000000.0
+      interestRateBps = 500
+      reserveFactorBps = 1000
+      protocolReserves = 0.0
+      minBorrow = 10.0
+      closeFactorBps = 5000
+      paused = False
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      complianceRegistryCid = None
+      minKeeperBond = 100.0
+      observers = [borrower, keeper]
+
+  coinCid <- submitMulti [operator, borrower] [] do
+    createCmd CantonCoin with
+      issuer = operator
+      owner = borrower
+      amount = 10000.0
+      privacyObservers = []
+
+  (svc1, escrowCid) <- submit borrower do
+    exerciseCmd serviceCid Lending_DepositCTN with
+      user = borrower
+      coinCid
+
+  (svc2, debtCid, _musdCid) <- submit borrower do
+    exerciseCmd svc1 Lending_Borrow with
+      user = borrower
+      borrowAmount = 1100.0
+      escrowCids = [escrowCid]
+      priceFeedCids = [ctnFeedCid]
+
+  passTime (minutes 6)
+  emergProof <- createGovProof operator governor EmergencyPause "crash"
+  crashedFeedCid <- submit operator do
+    exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
+      newPriceUsd = 0.10
+      reason = "CTN crash"
+      governanceProofCid = emergProof
+
+  -- Keeper has INACTIVE bond → should fail
+  now <- getTime
+  keeperBondCid <- submitMulti [operator, keeper] [] do
+    createCmd KeeperBond with
+      operator
+      keeper
+      bondAmount = 500.0
+      registeredAt = now
+      slashCount = 0
+      active = False  -- INACTIVE
+
+  liqMusdCid <- submitMulti [operator, keeper] [] do
+    createCmd CantonMUSD with
+      issuer = operator
+      owner = keeper
+      amount = 550.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
+
+  -- Should fail — keeper bond inactive
+  submitMustFail keeper do
+    exerciseCmd svc2 Lending_Liquidate with
+      liquidator = keeper
+      borrower
+      repayAmount = 550.0
+      targetEscrowCid = escrowCid
+      debtCid
+      musdCid = liqMusdCid
+      escrowCids = [escrowCid]
+      priceFeedCids = [crashedFeedCid]
+      keeperBondCid
+  debug "✅ Integration 6: Inactive keeper bond rejected (DAML-R03)"
+
+-- ============================================================
+--  7. INTEGRATION: BURN RATE LIMITER (DAML-R05)
+-- ============================================================
+
+testBurnRateLimiter : Script ()
+testBurnRateLimiter = do
+  operator <- allocateParty "Operator"
+  governor <- allocateParty "Governor"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Create burn rate limiter with 1000 mUSD per epoch limit
+  limiterCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400  -- 24h
+      paused = False
+
+  -- Record 500 mUSD burn → should succeed
+  limiterCid2 <- submit operator do
+    exerciseCmd limiterCid BurnLimit_RecordBurn with
+      burnAmount = 500.0
+
+  -- Record another 400 mUSD burn → should succeed (total 900)
+  limiterCid3 <- submit operator do
+    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
+      burnAmount = 400.0
+
+  -- Record 200 mUSD burn → should FAIL (900 + 200 = 1100 > 1000 limit)
+  submitMustFail operator do
+    exerciseCmd limiterCid3 BurnLimit_RecordBurn with
+      burnAmount = 200.0
+
+  debug "✅ Integration 7: Burn rate limiter enforces epoch limit (DAML-R05)"
+
+testBurnRateLimiterEpochReset : Script ()
+testBurnRateLimiterEpochReset = do
+  operator <- allocateParty "Operator"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  limiterCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400
+      paused = False
+
+  -- Burn 900 (near limit)
+  limiterCid2 <- submit operator do
+    exerciseCmd limiterCid BurnLimit_RecordBurn with
+      burnAmount = 900.0
+
+  -- Advance time past epoch boundary
+  passTime (hours 25)
+
+  -- Should succeed because epoch reset (900 → 0, then +500 = 500)
+  limiterCid3 <- submit operator do
+    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
+      burnAmount = 500.0
+
+  debug "✅ Integration 8: Burn rate limiter epoch reset works (DAML-R05)"
+
+testBurnRateLimiterPausedRejectsBurns : Script ()
+testBurnRateLimiterPausedRejectsBurns = do
+  operator <- allocateParty "Operator"
+  governor <- allocateParty "Governor"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  limiterCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400
+      paused = False
+
+  -- Pause the limiter
+  govProof <- createGovProof operator governor EmergencyPause "pause-burns"
+  limiterCid2 <- submit operator do
+    exerciseCmd limiterCid BurnLimit_SetPaused with
+      newPaused = True
+      governanceProofCid = govProof
+
+  -- Any burn should fail when paused
+  submitMustFail operator do
+    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
+      burnAmount = 1.0
+
+  debug "✅ Integration 9: Paused burn limiter rejects all burns (DAML-R05)"
+
+-- ============================================================
+--  8. INTEGRATION: ATTESTATION DEVIATION TOO LARGE (DAML-R01)
+-- ============================================================
+
+testAttestationDeviationRejected : Script ()
+testAttestationDeviationRejected = do
+  operator <- allocateParty "Operator"
+  governor <- allocateParty "Governor"
+  attestor1 <- allocateParty "Attestor1"
+  attestor2 <- allocateParty "Attestor2"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  stakingCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 100.0
+      globalSharePrice = 1.0
+      globalTotalAssets = 100.0
+      globalTotalShares = 100.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 86400
+      minDeposit = 1.0
+      paused = False
+      authorizedAttestors = [attestor1, attestor2]
+      minAttestors = 2
+      maxAttestationDeviationBps = 100  -- 1% max deviation
+      complianceRegistryCid = None
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = []
+
+  -- Attestor1: price = 1.00
+  att1Cid <- submit attestor1 do
+    createCmd SharePriceAttestation with
+      attestor = attestor1
+      operator
+      epochNumber = 1
+      attestedSharePrice = 1.00
+      attestedTotalAssets = 100.0
+      attestedTotalShares = 100.0
+      attestedAt = datetime 2026 Feb 6 12 0 0
+
+  -- Attestor2: price = 1.05 (5% deviation — exceeds 1% tolerance)
+  att2Cid <- submit attestor2 do
+    createCmd SharePriceAttestation with
+      attestor = attestor2
+      operator
+      epochNumber = 1
+      attestedSharePrice = 1.05
+      attestedTotalAssets = 105.0
+      attestedTotalShares = 100.0
+      attestedAt = datetime 2026 Feb 6 12 0 0
+
+  govProof <- createGovProof operator governor ParameterUpdate "sync-deviation"
+
+  -- Should fail — price deviation too large (5% > 1%)
+  submitMustFail operator do
+    exerciseCmd stakingCid SyncGlobalSharePrice with
+      attestationCids = [att1Cid, att2Cid]
+      epochNumber = 1
+      governanceProofCid = govProof
+  debug "✅ Integration 10: Attestation price deviation rejected (DAML-R01)"

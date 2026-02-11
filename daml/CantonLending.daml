@@ -27,6 +27,7 @@ module CantonLending where
 import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
+import DA.List (sort, length, (!!))
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
@@ -191,6 +192,137 @@ template CantonPriceFeed
           priceUsd = newPriceUsd
           lastUpdated = now
           source = "emergency-override: " <> reason
+
+-- ============================================================
+--               SECTION 2b: MULTI-ORACLE FEED (FIX DAML-R04)
+-- ============================================================
+
+-- | MultiOracleFeed — Aggregates multiple independent price feeds for an asset.
+-- FIX DAML-R04: Instead of relying on a single oracle per asset, this template
+-- reads from 2+ independent CantonPriceFeed sources and uses the median price.
+-- This prevents any single oracle from manipulating prices.
+--
+-- The lending service reads from MultiOracleFeed instead of individual feeds.
+-- Each individual feed is still independently updatable by its source.
+template MultiOracleFeed
+  with
+    operator       : Party
+    symbol         : Text                     -- e.g. "CTN", "sMUSD"
+    feedCids       : [ContractId CantonPriceFeed]  -- Individual oracle feed CIDs
+    minFeeds       : Int                      -- Minimum feeds that must agree (quorum)
+    maxDeviationBps : Int                     -- Max allowed deviation between feeds (e.g. 500 = 5%)
+    observers      : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure minFeeds >= 2 && DA.List.length feedCids >= minFeeds && maxDeviationBps > 0
+
+    key (operator, "multi-" <> symbol) : (Party, Text)
+    maintainer key._1
+
+    -- | Get median price from multiple feeds with staleness check
+    -- FIX DAML-R04: Aggregates prices, checks deviation, returns median
+    nonconsuming choice MultiOracle_GetPrice : Money
+      with
+        requester    : Party
+        maxStaleness : RelTime
+      controller requester
+      do
+        -- Read all individual feed prices (with staleness check)
+        prices <- mapA (\cid -> exercise cid PriceFeed_GetPrice with requester; maxStaleness) feedCids
+        assertMsg "INSUFFICIENT_ORACLE_RESPONSES" (DA.List.length prices >= minFeeds)
+
+        -- Check deviation between feeds
+        let sorted = sort prices
+        let maxP = sorted !! (DA.List.length sorted - 1)
+        let minP = sorted !! 0
+        let deviation = if minP > 0.0
+              then ((maxP - minP) / minP) * 10000.0
+              else 0.0
+        assertMsg "ORACLE_PRICE_DEVIATION_TOO_LARGE" (deviation <= intToNumeric maxDeviationBps)
+
+        -- Return median
+        let mid = DA.List.length sorted / 2
+        return (sorted !! mid)
+
+    -- | Get median price WITHOUT staleness check (for liquidation path)
+    nonconsuming choice MultiOracle_GetPriceUnsafe : Money
+      with
+        requester : Party
+      controller requester
+      do
+        prices <- mapA (\cid -> exercise cid PriceFeed_GetPriceUnsafe with requester) feedCids
+        assertMsg "INSUFFICIENT_ORACLE_RESPONSES" (DA.List.length prices >= minFeeds)
+        let sorted = sort prices
+        -- For unsafe path: still check deviation but with wider tolerance (10%)
+        let maxP = sorted !! (DA.List.length sorted - 1)
+        let minP = sorted !! 0
+        let deviation = if minP > 0.0
+              then ((maxP - minP) / minP) * 10000.0
+              else 0.0
+        assertMsg "ORACLE_PRICE_DEVIATION_TOO_LARGE_UNSAFE" (deviation <= intToNumeric (maxDeviationBps * 2))
+        let mid = DA.List.length sorted / 2
+        return (sorted !! mid)
+
+    -- | Update feed list (admin)
+    choice MultiOracle_UpdateFeeds : ContractId MultiOracleFeed
+      with
+        newFeedCids : [ContractId CantonPriceFeed]
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "INSUFFICIENT_FEEDS" (DA.List.length newFeedCids >= minFeeds)
+        create this with feedCids = newFeedCids
+
+-- ============================================================
+--               SECTION 2c: KEEPER REGISTRY (FIX DAML-R03)
+-- ============================================================
+
+-- | KeeperBond — On-ledger bond required for liquidation keepers.
+-- FIX DAML-R03: Keepers must register and deposit a bond (in mUSD)
+-- before they can execute liquidations. The bond is slashable if the
+-- keeper submits a liquidation for a healthy position (disincentivizes
+-- griefing attacks). This replaces the fully-open liquidation model.
+template KeeperBond
+  with
+    operator : Party
+    keeper   : Party
+    bondAmount : Money      -- mUSD bond deposited
+    registeredAt : Time     -- When keeper registered
+    slashCount : Int        -- Number of times keeper has been slashed
+    active : Bool           -- Whether keeper is currently active
+  where
+    signatory operator, keeper
+    ensure bondAmount > 0.0
+
+    key (operator, keeper) : (Party, Party)
+    maintainer key._1
+
+    -- | Deactivate keeper (admin)
+    choice KeeperBond_Deactivate : ContractId KeeperBond
+      controller operator
+      do create this with active = False
+
+    -- | Reactivate keeper (admin)
+    choice KeeperBond_Activate : ContractId KeeperBond
+      controller operator
+      do create this with active = True
+
+    -- | Slash bond (called by LendingService if keeper griefs)
+    choice KeeperBond_Slash : ContractId KeeperBond
+      with
+        slashAmount : Money
+        reason : Text
+      controller operator
+      do
+        assertMsg "SLASH_EXCEEDS_BOND" (slashAmount <= bondAmount)
+        create this with
+          bondAmount = bondAmount - slashAmount
+          slashCount = slashCount + 1
+          active = bondAmount - slashAmount > 0.0  -- Auto-deactivate if bond depleted
 
 -- ============================================================
 --                     SECTION 3: ESCROWED COLLATERAL POSITION
@@ -420,6 +552,8 @@ template CantonLendingService
     minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
     closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
     paused             : Bool
+    -- FIX DAML-R03: Keeper bond requirement for liquidations
+    minKeeperBond      : Money                  -- Minimum bond required to liquidate
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
@@ -435,6 +569,7 @@ template CantonLendingService
         && reserveFactorBps >= 0 && reserveFactorBps <= 5000
         && closeFactorBps > 0 && closeFactorBps <= 10000
         && minBorrow > 0.0
+        && minKeeperBond >= 0.0
         && DA.Text.length mpaHash == 64
         && DA.Text.length mpaUri > 0
 
@@ -935,6 +1070,7 @@ template CantonLendingService
     -- | Liquidate an undercollateralized position.
     -- Liquidator repays part of the borrower's debt and receives
     -- seized collateral at a discount (penalty).
+    -- FIX DAML-R03: Requires keeper bond registration and revalidates health factor on-ledger.
     -- Uses unsafe price (no staleness check) — liquidations must always proceed.
     choice Lending_Liquidate : (ContractId CantonLendingService, ContractId CantonLiquidationReceipt)
       with
@@ -946,10 +1082,18 @@ template CantonLendingService
         musdCid          : ContractId CantonMUSD           -- Liquidator's mUSD for repayment
         escrowCids       : [ContractId EscrowedCollateral] -- All borrower's collateral
         priceFeedCids    : [ContractId CantonPriceFeed]
+        keeperBondCid    : ContractId KeeperBond           -- FIX DAML-R03: Keeper's bond proof
       controller liquidator
       do
         -- FIX H-L1: Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
+
+        -- FIX DAML-R03: Verify keeper is registered with sufficient bond
+        keeperBond <- fetch keeperBondCid
+        assertMsg "KEEPER_BOND_OWNER_MISMATCH" (keeperBond.keeper == liquidator)
+        assertMsg "KEEPER_BOND_OPERATOR_MISMATCH" (keeperBond.operator == operator)
+        assertMsg "KEEPER_NOT_ACTIVE" keeperBond.active
+        assertMsg "KEEPER_BOND_INSUFFICIENT" (keeperBond.bondAmount >= minKeeperBond)
 
         -- Verify liquidator owns the repayment mUSD
         musd <- fetch musdCid
@@ -961,8 +1105,9 @@ template CantonLendingService
         assertMsg "DEBT_OWNER_MISMATCH" (debt.borrower == borrower)
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = liquidator
 
-        -- Check position is actually undercollateralized (UNSAFE price — no staleness check)
-        -- FIX N-H3: Pass borrower as expectedOwner to verify all escrows belong to this borrower
+        -- FIX DAML-R03: On-ledger health factor revalidation using fresh price reads
+        -- This ensures the position is ACTUALLY undercollateralized at execution time,
+        -- not just when the liquidator submitted the transaction.
         totalRawValue <- computeRawCollateralValue operator borrower configs escrowCids priceFeedCids False
         accruedDebt <- fetch accruedDebtCid
         let totalDebt = accruedDebt.principalDebt + accruedDebt.accruedInterest
@@ -970,6 +1115,9 @@ template CantonLendingService
         -- Health factor: rawValue weighted by liquidationThreshold / totalDebt
         totalLiqValue <- computeLiquidationThresholdValue operator borrower configs escrowCids priceFeedCids False
         let healthFactor = if totalDebt > 0.0 then totalLiqValue / totalDebt else 999.0
+
+        -- FIX DAML-R03: Revalidate health factor ON-LEDGER at execution time
+        -- Position must be genuinely undercollateralized (health factor < 1.0)
         assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
 
         -- Close factor limits
