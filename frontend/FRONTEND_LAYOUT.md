@@ -29,11 +29,6 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Background
-- Dark surface (`bg-surface-950`) with animated gradient orbs (top-left blue, bottom-right purple)
-- Subtle cross-hatch SVG grid at 2% opacity
-- Orb colors swap to amber when on Canton chain
-
 ### Chain Toggle
 - Pill toggle in the navbar: **Ethereum** (blue/brand) ⟷ **Canton** (amber/yellow)
 - Entire app swaps between Ethereum pages and Canton pages based on selection
@@ -59,53 +54,6 @@
 ---
 
 ## Page Layouts
-
-Every page follows this structure:
-
-```
-┌──────────────────────────────────────────────────────┐
-│  PageHeader                                           │
-│  Title · Subtitle · Badge                             │
-├──────────────────────────────────────────────────────┤
-│  Alert Banner (conditional)                           │
-├──────────────────────────────────────────────────────┤
-│  StatCard Grid  (2-4 columns)                         │
-│  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐     │
-│  │ Icon   │  │ Icon   │  │ Icon   │  │ Icon   │     │
-│  │ Label  │  │ Label  │  │ Label  │  │ Label  │     │
-│  │ Value  │  │ Value  │  │ Value  │  │ Value  │     │
-│  │ Sub    │  │ Sub    │  │ Trend  │  │ Sub    │     │
-│  └────────┘  └────────┘  └────────┘  └────────┘     │
-├──────────────────────────────────────────────────────┤
-│  Feature Card(s) — gradient border                    │
-│  (position overview, gauges, tables, etc.)            │
-├──────────────────────────────────────────────────────┤
-│  Action Card — gradient border                        │
-│  ┌─ Tab Bar ────────────────────────────────────┐    │
-│  │  [Tab1]  [Tab2]  [Tab3]  [Tab4]              │    │
-│  ├──────────────────────────────────────────────┤    │
-│  │  Input Field (emerald/brand glow on focus)   │    │
-│  │  ┌──────────────────────── [MAX] [Token] ┐   │    │
-│  │  │  0.00                                  │   │    │
-│  │  └────────────────────────────────────────┘   │    │
-│  │           ↓  (arrow separator)                │    │
-│  │  Output Preview                               │    │
-│  │  ┌────────────────────────────── [Token] ┐   │    │
-│  │  │  0.00                                  │   │    │
-│  │  └────────────────────────────────────────┘   │    │
-│  │  Exchange Info Panel                          │    │
-│  │  [ ====== Action Button (full width) ====== ]│    │
-│  │  Alert: success / error                       │    │
-│  └──────────────────────────────────────────────┘    │
-├──────────────────────────────────────────────────────┤
-│  Info Section — "How It Works" (step cards)           │
-│  ┌──────┐  ┌──────┐  ┌──────┐  ┌──────┐             │
-│  │ ① …  │  │ ② …  │  │ ③ …  │  │ ④ …  │             │
-│  └──────┘  └──────┘  └──────┘  └──────┘             │
-└──────────────────────────────────────────────────────┘
-```
-
----
 
 ### 0. Landing Page (pre-app gate) — `LandingPage.tsx`
 
