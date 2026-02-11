@@ -338,14 +338,24 @@ interface CantonContract {
 async function queryCantonContracts(templateId: string): Promise<CantonContract[]> {
   const { LEDGER_HOST, LEDGER_PORT } = CONTRACTS.canton;
 
+  // FIX: Require CANTON_JWT_TOKEN from env — never allow empty/plaintext fallback
+  const jwtToken = process.env.CANTON_JWT_TOKEN;
+  if (!jwtToken) {
+    console.error("[Canton] CANTON_JWT_TOKEN env var is required — skipping Canton query");
+    return [];
+  }
+
+  // FIX: Use HTTPS for Canton Ledger API (TLS required in production)
+  const protocol = process.env.CANTON_LEDGER_TLS === "false" ? "http" : "https";
+
   try {
     const response = await fetch(
-      `http://${LEDGER_HOST}:${LEDGER_PORT}/v1/query`,
+      `${protocol}://${LEDGER_HOST}:${LEDGER_PORT}/v1/query`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.CANTON_JWT_TOKEN || ""}`,
+          Authorization: `Bearer ${jwtToken}`,
         },
         body: JSON.stringify({
           templateIds: [templateId],
@@ -360,6 +370,11 @@ async function queryCantonContracts(templateId: string): Promise<CantonContract[
     }
 
     const data: any = await response.json();
+    // FIX: Schema validation — verify Canton response structure
+    if (!data || !Array.isArray(data.result)) {
+      console.error(`[Canton] Unexpected response format for ${templateId}: missing 'result' array`);
+      return [];
+    }
     return (data.result || []).map((item: any) => ({
       templateId: item.templateId,
       payload: item.payload,

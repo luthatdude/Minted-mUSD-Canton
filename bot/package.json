@@ -13,7 +13,9 @@
     "alerts": "ts-node src/pool-alerts.ts",
     "alerts:prod": "node dist/pool-alerts.js",
     "scanner": "ts-node src/yield-scanner.ts",
-    "scanner:prod": "node dist/yield-scanner.js"
+    "scanner:prod": "node dist/yield-scanner.js",
+    "yield-api": "ts-node src/yield-api.ts",
+    "yield-api:prod": "node dist/yield-api.js"
   },
   "dependencies": {
     "ethers": "^6.9.0",

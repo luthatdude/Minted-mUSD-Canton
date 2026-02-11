@@ -319,10 +319,14 @@ export class PriceOracleService {
       throw new Error("CANTON_PARTY not configured");
     }
 
+    // FIX: Use TLS by default for Canton connections (matching other services)
+    const httpScheme = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsScheme = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
+
     this.ledger = new Ledger({
       token: this.config.cantonToken,
-      httpBaseUrl: `http://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `ws://${this.config.cantonHost}:${this.config.cantonPort}`,
+      httpBaseUrl: `${httpScheme}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      wsBaseUrl: `${wsScheme}://${this.config.cantonHost}:${this.config.cantonPort}`,
     });
 
     console.log(`[PriceOracle] Connected to Canton ledger at ${this.config.cantonHost}:${this.config.cantonPort}`);

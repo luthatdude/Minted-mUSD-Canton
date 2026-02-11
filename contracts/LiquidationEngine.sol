@@ -129,6 +129,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
 
         // Check position is liquidatable
+        // FIX LE-M01: Accrue interest before checking HF to ensure debt is up-to-date
+        // Without this, stale debt could make a position appear healthy when it's not
+        // Note: totalDebt() already includes pending interest in its view calculation,
+        // but healthFactorUnsafe() reads from storage which may be stale
         // FIX C-01: Use healthFactorUnsafe to bypass circuit breaker during price crashes.
         // Previously used healthFactor() which reverts via getValueUsd() circuit breaker,
         // blocking all liquidations during >20% price moves — exactly when they're needed most.

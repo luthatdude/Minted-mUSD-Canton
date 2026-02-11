@@ -137,9 +137,17 @@ interface AlertConfig {
 }
 
 function loadConfig(): AlertConfig {
+  // FIX: Require RPC URLs from env — no hardcoded API keys
+  if (!process.env.RPC_URL) {
+    throw new Error("FATAL: RPC_URL environment variable is required");
+  }
+  if (!process.env.WS_RPC_URL) {
+    throw new Error("FATAL: WS_RPC_URL environment variable is required");
+  }
+
   return {
-    rpcUrl: process.env.RPC_URL || "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
-    wsRpcUrl: process.env.WS_RPC_URL || "wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
+    rpcUrl: process.env.RPC_URL,
+    wsRpcUrl: process.env.WS_RPC_URL,
     chainId: parseInt(process.env.CHAIN_ID || "1"),
 
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
@@ -198,8 +206,24 @@ class PoolAlertBot {
   private wsProvider: ethers.WebSocketProvider | null = null;
 
   // Dedup — track seen events by tx hash + log index
+  // FIX: Bounded to prevent unbounded memory growth
+  private static readonly MAX_SEEN_EVENTS = 50_000;
   private seenEvents: Set<string> = new Set();
   private lastCheckedBlock: number = 0;
+
+  /** FIX: Bounded add with FIFO eviction */
+  private trackEvent(key: string): void {
+    if (this.seenEvents.size >= PoolAlertBot.MAX_SEEN_EVENTS) {
+      // Evict oldest 10% to amortise cost
+      const evictCount = Math.floor(PoolAlertBot.MAX_SEEN_EVENTS * 0.1);
+      let i = 0;
+      for (const k of this.seenEvents) {
+        if (i++ >= evictCount) break;
+        this.seenEvents.delete(k);
+      }
+    }
+    this.seenEvents.add(key);
+  }
 
   constructor(config: AlertConfig) {
     this.config = config;
@@ -251,7 +275,7 @@ class PoolAlertBot {
           factory.on("CreateNewMarket", async (market: string, pt: string, _s: any, _a: any, _l: any, event: EventLog) => {
             const key = `${event.transactionHash}-${event.index}`;
             if (this.seenEvents.has(key)) return;
-            this.seenEvents.add(key);
+            this.trackEvent(key);
             await this.handlePendleNewMarket(market, pt, version, event.blockNumber);
           });
           logger.info(`[WS] Subscribed: Pendle ${version} (${addr})`);
@@ -264,7 +288,7 @@ class PoolAlertBot {
         configurator.on("ReserveInitialized", async (asset: string, aToken: string, _s: any, _v: any, _i: any, event: EventLog) => {
           const key = `${event.transactionHash}-${event.index}`;
           if (this.seenEvents.has(key)) return;
-          this.seenEvents.add(key);
+          this.trackEvent(key);
           await this.handleAaveNewReserve(asset, aToken, event.blockNumber);
         });
         logger.info(`[WS] Subscribed: Aave V3 PoolConfigurator`);
@@ -273,7 +297,7 @@ class PoolAlertBot {
         configurator.on("AssetCollateralInEModeChanged", async (asset: string, categoryId: number, allowed: boolean, event: EventLog) => {
           const key = `${event.transactionHash}-${event.index}`;
           if (this.seenEvents.has(key)) return;
-          this.seenEvents.add(key);
+          this.trackEvent(key);
           if (allowed) {
             await this.handleAaveEModeChange(asset, categoryId, event.blockNumber);
           }
@@ -287,7 +311,7 @@ class PoolAlertBot {
         morpho.on("CreateMarket", async (id: string, marketParams: any, event: EventLog) => {
           const key = `${event.transactionHash}-${event.index}`;
           if (this.seenEvents.has(key)) return;
-          this.seenEvents.add(key);
+          this.trackEvent(key);
           await this.handleMorphoNewMarket(id, marketParams, event.blockNumber);
         });
         logger.info(`[WS] Subscribed: Morpho Blue CreateMarket`);
@@ -330,7 +354,7 @@ class PoolAlertBot {
               if (event instanceof EventLog) {
                 const key = `${event.transactionHash}-${event.index}`;
                 if (this.seenEvents.has(key)) continue;
-                this.seenEvents.add(key);
+                this.trackEvent(key);
                 await this.handlePendleNewMarket(event.args[0], event.args[1], version, event.blockNumber);
               }
             }
@@ -346,7 +370,7 @@ class PoolAlertBot {
             if (event instanceof EventLog) {
               const key = `${event.transactionHash}-${event.index}`;
               if (this.seenEvents.has(key)) continue;
-              this.seenEvents.add(key);
+              this.trackEvent(key);
               await this.handleAaveNewReserve(event.args[0], event.args[1], event.blockNumber);
             }
           }
@@ -356,7 +380,7 @@ class PoolAlertBot {
             if (event instanceof EventLog) {
               const key = `${event.transactionHash}-${event.index}`;
               if (this.seenEvents.has(key)) continue;
-              this.seenEvents.add(key);
+              this.trackEvent(key);
               if (event.args[2]) { // allowed = true
                 await this.handleAaveEModeChange(event.args[0], event.args[1], event.blockNumber);
               }
@@ -372,7 +396,7 @@ class PoolAlertBot {
             if (event instanceof EventLog) {
               const key = `${event.transactionHash}-${event.index}`;
               if (this.seenEvents.has(key)) continue;
-              this.seenEvents.add(key);
+              this.trackEvent(key);
               await this.handleMorphoNewMarket(event.args[0], event.args[1], event.blockNumber);
             }
           }

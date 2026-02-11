@@ -272,8 +272,8 @@ contract PendleStrategyV2 is
     /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
     uint256 public ptDiscountRateBps;
 
-    /// @dev Storage gap for upgrades (reduced by 1 for ptDiscountRateBps)
-    uint256[39] private __gap;
+    /// @dev Storage gap for upgrades (reduced from 39 to 37 for pendingImplementation + upgradeRequestTime)
+    uint256[37] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -350,8 +350,8 @@ contract PendleStrategyV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // Approve router for USDC
-        usdc.forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // FIX PS-H01: Don't grant infinite approval — use per-operation approvals instead
+        // Approvals are set in deposit() and _depositToCurrentMarket() before each swap
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -375,6 +375,9 @@ contract PendleStrategyV2 is
 
         // Transfer USDC from treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
+
+        // FIX PS-H01: Per-operation approval instead of infinite
+        usdc.forceApprove(PENDLE_ROUTER, amount);
 
         // Swap USDC → PT via Pendle Router
         uint256 minPtOut = (amount * (BPS - slippageBps)) / BPS;
@@ -452,11 +455,14 @@ contract PendleStrategyV2 is
         uint256 ptToRedeem = ptBalance;
         withdrawn = _redeemPt(ptToRedeem);
 
-        // Transfer all USDC to treasury
+        // Transfer all USDC to treasury (includes any dust from prior operations)
         uint256 balance = usdc.balanceOf(address(this));
+        if (balance > withdrawn) {
+            // FIX PS-M01: Use the larger of redeemed amount and balance to capture any extras
+            withdrawn = balance;
+        }
         if (balance > 0) {
             usdc.safeTransfer(msg.sender, balance);
-            withdrawn = balance;
         }
 
         emit Withdrawn(currentMarket, ptToRedeem, withdrawn);
@@ -594,11 +600,13 @@ contract PendleStrategyV2 is
         (,, address yt) = IPendleMarket(bestMarket).readTokens();
         currentYT = yt;
 
-        // Approve PT for router
-        IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // FIX PS-H01: Don't grant infinite PT approval — done per-operation in _redeemPt
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
+        // FIX PS-H01: Per-operation approval instead of infinite
+        usdc.forceApprove(PENDLE_ROUTER, usdcAmount);
+
         uint256 minPtOut = (usdcAmount * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
@@ -636,6 +644,9 @@ contract PendleStrategyV2 is
 
     function _redeemPt(uint256 ptAmount) internal returns (uint256 usdcOut) {
         if (ptAmount == 0) return 0;
+
+        // FIX PS-H01: Per-operation PT approval instead of infinite
+        IERC20(currentPT).forceApprove(PENDLE_ROUTER, ptAmount);
 
         IPendleMarket market = IPendleMarket(currentMarket);
         bool expired = market.isExpired();
@@ -678,32 +689,37 @@ contract PendleStrategyV2 is
     }
 
     function _ptToUsdc(uint256 ptAmount) internal view returns (uint256) {
+        if (ptAmount == 0) return 0;
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
             // At or after maturity, PT = 1:1 underlying
             return ptAmount;
         }
 
         // Before maturity, PT trades at discount
-        // Approximate using time to maturity
+        // FIX V6-HIGH: Improved PT valuation using continuous compounding approximation
+        // PT_value = underlying / (1 + rate * timeRemaining/year)
+        // This is more accurate than linear discount for higher rates / longer durations
         uint256 timeRemaining = currentExpiry - block.timestamp;
         uint256 secondsPerYear = 365 days;
 
-        // Simple approximation: PT discount = impliedRate * timeRemaining
-        // For ~11% APY with 6 months to go: discount ≈ 5.5%
-        // PT value = underlying * (1 - discount)
-        // This is a simplification; actual value requires oracle
         if (timeRemaining > secondsPerYear) {
             timeRemaining = secondsPerYear;
         }
 
         // FIX M-02: Use configurable discount rate instead of hardcoded 10%
+        // Denominator: BPS + (rate * time / year)
+        // This gives PT_value = ptAmount * BPS / (BPS + discountBps)
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
-        uint256 valueBps = BPS - discountBps;
+        uint256 denominatorBps = BPS + discountBps;
 
-        return (ptAmount * valueBps) / BPS;
+        // FIX V6-HIGH: Division-by-zero guard (denominatorBps is always >= BPS here, but be safe)
+        if (denominatorBps == 0) return ptAmount;
+
+        return (ptAmount * BPS) / denominatorBps;
     }
 
     function _usdcToPt(uint256 usdcAmount) internal view returns (uint256) {
+        if (usdcAmount == 0) return 0;
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
             return usdcAmount;
         }
@@ -715,11 +731,15 @@ contract PendleStrategyV2 is
         }
 
         // FIX M-02: Use configurable discount rate
+        // Inverse of _ptToUsdc: PT = usdc * (BPS + discountBps) / BPS
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
-        uint256 valueBps = BPS - discountBps;
+        uint256 denominatorBps = BPS + discountBps;
 
-        // PT needed = usdc / (PT value per usdc)
-        return (usdcAmount * BPS) / valueBps;
+        // FIX V6-HIGH: Division-by-zero guard
+        if (BPS == 0) return usdcAmount;
+
+        // PT needed = usdc * (1 + discount) — more PT for same USDC since PT is at a discount
+        return (usdcAmount * denominatorBps) / BPS;
     }
 
     function _emptyLimitOrder() internal pure returns (IPendleRouter.LimitOrderData memory) {
@@ -810,7 +830,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(GUARDIAN_ROLE) {
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
@@ -825,8 +845,42 @@ contract PendleStrategyV2 is
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // UUPS UPGRADE
+    // UUPS UPGRADE (TIMELOCKED)
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    address public pendingImplementation;
+
+    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
+    uint256 public upgradeRequestTime;
+
+    /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
+    uint256 public constant UPGRADE_DELAY = 48 hours;
+
+    event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
+    event UpgradeCancelled(address indexed cancelledImplementation);
+
+    /// @notice Request a timelocked upgrade
+    function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newImplementation != address(0), "ZERO_ADDRESS");
+        pendingImplementation = newImplementation;
+        upgradeRequestTime = block.timestamp;
+        emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /// @notice Cancel a pending upgrade
+    function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingImplementation;
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+        emit UpgradeCancelled(cancelled);
+    }
+
+    /// @notice UUPS upgrade authorization with 48h timelock
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
+        require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+    }
 }

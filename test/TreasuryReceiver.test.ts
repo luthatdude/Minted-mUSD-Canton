@@ -346,10 +346,13 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should allow emergency withdrawal", async function () {
-      const { receiver, usdc, admin, user1 } = await loadFixture(deployFixture);
+      const { receiver, usdc, admin, user1, pauser } = await loadFixture(deployFixture);
 
       // Send some USDC to receiver
       await usdc.mint(await receiver.getAddress(), ethers.parseUnits("1000", 6));
+
+      // FIX TR-M01: USDC withdrawal only allowed when paused (true emergency)
+      await receiver.connect(pauser).pause();
 
       await receiver.connect(admin).emergencyWithdraw(
         await usdc.getAddress(),

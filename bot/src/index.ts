@@ -29,11 +29,19 @@ const config = {
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
   gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20"),
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100"),
+  ethPriceUsd: parseFloat(process.env.ETH_PRICE_USD || "2500"),
+  maxTrackedBorrowers: parseInt(process.env.MAX_TRACKED_BORROWERS || "10000"),
   
   // Flashbots
   useFlashbots: process.env.USE_FLASHBOTS === "true",
   flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
 };
+
+// FIX: Validate private key format on startup
+if (!config.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(config.privateKey)) {
+  console.error("FATAL: PRIVATE_KEY env var is missing or invalid (expected 64 hex chars)");
+  process.exit(1);
+}
 
 // ============================================================
 //                     LOGGER
@@ -130,6 +138,17 @@ class LiquidationBot {
   private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
+  private static readonly MAX_BORROWERS = config.maxTrackedBorrowers;
+
+  /** FIX: Add with eviction to keep bounded */
+  private trackBorrower(addr: string): void {
+    if (this.borrowers.size >= LiquidationBot.MAX_BORROWERS) {
+      // Evict oldest entry (first inserted)
+      const oldest = this.borrowers.values().next().value;
+      if (oldest) this.borrowers.delete(oldest);
+    }
+    this.borrowers.add(addr);
+  }
   private supportedTokens: string[] = [];
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
@@ -197,7 +216,7 @@ class LiquidationBot {
     // Listen for new borrowers
     this.borrowModule.on("Borrowed", (user: string, amount: bigint, totalDebt: bigint) => {
       logger.info(`New borrower detected: ${user} - Debt: ${ethers.formatEther(totalDebt)} mUSD`);
-      this.borrowers.add(user);
+      this.trackBorrower(user);
     });
     
     // Listen for deposits (potential new positions)
@@ -221,13 +240,15 @@ class LiquidationBot {
 
   private async ensureApproval(): Promise<void> {
     const allowance = await this.musd.allowance(this.wallet.address, config.liquidationEngine);
-    const maxApproval = ethers.MaxUint256;
+    // FIX: Use bounded approval instead of MaxUint256
+    // Approve enough for ~100 liquidations at max debt threshold
+    const boundedApproval = ethers.parseEther("10000000"); // 10M mUSD — practical upper bound
     
-    if (allowance < maxApproval / 2n) {
-      logger.info("Approving mUSD for liquidation engine...");
-      const tx = await this.musd.approve(config.liquidationEngine, maxApproval);
+    if (allowance < boundedApproval / 2n) {
+      logger.info("Approving mUSD for liquidation engine (bounded: 10M mUSD)...");
+      const tx = await this.musd.approve(config.liquidationEngine, boundedApproval);
       await tx.wait();
-      logger.info("Approval complete");
+      logger.info("Approval complete (bounded)");
     }
   }
 
@@ -340,7 +361,7 @@ class LiquidationBot {
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * 2500; // Assume ETH = $2500
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * config.ethPriceUsd; // FIX: env-driven ETH price
           
           const netProfitUsd = profitUsd - gasCostUsd;
           
@@ -455,7 +476,7 @@ class LiquidationBot {
       for (const event of events) {
         const args = (event as any).args;
         if (args && args.user) {
-          this.borrowers.add(args.user);
+          this.trackBorrower(args.user);
         }
       }
       

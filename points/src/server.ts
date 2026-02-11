@@ -43,6 +43,37 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX INSTITUTIONAL: In-memory rate limiting middleware (token bucket per IP)
+// ═══════════════════════════════════════════════════════════════════════════
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 100; // 100 requests per minute per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+// Periodic cleanup of stale entries (every 5 min)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now >= entry.resetAt) rateLimitMap.delete(ip);
+  }
+}, 300_000);
+
+app.use((req, res, next) => {
+  const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
+    || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const entry = rateLimitMap.get(clientIp);
+  if (!entry || now >= entry.resetAt) {
+    rateLimitMap.set(clientIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return next();
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX_REQUESTS) {
+    return res.status(429).json({ error: "Too many requests. Try again later." });
+  }
+  next();
+});
+
 const PORT = parseInt(process.env.POINTS_API_PORT || "3210");
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -52,6 +83,16 @@ const PORT = parseInt(process.env.POINTS_API_PORT || "3210");
 app.get("/api/points/:address", (req, res) => {
   try {
     const { address } = req.params;
+
+    // FIX: Validate address format (Ethereum or Canton party ID)
+    if (!address || address.length < 10 || address.length > 200) {
+      return res.status(400).json({ error: "Invalid address format" });
+    }
+    // Ethereum address validation
+    if (address.startsWith("0x") && !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      return res.status(400).json({ error: "Invalid Ethereum address format" });
+    }
+
     const userPoints = getUserPoints(address);
 
     // Get rank in current season
@@ -88,8 +129,12 @@ app.get("/api/points/:address", (req, res) => {
 
 app.get("/api/leaderboard", (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
-    const offset = parseInt(req.query.offset as string) || 0;
+    const limitRaw = parseInt(req.query.limit as string) || 100;
+    const offsetRaw = parseInt(req.query.offset as string) || 0;
+
+    // FIX: Input validation — enforce non-negative bounds
+    const limit = Math.max(1, Math.min(limitRaw, 500));
+    const offset = Math.max(0, offsetRaw);
 
     const entries = getGlobalLeaderboard(limit, offset);
 
@@ -358,7 +403,10 @@ app.get("/health", (_req, res) => {
 
 function adminAuth(req: express.Request, res: express.Response, next: express.NextFunction): void {
   const token = req.headers.authorization?.replace("Bearer ", "");
-  if (!token || token !== process.env.ADMIN_API_KEY) {
+  const expected = process.env.ADMIN_API_KEY;
+  // FIX: Use constant-time comparison to prevent timing-based token extraction
+  if (!token || !expected || token.length !== expected.length ||
+      !require("crypto").timingSafeEqual(Buffer.from(token), Buffer.from(expected))) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
@@ -391,9 +439,11 @@ export function startServer(): void {
   // startSnapshotLoop() is available for standalone use.
 
   // Start the API server
-  app.listen(PORT, () => {
+  // FIX: Bind to localhost only — use a reverse proxy for external access
+  const HOST = process.env.HOST || "127.0.0.1";
+  app.listen(PORT, HOST, () => {
     console.log(`\n╔══════════════════════════════════════════╗`);
-    console.log(`║   Minted Points API — Port ${PORT}          ║`);
+    console.log(`║   Minted Points API — ${HOST}:${PORT}          ║`);
     console.log(`║   Season: ${(getCurrentSeason()?.name ?? "Inactive").padEnd(29)}║`);
     console.log(`╚══════════════════════════════════════════╝\n`);
   });
