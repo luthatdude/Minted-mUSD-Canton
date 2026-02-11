@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Layout } from "@/components/Layout";
+import { LandingPage } from "@/components/LandingPage";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
@@ -26,6 +27,7 @@ export default function Home() {
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
   const [page, setPage] = useState("dashboard");
+  const [appLaunched, setAppLaunched] = useState(false);
 
   function renderPage() {
     if (chainState.chain === "canton") {
@@ -64,6 +66,11 @@ export default function Home() {
       default:
         return <DashboardMintPage />;
     }
+  }
+
+  // Show landing page until user clicks "Launch App"
+  if (!appLaunched) {
+    return <LandingPage onLaunchApp={() => setAppLaunched(true)} />;
   }
 
   return (
