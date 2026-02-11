@@ -283,9 +283,18 @@ class PendlePoolSniper {
     this.snipedMarkets.add(key);
   }
 
+  // FIX INFRA-MED: Guard against stacking WebSocket reconnections
+  private isReconnecting = false;
+
   constructor(config: SniperConfig) {
     this.config = config;
-    this.httpProvider = new ethers.JsonRpcProvider(config.rpcUrl);
+    // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
+    const fetchReq = new ethers.FetchRequest(config.rpcUrl);
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    this.httpProvider = new ethers.JsonRpcProvider(fetchReq, undefined, {
+      staticNetwork: true,
+      batchMaxCount: 1,
+    });
     this.wallet = new Wallet(config.privateKey, this.httpProvider);
 
     // Collect target SY addresses and underlying tokens
@@ -391,8 +400,17 @@ class PendlePoolSniper {
   // ─────────────────────────────────────────────────────────────────────
 
   private async startWsListener(): Promise<void> {
+    // FIX INFRA-MED: Prevent stacking concurrent reconnect attempts
+    if (this.isReconnecting) return;
+    this.isReconnecting = true;
     try {
+      // Destroy old provider before creating new one
+      if (this.wsProvider) {
+        try { this.wsProvider.removeAllListeners(); await this.wsProvider.destroy(); } catch { /* ignore */ }
+        this.wsProvider = null;
+      }
       this.wsProvider = new ethers.WebSocketProvider(this.config.wsRpcUrl);
+      this.isReconnecting = false;
       logger.info("WebSocket connection established");
 
       for (const [version, factoryAddr] of Object.entries(MARKET_FACTORIES)) {
@@ -410,13 +428,15 @@ class PendlePoolSniper {
         logger.info(`Subscribed to CreateNewMarket on Factory ${version} (${factoryAddr})`);
       }
 
-      // Reconnect on disconnect
+      // Reconnect on disconnect with guard
       this.wsProvider.on("error", (err) => {
         logger.error(`WebSocket error: ${err.message}`);
+        this.isReconnecting = false; // Allow reconnect
         setTimeout(() => this.startWsListener(), 5000);
       });
 
     } catch (err: any) {
+      this.isReconnecting = false;
       logger.error(`WebSocket setup failed: ${err.message}. Falling back to polling only.`);
     }
   }

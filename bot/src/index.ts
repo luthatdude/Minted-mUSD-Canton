@@ -171,7 +171,14 @@ class LiquidationBot {
   private totalProfitUsd = 0;
 
   constructor() {
-    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
+    const fetchReq = new ethers.FetchRequest(config.rpcUrl);
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
+      staticNetwork: true,
+      pollingInterval: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
+      batchMaxCount: 1,
+    });
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);
     
     this.borrowModule = new ethers.Contract(config.borrowModule, BORROW_MODULE_ABI, this.wallet);
