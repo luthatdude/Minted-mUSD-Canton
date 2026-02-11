@@ -42,14 +42,14 @@
 
 ## Navigation Items
 
-| Key         | Label          | Icon                | Page Component (ETH)     | Page Component (Canton)    |
-|-------------|----------------|---------------------|--------------------------|----------------------------|
-| `mint`      | Mint           | Coins               | `DashboardMintPage`      | `CantonDashboardMint`      |
-| `stake`     | Stake          | Trending up         | `StakePage`              | `CantonStake`              |
-| `borrow`    | Borrow & Lend  | Building            | `BorrowPage`             | `CantonBorrow`             |
-| `bridge`    | Bridge         | Arrows left-right   | `BridgePage`             | `CantonBridge`             |
-| `admin`     | Admin          | Settings gear       | `AdminPage`              | `CantonAdmin`              |
-| `points`    | Points         | Star                | `PointsPage`             | `PointsPage`               |
+| Key         | Label          | Page Component (ETH)     | Page Component (Canton)    |
+|-------------|----------------|--------------------------|----------------------------|
+| `mint`      | Mint           | `DashboardMintPage`      | `CantonDashboardMint`      |
+| `stake`     | Stake          | `StakePage`              | `CantonStake`              |
+| `borrow`    | Borrow & Lend  | `BorrowPage`             | `CantonBorrow`             |
+| `bridge`    | Bridge         | `BridgePage`             | `CantonBridge`             |
+| `admin`     | Admin          | `AdminPage`              | `CantonAdmin`              |
+| `points`    | Points         | `PointsPage`             | `PointsPage`               |
 
 ---
 
