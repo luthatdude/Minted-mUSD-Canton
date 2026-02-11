@@ -14,6 +14,7 @@ interface DeployedContracts {
     SMUSD: string;
     MockUSDC: string;
     PriceOracle: string;
+    InterestRateModel: string;
     CollateralVault: string;
     BorrowModule: string;
     LiquidationEngine: string;
@@ -65,7 +66,7 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   console.log("2/10 Deploying MUSD...");
   const MUSD = await ethers.getContractFactory("MUSD");
-  const musd = await MUSD.deploy();
+  const musd = await MUSD.deploy(ethers.parseEther("10000000")); // 10M supply cap
   await musd.waitForDeployment();
   const musdAddress = await musd.getAddress();
   console.log(`     MUSD: ${musdAddress}`);
@@ -89,6 +90,16 @@ async function main() {
   await priceOracle.waitForDeployment();
   const priceOracleAddress = await priceOracle.getAddress();
   console.log(`     PriceOracle: ${priceOracleAddress}`);
+  
+  // ═══════════════════════════════════════════════════════════
+  // Deploy InterestRateModel
+  // ═══════════════════════════════════════════════════════════
+  console.log("4.5/10 Deploying InterestRateModel...");
+  const InterestRateModel = await ethers.getContractFactory("InterestRateModel");
+  const interestRateModel = await InterestRateModel.deploy(deployer.address);
+  await interestRateModel.waitForDeployment();
+  const interestRateModelAddress = await interestRateModel.getAddress();
+  console.log(`     InterestRateModel: ${interestRateModelAddress}`);
   
   // ═══════════════════════════════════════════════════════════
   // Deploy CollateralVault
@@ -138,9 +149,10 @@ async function main() {
   console.log("8/10 Deploying DirectMint...");
   const DirectMint = await ethers.getContractFactory("DirectMintV2");
   const directMint = await DirectMint.deploy(
-    musdAddress,
     mockUSDCAddress,
-    deployer.address // Treasury address (self for testnet)
+    musdAddress,
+    deployer.address, // Treasury placeholder for testnet (updated after Treasury deploys)
+    deployer.address  // Fee recipient
   );
   await directMint.waitForDeployment();
   const directMintAddress = await directMint.getAddress();
@@ -224,6 +236,7 @@ async function main() {
       SMUSD: smusdAddress,
       MockUSDC: mockUSDCAddress,
       PriceOracle: priceOracleAddress,
+      InterestRateModel: interestRateModelAddress,
       CollateralVault: vaultAddress,
       BorrowModule: borrowModuleAddress,
       LiquidationEngine: liquidationEngineAddress,
