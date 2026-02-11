@@ -24,15 +24,15 @@
 │  └──────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  FOOTER  (border-t, text-gray-500)                                          │
+│  FOOTER  (border-t)                                                         │
 │  ● All systems operational          Docs · GitHub · Discord    © 2026 Minted│
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Chain Toggle
-- Pill toggle in the navbar: **Ethereum** (blue/brand) ⟷ **Canton** (amber/yellow)
+- Pill toggle in the navbar: **Ethereum** ⟷ **Canton**
 - Entire app swaps between Ethereum pages and Canton pages based on selection
-- Navbar active-tab underline color follows chain (brand-500 vs amber-500)
+- Navbar active-tab underline follows selected chain
 
 ### Mobile
 - Hamburger button replaces nav tabs at `< lg` breakpoint
@@ -64,7 +64,7 @@ Shown before the user enters the app. Full-screen, no scrollable content below.
 │  THREE.js Animated Scene (full viewport, behind all content)     │
 │  • 2000 particles (spherical distribution, additive blending)    │
 │  • Central glowing orb (fresnel shader, pulsing)                 │
-│  • 3 orbiting torus rings (brand-blue, purple, amber)            │
+│  • 3 orbiting torus rings                                        │
 │  • Neural-network connection lines between nearby particles      │
 │  • Mouse-follow camera (smooth lerp)                             │
 │  • Dark vignette overlay for text legibility                     │
@@ -103,10 +103,10 @@ PageHeader: "Dashboard" · badge: chain name
 Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 
 4 Key Metric StatCards (sm:2 lg:4):
-  • Your Balance       (blue, glow, mUSD balance)
-  • Your Staked Earnings (green, smUSD yield earned)
-  • Current APY        (purple, smUSD staking yield %)
-  • mUSD Supply        (default, % of cap)
+  • Your Balance       (mUSD balance)
+  • Your Staked Earnings (smUSD yield earned)
+  • Current APY        (smUSD staking yield %)
+  • mUSD Supply        (% of cap)
 
 ┌──────────────────────────── 2-Column Layout ─────────────────────────────┐
 │                                                                          │
@@ -126,8 +126,8 @@ Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 │  │  Fee info (rate, fee bps)    │  │  └────────────────────────────────┘ │ │
 │  │  [ ═══ Mint mUSD ═══ ]      │  │                                   │ │
 │  │  Success/Error alerts        │  │  3 Protocol Health StatCards:     │ │
-│  │                              │  │  • Total Backing  (green)         │ │
-│  │  2 mini-StatCards:           │  │  • smUSD Staked   (purple)        │ │
+│  │                              │  │  • Total Backing                  │ │
+│  │  2 mini-StatCards:           │  │  • smUSD Staked                   │ │
 │  │  • Remaining Mintable        │  │  • Supply Cap     (utilization %) │ │
 │  │  • Available to Redeem       │  │                                   │ │
 │  └──────────────────────────────┘  └───────────────────────────────────┘ │
@@ -140,7 +140,6 @@ Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 ```
 
 **Canton variant (`CantonDashboardMint`):**
-- Amber/yellow color scheme throughout
 - Collateral dropdown replaced by DAML contract selector
 - Hero stats show Canton contract counts and totals
 - Protocol services status grid (DirectMint, Staking, Oracle, Issuer, Pool)
@@ -154,15 +153,15 @@ Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 PageHeader: "Stake & Earn"
 
 2 StatCards (sm:2):
-  • Total Staked       (blue, total mUSD staked in vault)
-  • Current APY        (emerald, staking yield %)
+  • Total Staked       (total mUSD staked in vault)
+  • Current APY        (staking yield %)
 
 Stake / Unstake Widget (card-gradient-border):
   ┌─ [➕ Stake mUSD]  [🔄 Unstake smUSD] ───────────────┐
   │                                                        │
   │  2 Balance Cards inside widget (sm:2):                 │
-  │  • Your mUSD Balance (blue)                            │
-  │  • Your smUSD Balance (purple, sub = ≈ X.XX mUSD)     │
+  │  • Your mUSD Balance                                   │
+  │  • Your smUSD Balance (sub = ≈ X.XX mUSD)             │
   │                                                        │
   │  Input:  amount  [MAX] [mUSD/smUSD badge]              │
   │              ↓                                         │
@@ -193,7 +192,6 @@ Cooldown Timer (card, only if cooldown active):
 ```
 
 **CantonStake variant:**
-- Amber/yellow color scheme throughout
 - 3 StatCards: Total Staked · Current APY · Minted Points Earned
 - mUSD Stake/Unstake widget with DAML contract selector
 - **Canton Coin Staking Widget (Canton ONLY):**
@@ -238,7 +236,7 @@ Collateral Reference Table (card):
 Health Factor & Position Summary (card, only if debt > 0):
   ┌───────────────────────────────────────────────────────┐
   │  Health Factor: X.XX   Status: Healthy / At Risk      │
-  │  [████████████████░░░]  (color-coded gauge)            │
+  │  [████████████████░░░]  (gauge)                        │
   │  Collateral: $XX  ·  Debt: $XX  ·  Utilization: XX%   │
   │  [Close Position]                                      │
   └───────────────────────────────────────────────────────┘
@@ -292,7 +290,6 @@ Action Card (card-gradient-border):
 ```
 
 **CantonBorrow variant:**
-- Amber/yellow color scheme throughout
 - Canton-specific collateral reference table:
   ```
   │ Canton Coin │ 65%  │ 75%                  │
@@ -309,21 +306,21 @@ Action Card (card-gradient-border):
 ### 4. Bridge Page (`/bridge`)  — max-w-4xl
 
 ```
-PageHeader: "Canton Bridge" · badge dynamic "Active" (emerald) / "PAUSED" (warning)
+PageHeader: "Canton Bridge" · badge dynamic "Active" / "PAUSED"
 
 ⚠ Paused Alert (alert-error, if bridge paused)
 
 4 StatCards (sm:2 lg:4):
-  • Attested Canton Assets   (blue, glow variant, 🏢 icon)
-  • Current Supply Cap       (purple, 📊 icon)
-  • Remaining Mintable       (green, 💰 icon)
+  • Attested Canton Assets   (🏢 icon)
+  • Current Supply Cap       (📊 icon)
+  • Remaining Mintable       (💰 icon)
   • Last Attestation         (Xm/h ago, ⏱ icon, sub = timestamp)
 
 Supply Cap & Health Ratio (2-col grid):
   ┌─── Supply Cap Utilization ───┐  ┌─── Bridge Health Ratio ──────┐
   │  (card-gradient-border)       │  │  (card-gradient-border)       │
   │  XX.X% of capacity used      │  │                                │
-  │  [██████████████░░░░░]        │  │    1.85  (big, color-coded)   │
+  │  [██████████████░░░░░]        │  │    1.85  (large display)      │
   │  Minted: $XX   Available: $XX │  │    "Healthy"                  │
   │                               │  │  [███████████████░░░]         │
   │                               │  │  1.0 ——— 1.5 ——— 2.0+        │
@@ -348,7 +345,7 @@ Attestation History Table (card):
 
 "How the Bridge Works" — 6 step pipeline (3x2 or 6-col):
   ① Observe → ② Verify → ③ Sign → ④ Aggregate → ⑤ Update → ⑥ Mint
-  (each with color-coded number circle: blue→purple→brand→emerald→yellow→green)
+  (each with numbered circle)
 
 "Beneficiary Locked Environment (BLE)" Explainer Card:
   Move mUSD and sMUSD between Ethereum and Canton. Your yield never stops.
@@ -377,10 +374,10 @@ Tab Nav: [Overview] [Leaderboard] [Calculator]
 
 OVERVIEW TAB:
   Your Points (4 StatCards):
-    • Total Points   (glow, blue)
-    • Global Rank    (purple)
-    • Current Season (default)
-    • Seasons Active (green)
+    • Total Points
+    • Global Rank
+    • Current Season
+    • Seasons Active
 
   Points Breakdown (card): per-action breakdown by season
 
@@ -567,7 +564,7 @@ Layout (shown when appLaunched=true)
 │       └── Section Forms (inputs + TxButtons)
 │
 └── Footer
-    ├── Status indicator (green dot)
+    ├── Status indicator
     ├── Links (Docs · GitHub · Discord)
     └── Copyright
 ```
@@ -586,11 +583,11 @@ Layout (shown when appLaunched=true)
 
 ## Key Interactions
 
-1. **Wallet Connect** — Click "Connect Wallet" → MetaMask popup → address shown with green dot
+1. **Wallet Connect** — Click "Connect Wallet" → MetaMask popup → address shown with status indicator
 2. **Chain Toggle** — Click pill → swaps all pages between Ethereum and Canton variants
 3. **Tab Switching** — Click tab → active underline animates, form resets, amount clears
 4. **MAX Button** — Fills input with full wallet balance for selected token
-5. **Amount Input** — Focus triggers glow border; live preview updates with 300ms debounce
+5. **Amount Input** — Focus triggers border highlight; live preview updates with 300ms debounce
 6. **TxButton** — Click → simulate tx → send tx → loading spinner → success alert with Etherscan link / error alert
 7. **Approve Flow** — If allowance insufficient, auto-approve before main tx (sequential)
 8. **Page Navigation** — `useState("dashboard")` in `index.tsx`, no URL routing (SPA)
@@ -620,7 +617,7 @@ frontend/src/
 │   ├── Layout.tsx           — Shell: bg, navbar, main, footer
 │   ├── Navbar.tsx           — Top nav with 7 items + wallet + chain toggle
 │   ├── ChainToggle.tsx      — ETH ⟷ Canton pill switch
-│   ├── StatCard.tsx         — Metric card (color, icon, trend, sub, variant)
+│   ├── StatCard.tsx         — Metric card (icon, trend, sub, variant)
 │   ├── PageHeader.tsx       — Title + subtitle + badge
 │   ├── TxButton.tsx         — Transaction button with loading state
 │   └── canton/              — Canton-chain page equivalents
