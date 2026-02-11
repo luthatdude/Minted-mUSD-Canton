@@ -139,7 +139,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20, // 2.0x leverage
-        5   // Max 5 loops
+        5,  // Max 5 loops
+        0   // FIX CODEX-4: Use global slippage default
       );
 
       const position = await leverageVault.getPosition(user.address);
@@ -159,7 +160,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           initialDeposit,
           50, // 5.0x leverage
-          10
+          10,
+          0
         )
       ).to.be.revertedWith('LEVERAGE_EXCEEDS_MAX');
     });
@@ -173,7 +175,8 @@ describe('LeverageVault', function () {
           await randomToken.getAddress(),
           ethers.parseEther('10'),
           20,
-          5
+          5,
+          0
         )
       ).to.be.revertedWith('TOKEN_NOT_ENABLED');
     });
@@ -185,7 +188,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        3
+        3,
+        0
       );
 
       await weth.mint(user.address, initialDeposit);
@@ -195,7 +199,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           initialDeposit,
           20,
-          3
+          3,
+          0
         )
       ).to.be.revertedWith('POSITION_EXISTS');
     });
@@ -264,7 +269,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           initialDeposit,
           25, // 2.5x exceeds 2.0x max
-          5
+          5,
+          0
         )
       ).to.be.revertedWith('LEVERAGE_EXCEEDS_MAX');
     });
@@ -299,7 +305,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         ethers.parseEther('10'),
         25, // 2.5x target
-        5
+        5,
+        0
       );
 
       const effectiveLeverage = await leverageVault.getEffectiveLeverage(user.address);
@@ -319,7 +326,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         ethers.parseEther('10'),
         20,
-        3
+        3,
+        0
       );
 
       const position = await leverageVault.getPosition(user.address);
@@ -341,7 +349,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         ethers.parseEther('10'),
         20,
-        3
+        3,
+        0
       );
 
       await expect(
@@ -375,7 +384,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           ethers.parseEther('10'),
           20,
-          5
+          5,
+          0
         )
       ).to.be.revertedWithCustomError(leverageVault, 'EnforcedPause');
     });
@@ -399,7 +409,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         ethers.parseEther('10'),
         20,
-        5
+        5,
+        0
       );
 
       const position = await leverageVault.getPosition(user.address);
@@ -414,7 +425,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           0,
           20,
-          5
+          5,
+          0
         )
       ).to.be.revertedWith('INVALID_AMOUNT');
     });
@@ -425,7 +437,8 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           ethers.parseEther('10'),
           5, // 0.5x - below minimum 1.0x
-          5
+          5,
+          0
         )
       ).to.be.revertedWith('LEVERAGE_TOO_LOW');
     });
@@ -447,6 +460,102 @@ describe('LeverageVault', function () {
   });
 
   // ================================================================
+  //  FIX CODEX-4: User-Specified Slippage Tests
+  // ================================================================
+
+  describe('User-Specified Slippage (FIX CODEX-4)', function () {
+    it('should open position with user-specified slippage (stricter than global)', async function () {
+      const initialDeposit = ethers.parseEther('10');
+
+      // maxSlippageBps is 100 (1%); user specifies 50 (0.5%) — stricter, should work
+      const tx = await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        initialDeposit,
+        20, // 2.0x leverage
+        5,
+        50  // 0.5% user slippage (stricter than 1% global)
+      );
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.totalCollateral).to.be.gt(initialDeposit);
+      expect(position.totalDebt).to.be.gt(0);
+    });
+
+    it('should reject user slippage exceeding global max', async function () {
+      const initialDeposit = ethers.parseEther('10');
+
+      // maxSlippageBps is 100 (1%); user tries 200 (2%) — looser, should revert
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          initialDeposit,
+          20,
+          5,
+          200 // 2% — exceeds global 1% max
+        )
+      ).to.be.revertedWith('USER_SLIPPAGE_EXCEEDS_MAX');
+    });
+
+    it('should use global default when user passes 0', async function () {
+      const initialDeposit = ethers.parseEther('10');
+
+      // userMaxSlippageBps = 0 means "use global default"
+      const tx = await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        initialDeposit,
+        20,
+        5,
+        0 // Use global default
+      );
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.totalCollateral).to.be.gt(initialDeposit);
+    });
+
+    it('should close position with user-specified slippage', async function () {
+      const initialDeposit = ethers.parseEther('10');
+
+      await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        initialDeposit,
+        20,
+        5,
+        0
+      );
+
+      // Ensure the mock swap router has enough WETH
+      await weth.mint(await mockSwapRouter.getAddress(), ethers.parseEther('50000'));
+
+      // Close with user slippage = 50 bps (0.5%) — stricter than global 100 bps
+      const balanceBefore = await weth.balanceOf(user.address);
+      await leverageVault.connect(user).closeLeveragedPosition(0, 50);
+      const balanceAfter = await weth.balanceOf(user.address);
+
+      expect(balanceAfter).to.be.gt(balanceBefore);
+
+      const positionAfter = await leverageVault.getPosition(user.address);
+      expect(positionAfter.totalCollateral).to.equal(0);
+    });
+
+    it('should reject close with user slippage exceeding global max', async function () {
+      const initialDeposit = ethers.parseEther('10');
+
+      await leverageVault.connect(user).openLeveragedPosition(
+        await weth.getAddress(),
+        initialDeposit,
+        20,
+        5,
+        0
+      );
+
+      // Try to close with 200 bps (2%) — exceeds global 100 bps
+      await expect(
+        leverageVault.connect(user).closeLeveragedPosition(0, 200)
+      ).to.be.revertedWith('USER_SLIPPAGE_EXCEEDS_MAX');
+    });
+  });
+
+  // ================================================================
   //  NEW COVERAGE TESTS — Close Position
   // ================================================================
 
@@ -459,7 +568,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20, // 2.0x leverage
-        5
+        5,
+        0
       );
 
       const positionBefore = await leverageVault.getPosition(user.address);
@@ -474,7 +584,7 @@ describe('LeverageVault', function () {
 
       // Close the position — minCollateralOut = 0 for this test
       const balanceBefore = await weth.balanceOf(user.address);
-      await leverageVault.connect(user).closeLeveragedPosition(0);
+      await leverageVault.connect(user).closeLeveragedPosition(0, 0);
       const balanceAfter = await weth.balanceOf(user.address);
 
       // User should have received collateral back
@@ -493,7 +603,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       // Ensure mock router has liquidity
@@ -502,13 +613,13 @@ describe('LeverageVault', function () {
       // Set unrealistically high minCollateralOut — should revert
       const absurdMinOut = ethers.parseEther('999999');
       await expect(
-        leverageVault.connect(user).closeLeveragedPosition(absurdMinOut)
+        leverageVault.connect(user).closeLeveragedPosition(absurdMinOut, 0)
       ).to.be.revertedWith('SLIPPAGE_EXCEEDED');
     });
 
     it('should fail close when no position exists', async function () {
       await expect(
-        leverageVault.connect(user).closeLeveragedPosition(0)
+        leverageVault.connect(user).closeLeveragedPosition(0, 0)
       ).to.be.revertedWith('NO_POSITION');
     });
   });
@@ -525,7 +636,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       const position = await leverageVault.getPosition(user.address);
@@ -561,7 +673,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       const debtAmount = await borrowModule.totalDebt(user.address);
@@ -591,7 +704,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       const debtAmount = await borrowModule.totalDebt(user.address);
@@ -627,7 +741,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       const musdNeeded = await leverageVault.getMusdNeededToClose(user.address);
@@ -655,7 +770,8 @@ describe('LeverageVault', function () {
         await weth.getAddress(),
         initialDeposit,
         20,
-        5
+        5,
+        0
       );
 
       const positionBefore = await leverageVault.getPosition(user.address);
