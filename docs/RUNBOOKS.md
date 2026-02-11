@@ -95,12 +95,14 @@ kubectl -n musd exec $VALIDATOR_POD -- cat /tmp/heartbeat
 ### Procedure
 1. **Ethereum side — pause all contracts:**
    ```bash
-   # Using admin multisig (Gnosis Safe or similar)
+   # Using Foundry keystore (never pass raw private keys on CLI)
+   # To set up: cast wallet import deployer --interactive
+   # For hardware wallet: replace --account deployer with --ledger
    # Pause order: BorrowModule → SMUSD → DirectMintV2 → BLEBridgeV9
-   cast send $BORROW_MODULE "pause()" --private-key $ADMIN_KEY
-   cast send $SMUSD "pause()" --private-key $ADMIN_KEY
-   cast send $DIRECT_MINT "pause()" --private-key $ADMIN_KEY
-   cast send $BLE_BRIDGE "pause()" --private-key $ADMIN_KEY
+   cast send $BORROW_MODULE "pause()" --account deployer
+   cast send $SMUSD "pause()" --account deployer
+   cast send $DIRECT_MINT "pause()" --account deployer
+   cast send $BLE_BRIDGE "pause()" --account deployer
    ```
 
 2. **Canton side — pause via governance:**
@@ -277,9 +279,14 @@ kubectl -n musd exec -i $PG_POD -- psql -U canton canton_ledger < backup.sql
 
 ### Relay Private Key
 1. Generate new key (offline, air-gapped machine)
-2. Update Docker secret: `echo "NEW_KEY" > relay/secrets/relayer_private_key`
-3. Update on-chain: `BLEBridgeV9.updateRelayer(newAddress)`
-4. Restart relay: `docker compose restart relay`
+2. Update Kubernetes secret (never write keys to files on disk):
+   ```bash
+   kubectl -n musd create secret generic relay-private-key \
+     --from-literal=relayer_private_key="$NEW_KEY" \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+3. Update on-chain: `cast send $BLE_BRIDGE "updateRelayer(address)" $NEW_ADDRESS --account deployer`
+4. Restart relay: `kubectl -n musd rollout restart deployment/musd-relay`
 
 ### Validator KMS Keys
 1. Create new KMS key in AWS
@@ -289,8 +296,13 @@ kubectl -n musd exec -i $PG_POD -- psql -U canton canton_ledger < backup.sql
 
 ### Canton Token
 1. Generate new token via Canton admin API
-2. Update Docker secret: `echo "NEW_TOKEN" > relay/secrets/canton_token`
-3. Restart all services
+2. Update Kubernetes secret:
+   ```bash
+   kubectl -n musd create secret generic canton-token \
+     --from-literal=canton_token="$NEW_TOKEN" \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+3. Restart all services: `kubectl -n musd rollout restart deployment --all`
 
 ---
 
@@ -312,11 +324,14 @@ kubectl -n musd exec -i $PG_POD -- psql -U canton canton_ledger < backup.sql
 
 ## On-Call Contacts
 
-| Role | Primary | Backup |
-|------|---------|--------|
-| Protocol Engineering | TBD | TBD |
-| Infrastructure | TBD | TBD |
-| Security | TBD | TBD |
+> **Setup required:** Configure on-call rotations in PagerDuty and update this table.
+> PagerDuty service IDs are set via the `PAGERDUTY_SERVICE_ID` environment variable.
+
+| Role | PagerDuty Escalation Policy | Slack Channel |
+|------|----------------------------|---------------|
+| Protocol Engineering | `musd-protocol-oncall` | #musd-protocol-eng |
+| Infrastructure | `musd-infra-oncall` | #musd-infra |
+| Security | `musd-security-oncall` | #musd-security |
 
 ## Alerting Channels
 

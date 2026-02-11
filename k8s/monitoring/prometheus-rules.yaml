@@ -224,3 +224,104 @@ spec:
           annotations:
             summary: "TLS certificate expiring in < 7 days"
             description: "Certificate {{ $labels.name }} expires in {{ $value | humanizeDuration }}."
+
+    # ══════════════════════════════════════════════════════════
+    #  BOT SERVICE HEALTH
+    # ══════════════════════════════════════════════════════════
+    - name: musd-bot-health
+      rules:
+        - alert: LiquidationBotDown
+          expr: up{job="musd-liquidation-bot"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            team: protocol
+          annotations:
+            summary: "Liquidation bot is down"
+            description: "The liquidation bot has been unreachable for >3 minutes. Under-collateralized positions will not be liquidated."
+            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#liquidation-surge"
+
+        - alert: OracleKeeperDown
+          expr: up{job="musd-oracle-keeper"} == 0
+          for: 5m
+          labels:
+            severity: high
+            team: protocol
+          annotations:
+            summary: "Oracle keeper bot is down"
+            description: "The PriceOracle circuit-breaker keeper has been unreachable for >5 minutes. Tripped circuit breakers will not auto-reset."
+
+        - alert: PendleSniperDown
+          expr: up{job="musd-pendle-sniper"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: protocol
+          annotations:
+            summary: "Pendle sniper bot is down"
+            description: "The Pendle pool sniper has been unreachable for >5 minutes. New Pendle opportunities will be missed."
+
+        - alert: PoolAlertBotDown
+          expr: up{job="musd-pool-alerts"} == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: protocol
+          annotations:
+            summary: "Pool alert bot is down"
+            description: "The DeFi pool alert service has been unreachable for >5 minutes. New pool notifications are not being sent."
+
+        - alert: BotHighRestartRate
+          expr: rate(kube_pod_container_status_restarts_total{namespace="musd", container=~"liquidation-bot|oracle-keeper|pendle-sniper|pool-alerts"}[30m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+            team: protocol
+          annotations:
+            summary: "Bot {{ $labels.container }} is restart-looping"
+            description: "{{ $value }} restarts/min. Check logs and RPC connectivity."
+
+    # ══════════════════════════════════════════════════════════
+    #  RPC ENDPOINT HEALTH
+    # ══════════════════════════════════════════════════════════
+    - name: musd-rpc-health
+      rules:
+        - alert: RpcEndpointDown
+          expr: probe_success{job="musd-rpc-probe"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: infra
+          annotations:
+            summary: "RPC endpoint {{ $labels.instance }} is unreachable"
+            description: "The Ethereum RPC endpoint has been down for >2 minutes. All on-chain operations are blocked."
+
+        - alert: RpcHighLatency
+          expr: probe_duration_seconds{job="musd-rpc-probe"} > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: infra
+          annotations:
+            summary: "RPC latency >5s on {{ $labels.instance }}"
+            description: "Current latency: {{ $value }}s. May cause transaction timeouts and bot failures."
+
+        - alert: RpcHighErrorRate
+          expr: rate(musd_rpc_errors_total[5m]) / rate(musd_rpc_requests_total[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            team: infra
+          annotations:
+            summary: "RPC error rate >5% on {{ $labels.instance }}"
+            description: "{{ $value | humanizePercentage }} of RPC requests are failing. Check provider status."
+
+        - alert: WebSocketDisconnectFrequent
+          expr: rate(musd_ws_disconnect_total[15m]) > 0.2
+          for: 5m
+          labels:
+            severity: warning
+            team: infra
+          annotations:
+            summary: "Frequent WebSocket disconnects on {{ $labels.instance }}"
+            description: "{{ $value }} disconnects/min. May indicate unstable RPC provider or network issues."

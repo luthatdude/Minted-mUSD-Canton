@@ -15,7 +15,11 @@
     "scanner": "ts-node src/yield-scanner.ts",
     "scanner:prod": "node dist/yield-scanner.js",
     "yield-api": "ts-node src/yield-api.ts",
-    "yield-api:prod": "node dist/yield-api.js"
+    "yield-api:prod": "node dist/yield-api.js",
+    "oracle-keeper": "ts-node src/oracle-keeper.ts",
+    "oracle-keeper:prod": "node dist/oracle-keeper.js",
+    "test": "jest --passWithNoTests",
+    "test:ci": "jest --ci --coverage --passWithNoTests"
   },
   "dependencies": {
     "ethers": "^6.9.0",
@@ -26,6 +30,9 @@
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/node-telegram-bot-api": "^0.64.0",
+    "@types/jest": "^29.5.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0"
   }
