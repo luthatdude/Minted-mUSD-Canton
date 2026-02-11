@@ -65,6 +65,41 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 
 **Layout:** Full viewport, no scroll, no footer.
 
+### Wireframe
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  THREE.js Animated Scene (full viewport, behind all content)     │
+│  • 2000 particles (spherical distribution, additive blending)    │
+│  • Central glowing orb (fresnel shader, pulsing)                 │
+│  • 3 orbiting torus rings                                        │
+│  • Neural-network connection lines between nearby particles      │
+│  • Mouse-follow camera (smooth lerp)                             │
+│  • Dark vignette overlay for text legibility                     │
+├──────────────────────────────────────────────────────────────────┤
+│  NAV BAR (z-20, minimal)                                         │
+│  ┌──────────┐                                    ┌─────────────┐│
+│  │ Logo     │                                    │ [Enter App] ││
+│  │ Minted   │                                    │             ││
+│  │ Protocol │                                    │             ││
+│  └──────────┘                                    └─────────────┘│
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│          "The currency for the"                                  │
+│          "Web3 Ownership Economy"                                │
+│                                                                  │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────────┐│
+│  │ mUSD     │ │ Staking  │ │ Active   │ │ Canton Attestation  ││
+│  │ Supply   │ │ APY      │ │ Users    │ │ Value               ││
+│  │ 24.8M    │ │ 12.4%    │ │ 3,847    │ │ 18.2M               ││
+│  └──────────┘ └──────────┘ └──────────┘ └─────────────────────┘│
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+
+No other buttons, links, features sections, or footer.
+"Enter App" → sets appLaunched=true → shows Dashboard.
+```
+
 ### Background: THREE.js Animated Scene
 - Full-viewport 3D canvas behind all content
 - ~2000 particles in a spherical distribution with additive blending
@@ -105,6 +140,49 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 **Purpose:** The home base. Users see their portfolio at a glance and can immediately mint or redeem mUSD. Dashboard and Mint are merged into one page — the data panels provide context while the mint widget provides action.
 
 **Subtitle:** "Mint mUSD, track your portfolio, and monitor protocol health"
+
+### Wireframe
+
+```
+PageHeader: "Dashboard" · badge: chain name
+Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
+
+4 Key Metric StatCards (sm:2 lg:4):
+  • Your Balance       (mUSD balance)
+  • Your Staked Earnings (smUSD yield earned)
+  • Current APY        (smUSD staking yield %)
+  • mUSD Supply        (% of cap)
+
+┌──────────────────────────── 2-Column Layout ─────────────────────────────┐
+│                                                                          │
+│  ┌── LEFT (2/5): Mint Widget ──┐  ┌── RIGHT (3/5): Data Panels ──────┐ │
+│  │  prominent-border card       │  │                                   │ │
+│  │  ┌ Mint / Redeem tabs ─────┐│  │  ┌── Supply Growth Chart ──────┐ │ │
+│  │  │ [Mint]  [Redeem]        ││  │  │  SVG area chart               │ │ │
+│  │  └─────────────────────────┘│  │  │  Time range selector:          │ │ │
+│  │                              │  │  │  [1w] [1m] [3m] [6m] [1y]     │ │ │
+│  │  Collateral Dropdown:        │  │  │  Start/end date labels         │ │ │
+│  │  [USDC ▾] [USDT] [DAI]      │  │  │  Current supply value          │ │ │
+│  │                              │  │  └────────────────────────────────┘ │ │
+│  │  Input:  amount [MAX] token  │  │                                   │ │
+│  │            ↓                 │  │  ┌── Recent Activity ────────────┐ │ │
+│  │  Output: preview  token      │  │  │  Table: Type | Amount | Block | │ │
+│  │                              │  │  │  Mint/Redeem badges, links     │ │
+│  │  Fee info (rate, fee bps)    │  │  └────────────────────────────────┘ │ │
+│  │  [ ═══ Mint mUSD ═══ ]      │  │                                   │ │
+│  │  Success/Error alerts        │  │  3 Protocol Health StatCards:     │ │
+│  │                              │  │  • Total Backing                  │ │
+│  │  2 mini-StatCards:           │  │  • smUSD Staked                   │ │
+│  │  • Remaining Mintable        │  │  • Supply Cap     (utilization %) │ │
+│  │  • Available to Redeem       │  │                                   │ │
+│  └──────────────────────────────┘  └───────────────────────────────────┘ │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+"How It Works" Explainer Card:
+  "Mint mUSD 1:1 against selected collateral, validated in real time by
+  attestations on the Canton Network, then stake to begin earning."
+```
 
 ### Top: 4 Stat Cards (horizontal row)
 
@@ -166,6 +244,55 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 **Purpose:** Stake mUSD to receive smUSD and earn yield. Simple, focused page. On Canton, adds a second staking widget for Canton Coin (Boost Pool).
 
 **Max width:** Narrower than other pages (~max-w-3xl) — this is a single-action page.
+
+### Wireframe
+
+```
+PageHeader: "Stake & Earn"
+
+2 StatCards (sm:2):
+  • Total Staked       (total mUSD staked in vault)
+  • Current APY        (staking yield %)
+
+Stake / Unstake Widget (prominent-border card):
+  ┌─ [➕ Stake mUSD]  [🔄 Unstake smUSD] ───────────────┐
+  │                                                        │
+  │  2 Balance Cards inside widget (sm:2):                 │
+  │  • Your mUSD Balance                                   │
+  │  • Your smUSD Balance (sub = ≈ X.XX mUSD)             │
+  │                                                        │
+  │  Input:  amount  [MAX] [mUSD/smUSD badge]              │
+  │              ↓                                         │
+  │  Output: preview  [smUSD/mUSD badge]                   │
+  │                                                        │
+  │  Exchange info (rate, cooldown, fee=None)               │
+  │  [ ====== Stake mUSD / Unstake smUSD ============== ] │
+  │  Success/Error alerts with explorer link                │
+  └────────────────────────────────────────────────────────┘
+
+Cooldown Timer (card, only if cooldown active):
+  ┌───────────────────────────────────────────────────┐
+  │  ⏱ Withdrawal Cooldown      [XX% Complete badge]  │
+  │  X.X days remaining  (10-day cooldown period)      │
+  │  [███████████████░░░░░░░░░░░]  progress bar        │
+  └───────────────────────────────────────────────────┘
+
+Canton variant adds:
+  ┌─── Stake Canton Coin (Boost Pool) ──────────────────────────────────┐
+  │  Explainer: "Stake 20% of your mUSD stake in Canton Coin to        │
+  │  receive a boosted yield of 2-4% PLUS 60% of all validator rewards  │
+  │  PLUS a 10x Minted Points boost"                                    │
+  │                                                                      │
+  │  3 StatCards:                                                        │
+  │  • Boost Pool APY (2-4%)                                             │
+  │  • Validator Rewards (60% share)                                     │
+  │  • Points Multiplier (10×)                                           │
+  │                                                                      │
+  │  Canton Coin Stake / Unstake tabs                                    │
+  │  Canton Coin Amount input                                            │
+  │  [Stake Canton Coin (Coming Soon)] — disabled                        │
+  └──────────────────────────────────────────────────────────────────────┘
+```
 
 ### Top: 2 Stat Cards
 
@@ -229,6 +356,71 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 
 **Subtitle:** "mUSD stakers earn the interest"
 **Max width:** ~max-w-4xl
+
+### Wireframe
+
+```
+PageHeader: "Borrow & Lend"
+Subtitle: "mUSD stakers earn the interest"
+
+Collateral Reference Table (card):
+  ┌──────────────────────────────────────────────────────┐
+  │  📦 Supported Collateral                              │
+  │  ┌────────────┬──────────────┬──────────────────────┐│
+  │  │ Asset      │ Max LTV      │ Liquidation Threshold││
+  │  │ ETH        │ 75%          │ 80%                  ││
+  │  │ WBTC       │ 75%          │ 80%                  ││
+  │  │ smUSD      │ 90%          │ 93%                  ││
+  │  └────────────┴──────────────┴──────────────────────┘│
+  └──────────────────────────────────────────────────────┘
+
+Health Factor & Position Summary (card, only if debt > 0):
+  ┌───────────────────────────────────────────────────────┐
+  │  Health Factor: X.XX   Status: Healthy / At Risk      │
+  │  [████████████████░░░]  (gauge)                        │
+  │  Collateral: $XX  ·  Debt: $XX  ·  Utilization: XX%   │
+  │  [Close Position]                                      │
+  └───────────────────────────────────────────────────────┘
+
+Action Card (prominent-border card):
+  ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] [⚡ Loop] ────┐
+  │                                                                     │
+  │  ── Deposit/Borrow/Repay/Withdraw tabs ──                          │
+  │  Collateral selector dropdown (deposit/withdraw only):              │
+  │     ETH (LTV 75%, Liq 80%)                                         │
+  │     WBTC (LTV 75%, Liq 80%)                                        │
+  │     smUSD (LTV 90%, Liq 93%)                                       │
+  │  Amount input [MAX]                                                 │
+  │  [ ====== Deposit / Borrow / Repay / Withdraw ===== ]              │
+  │  Success/Error alerts                                               │
+  │                                                                     │
+  │  ── ⚡ Loop tab ──                                                  │
+  │  Leverage Drag Slider: 2x → 3x → 4x → 5x                          │
+  │  ┌──────────────────────────────────────────────┐                   │
+  │  │  3x   (big display)          Drag to select  │                   │
+  │  │  [=====●=============]  range input          │                   │
+  │  │   2x      3x      4x      5x                │                   │
+  │  └──────────────────────────────────────────────┘                   │
+  │  Collateral Amount input                                            │
+  │  Position Preview:                                                  │
+  │    Total Collateral · Estimated Debt · Loop Iterations · Leverage   │
+  │  [ ⚡ Open Xx Loop Position ]                                       │
+  │                                                                     │
+  │  Active Leverage Position (if exists):                              │
+  │    Deposited · Collateral · Outstanding Debt · Leverage             │
+  │    [Close Position & Repay Debt] (danger)                           │
+  └─────────────────────────────────────────────────────────────────────┘
+
+"How Borrowing Works" — 5 step cards:
+  ① Choose Collateral → ② Deposit → ③ Borrow → ④ Repay → ⑤ Stakers Earn
+
+"Looping Strategies" — 2 strategy cards (sm:grid-cols-2):
+  ┌─── sMUSD Maxi ─────────────────┐  ┌─── Canton Maxi ────────────────┐
+  │  Low-Medium Risk                │  │  Medium Risk                    │
+  │  Deposit → Mint → Stake → Loop  │  │  Deposit → Stake → Loop → Boost│
+  │  APY table: 2x–5x loops         │  │  APY table: 2x–5x + Boost Pool │
+  └──────────────────────────────────┘  └─────────────────────────────────┘
+```
 
 ### Collateral Reference Table
 A card showing supported collateral with key parameters:
@@ -328,6 +520,50 @@ Horizontal row of numbered steps:
 
 **Reference design:** Look at deBridge or Stargate for UX inspiration.
 
+### Wireframe
+
+```
+PageHeader: "Canton Bridge" · badge dynamic "Active" / "PAUSED"
+
+⚠ Paused Alert (if bridge paused)
+
+4 StatCards (sm:2 lg:4):
+  • Attested Canton Assets   (🏢 icon)
+  • Current Supply Cap       (📊 icon)
+  • Remaining Mintable       (💰 icon)
+  • Last Attestation         (Xm/h ago, ⏱ icon, sub = timestamp)
+
+Supply Cap & Health Ratio (2-col grid):
+  ┌─── Supply Cap Utilization ───┐  ┌─── Bridge Health Ratio ──────┐
+  │  (prominent-border card)      │  │  (prominent-border card)      │
+  │  XX.X% of capacity used      │  │                                │
+  │  [██████████████░░░░░]        │  │    1.85  (large display)      │
+  │  Minted: $XX   Available: $XX │  │    "Healthy"                  │
+  │                               │  │  [███████████████░░░]         │
+  │                               │  │  1.0 ——— 1.5 ——— 2.0+        │
+  └───────────────────────────────┘  └──────────────────────────────┘
+
+Bridge Parameters (3-col grid, card):
+  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+  │ Collateral Ratio│  │ Required Sigs  │  │ Current Nonce  │
+  │     150%        │  │      3         │  │      42        │
+  │  Overcollateral │  │ Multi-sig      │  │ Sequence #     │
+  └────────────────┘  └────────────────┘  └────────────────┘
+
+Attestation History Table (card):
+  ┌───────────────────────────────────────────────────┐
+  │  📋 Attestation History — X recent attestations    │
+  │  ┌───────┬──────────────┬──────────┬────────┬────┐│
+  │  │ Block │ Attestation  │ Canton   │ New    │Nonce││
+  │  │ #1234 │ 0x1a2b…3c4d  │ Assets   │ Cap    │    ││
+  │  └───────┴──────────────┴──────────┴────────┴────┘│
+  │  (empty state: clipboard icon + "No attestations") │
+  └───────────────────────────────────────────────────┘
+
+"How the Bridge Works" — 6 step pipeline (3×2 or 6-col):
+  ① Observe → ② Verify → ③ Sign → ④ Aggregate → ⑤ Update → ⑥ Mint
+```
+
 ### Top: Page Header
 - Title: "Canton Bridge"
 - Dynamic badge: "Active" or "PAUSED"
@@ -384,6 +620,63 @@ Each step gets a numbered circle indicator.
 
 **Header subtitle:** "Earn points for using the protocol. Points convert to $MINT token airdrop."
 **Badge:** Current season name
+
+### Wireframe
+
+```
+PageHeader: "Points Program" · badge: season name
+
+Season Progress Bar (card):
+  ┌───────────────────────────────────────────────────┐
+  │  Season 1 — Genesis                               │
+  │  2x multiplier · 45 days remaining                │
+  │  [██████████████░░░░░░░░░░░░] 58% Complete        │
+  │  ● Season 1 (active) · ○ Season 2 · ○ Season 3   │
+  └───────────────────────────────────────────────────┘
+
+Tab Nav: [Overview] [Leaderboard] [Calculator]
+
+OVERVIEW TAB:
+  Your Points (4 StatCards):
+    • Total Points · Global Rank · Current Season · Seasons Active
+
+  Points Breakdown (card): per-action breakdown by season
+
+  How It Works (card):
+    "Your Points = USD Value × Multiplier × Hours"
+
+  3 Seasons Multiplier Table:
+    ┌──────────────┬──────────┬───────┬──────────┬────────┐
+    │ Season       │ Boost    │ sMUSD │ Collat.  │ Borrow │
+    │ 1 — Genesis  │ 10× 🔥   │ 4×    │ 3×       │ 2×     │
+    │ 2 — Growth   │ 6×       │ 2.5×  │ 2×       │ 1.5×   │
+    │ 3 — Maturity │ 4×       │ 1.5×  │ 1×       │ 1×     │
+    └──────────────┴──────────┴───────┴──────────┴────────┘
+
+  What Earns Points (2-col grid):
+    Canton (higher multipliers): Stake mUSD, Deposit sMUSD/CTN, Borrow, Boost Pool
+    Ethereum: Hold sMUSD, Deposit ETH/WBTC/sMUSD, Borrow, Leverage Vault
+
+  Points APY by TVL (table):
+    ┌──────────┬───────────────┬──────────────┬───────────────┐
+    │ TVL      │ Boost Pool 🔥 │ sMUSD (CTN)  │ sMUSD (ETH)   │
+    │ $5M      │ 354%          │ 142%         │ 106%          │
+    │ $10M     │ 177%          │ 71%          │ 53%           │
+    │ $25M     │ 71%           │ 28%          │ 21%           │
+    │ $50M     │ 35%           │ 14%          │ 11%           │
+    └──────────┴───────────────┴──────────────┴───────────────┘
+
+  Maximize Your Points (4 tips):
+    ① Get in early  ② Use Canton  ③ Loop your sMUSD  ④ Deposit $CC in Boost Pool
+
+LEADERBOARD TAB:
+  Top 25 table: Rank · Address · Points (highlights user's own row)
+
+CALCULATOR TAB:
+  Implied APY (3 StatCards): APY · Token Price · Total Airdrop Value
+  Scenarios Table: deposit · est. points · allocation · value · APY
+  Multiplier Schedule: per-action cards with ETH/CTN badges
+```
 
 ### Season Progress Bar
 - Card showing:
@@ -499,6 +792,26 @@ Per-action breakdown by season (table or itemized list)
 - Every write action requires a confirmation modal showing exact call data
 - Transaction status: pending spinner → success checkmark → error with decoded revert reason
 - Role indicator at top: show which roles the connected wallet holds; grey out actions the wallet can't execute
+
+### Wireframe
+
+```
+Tab bar: [mUSD] [DirectMint] [Treasury] [Bridge] [Borrow] [Oracle]
+
+Each section shows:
+  • Current on-chain values (read from contracts)
+  • Input fields to update parameters
+  • TxButton to submit transactions
+  • Success/Error feedback
+
+Sections:
+  mUSD:       Supply cap, blacklist address
+  DirectMint: Mint/redeem fees, fee recipient, min/max amounts, pause, collect fees
+  Treasury:   Add/remove strategy, deploy/withdraw funds, max deployment BPS
+  Bridge:     Min signatures, collateral ratio, emergency cap, pause
+  Borrow:     Interest rate, min debt
+  Oracle:     Set price feed (token, feed address, stale threshold, decimals)
+```
 
 ### Section 1: Protocol Health Dashboard (read-only, top of page)
 Live data polled every 15 seconds. "At a glance" panel.
@@ -652,6 +965,175 @@ These components appear across multiple pages and should be designed as a reusab
 | 6 | **TxButton** | Click → simulate tx → send tx → loading spinner → success alert with explorer link / error alert |
 | 7 | **Approve Flow** | If ERC-20 allowance insufficient, auto-approve step before main tx (sequential) |
 | 8 | **Leverage Slider** | Drag 2x–5x → live position preview recalculates |
+
+---
+
+## Component Hierarchy
+
+```
+LandingPage (pre-app gate, shown when appLaunched=false)
+├── THREE.js Scene (particles, orb, rings, neural lines)
+├── Navbar (logo + "Enter App" button only)
+├── Headline ("The currency for the Web3 Ownership Economy")
+└── 4 Global Stat Cards (mUSD Supply, APY, Users, Canton Attestation Value)
+
+Layout (shown when appLaunched=true)
+├── Navbar
+│   ├── Logo (Minted Protocol)
+│   ├── NavItems × 5 (Mint, Stake, Borrow & Lend, Bridge, Points)
+│   ├── ChainToggle (ETH ⟷ Canton)
+│   ├── Wallet Button / Connect Button
+│   └── Mobile Menu (hamburger → slide-down)
+│
+├── Main Content (page router via useState)
+│   ├── DashboardMintPage
+│   │   ├── PageHeader
+│   │   ├── StatCard × 4
+│   │   ├── Mint/Redeem Widget (prominent-border card)
+│   │   │   ├── Tab Toggle (Mint / Redeem)
+│   │   │   ├── CollateralSelector
+│   │   │   ├── AmountInput + MAX + TokenBadge
+│   │   │   ├── Arrow Separator
+│   │   │   ├── OutputPreview
+│   │   │   ├── FeeInfo
+│   │   │   ├── TxButton
+│   │   │   └── AlertStatus
+│   │   ├── Supply Growth Chart
+│   │   ├── Recent Activity Table
+│   │   ├── 3 Protocol Health StatCards
+│   │   └── HowItWorks Explainer Card
+│   │
+│   ├── StakePage
+│   │   ├── 2 StatCards (Total Staked, Current APY)
+│   │   ├── Stake/Unstake Widget (prominent-border card)
+│   │   │   ├── 2 Balance Cards (mUSD, smUSD)
+│   │   │   ├── AmountInput + MAX + TokenBadge
+│   │   │   ├── Arrow Separator
+│   │   │   ├── OutputPreview
+│   │   │   ├── ExchangeInfo
+│   │   │   ├── TxButton
+│   │   │   └── AlertStatus
+│   │   ├── CooldownTimer (10-day cooldown, progress bar)
+│   │   ├── AI Yield Aggregation Explainer Card
+│   │   └── Unstaking Info Card
+│   │
+│   │   Canton variant adds:
+│   │   ├── 3rd StatCard (Minted Points Earned)
+│   │   └── Canton Coin Boost Pool Widget
+│   │       ├── Explainer text
+│   │       ├── 3 StatCards (Boost APY, Validator Rewards, Points 10×)
+│   │       ├── Stake/Unstake tabs (Coming Soon)
+│   │       └── Amount Input (disabled)
+│   │
+│   ├── BorrowPage
+│   │   ├── Collateral Reference Table
+│   │   ├── HealthFactor + Position Summary (conditional on debt > 0)
+│   │   ├── Action Card (deposit/borrow/repay/withdraw/loop tabs)
+│   │   │   ├── CollateralSelector dropdown
+│   │   │   ├── AmountInput + MAX
+│   │   │   ├── ⚡ Loop tab:
+│   │   │   │   ├── Leverage Drag Slider (2x–5x range input)
+│   │   │   │   ├── Collateral Amount input
+│   │   │   │   ├── Position Preview (collateral/debt/loops/leverage)
+│   │   │   │   └── Open Loop Position button
+│   │   │   ├── Active Leverage Position display + Close button
+│   │   │   ├── TxButton
+│   │   │   └── AlertStatus
+│   │   ├── HowItWorks × 5 (Choose→Deposit→Borrow→Repay→Stakers Earn)
+│   │   ├── Loop Explainer Card
+│   │   └── LoopingStrategies × 2 (sMUSD Maxi + Canton Maxi)
+│   │
+│   ├── BridgePage
+│   │   ├── PageHeader (badge: Active/PAUSED)
+│   │   ├── PausedAlert (conditional)
+│   │   ├── StatCard × 4
+│   │   ├── SupplyCapUtilization + HealthRatio (2-col)
+│   │   ├── BridgeParameters (3-col grid)
+│   │   ├── AttestationHistory (table or empty state)
+│   │   ├── HowItWorks × 6 (pipeline)
+│   │   └── BLE Explainer Card
+│   │
+│   ├── PointsPage
+│   │   ├── PageHeader
+│   │   ├── Season Progress Bar
+│   │   ├── Tab Nav (Overview / Leaderboard / Calculator)
+│   │   ├── Overview Tab
+│   │   │   ├── Your Points (StatCard × 4)
+│   │   │   ├── Points Breakdown (per-action)
+│   │   │   ├── How It Works (formula card)
+│   │   │   ├── 3 Seasons Multiplier Table
+│   │   │   ├── What Earns Points (Canton vs Ethereum)
+│   │   │   ├── Points APY by TVL Table
+│   │   │   ├── Maximize Your Points (4 tips)
+│   │   │   └── Airdrop Info Card
+│   │   ├── Leaderboard Tab (top-25 table)
+│   │   └── Calculator Tab
+│   │       ├── Implied APY (StatCard × 3)
+│   │       ├── Scenarios Table
+│   │       └── Multiplier Schedule
+│   │
+│   └── AdminPage
+│       ├── Role Indicator (top bar)
+│       ├── Collapsible Accordion Sections × 6
+│       └── Section Forms (inputs + TxButtons + confirmation modals)
+│
+└── Footer
+    ├── Status indicator
+    ├── Links (Docs · GitHub · Discord)
+    └── Copyright
+```
+
+---
+
+## File Map
+
+```
+frontend/src/
+├── pages/
+│   ├── index.tsx            — SPA router (useState page switch)
+│   ├── _app.tsx             — Next.js app wrapper
+│   ├── _document.tsx        — HTML document
+│   ├── DashboardPage.tsx    — Protocol + portfolio dashboard + Mint
+│   ├── StakePage.tsx        — mUSD ↔ smUSD stake/unstake
+│   ├── BorrowPage.tsx       — Collateral deposit, borrow, repay, withdraw + leverage looping
+│   ├── BridgePage.tsx       — Canton attestation monitoring
+│   ├── AdminPage.tsx        — Protocol admin panel
+│   └── PointsPage.tsx       — Points program, seasons, leaderboard, APY calculator
+│
+├── components/
+│   ├── LandingPage.tsx      — Pre-app gate: THREE.js scene, headline, stats, Enter App
+│   ├── Layout.tsx           — Shell: bg, navbar, main, footer
+│   ├── Navbar.tsx           — Top nav with 5 items + wallet + chain toggle
+│   ├── ChainToggle.tsx      — ETH ⟷ Canton pill switch
+│   ├── StatCard.tsx         — Metric card (icon, trend, sub, variant)
+│   ├── PageHeader.tsx       — Title + subtitle + badge
+│   ├── TxButton.tsx         — Transaction button with loading state
+│   └── canton/              — Canton-chain page equivalents
+│       ├── CantonDashboardMint.tsx
+│       ├── CantonStake.tsx
+│       ├── CantonBorrow.tsx
+│       ├── CantonBridge.tsx
+│       └── CantonAdmin.tsx
+│
+├── hooks/
+│   ├── useWalletConnect.ts  — WalletConnect / MetaMask connection
+│   ├── useWCContracts.ts    — Contract instances via WalletConnect signer
+│   ├── useTx.ts             — Tx send with simulation, loading/error/success
+│   ├── useChain.ts          — Chain state (ethereum / canton toggle)
+│   └── useCanton.ts         — Canton/DAML integration
+│
+├── lib/
+│   ├── config.ts            — Contract addresses, decimals, validation
+│   └── format.ts            — formatUSD, formatToken, formatBps, formatHealthFactor, etc.
+│
+├── abis/                    — Contract ABI TypeScript exports
+│   ├── MUSD.ts, SMUSD.ts, DirectMint.ts, Treasury.ts
+│   ├── CollateralVault.ts, BorrowModule.ts, LiquidationEngine.ts
+│   └── BLEBridgeV9.ts, PriceOracle.ts, ERC20.ts
+│
+└── styles/
+    └── globals.css          — Tailwind design system
+```
 
 ---
 
