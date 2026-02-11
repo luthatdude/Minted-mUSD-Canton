@@ -30,7 +30,7 @@ import DA.Foldable (forA_)
 import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
-import Governance (GovernanceActionLog(..), ActionType(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================

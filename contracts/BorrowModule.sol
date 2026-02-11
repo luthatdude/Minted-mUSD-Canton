@@ -192,6 +192,25 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         emit TreasuryUpdated(old, _treasury);
     }
 
+    /// @notice FIX SOL-H01: Drain unrouted interest to correct totalBorrows divergence.
+    /// When supply cap exhaustion prevents minting mUSD for supplier interest,
+    /// `unroutedInterest` accumulates while `totalBorrows` keeps growing.
+    /// This function reconciles by subtracting the unrouted amount from totalBorrows.
+    event UnroutedInterestDrained(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
+
+    function drainUnroutedInterest() external onlyRole(BORROW_ADMIN_ROLE) {
+        uint256 amount = unroutedInterest;
+        require(amount > 0, "NOTHING_TO_DRAIN");
+        uint256 totalBorrowsBefore = totalBorrows;
+        unroutedInterest = 0;
+        if (totalBorrows >= amount) {
+            totalBorrows -= amount;
+        } else {
+            totalBorrows = 0; // Safety: prevent underflow from rounding drift
+        }
+        emit UnroutedInterestDrained(amount, totalBorrowsBefore, totalBorrows);
+    }
+
     // ============================================================
     //                  BORROW / REPAY
     // ============================================================
@@ -650,9 +669,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     //                  LIQUIDATION INTERFACE
     // ============================================================
 
-    /// @notice Called by LiquidationEngine to reduce a user's debt after seizure
+    /// @notice Called by LiquidationEngine or LeverageVault to reduce a user's debt after seizure/emergency close
     /// FIX M-01: Added nonReentrant to match all other state-modifying debt functions
-    function reduceDebt(address user, uint256 amount) external nonReentrant onlyRole(LIQUIDATION_ROLE) {
+    /// FIX LV-H01: Allow LEVERAGE_VAULT_ROLE to call for emergency debt cleanup
+    function reduceDebt(address user, uint256 amount) external nonReentrant {
+        require(
+            hasRole(LIQUIDATION_ROLE, msg.sender) || hasRole(LEVERAGE_VAULT_ROLE, msg.sender),
+            "UNAUTHORIZED_REDUCE_DEBT"
+        );
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];

@@ -495,10 +495,31 @@ describe("TreasuryV2", function () {
       ).to.be.revertedWith("Reserve too high");
     });
 
-    it("Should update vault address", async function () {
+    it("Should update vault address via timelock", async function () {
       const newVault = user;
-      await treasury.setVault(newVault.address);
+      // Request vault change
+      await treasury.requestVaultChange(newVault.address);
+      expect(await treasury.pendingVault()).to.equal(newVault.address);
+      
+      // Cannot execute before timelock expires
+      await expect(
+        treasury.executeVaultChange()
+      ).to.be.revertedWith("VAULT_TIMELOCK_ACTIVE");
+      
+      // Advance time past 48h timelock
+      await ethers.provider.send("evm_increaseTime", [48 * 3600 + 1]);
+      await ethers.provider.send("evm_mine", []);
+      
+      // Execute vault change
+      await treasury.executeVaultChange();
       expect(await treasury.vault()).to.equal(newVault.address);
+    });
+
+    it("Should cancel pending vault change", async function () {
+      const newVault = user;
+      await treasury.requestVaultChange(newVault.address);
+      await treasury.cancelVaultChange();
+      expect(await treasury.pendingVault()).to.equal(ethers.ZeroAddress);
     });
 
     it("Should update min auto-allocate", async function () {

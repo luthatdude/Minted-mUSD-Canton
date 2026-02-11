@@ -115,8 +115,14 @@ contract TreasuryV2 is
     /// @notice FIX T-H01: Timelock delay for upgrades (48 hours)
     uint256 public constant UPGRADE_DELAY = 48 hours;
 
-    /// @dev Storage gap for future upgrades (40 - 2 new vars = 38)
-    uint256[38] private __gap;
+    /// @notice FIX T-H01b: Pending vault address (timelock)
+    address public pendingVault;
+
+    /// @notice FIX T-H01b: Timestamp when vault change was requested
+    uint256 public vaultChangeRequestTime;
+
+    /// @dev Storage gap for future upgrades (40 - 4 new vars = 36)
+    uint256[36] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -141,6 +147,10 @@ contract TreasuryV2 is
     /// FIX T-H01: Upgrade timelock events
     event UpgradeRequested(address indexed newImplementation, uint256 readyAt);
     event UpgradeCancelled(address indexed cancelledImplementation);
+    /// FIX T-H01b: Vault change timelock events
+    event VaultChangeRequested(address indexed newVault, uint256 readyAt);
+    event VaultChangeCancelled(address indexed cancelledVault);
+    event VaultChanged(address indexed oldVault, address indexed newVault);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -998,14 +1008,47 @@ contract TreasuryV2 is
     }
 
     /**
-     * @notice Update vault address
+     * @notice FIX T-H01b: Request a timelocked vault change
+     * @param _vault Address of the new vault
      */
-    function setVault(address _vault) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function requestVaultChange(address _vault) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (_vault == address(0)) revert ZeroAddress();
+        pendingVault = _vault;
+        vaultChangeRequestTime = block.timestamp;
+        emit VaultChangeRequested(_vault, block.timestamp + UPGRADE_DELAY);
+    }
 
-        _revokeRole(VAULT_ROLE, vault);
-        vault = _vault;
-        _grantRole(VAULT_ROLE, _vault);
+    /**
+     * @notice FIX T-H01b: Cancel a pending vault change
+     */
+    function cancelVaultChange() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingVault;
+        pendingVault = address(0);
+        vaultChangeRequestTime = 0;
+        emit VaultChangeCancelled(cancelled);
+    }
+
+    /**
+     * @notice FIX T-H01b: Execute vault change after timelock expires
+     * @dev VAULT_ROLE controls deposit/withdraw, so changes must be timelocked
+     */
+    function executeVaultChange() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingVault != address(0), "NO_PENDING_VAULT");
+        require(block.timestamp >= vaultChangeRequestTime + UPGRADE_DELAY, "VAULT_TIMELOCK_ACTIVE");
+
+        address oldVault = vault;
+        address newVault = pendingVault;
+
+        // Clear pending state
+        pendingVault = address(0);
+        vaultChangeRequestTime = 0;
+
+        // Execute role swap
+        _revokeRole(VAULT_ROLE, oldVault);
+        vault = newVault;
+        _grantRole(VAULT_ROLE, newVault);
+
+        emit VaultChanged(oldVault, newVault);
     }
 
     /**
