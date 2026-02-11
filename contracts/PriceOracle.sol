@@ -134,41 +134,29 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Get the USD price of a collateral token, normalized to 18 decimals
-    /// @param token The collateral token address
-    /// @return price USD value of 1 full token unit, scaled to 18 decimals
+    /// @notice Get the USD price of a collateral token, normalized to 18 decimals
+    /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed().
+    ///      Keeping getPrice as view ensures interface compatibility (IPriceOracleLiq, etc.).
     function getPrice(address token) external view returns (uint256 price) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
-        // FIX M-23: Capture roundId and answeredInRound for staleness check
-        (
-            uint80 roundId,
-            int256 answer,
-            ,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        ) = config.feed.latestRoundData();
-
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
         require(answer > 0, "INVALID_PRICE");
         require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        // FIX M-23: Ensure the round was fully answered (not incomplete)
         require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();
         require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-
-        // Chainlink answer is price per 1 token unit in USD, scaled to feedDecimals
-        // Normalize to 18 decimals
         price = uint256(answer) * (10 ** (18 - feedDecimals));
 
-        // FIX S-H01: Circuit breaker check (view-compatible - checks against cached price)
+        // Circuit breaker check
         if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
             uint256 oldPrice = lastKnownPrice[token];
             uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
             uint256 deviationBps = (diff * 10000) / oldPrice;
             require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
         }
-        // Note: lastKnownPrice is updated via updatePrice() or admin resetLastKnownPrice()
     }
 
     /// @notice FIX S-H01: Update cached price (call before getPrice if circuit breaker trips)
@@ -198,11 +186,35 @@ contract PriceOracle is AccessControl {
     /// @param token The collateral token address
     /// @param amount The amount of collateral (in token's native decimals)
     /// @return valueUsd USD value scaled to 18 decimals
-    /// FIX C-05: Now calls getPrice() internally so circuit breaker is enforced.
-    /// Previously read the feed directly, bypassing the circuit breaker check.
+    /// FIX C-05: Now calls _getPriceInternal() to avoid external self-call gas overhead.
+    /// FIX PO-M02: Previously used this.getPrice(token) which is an external self-call.
     function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
-        uint256 priceNormalized = this.getPrice(token);
+        uint256 priceNormalized = _getPriceInternal(token);
         valueUsd = (amount * priceNormalized) / (10 ** feeds[token].tokenDecimals);
+    }
+
+    /// @notice FIX PO-M02: Internal price function to avoid external self-calls
+    /// @dev Same logic as getPrice() but callable internally without external call overhead
+    function _getPriceInternal(address token) internal view returns (uint256 price) {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        require(answeredInRound >= roundId, "STALE_ROUND");
+
+        uint8 feedDecimals = config.feed.decimals();
+        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+        price = uint256(answer) * (10 ** (18 - feedDecimals));
+
+        // Circuit breaker check
+        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+            uint256 oldPrice = lastKnownPrice[token];
+            uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
+            uint256 deviationBps = (diff * 10000) / oldPrice;
+            require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
+        }
     }
 
     /// @notice FIX P1-H4: Get price WITHOUT circuit breaker check, for liquidation paths

@@ -106,8 +106,17 @@ contract TreasuryV2 is
     /// @notice Minimum deposit to trigger auto-allocation
     uint256 public minAutoAllocateAmount;
 
-    /// @dev Storage gap for future upgrades
-    uint256[40] private __gap;
+    /// @notice FIX T-H01: Pending upgrade implementation (timelock)
+    address public pendingImplementation;
+
+    /// @notice FIX T-H01: Timestamp when upgrade was requested
+    uint256 public upgradeRequestTime;
+
+    /// @notice FIX T-H01: Timelock delay for upgrades (48 hours)
+    uint256 public constant UPGRADE_DELAY = 48 hours;
+
+    /// @dev Storage gap for future upgrades (40 - 2 new vars = 38)
+    uint256[38] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -129,6 +138,9 @@ contract TreasuryV2 is
     /// FIX CRITICAL: Events for rebalance failures
     event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
     event RebalanceDepositFailed(address indexed strategy, uint256 amount);
+    /// FIX T-H01: Upgrade timelock events
+    event UpgradeRequested(address indexed newImplementation, uint256 readyAt);
+    event UpgradeCancelled(address indexed cancelledImplementation);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -472,6 +484,10 @@ contract TreasuryV2 is
         require(available >= amount, "INSUFFICIENT_RESERVES");
 
         asset.safeTransfer(to, amount);
+
+        // FIX: Update lastRecordedValue so the withdrawal isn't
+        // mistaken for yield on the next _accrueFees() call.
+        lastRecordedValue = totalValue();
 
         emit Withdrawn(to, amount);
     }
@@ -839,7 +855,14 @@ contract TreasuryV2 is
 
             address strat = strategies[i].strategy;
             // slither-disable-next-line calls-loop
-            uint256 currentValue = IStrategy(strat).totalValue();
+            // FIX T-M02: try/catch on totalValue() so a broken strategy doesn't DoS rebalance
+            uint256 currentValue;
+            try IStrategy(strat).totalValue() returns (uint256 val) {
+                currentValue = val;
+            } catch {
+                emit RebalanceWithdrawFailed(strat, 0);
+                continue; // Skip broken strategy
+            }
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue > targetValue) {
@@ -994,7 +1017,35 @@ contract TreasuryV2 is
     }
 
     /**
-     * @notice UUPS upgrade authorization
+     * @notice FIX T-H01: Request a timelocked upgrade
+     * @param newImplementation Address of the new implementation contract
      */
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newImplementation != address(0), "ZERO_ADDRESS");
+        pendingImplementation = newImplementation;
+        upgradeRequestTime = block.timestamp;
+        emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /**
+     * @notice FIX T-H01: Cancel a pending upgrade
+     */
+    function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingImplementation;
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+        emit UpgradeCancelled(cancelled);
+    }
+
+    /**
+     * @notice FIX T-H01: UUPS upgrade authorization with timelock
+     * @dev Requires requestUpgrade() to be called first, then UPGRADE_DELAY must pass
+     */
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
+        require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
+        // Clear pending state
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+    }
 }

@@ -210,7 +210,7 @@ export const CONTRACTS = {
     BORROW_MODULE: "0x114109F3555Ee75DD343710a63926B9899A6A4a8",
     PRICE_ORACLE: "0x3F761A52091DB1349aF08C54336d1E5Ae6636901",
     LEVERAGE_VAULT: "", // TODO: deployed address
-    RPC_URL: process.env.ETH_RPC_URL || "https://eth-sepolia.g.alchemy.com/v2/demo",
+    RPC_URL: process.env.ETH_RPC_URL || (() => { throw new Error("FATAL: ETH_RPC_URL environment variable is required"); })(),
   },
   canton: {
     LEDGER_HOST: process.env.CANTON_LEDGER_HOST || "localhost",

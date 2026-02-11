@@ -1,0 +1,156 @@
+# ═══════════════════════════════════════════════════════════════
+# Minted Protocol — Subgraph Schema
+# ═══════════════════════════════════════════════════════════════
+# Indexes all protocol events for the frontend:
+#   - User activity feed (mints, redeems, stakes, borrows, bridges)
+#   - Global statistics (supply, TVL, user count)
+#   - Historical data (supply snapshots, APY tracking)
+# ═══════════════════════════════════════════════════════════════
+
+# ───────────────────────────────────────────────────────────────
+# PROTOCOL-LEVEL AGGREGATES
+# ───────────────────────────────────────────────────────────────
+
+type ProtocolStats @entity {
+  id: ID!                        # "protocol"
+  totalUsers: BigInt!            # Unique addresses that have interacted
+  totalMints: BigInt!
+  totalRedeems: BigInt!
+  totalBorrows: BigInt!
+  totalRepays: BigInt!
+  totalLiquidations: BigInt!
+  totalBridgeTransfers: BigInt!
+  musdTotalSupply: BigDecimal!
+  smusdTotalAssets: BigDecimal!
+  lastUpdatedBlock: BigInt!
+  lastUpdatedTimestamp: BigInt!
+}
+
+# ───────────────────────────────────────────────────────────────
+# SUPPLY SNAPSHOTS (for charts)
+# ───────────────────────────────────────────────────────────────
+
+type DailySnapshot @entity {
+  id: ID!                        # dayId = timestamp / 86400
+  date: BigInt!                  # Start of day timestamp
+  musdSupply: BigDecimal!
+  smusdTotalAssets: BigDecimal!
+  smusdSharePrice: BigDecimal!
+  totalBorrows: BigDecimal!
+  totalCollateralValue: BigDecimal!
+  mintVolume: BigDecimal!        # mUSD minted that day
+  redeemVolume: BigDecimal!      # mUSD redeemed that day
+  borrowVolume: BigDecimal!
+  repayVolume: BigDecimal!
+  bridgeVolume: BigDecimal!
+  uniqueUsers: BigInt!           # Unique addresses active that day
+  txCount: BigInt!
+}
+
+type HourlySnapshot @entity {
+  id: ID!                        # hourId = timestamp / 3600
+  timestamp: BigInt!
+  musdSupply: BigDecimal!
+  smusdSharePrice: BigDecimal!
+  mintVolume: BigDecimal!
+  redeemVolume: BigDecimal!
+}
+
+# ───────────────────────────────────────────────────────────────
+# USERS
+# ───────────────────────────────────────────────────────────────
+
+type User @entity {
+  id: ID!                        # User address (lowercase)
+  firstInteractionBlock: BigInt!
+  firstInteractionTimestamp: BigInt!
+  totalMinted: BigDecimal!
+  totalRedeemed: BigDecimal!
+  totalBorrowed: BigDecimal!
+  totalRepaid: BigDecimal!
+  totalStaked: BigDecimal!       # mUSD staked into sMUSD
+  totalUnstaked: BigDecimal!
+  txCount: BigInt!
+  lastActiveTimestamp: BigInt!
+  activities: [Activity!]! @derivedFrom(field: "user")
+}
+
+# ───────────────────────────────────────────────────────────────
+# ACTIVITY FEED
+# ───────────────────────────────────────────────────────────────
+
+enum ActivityType {
+  MINT
+  REDEEM
+  STAKE
+  UNSTAKE
+  BORROW
+  REPAY
+  DEPOSIT_COLLATERAL
+  WITHDRAW_COLLATERAL
+  LIQUIDATION
+  BRIDGE_OUT
+  BRIDGE_IN
+  LEVERAGE_OPEN
+  LEVERAGE_CLOSE
+}
+
+type Activity @entity {
+  id: ID!                        # txHash-logIndex
+  user: User!
+  type: ActivityType!
+  amount: BigDecimal!            # Primary amount (mUSD/USDC value)
+  asset: String!                 # Token symbol
+  txHash: Bytes!
+  blockNumber: BigInt!
+  timestamp: BigInt!
+  # Optional context
+  collateralToken: String
+  healthFactor: BigDecimal
+  chainId: BigInt
+}
+
+# ───────────────────────────────────────────────────────────────
+# BRIDGE TRANSFERS
+# ───────────────────────────────────────────────────────────────
+
+type BridgeTransfer @entity {
+  id: ID!                        # nonce or txHash
+  sender: Bytes!
+  recipient: Bytes!
+  amount: BigDecimal!
+  sourceChain: BigInt!
+  destChain: BigInt!
+  nonce: BigInt!
+  attestationTime: BigInt
+  status: String!                # "pending" | "completed" | "failed"
+  txHash: Bytes!
+  blockNumber: BigInt!
+  timestamp: BigInt!
+}
+
+# ───────────────────────────────────────────────────────────────
+# COLLATERAL POSITIONS (latest state per user per token)
+# ───────────────────────────────────────────────────────────────
+
+type CollateralPosition @entity {
+  id: ID!                        # user-token
+  user: User!
+  token: Bytes!
+  tokenSymbol: String!
+  amount: BigDecimal!
+  lastUpdatedBlock: BigInt!
+  lastUpdatedTimestamp: BigInt!
+}
+
+# ───────────────────────────────────────────────────────────────
+# BORROW POSITIONS
+# ───────────────────────────────────────────────────────────────
+
+type BorrowPosition @entity {
+  id: ID!                        # user address
+  user: User!
+  principal: BigDecimal!
+  lastUpdatedBlock: BigInt!
+  lastUpdatedTimestamp: BigInt!
+}

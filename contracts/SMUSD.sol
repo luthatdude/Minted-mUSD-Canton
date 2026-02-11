@@ -69,6 +69,10 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @notice Last interest receipt timestamp
     uint256 public lastInterestReceiptTime;
 
+    /// @notice FIX SOL-C01: Cached last known good globalTotalAssets to prevent
+    ///         silent fallback to local totalAssets on treasury failure
+    uint256 public lastKnownGlobalAssets;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
@@ -168,7 +172,15 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
         
         // Track for analytics
-        totalInterestReceived += amount;
+        // FIX SMUSD-M03: Cap to prevent overflow on totalInterestReceived
+        unchecked {
+            uint256 newTotal = totalInterestReceived + amount;
+            // Overflow check: if newTotal wrapped around, cap at max
+            if (newTotal < totalInterestReceived) {
+                newTotal = type(uint256).max;
+            }
+            totalInterestReceived = newTotal;
+        }
         lastInterestReceiptTime = block.timestamp;
 
         emit InterestReceived(msg.sender, amount, totalInterestReceived);
@@ -243,7 +255,10 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Get global total assets from Treasury
-    /// @dev Falls back to local totalAssets if treasury not set
+    /// @dev FIX SOL-C01: No longer silently falls back to local totalAssets.
+    ///      Uses cached last known good value when treasury call fails.
+    ///      This prevents catastrophic share price collapse (dilution attack)
+    ///      that would occur if the vault switched from global to local pricing.
     /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
     /// @dev FIX S-H01: Uses typed interface call instead of raw staticcall for
@@ -258,10 +273,23 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             // FIX: Convert USDC (6 decimals) to mUSD (18 decimals)
             return usdcValue * 1e12;
         } catch {
-            // Fallback to local totalAssets if Treasury call fails
-            // This is a degraded state — monitoring should alert on share price divergence
+            // FIX SOL-C01: Use cached value instead of local totalAssets fallback.
+            // If no cache exists yet, fall back to local (first-use safety).
+            uint256 cached = lastKnownGlobalAssets;
+            if (cached > 0) {
+                return cached;
+            }
             return totalAssets();
         }
+    }
+
+    /// @notice Update the cached global assets value
+    /// @dev Should be called periodically by a keeper or during deposits/withdrawals.
+    ///      This ensures the fallback value stays fresh.
+    function refreshGlobalAssets() external {
+        require(treasury != address(0), "NO_TREASURY");
+        uint256 usdcValue = ITreasury(treasury).totalValue();
+        lastKnownGlobalAssets = usdcValue * 1e12;
     }
 
     /// @notice Global share price used for both chains
@@ -309,6 +337,41 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
         uint256 totalShares = globalTotalShares();
         return shares.mulDiv(globalTotalAssets() + 1, totalShares + 10 ** _decimalsOffset(), rounding);
+    }
+
+    // ============================================================
+    //     FIX ERC-4626: maxWithdraw/maxDeposit/maxMint/maxRedeem
+    //     Must use globalTotalAssets for consistency with _convertToShares
+    // ============================================================
+
+    /// @notice FIX ERC-4626: Max withdrawable assets for owner, accounting for global share price
+    /// @dev OZ default uses local totalAssets(). We override to use globalTotalAssets-based conversion.
+    function maxWithdraw(address owner) public view override returns (uint256) {
+        if (paused()) return 0;
+        if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) return 0;
+        return _convertToAssets(balanceOf(owner), Math.Rounding.Floor);
+    }
+
+    /// @notice FIX ERC-4626: Max redeemable shares for owner
+    /// @dev Returns 0 when paused or in cooldown, otherwise owner's full balance
+    function maxRedeem(address owner) public view override returns (uint256) {
+        if (paused()) return 0;
+        if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) return 0;
+        return balanceOf(owner);
+    }
+
+    /// @notice FIX ERC-4626: Max depositable assets
+    /// @dev Returns 0 when paused, otherwise type(uint256).max (no cap)
+    function maxDeposit(address) public view override returns (uint256) {
+        if (paused()) return 0;
+        return type(uint256).max;
+    }
+
+    /// @notice FIX ERC-4626: Max mintable shares
+    /// @dev Returns 0 when paused, otherwise type(uint256).max (no cap)
+    function maxMint(address) public view override returns (uint256) {
+        if (paused()) return 0;
+        return type(uint256).max;
     }
 
     // ============================================================

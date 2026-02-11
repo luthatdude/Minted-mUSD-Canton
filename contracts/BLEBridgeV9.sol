@@ -467,9 +467,43 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                      UPGRADEABILITY
     // ============================================================
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    address public pendingImplementation;
 
-    // Storage gap for future upgrades — 13 state variables → 50 - 13 = 37
-    // FIX H-02: Corrected count to include unpauseRequestTime (13th variable)
-    uint256[37] private __gap;
+    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
+    uint256 public upgradeRequestTime;
+
+    /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
+    uint256 public constant UPGRADE_DELAY = 48 hours;
+
+    event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
+    event UpgradeCancelled(address indexed cancelledImplementation);
+
+    /// @notice Request a timelocked upgrade
+    function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(newImplementation != address(0), "ZERO_ADDRESS");
+        pendingImplementation = newImplementation;
+        upgradeRequestTime = block.timestamp;
+        emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /// @notice Cancel a pending upgrade
+    function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingImplementation;
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+        emit UpgradeCancelled(cancelled);
+    }
+
+    /// @notice UUPS upgrade authorization with 48h timelock
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
+        require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
+        pendingImplementation = address(0);
+        upgradeRequestTime = 0;
+    }
+
+    // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
+    // FIX: Adjusted from 37 to 35 after adding pendingImplementation + upgradeRequestTime
+    uint256[35] private __gap;
 }

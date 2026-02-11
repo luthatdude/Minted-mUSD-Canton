@@ -236,23 +236,21 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
         require(recipient != address(0), "INVALID_RECIPIENT");
         
-        // FIX S-H04: Check health factor unless explicitly skipped during atomic position closure
-        if (!skipHealthCheck && borrowModule != address(0)) {
-            // Only check if user has debt
-            uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
-            if (userDebt > 0) {
-                // Get current health factor - must be >= 1.0 (10000 bps) after withdrawal
-                // Note: This is a view call, actual withdrawal may change the calculation
-                // The LeverageVault must use skipHealthCheck=true only in atomic close operations
-                // where debt is being repaid in the same transaction
-                uint256 hf = IBorrowModule(borrowModule).healthFactor(user);
-                // Require significant margin (1.1x = 11000 bps) to account for the withdrawal
-                require(hf >= 11000, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
-            }
-        }
+        // FIX S-H04 + CV-M01: Moved to post-withdrawal check for accuracy
+        // Pre-check was unreliable because it estimated HF before the actual state change
+        // Post-check (below, after transfer) verifies against actual on-chain state
 
         deposits[user][token] -= amount;
         IERC20(token).safeTransfer(recipient, amount);
+
+        // FIX CV-M01: Post-withdrawal health factor check to ensure position remains healthy
+        if (!skipHealthCheck && borrowModule != address(0)) {
+            uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
+            if (userDebt > 0) {
+                uint256 postHf = IBorrowModule(borrowModule).healthFactor(user);
+                require(postHf >= 10000, "POST_WITHDRAWAL_UNDERCOLLATERALIZED");
+            }
+        }
 
         emit Withdrawn(user, token, amount);
     }

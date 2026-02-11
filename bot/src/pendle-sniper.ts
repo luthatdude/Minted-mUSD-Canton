@@ -180,9 +180,17 @@ interface SniperConfig {
 }
 
 function loadConfig(): SniperConfig {
+  // FIX: Require RPC URLs from env — no hardcoded API keys
+  if (!process.env.RPC_URL) {
+    throw new Error("FATAL: RPC_URL environment variable is required");
+  }
+  if (!process.env.WS_RPC_URL) {
+    throw new Error("FATAL: WS_RPC_URL environment variable is required");
+  }
+
   return {
-    rpcUrl: process.env.RPC_URL || "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
-    wsRpcUrl: process.env.WS_RPC_URL || "wss://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
+    rpcUrl: process.env.RPC_URL,
+    wsRpcUrl: process.env.WS_RPC_URL,
     chainId: parseInt(process.env.CHAIN_ID || "1"),
     privateKey: process.env.PRIVATE_KEY!,
 
@@ -248,8 +256,18 @@ class PendlePoolSniper {
   private targetSyAddresses: Set<string> = new Set();
   private targetUnderlyings: Set<string> = new Set();
 
-  // Prevent double-sniping the same market
+  // Prevent double-sniping the same market (bounded to prevent memory leak)
+  private static readonly MAX_SNIPED_MARKETS = 10_000;
   private snipedMarkets: Set<string> = new Set();
+
+  /** FIX: Bounded add with FIFO eviction */
+  private trackSnipedMarket(key: string): void {
+    if (this.snipedMarkets.size >= PendlePoolSniper.MAX_SNIPED_MARKETS) {
+      const oldest = this.snipedMarkets.values().next().value;
+      if (oldest) this.snipedMarkets.delete(oldest);
+    }
+    this.snipedMarkets.add(key);
+  }
 
   constructor(config: SniperConfig) {
     this.config = config;
@@ -335,13 +353,15 @@ class PendlePoolSniper {
       throw new Error("Insufficient USDC balance");
     }
 
-    // Pre-approve Pendle Router for USDC (max approval)
+    // Pre-approve Pendle Router for USDC (bounded to 2x deposit amount)
     const currentAllowance = await usdc.allowance(this.wallet.address, PENDLE_ROUTER);
     if (currentAllowance < this.config.depositAmountRaw) {
-      logger.info("Approving Pendle Router for USDC...");
-      const approveTx = await usdc.approve(PENDLE_ROUTER, ethers.MaxUint256);
+      // FIX: Bounded approval — only approve what's needed (2x for slippage headroom)
+      const approveAmount = this.config.depositAmountRaw * 2n;
+      logger.info(`Approving Pendle Router for ${ethers.formatUnits(approveAmount, usdcDecimals)} USDC (bounded)...`);
+      const approveTx = await usdc.approve(PENDLE_ROUTER, approveAmount);
       await approveTx.wait();
-      logger.info(`✅ USDC approved for Pendle Router`);
+      logger.info(`✅ USDC approved for Pendle Router (bounded: ${ethers.formatUnits(approveAmount, usdcDecimals)})`);
     } else {
       logger.info("USDC already approved for Pendle Router");
     }
@@ -532,7 +552,7 @@ class PendlePoolSniper {
       logger.info(`   Expiry: ${daysToExpiry.toFixed(0)} days`);
       logger.info(`   Amount: ${ethers.formatUnits(this.config.depositAmountRaw, 6)} USDC`);
 
-      this.snipedMarkets.add(marketKey);
+      this.trackSnipedMarket(marketKey);
 
       const result = await this.executeSnipe(marketAddr, ptAddr);
 
