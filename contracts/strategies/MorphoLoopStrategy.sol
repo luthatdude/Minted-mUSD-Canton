@@ -480,7 +480,9 @@ contract MorphoLoopStrategy is
             // This protects against paying high borrow interest with 0% supply yield
             emit LoopingSkipped(borrowRate, maxBorrowRateForProfit, "Borrow rate too high");
             
-            // Just supply the initial amount without looping
+            // FIX SOL-H02: Add forceApprove before supplyCollateral in non-profitable path
+            // Without this, supplyCollateral reverts since infinite approvals were removed (ML-M02)
+            usdc.forceApprove(address(morpho), initialAmount);
             morpho.supplyCollateral(marketParams, initialAmount, address(this), "");
             return initialAmount;
         }

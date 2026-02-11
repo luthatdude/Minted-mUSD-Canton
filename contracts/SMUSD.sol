@@ -90,7 +90,15 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // A depositor can always set their own cooldown, and depositing on behalf of someone
     // correctly locks the receiver's withdrawal window.
     // FIX: Added nonReentrant and whenNotPaused for security
+    // FIX SOL-M02: Ensure globalTotalAssets cache is populated before accepting deposits.
+    // If treasury is set but lastKnownGlobalAssets is 0 and globalTotalShares includes Canton
+    // shares, the fallback to local totalAssets() would dilute existing holders.
     function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
+        if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
+            // Force-populate the cache before first deposit when Canton shares exist
+            uint256 usdcValue = ITreasury(treasury).totalValue();
+            lastKnownGlobalAssets = usdcValue * 1e12;
+        }
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.deposit(assets, receiver);
@@ -99,7 +107,12 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
     // Matches deposit() behavior — any path that increases shares must reset cooldown.
     // FIX: Added nonReentrant and whenNotPaused for security
+    // FIX SOL-M02: Same globalTotalAssets cache guard as deposit()
     function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
+        if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
+            uint256 usdcValue = ITreasury(treasury).totalValue();
+            lastKnownGlobalAssets = usdcValue * 1e12;
+        }
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.mint(shares, receiver);

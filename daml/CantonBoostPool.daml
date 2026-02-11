@@ -273,6 +273,11 @@ template CantonBoostPoolService
         assertMsg "CANTON_OWNER_MISMATCH" (canton.owner == user)
 
         -- FIX C-B1: Consume the sMUSD to prevent re-use as qualifier
+        -- AUDIT NOTE DAML-C07: archive/recreate is an inherent DAML pattern limitation.
+        -- The operator must archive the old sMUSD CID (as signatory) and recreate it.
+        -- This is safe because: (1) operator is a protocol-controlled party, not arbitrary,
+        -- (2) the sMUSD is immediately recreated with identical fields below,
+        -- (3) user co-signed the BoostPool deposit action that triggers this flow.
         smusd <- fetch smusdCid
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)

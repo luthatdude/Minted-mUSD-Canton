@@ -899,8 +899,16 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // FIX SOL-M03: Wrap in try/catch consistent with pass 1 to prevent
+            // a single broken strategy from DoSing all rebalancing
+            uint256 currentValue;
             // slither-disable-next-line calls-loop
-            uint256 currentValue = IStrategy(strat).totalValue();
+            try IStrategy(strat).totalValue() returns (uint256 val) {
+                currentValue = val;
+            } catch {
+                // Skip broken strategy — cannot determine its current value
+                continue;
+            }
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue < targetValue) {

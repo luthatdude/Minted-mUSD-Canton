@@ -36,6 +36,11 @@ const DEFAULT_CONFIG: KeeperConfig = {
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
 };
 
+// FIX BE-H05: Validate Treasury address at startup
+if (DEFAULT_CONFIG.treasuryAddress && !ethers.isAddress(DEFAULT_CONFIG.treasuryAddress)) {
+  throw new Error(`Invalid TREASURY_ADDRESS: ${DEFAULT_CONFIG.treasuryAddress}`);
+}
+
 // ============================================================
 //                     TREASURY ABI
 // ============================================================

@@ -87,6 +87,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Global total borrows across all users
     uint256 public totalBorrows;
+
+    /// @notice FIX SOL-M01: Pre-accrual total borrows snapshot for per-user interest calculation
+    /// Prevents denominator inflation that causes systematic undercharging
+    uint256 internal totalBorrowsBeforeAccrual;
     
     /// @notice Accumulated protocol reserves (from reserve factor)
     uint256 public protocolReserves;
@@ -513,7 +517,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                 }
             }
 
-            // Update total borrows to include accrued interest
+            // FIX SOL-M01: Update total borrows to include accrued interest
+            // NOTE: totalBorrows is updated AFTER _accrueInterest() reads it for per-user
+            // proportional calculation. This is correct: _accrueGlobalInterest() runs first
+            // (updating totalBorrows here), then _accrueInterest() uses the new totalBorrows
+            // as the denominator. To prevent systematic undercharging, we cache the pre-update
+            // value in totalBorrowsBeforeAccrual for the per-user calculation.
+            totalBorrowsBeforeAccrual = totalBorrows;
             totalBorrows += interest;
             
             uint256 utilization = address(interestRateModel) != address(0)
@@ -547,18 +557,22 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // FIX P1-H2: Calculate user interest as their proportional share of global interest
         // to prevent totalBorrows divergence. User's share = (user_principal / totalBorrows) * global_interest
         // This ensures Σ user_interest ≈ global_interest by construction.
+        // FIX SOL-M01: Use totalBorrowsBeforeAccrual (cached pre-increment value) to prevent
+        // systematic undercharging. Without this, the denominator is inflated by the global
+        // interest already added in _accrueGlobalInterest(), causing sum(user_debts) < totalBorrows.
         uint256 interest;
         uint256 userTotal = pos.principal + pos.accruedInterest;
-        if (totalBorrows > 0 && userTotal > 0) {
+        uint256 denominator = totalBorrowsBeforeAccrual > 0 ? totalBorrowsBeforeAccrual : totalBorrows;
+        if (denominator > 0 && userTotal > 0) {
             if (address(interestRateModel) != address(0)) {
                 uint256 globalInterest = interestRateModel.calculateInterest(
-                    totalBorrows,
-                    totalBorrows,
+                    denominator,
+                    denominator,
                     _getTotalSupply(),
                     elapsed
                 );
                 // User's proportional share of global interest
-                interest = (globalInterest * userTotal) / totalBorrows;
+                interest = (globalInterest * userTotal) / denominator;
             } else {
                 // Fallback: use user's total debt (principal + accrued) as base
                 interest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);

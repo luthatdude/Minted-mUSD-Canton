@@ -33,6 +33,11 @@ template ComplianceRegistry
 
     ensure regulator /= operator
 
+    -- FIX DAML-C01: Add contract key so other templates can look up the registry
+    -- rather than accepting a caller-supplied CID that could be None/forged
+    key (regulator, operator) : (Party, Party)
+    maintainer key._1
+
     -- | Add a party to the blacklist. Blacklisted parties cannot send or receive mUSD.
     choice BlacklistUser : ContractId ComplianceRegistry
       with
@@ -130,11 +135,12 @@ template ComplianceRegistry
         assertMsg "REDEEMER_FROZEN" (not (Set.member redeemer frozen))
 
     -- | Check if a party is in good standing (not blacklisted, not frozen)
+    -- FIX DAML-C06: Changed controller from 'caller' to 'operator' to prevent
+    -- arbitrary parties from probing blacklist/freeze status of other users
     nonconsuming choice IsCompliant : Bool
       with
         party : Party
-        caller : Party
-      controller caller
+      controller operator
       do
         return (not (Set.member party blacklisted) && not (Set.member party frozen))
 
