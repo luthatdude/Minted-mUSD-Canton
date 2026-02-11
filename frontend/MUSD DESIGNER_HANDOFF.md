@@ -80,7 +80,7 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 - Logo left, "Enter App" button right. No other nav items.
 
 **Center (vertically and horizontally):**
-- Two-line headline in large gradient text:
+- Two-line headline in large emphasized text:
   - Line 1: "The currency for the"
   - Line 2: "Web3 Ownership Economy"
 
