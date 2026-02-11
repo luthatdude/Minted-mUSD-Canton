@@ -222,6 +222,65 @@ jobs:
         run: npm test
 
   # ============================================================
+  #  BOT SERVICE: Build & Test
+  # ============================================================
+  bot:
+    name: Bot Service Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install bot dependencies
+        working-directory: bot
+        run: npm ci || npm install
+
+      - name: TypeScript compile check
+        working-directory: bot
+        run: npx tsc --noEmit
+
+      - name: Run bot tests
+        working-directory: bot
+        run: npm run test:ci
+
+      - name: Upload bot coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-coverage
+          path: bot/coverage/
+          retention-days: 14
+
+  # ============================================================
+  #  CODEQL: TypeScript Static Analysis (SAST)
+  # ============================================================
+  codeql:
+    name: CodeQL Security Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          config: |
+            paths:
+              - bot/src
+              - relay
+              - scripts
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
+
+  # ============================================================
   #  DOCKER: Build & Scan Relay Image
   # ============================================================
   docker:

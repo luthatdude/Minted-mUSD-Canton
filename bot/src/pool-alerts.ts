@@ -225,9 +225,18 @@ class PoolAlertBot {
     this.seenEvents.add(key);
   }
 
+  // FIX INFRA-MED: Guard against stacking WebSocket reconnections
+  private isReconnecting = false;
+
   constructor(config: AlertConfig) {
     this.config = config;
-    this.httpProvider = new ethers.JsonRpcProvider(config.rpcUrl);
+    // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
+    const fetchReq = new ethers.FetchRequest(config.rpcUrl);
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    this.httpProvider = new ethers.JsonRpcProvider(fetchReq, undefined, {
+      staticNetwork: true,
+      batchMaxCount: 1,
+    });
   }
 
   async start(): Promise<void> {
@@ -265,8 +274,17 @@ class PoolAlertBot {
   // ─────────────────────────────────────────────────────────────────────
 
   private async startWsListeners(): Promise<void> {
+    // FIX INFRA-MED: Prevent stacking concurrent reconnect attempts
+    if (this.isReconnecting) return;
+    this.isReconnecting = true;
     try {
+      // Destroy old provider before creating new one
+      if (this.wsProvider) {
+        try { this.wsProvider.removeAllListeners(); await this.wsProvider.destroy(); } catch { /* ignore */ }
+        this.wsProvider = null;
+      }
       this.wsProvider = new ethers.WebSocketProvider(this.config.wsRpcUrl);
+      this.isReconnecting = false;
 
       // Pendle
       if (this.config.watchPendle) {
@@ -317,10 +335,12 @@ class PoolAlertBot {
         logger.info(`[WS] Subscribed: Morpho Blue CreateMarket`);
       }
 
-      // Reconnect on error
+      // Reconnect on error with guard
       this.wsProvider.on("error", (err) => {
-        logger.warn(`WebSocket error: ${err.message} — continuing with polling only`);
+        logger.warn(`WebSocket error: ${err.message} — reconnecting...`);
+        this.isReconnecting = false; // Allow reconnect
         this.wsProvider = null;
+        setTimeout(() => this.startWsListeners(), 5000);
       });
 
     } catch (err: any) {
