@@ -14,8 +14,8 @@
 secrets:
   canton_token:
     file: ./secrets/canton_token
-  relayer_private_key:
-    file: ./secrets/relayer_private_key
+  bridge_private_key:
+    file: ./secrets/bridge_private_key
   validator1_aws_access_key:
     file: ./secrets/validator1_aws_access_key
   validator1_aws_secret_key:
@@ -61,9 +61,10 @@ services:
       - HEALTH_BIND_HOST=127.0.0.1
       - NODE_ENV=production
     # FIX C-11: Mount secrets instead of env vars for sensitive values
+    # FIX BE-L03: Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
     secrets:
       - canton_token
-      - relayer_private_key
+      - bridge_private_key
     # FIX M-22: Only expose health port to localhost
     ports:
       - "127.0.0.1:8080:8080"
@@ -117,9 +118,10 @@ services:
       - YIELD_SYNC_INTERVAL_MS=${YIELD_SYNC_INTERVAL_MS:-3600000}
       - MIN_YIELD_THRESHOLD=${MIN_YIELD_THRESHOLD:-1000000000}
       - NODE_ENV=production
+    # FIX BE-L03: Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
     secrets:
       - canton_token
-      - relayer_private_key
+      - bridge_private_key
     restart: unless-stopped
     read_only: true
     tmpfs:

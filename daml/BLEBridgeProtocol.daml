@@ -108,12 +108,14 @@ template BridgeOutAttestation
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
+        -- FIX DAML-C09: Include payload hash (attestationId) to bind signature to full payload
         sig <- create BridgeOutSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+          payloadHash = payload.attestationId
         
         -- FIX D-02: Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
@@ -138,9 +140,12 @@ template BridgeOutAttestation
         let sigValidators = map (.validator) sigs
         let sigNonces = map (.nonce) sigs
 
-        -- Enforce all sigs belong to this attestation (by nonce, not contract ID)
+        -- Enforce all sigs belong to this attestation (by nonce AND payload hash)
         -- Contract ID changes on each BridgeOut_Sign, but nonce stays constant
+        -- FIX DAML-C09: Also verify payload hash to bind signatures to full payload
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
+        let sigPayloadHashes = map (\s -> s.payloadHash) sigs
+        assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -158,6 +163,7 @@ template BridgeOutSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
+    payloadHash : Text  -- FIX DAML-C09: Bind signature to full payload (attestationId)
   where
     signatory validator
     observer aggregator

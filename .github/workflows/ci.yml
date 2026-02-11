@@ -18,15 +18,15 @@ jobs:
     name: Solidity Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: solidity-coverage
           path: coverage/
@@ -87,15 +87,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: solidity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -122,7 +122,7 @@ jobs:
 
       # Slither static analysis
       - name: Run Slither
-        uses: crytic/slither-action@v0.4.0
+        uses: crytic/slither-action@f197989dea5b53e986d0f88c60a034ddd77ec9a8 # v0.4.0
         id: slither
         with:
           node-version: "20"
@@ -146,7 +146,7 @@ jobs:
 
       - name: Upload Slither SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@45cbd0c69e560cd9e7cd7f8c32362050c9b7ded2 # v4
         with:
           sarif_file: results.sarif
         continue-on-error: true  # SARIF upload can fail on forks
@@ -161,7 +161,7 @@ jobs:
       DAML_SDK_VERSION: "2.10.3"
       DAML_HOME: /home/runner/.daml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install DAML SDK ${{ env.DAML_SDK_VERSION }}
         run: |
@@ -201,9 +201,9 @@ jobs:
     name: Relay Service Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"
@@ -228,9 +228,9 @@ jobs:
     name: Bot Service Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
@@ -248,7 +248,7 @@ jobs:
 
       - name: Upload bot coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bot-coverage
           path: bot/coverage/
@@ -263,10 +263,10 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@b5ebac6f4c00c8ccddb7cdcd45fdb248329f808a # v3
         with:
           languages: javascript-typescript
           config: |
@@ -276,7 +276,7 @@ jobs:
               - scripts
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@b5ebac6f4c00c8ccddb7cdcd45fdb248329f808a # v3
         with:
           category: "/language:javascript-typescript"
 
@@ -290,13 +290,13 @@ jobs:
     # Skip on PRs - Dockerfile changes need to be on main first
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build relay image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@601a80b39c9405e50806ae38af30926f9d957c47 # v6
         with:
           context: relay
           push: false
@@ -306,7 +306,7 @@ jobs:
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
         with:
           image-ref: musd-relay:ci
           format: table
@@ -323,7 +323,7 @@ jobs:
     name: K8s Manifest Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install kubeconform
         run: |
@@ -345,9 +345,9 @@ jobs:
     name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"

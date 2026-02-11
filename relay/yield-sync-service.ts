@@ -229,6 +229,14 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
+    // FIX BE-H04: Validate Ethereum addresses before use
+    if (!config.treasuryAddress || !ethers.isAddress(config.treasuryAddress)) {
+      throw new Error(`Invalid TREASURY_ADDRESS: ${config.treasuryAddress}`);
+    }
+    if (!config.smusdAddress || !ethers.isAddress(config.smusdAddress)) {
+      throw new Error(`Invalid SMUSD_ADDRESS: ${config.smusdAddress}`);
+    }
+
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
     this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
@@ -385,6 +393,19 @@ class YieldSyncService {
 
     const sharePriceIncrease = globalSharePrice - this.lastGlobalSharePrice;
     console.log(`[YieldSync] Share price increase: ${sharePriceIncrease}`);
+
+    // FIX BE-C02: Sanity bound — reject share price changes > 10% per epoch
+    // Prevents relay compromise from pushing catastrophic price updates
+    // (DAML-side SyncGlobalSharePrice has its own 10% decrease cap + quorum)
+    if (this.lastGlobalSharePrice > 0n) {
+      const maxIncreaseBps = 1000n; // 10% max increase per epoch
+      const maxAllowed = this.lastGlobalSharePrice + (this.lastGlobalSharePrice * maxIncreaseBps / 10000n);
+      if (globalSharePrice > maxAllowed) {
+        console.error(`[YieldSync] ❌ REJECTED: Share price increase exceeds 10% cap`);
+        console.error(`[YieldSync]   last=${this.lastGlobalSharePrice}, new=${globalSharePrice}, max=${maxAllowed}`);
+        return;
+      }
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // STEP 3: Sync global share price to Canton

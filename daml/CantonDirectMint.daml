@@ -197,17 +197,17 @@ template CantonMUSD
 
     -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
     -- FIX INSTITUTIONAL: Added compliance check for transfers (anti-blacklist/freeze)
+    -- FIX DAML-C01: complianceRegistryCid is now REQUIRED (not Optional) to prevent bypass
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- Compliance check: verify sender and receiver are not blacklisted/frozen
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateTransfer with
-            sender = owner
-            receiver = newOwner
+        -- FIX DAML-C01: Compliance check is mandatory — caller must provide valid CID
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create CantonMUSDTransferProposal with
           musd = this
           newOwner
@@ -234,6 +234,11 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
+    -- AUDIT NOTE DAML-C02: Burn is controller issuer only, but this is safe because:
+    -- 1. Both issuer AND owner are signatories on CantonMUSD — owner consented at creation
+    -- 2. Protocol services (staking, lending, redemption, loop) exercise burns internally
+    -- 3. Making dual-consent would break all protocol burns (CantonSMUSD, CantonLending, etc.)
+    -- 4. Burn is rate-limited by BurnRateLimiter (DAML-R05) as a separate backstop
     choice CantonMUSD_Burn : ()
       controller issuer
       do

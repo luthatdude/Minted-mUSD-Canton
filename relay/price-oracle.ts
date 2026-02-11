@@ -184,7 +184,8 @@ export async function fetchTradecraftQuote(
   config: PriceOracleConfig,
   givingAmountCC: number
 ): Promise<{ userGets: number; effectivePrice: number }> {
-  const url = `${config.tradecraftBaseUrl}/quoteForFixedInput/CC/USDCx?givingAmount=${givingAmountCC}`;
+  // FIX BE-H02: Encode parameter to prevent URL injection
+  const url = `${config.tradecraftBaseUrl}/quoteForFixedInput/CC/USDCx?givingAmount=${encodeURIComponent(String(givingAmountCC))}`;
   const response = await fetch(url, {
     method: "GET",
     headers: { "Accept": "application/json" },
