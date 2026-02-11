@@ -147,6 +147,8 @@ export class LendingKeeperBot {
   private oracle: PriceOracleService;
   private running = false;
   private lastLiquidationTime = 0;
+  private consecutiveFailures = 0;
+  private readonly MAX_BACKOFF_MS = 300000; // 5 minutes max backoff
   private stats: KeeperStats = {
     totalScans: 0,
     totalLiquidations: 0,
@@ -222,19 +224,31 @@ export class LendingKeeperBot {
   /**
    * Get the current price for a collateral type.
    * Uses the oracle's last known prices.
+   * FIX LK-07: Guard against price=0 which causes infinite seize amount
    */
   private getPrice(collateralType: string): number {
+    let price: number;
     switch (collateralType) {
       case "CTN_Coin":
-        return this.oracle.getLastCTNPrice();
+        price = this.oracle.getLastCTNPrice();
+        break;
       case "CTN_USDC":
       case "CTN_USDCx":
-        return 1.0;  // Stablecoins hardcoded
+        price = 1.0;  // Stablecoins hardcoded
+        break;
       case "CTN_SMUSD":
-        return this.config.smusdPrice; // FIX LK-03: Configurable via SMUSD_PRICE env var
+        price = this.config.smusdPrice;
+        break;
       default:
         throw new Error(`Unknown collateral type: ${collateralType}`);
     }
+    
+    // FIX LK-07: Reject zero or negative prices to prevent infinite seize
+    if (!price || price <= 0 || isNaN(price)) {
+      throw new Error(`Invalid price for ${collateralType}: ${price}`);
+    }
+    
+    return price;
   }
 
   /**
@@ -262,15 +276,29 @@ export class LendingKeeperBot {
 
   /**
    * Calculate total debt including projected interest since last accrual
+   * FIX LK-05: Guard against NaN from invalid date parsing
    */
   private calculateTotalDebt(position: DebtPosition): number {
     const now = Date.now() / 1000;
-    const lastAccrual = new Date(position.lastAccrualTime).getTime() / 1000;
+    const lastAccrualMs = new Date(position.lastAccrualTime).getTime();
+    
+    // FIX LK-05: NaN guard — if date parsing fails, use accrued interest only
+    if (isNaN(lastAccrualMs)) {
+      console.warn(`[Keeper] Invalid lastAccrualTime for ${position.borrower}: "${position.lastAccrualTime}"`);
+      return position.principalDebt + position.accruedInterest;
+    }
+    
+    const lastAccrual = lastAccrualMs / 1000;
     const elapsed = Math.max(0, now - lastAccrual);
     const yearSeconds = 31536000;
 
     const newInterest =
       position.principalDebt * position.interestRateBps * elapsed / (10000 * yearSeconds);
+
+    // FIX LK-05: Final NaN guard on computed interest
+    if (isNaN(newInterest)) {
+      return position.principalDebt + position.accruedInterest;
+    }
 
     return position.principalDebt + position.accruedInterest + newInterest;
   }
@@ -630,9 +658,11 @@ export class LendingKeeperBot {
     while (this.running) {
       try {
         this.stats.totalScans++;
-        this.stats.lastScan = new Date();
 
         const candidates = await this.scanPositions();
+        
+        // FIX LK-08: Update lastScan only AFTER successful scan
+        this.stats.lastScan = new Date();
         this.stats.activeCandidates = candidates.length;
 
         if (candidates.length > 0) {
@@ -644,8 +674,21 @@ export class LendingKeeperBot {
             await this.executeLiquidation(candidate);
           }
         }
+        
+        // FIX LK-06: Reset backoff on success
+        this.consecutiveFailures = 0;
       } catch (err) {
         console.error("[Keeper] Scan cycle failed:", (err as Error).message);
+        
+        // FIX LK-06: Exponential backoff on consecutive failures
+        this.consecutiveFailures++;
+        const backoffMs = Math.min(
+          this.config.pollIntervalMs * Math.pow(2, this.consecutiveFailures),
+          this.MAX_BACKOFF_MS
+        );
+        console.warn(`[Keeper] Consecutive failures: ${this.consecutiveFailures}, backing off ${backoffMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue; // Skip the normal poll interval wait
       }
 
       await new Promise((resolve) => setTimeout(resolve, this.config.pollIntervalMs));

@@ -49,6 +49,8 @@ contract InterestRateModel is AccessControl {
 
     uint256 private constant BPS = 10000;
     uint256 private constant SECONDS_PER_YEAR = 365 days;
+    /// @dev 1e18 scaling factor to avoid integer truncation in per-second rates
+    uint256 private constant WAD = 1e18;
 
     // ============================================================
     //                  EVENTS
@@ -68,7 +70,10 @@ contract InterestRateModel is AccessControl {
 
     error InvalidParameter();
     error KinkTooHigh();
+    error KinkTooLow();
     error ReserveFactorTooHigh();
+    error BaseRateTooHigh();
+    error MultiplierZero();
 
     // ============================================================
     //                  CONSTRUCTOR
@@ -77,6 +82,7 @@ contract InterestRateModel is AccessControl {
     /// @notice Initialize with default parameters
     /// @param _admin The admin address for rate updates
     constructor(address _admin) {
+        require(_admin != address(0), "INVALID_ADMIN");
         // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
         // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
         baseRateBps = 200;           // 2% base rate
@@ -108,17 +114,19 @@ contract InterestRateModel is AccessControl {
         return (totalBorrows * BPS) / totalSupply;
     }
 
-    /// @notice Calculate borrow rate per second in BPS
+    /// @notice Calculate borrow rate per second, scaled by WAD (1e18)
     /// @param totalBorrows Total amount borrowed
     /// @param totalSupply Total amount supplied
-    /// @return Borrow rate per second in BPS (multiply by principal and seconds)
+    /// @return Borrow rate per second in BPS * WAD / SECONDS_PER_YEAR
+    /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
+    ///      Callers should divide the accumulated result by WAD after multiplying by seconds.
     function getBorrowRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
         public
         view
         returns (uint256)
     {
         uint256 annualRate = getBorrowRateAnnual(totalBorrows, totalSupply);
-        return annualRate / SECONDS_PER_YEAR;
+        return (annualRate * WAD) / SECONDS_PER_YEAR;
     }
 
     /// @notice Calculate annual borrow rate in BPS
@@ -143,18 +151,19 @@ contract InterestRateModel is AccessControl {
         }
     }
 
-    /// @notice Calculate supply rate per second in BPS
+    /// @notice Calculate supply rate per second, scaled by WAD (1e18)
     /// @dev SupplyRate = BorrowRate * Utilization * (1 - ReserveFactor)
     /// @param totalBorrows Total amount borrowed
     /// @param totalSupply Total amount supplied
-    /// @return Supply rate per second in BPS
+    /// @return Supply rate per second in BPS * WAD / SECONDS_PER_YEAR
+    /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
     function getSupplyRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
         public
         view
         returns (uint256)
     {
         uint256 annualRate = getSupplyRateAnnual(totalBorrows, totalSupply);
-        return annualRate / SECONDS_PER_YEAR;
+        return (annualRate * WAD) / SECONDS_PER_YEAR;
     }
 
     /// @notice Calculate annual supply rate in BPS
@@ -251,7 +260,11 @@ contract InterestRateModel is AccessControl {
         uint256 _reserveFactorBps
     ) external onlyRole(RATE_ADMIN_ROLE) {
         // Validate parameters
+        if (_baseRateBps > 2000) revert BaseRateTooHigh();           // Max 20% base rate
         if (_kinkBps > BPS) revert KinkTooHigh();
+        if (_kinkBps < 1000) revert KinkTooLow();                   // Min 10% kink
+        if (_multiplierBps == 0) revert MultiplierZero();
+        if (_jumpMultiplierBps == 0) revert MultiplierZero();
         if (_reserveFactorBps > 5000) revert ReserveFactorTooHigh(); // Max 50% to reserves
         
         // Sanity check: max annual rate at 100% util should be < 100%
