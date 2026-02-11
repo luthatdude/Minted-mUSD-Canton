@@ -28,19 +28,21 @@ testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
 
 -- | Create a governance proof for tests
-createGovProof : Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator actionType desc = do
+-- FIX CRIT-01: Now requires a proposer (governor) party separate from operator
+createGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator proposer actionType desc = do
   now <- getTime
-  submit operator do
+  submitMulti [operator, proposer] [] do
     createCmd GovernanceActionLog with
       operator
+      proposer
       proposalId = "test-" <> desc
       actionType
       description = desc
       payload = ""
       payloadHash = ""
-      approvers = [operator]
-      executedBy = operator
+      approvers = [proposer]
+      executedBy = proposer
       executedAt = now
 
 -- | Standard test setup: operator, user, liquidator, price feeds, lending service
@@ -48,6 +50,7 @@ data TestSetup = TestSetup with
   operator   : Party
   user       : Party
   liquidator : Party
+  governor   : Party
   serviceCid : ContractId CantonLendingService
   ctnFeedCid : ContractId CantonPriceFeed
   usdcFeedCid : ContractId CantonPriceFeed
@@ -57,6 +60,7 @@ setupTest = do
   operator <- allocateParty "Operator"
   user <- allocateParty "User"
   liquidator <- allocateParty "Liquidator"
+  governor <- allocateParty "Governor"
 
   -- Set ledger time to 2026 so price feeds aren't stale
   setTime (datetime 2026 Feb 6 12 0 0)
@@ -120,7 +124,7 @@ testPriceFeedUpdate = do
   -- FIX M-4: Advance time past the 10-second update cooldown
   passTime (seconds 15)
   -- Update CTN price to $0.20 (within 50% cap)
-  govProof <- createGovProof setup.operator ParameterUpdate "price-update"
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "price-update"
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.20
@@ -134,7 +138,7 @@ testPriceFeedMovementCap : Script ()
 testPriceFeedMovementCap = do
   setup <- setupTest
   -- Try to move price >50% — should fail
-  govProof <- createGovProof setup.operator ParameterUpdate "price-cap"
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "price-cap"
   submitMustFail setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.30       -- 76% increase from 0.17 — exceeds 50% cap
@@ -148,7 +152,7 @@ testPriceFeedEmergencyOverride = do
   -- FIX M-6: Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
   -- Emergency update bypasses movement cap
-  emergProof <- createGovProof setup.operator EmergencyPause "emergency-override"
+  emergProof <- createGovProof setup.operator setup.governor EmergencyPause "emergency-override"
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.05       -- 70% drop — would fail normal update
@@ -258,7 +262,7 @@ testDepositFailsWhenPaused : Script ()
 testDepositFailsWhenPaused = do
   setup <- setupTest
   -- Pause the service
-  pauseProof <- createGovProof setup.operator EmergencyPause "pause"
+  pauseProof <- createGovProof setup.operator setup.governor EmergencyPause "pause"
   pausedServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
@@ -474,7 +478,7 @@ testLiquidation = do
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
   -- FIX M-6: Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
-  emergProof <- createGovProof setup.operator EmergencyPause "ctn-crash"
+  emergProof <- createGovProof setup.operator setup.governor EmergencyPause "ctn-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
@@ -765,7 +769,7 @@ testUpdateCollateralConfig : Script ()
 testUpdateCollateralConfig = do
   setup <- setupTest
   -- Update CTN config to lower LTV
-  govProof <- createGovProof setup.operator ParameterUpdate "update-config"
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "update-config"
   newServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_UpdateConfig with
       newConfig = defaultCTNConfig with collateralFactorBps = 5000
@@ -780,7 +784,7 @@ testUpdateCollateralConfig = do
 testUpdateInterestRate : Script ()
 testUpdateInterestRate = do
   setup <- setupTest
-  govProof <- createGovProof setup.operator ParameterUpdate "update-rate"
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "update-rate"
   newServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_UpdateRate with
       newRateBps = 800
@@ -792,7 +796,7 @@ testUpdateInterestRate = do
 testPauseUnpause : Script ()
 testPauseUnpause = do
   setup <- setupTest
-  pauseProof <- createGovProof setup.operator EmergencyPause "pause-test"
+  pauseProof <- createGovProof setup.operator setup.governor EmergencyPause "pause-test"
   pausedSvc <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
@@ -800,7 +804,7 @@ testPauseUnpause = do
   svc <- queryContractId setup.operator pausedSvc
   assertMsg "Service paused" ((fromSome svc).paused)
 
-  unpauseProof <- createGovProof setup.operator EmergencyPause "unpause-test"
+  unpauseProof <- createGovProof setup.operator setup.governor EmergencyPause "unpause-test"
   unpausedSvc <- submit setup.operator do
     exerciseCmd pausedSvc Lending_SetPaused with
       newPaused = False
@@ -830,7 +834,7 @@ testWithdrawReserves = do
       complianceRegistryCid = None
       observers = [setup.user]
 
-  govProof <- createGovProof setup.operator ParameterUpdate "withdraw-reserves"
+  govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "withdraw-reserves"
   (newSvcCid, reserveMusdCid) <- submit setup.operator do
     exerciseCmd reserveServiceCid Lending_WithdrawReserves with
       amount = 50.0

@@ -79,6 +79,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
+    event GlobalAssetsRefreshed(uint256 newGlobalAssets, uint256 usdcValue);
 
     constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -286,10 +287,15 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @notice Update the cached global assets value
     /// @dev Should be called periodically by a keeper or during deposits/withdrawals.
     ///      This ensures the fallback value stays fresh.
-    function refreshGlobalAssets() external {
+    /// @dev FIX S-M01: Guard against calling when no shares exist (division-by-zero in downstream callers)
+    /// @dev FIX S-M04: Restricted to YIELD_MANAGER_ROLE to prevent cache manipulation attacks
+    function refreshGlobalAssets() external onlyRole(YIELD_MANAGER_ROLE) {
         require(treasury != address(0), "NO_TREASURY");
+        require(globalTotalShares() > 0, "NO_SHARES_EXIST");
         uint256 usdcValue = ITreasury(treasury).totalValue();
-        lastKnownGlobalAssets = usdcValue * 1e12;
+        uint256 newGlobalAssets = usdcValue * 1e12;
+        lastKnownGlobalAssets = newGlobalAssets;
+        emit GlobalAssetsRefreshed(newGlobalAssets, usdcValue);
     }
 
     /// @notice Global share price used for both chains

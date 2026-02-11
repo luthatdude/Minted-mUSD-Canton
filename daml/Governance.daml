@@ -202,8 +202,10 @@ template MultiSigProposal
             assertMsg "TIMELOCK_NOT_ENDED" (now >= timelockEnd)
         
         -- Log the execution
+        -- FIX CRIT-01: Include proposer from this proposal to prevent operator forgery
         create GovernanceActionLog with
           operator
+          proposer             -- FIX CRIT-01: proposer's authority flows from MultiSigProposal
           proposalId
           actionType
           description
@@ -319,9 +321,14 @@ template MinterRegistry
 
 -- | GovernanceActionLog - Immutable record of executed governance actions.
 -- Provides permanent audit trail for compliance.
+-- FIX CRIT-01: Added `proposer` as co-signatory to prevent operator forgery.
+-- The operator cannot create this template directly via createCmd because
+-- they lack the proposer's authority. Only Proposal_Execute has the
+-- authority chain: MultiSigProposal(operator+proposer) → GovernanceActionLog.
 template GovernanceActionLog
   with
     operator : Party
+    proposer : Party              -- FIX CRIT-01: The governor who proposed (prevents forgery)
     proposalId : Text
     actionType : ActionType
     description : Text
@@ -331,7 +338,7 @@ template GovernanceActionLog
     executedBy : Party
     executedAt : Time
   where
-    signatory operator, executedBy
+    signatory operator, proposer  -- FIX CRIT-01: proposer must be different from operator
 
     -- FIX DAML-S1: Consuming choice to archive proof after use.
     -- Prevents governance proof replay — each approval is single-use.

@@ -31,7 +31,7 @@ import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(.
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
-import Governance (GovernanceActionLog(..), ActionType(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
@@ -1171,7 +1171,8 @@ template CantonLendingService
       do
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX HIGH-01: Use TreasuryWithdrawal (not ParameterUpdate) for reserve withdrawals
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator

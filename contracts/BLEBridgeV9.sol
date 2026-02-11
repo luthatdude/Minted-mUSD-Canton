@@ -10,7 +10,7 @@
 // ║    - dailyMintLimit, dailyMinted, dailyBurned, lastReset                     ║
 // ║    - navOracle, maxNavDeviationBps, navOracleEnabled, usedAttestationIds     ║
 // ║                                                                               ║
-// ║  V9 Storage Layout (12 vars + __gap[38] = 50 slots):                         ║
+// ║  V9 Storage Layout (14 vars + __gap[35] = 49 slots):                         ║
 // ║    - musdToken, attestedCantonAssets, collateralRatioBps, currentNonce       ║
 // ║    - minSignatures, lastAttestationTime, lastRatioChangeTime                 ║
 // ║    - dailyCapIncreaseLimit, dailyCapIncreased, dailyCapDecreased             ║
@@ -241,11 +241,21 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Emergency reduction of supply cap
+    /// @dev FIX BB-M01: In normal mode, cap cannot go below totalSupply.
+    ///      In critical emergencies (exploit, compromised minter), admin can force
+    ///      cap below totalSupply to halt ALL new minting immediately.
+    ///      Requires DEFAULT_ADMIN_ROLE (not just EMERGENCY_ROLE) for sub-supply caps.
     function emergencyReduceCap(uint256 _newCap, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(bytes(_reason).length > 0, "REASON_REQUIRED");
         uint256 oldCap = musdToken.supplyCap();
         require(_newCap < oldCap, "NOT_A_REDUCTION");
-        require(_newCap >= musdToken.totalSupply(), "CAP_BELOW_SUPPLY");
+        
+        // FIX BB-M01: Allow going below totalSupply only with admin authority
+        uint256 currentSupply = musdToken.totalSupply();
+        if (_newCap < currentSupply) {
+            // Sub-supply cap requires admin (higher privilege than emergency)
+            require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "SUB_SUPPLY_CAP_REQUIRES_ADMIN");
+        }
 
         musdToken.setSupplyCap(_newCap);
         emit EmergencyCapReduction(oldCap, _newCap, _reason);
