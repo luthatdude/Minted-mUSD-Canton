@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: musd-relay
+  namespace: musd
+  labels:
+    app: musd-relay
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: musd-relay
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - musd
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: musd-canton
+  namespace: musd
+  labels:
+    app: canton-participant
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: canton-participant
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - musd

@@ -599,7 +599,8 @@ template Vault
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         create this with config = newConfig
 
@@ -833,7 +834,8 @@ template VaultManager
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- fetch governanceProofCid
+        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         create this with defaultConfig = newConfig
 

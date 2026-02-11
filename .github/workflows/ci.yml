@@ -216,6 +216,11 @@ jobs:
         working-directory: relay
         run: npx tsc --noEmit
 
+      # FIX TEST-F01: Run relay security tests (secp256k1 validation, DER parsing, EIP-2 normalization)
+      - name: Run relay tests
+        working-directory: relay
+        run: npm test
+
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
   # ============================================================
