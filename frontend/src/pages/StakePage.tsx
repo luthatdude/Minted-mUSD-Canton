@@ -4,7 +4,7 @@ import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
-import { formatToken, formatUSD } from "@/lib/format";
+import { formatToken } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
@@ -91,21 +91,17 @@ export function StakePage() {
       ? (Number(stats.totalAssets) / Number(stats.totalSupply)).toFixed(4)
       : "1.0000";
 
+  // 10-day cooldown = 864000 seconds
+  const COOLDOWN_DURATION = 864000;
   const cooldownSeconds = Number(stats.cooldownRemaining);
-  const cooldownHours = cooldownSeconds / 3600;
-  const cooldownPct = Math.max(0, Math.min(100, ((86400 - cooldownSeconds) / 86400) * 100));
+  const cooldownDays = cooldownSeconds / 86400;
+  const cooldownPct = Math.max(0, Math.min(100, ((COOLDOWN_DURATION - cooldownSeconds) / COOLDOWN_DURATION) * 100));
 
   // Estimate APY from exchange rate drift
   const sharePrice = stats.totalSupply > 0n
     ? Number(stats.totalAssets) / Number(stats.totalSupply)
     : 1;
   const estimatedApy = Math.max(0, (sharePrice - 1) * 100);
-
-  // User's position value in mUSD
-  const positionValue = stats.smusdBal > 0n && stats.totalSupply > 0n
-    ? (stats.smusdBal * stats.totalAssets) / stats.totalSupply
-    : 0n;
-  const yieldEarned = positionValue > stats.smusdBal ? positionValue - stats.smusdBal : 0n;
 
   if (!isConnected) {
     return <WalletConnector mode="ethereum" />;
@@ -114,39 +110,16 @@ export function StakePage() {
   return (
     <div className="mx-auto max-w-3xl space-y-8">
       <PageHeader
-        title="Stake & Earn"
-        subtitle="Stake mUSD into the ERC-4626 vault to receive smUSD and earn protocol yield"
+        title="Stake mUSD"
+        subtitle="Stake mUSD to receive smUSD and earn AI-optimized yield"
         badge="ERC-4626"
         badgeColor="emerald"
       />
 
-      {/* Yield Overview Dashboard */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Key Stats */}
+      <div className="grid gap-4 sm:grid-cols-2">
         <StatCard
-          label="Share Price"
-          value={`${exchangeRate} mUSD`}
-          subValue="per smUSD"
-          color="green"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Estimated APY"
-          value={`${estimatedApy.toFixed(2)}%`}
-          color="green"
-          trend={estimatedApy > 0 ? "up" : "neutral"}
-          trendValue={estimatedApy > 0 ? "Earning" : "Base"}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Total Vault TVL"
+          label="Total Staked"
           value={formatToken(stats.totalAssets) + " mUSD"}
           color="blue"
           icon={
@@ -156,105 +129,20 @@ export function StakePage() {
           }
         />
         <StatCard
-          label="Total smUSD"
-          value={formatToken(stats.totalSupply)}
-          color="purple"
+          label="Current APY"
+          value={`${estimatedApy.toFixed(2)}%`}
+          color="green"
+          trend={estimatedApy > 0 ? "up" : "neutral"}
+          trendValue={estimatedApy > 0 ? "Earning" : "Base"}
           icon={
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
             </svg>
           }
         />
       </div>
 
-      {/* Your Position Card */}
-      {stats.smusdBal > 0n && (
-        <div className="card-gradient-border overflow-hidden">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-500">
-              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-white">Your Position</h2>
-              <p className="text-sm text-gray-400">Staking performance overview</p>
-            </div>
-          </div>
-
-          <div className="grid gap-6 sm:grid-cols-3">
-            <div className="space-y-1">
-              <p className="text-sm text-gray-400">smUSD Balance</p>
-              <p className="text-2xl font-bold text-white">{formatToken(stats.smusdBal)}</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm text-gray-400">Position Value</p>
-              <p className="text-2xl font-bold text-emerald-400">{formatToken(positionValue)} mUSD</p>
-            </div>
-            <div className="space-y-1">
-              <p className="text-sm text-gray-400">Yield Earned</p>
-              <p className="text-2xl font-bold text-green-400">+{formatToken(yieldEarned)} mUSD</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Cooldown Timer */}
-      {!stats.canWithdraw && stats.cooldownRemaining > 0n && (
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-yellow-500/20">
-                <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <p className="font-medium text-white">Withdrawal Cooldown</p>
-                <p className="text-sm text-gray-400">
-                  {cooldownHours >= 1
-                    ? `${cooldownHours.toFixed(1)} hours remaining`
-                    : `${Math.ceil(cooldownSeconds / 60)} minutes remaining`}
-                </p>
-              </div>
-            </div>
-            <span className="badge-warning">{Math.round(cooldownPct)}% Complete</span>
-          </div>
-          <div className="progress">
-            <div
-              className="progress-bar-emerald h-full rounded-full transition-all duration-1000"
-              style={{ width: `${cooldownPct}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Balance Cards */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard
-          label="Your mUSD Balance"
-          value={formatToken(stats.musdBal)}
-          color="blue"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Your smUSD Balance"
-          value={formatToken(stats.smusdBal)}
-          color="purple"
-          subValue={stats.smusdBal > 0n ? `≈ ${formatToken(positionValue)} mUSD` : undefined}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
-            </svg>
-          }
-        />
-      </div>
-
-      {/* Main Action Card */}
+      {/* Stake/Unstake Widget */}
       <div className="card-gradient-border overflow-hidden">
         {/* Tabs */}
         <div className="flex border-b border-white/10">
@@ -294,6 +182,18 @@ export function StakePage() {
 
         {/* Form Content */}
         <div className="space-y-6 p-6">
+          {/* Balance Cards */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+              <p className="text-sm text-gray-400 mb-1">Your mUSD Balance</p>
+              <p className="text-xl font-bold text-white">{formatToken(stats.musdBal)}</p>
+            </div>
+            <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+              <p className="text-sm text-gray-400 mb-1">Your smUSD Balance</p>
+              <p className="text-xl font-bold text-emerald-400">{formatToken(stats.smusdBal)}</p>
+            </div>
+          </div>
+
           {/* Input */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -372,22 +272,39 @@ export function StakePage() {
               <div className="divider my-2" />
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-400">Cooldown Period</span>
-                <span className="text-gray-300">24 hours</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-400">Withdrawal Fee</span>
-                <span className="text-emerald-400 font-medium">None</span>
+                <span className="text-gray-300">10 days</span>
               </div>
             </div>
           )}
 
-          {/* Unstake Warning */}
+          {/* Unstake Cooldown Warning */}
           {tab === "unstake" && !stats.canWithdraw && stats.cooldownRemaining > 0n && (
             <div className="alert-warning flex items-center gap-3">
               <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <span className="text-sm">Cooldown active — {cooldownHours.toFixed(1)}h remaining before you can withdraw.</span>
+              <span className="text-sm">Cooldown active — {cooldownDays.toFixed(1)} days remaining before you can withdraw.</span>
+            </div>
+          )}
+
+          {/* Cooldown Progress */}
+          {!stats.canWithdraw && stats.cooldownRemaining > 0n && (
+            <div className="rounded-xl bg-surface-800/30 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="font-medium text-white">10-Day Cooldown</span>
+                </div>
+                <span className="text-sm text-gray-400">{Math.round(cooldownPct)}% Complete</span>
+              </div>
+              <div className="progress">
+                <div
+                  className="progress-bar-emerald h-full rounded-full transition-all duration-1000"
+                  style={{ width: `${cooldownPct}%` }}
+                />
+              </div>
             </div>
           )}
 
@@ -408,7 +325,7 @@ export function StakePage() {
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
                   </svg>
-                  Stake mUSD
+                  Stake mUSD → Receive smUSD
                 </>
               ) : (
                 <>
@@ -447,55 +364,54 @@ export function StakePage() {
         </div>
       </div>
 
-      {/* How Staking Works */}
-      <div className="card">
-        <div className="flex items-center gap-3 mb-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500/20">
-            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h2 className="text-lg font-semibold text-white">How Staking Works</h2>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500/20 text-brand-400 font-bold text-sm mb-3">1</div>
-            <h3 className="font-medium text-white mb-1">Deposit mUSD</h3>
-            <p className="text-sm text-gray-400">Stake your mUSD tokens into the ERC-4626 vault to begin earning yield.</p>
-          </div>
-          <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm mb-3">2</div>
-            <h3 className="font-medium text-white mb-1">Earn Yield</h3>
-            <p className="text-sm text-gray-400">The smUSD share price increases as protocol revenue accrues to the vault.</p>
-          </div>
-          <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm mb-3">3</div>
-            <h3 className="font-medium text-white mb-1">Withdraw Anytime</h3>
-            <p className="text-sm text-gray-400">Redeem smUSD for mUSD at the current share price after a 24h cooldown.</p>
-          </div>
-        </div>
-      </div>
-
-      {/* AI Yield Aggregation Explainer */}
+      {/* AI Yield Aggregation Engine — How It Works */}
       <div className="card">
         <div className="flex items-center gap-3 mb-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/20">
             <svg className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
             </svg>
           </div>
-          <h2 className="text-lg font-semibold text-white">AI Yield Aggregation Engine</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-white">How It Works</h2>
+            <p className="text-sm text-gray-400">AI Yield Aggregation Engine</p>
+          </div>
         </div>
-        <p className="text-sm text-gray-400 leading-relaxed">
-          Staking distributes generated yield exclusively to mUSD stakers, using our AI yield aggregation engine.
-          The AI deliberates across hundreds of protocols in Web3 using a proprietary algorithm, taking into consideration
-          many different variables: <span className="text-white font-medium">Highest Yield</span>,{" "}
-          <span className="text-white font-medium">Pool Liquidity</span>,{" "}
-          <span className="text-white font-medium">Weighted Performance Over Time</span>,{" "}
-          <span className="text-white font-medium">Security/Risk Profile</span>,{" "}
-          <span className="text-white font-medium">Oracle Stability</span>,{" "}
-          <span className="text-white font-medium">Curators</span>, and more. This ensures your staked mUSD
-          is always earning the best risk-adjusted yield available in DeFi.
+        <div className="space-y-4 text-sm text-gray-300 leading-relaxed">
+          <p>
+            Staking distributes generated yield exclusively to mUSD stakers, using our AI yield aggregation engine.
+            The AI deliberates across 100&apos;s of protocols in Web3 using a proprietary algorithm, taking into
+            consideration many different variables: <span className="text-white font-medium">Highest Yield</span>,{" "}
+            <span className="text-white font-medium">Pool Liquidity</span>,{" "}
+            <span className="text-white font-medium">Weighted Performance over time</span>,{" "}
+            <span className="text-white font-medium">Security/Risk Profile</span>,{" "}
+            <span className="text-white font-medium">Oracle Stability</span>,{" "}
+            <span className="text-white font-medium">Curators</span>, and more.
+          </p>
+          <p>
+            It then carefully deploys and monitors positions in real time.
+          </p>
+          <p className="text-gray-400 italic">
+            Note* This does NOT mean TVL is distributed across 100&apos;s of platforms, it means pools are scrutinized,
+            and selected based on intuitively safe, asymmetrical upside. That could mean 5 protocols or less.
+          </p>
+        </div>
+      </div>
+
+      {/* Unstaking Info */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-purple-500/20">
+            <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">Unstaking</h2>
+        </div>
+        <p className="text-sm text-gray-300 leading-relaxed">
+          Upon unstaking, smUSD tokens are burned and users receive back their proportional share of mUSD with appreciated
+          yield included. The protocol enforces a <span className="text-white font-medium">10-day cooldown period</span> before
+          withdrawals can be executed.
         </p>
       </div>
     </div>

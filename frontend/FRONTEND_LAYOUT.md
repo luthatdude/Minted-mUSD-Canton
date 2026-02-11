@@ -164,49 +164,34 @@ Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 ### 2. Stake Page (`/stake`)  — max-w-3xl
 
 ```
-PageHeader: "Stake & Earn" · "ERC-4626 vault" · badge "ERC-4626" (emerald)
+PageHeader: "Stake & Earn"
 
-4 StatCards (sm:2 lg:4):
-  • Share Price        (X.XXXX mUSD per smUSD, green)
-  • Estimated APY      (X.XX%, green, trend arrow)
-  • Total Vault TVL    (X mUSD, blue)
-  • Total smUSD Supply (purple)
+2 StatCards (sm:2):
+  • Total Staked       (blue, total mUSD staked in vault)
+  • Current APY        (emerald, staking yield %)
 
-Your Position Card (card-gradient-border, only if smUSD > 0):
-  ┌───────────────────────────────────────────────────┐
-  │  📊 Your Position — Staking performance overview   │
-  │  ┌──────────────┬──────────────┬──────────────┐   │
-  │  │ smUSD Balance│ Position Val │ Yield Earned │   │
-  │  │    XX.XX     │  XX.XX mUSD  │ +X.XX mUSD   │   │
-  │  └──────────────┴──────────────┴──────────────┘   │
-  └───────────────────────────────────────────────────┘
-
-Cooldown Timer (card, only if cooldown active):
-  ┌───────────────────────────────────────────────────┐
-  │  ⏱ Withdrawal Cooldown      [XX% Complete badge]  │
-  │  X.X hours remaining                               │
-  │  [███████████████░░░░░░░░░░░]  progress bar        │
-  └───────────────────────────────────────────────────┘
-
-2 Balance Cards (sm:2):
-  • Your mUSD Balance (blue)
-  • Your smUSD Balance (purple, sub = ≈ X.XX mUSD)
-
-Action Card (card-gradient-border):
+Stake / Unstake Widget (card-gradient-border):
   ┌─ [➕ Stake mUSD]  [🔄 Unstake smUSD] ───────────────┐
+  │                                                        │
+  │  2 Balance Cards inside widget (sm:2):                 │
+  │  • Your mUSD Balance (blue)                            │
+  │  • Your smUSD Balance (purple, sub = ≈ X.XX mUSD)     │
   │                                                        │
   │  Input:  amount  [MAX] [mUSD/smUSD badge]              │
   │              ↓                                         │
   │  Output: preview  [smUSD/mUSD badge]                   │
   │                                                        │
   │  Exchange info (rate, cooldown, fee=None)               │
-  │  Cooldown warning (if unstake + cooldown active)        │
   │  [ ====== Stake mUSD / Unstake smUSD ============== ] │
   │  Success/Error alerts with Etherscan link               │
   └────────────────────────────────────────────────────────┘
 
-"How Staking Works" — 3 step cards:
-  ① Deposit mUSD → ② Earn Yield → ③ Withdraw Anytime
+Cooldown Timer (card, only if cooldown active):
+  ┌───────────────────────────────────────────────────┐
+  │  ⏱ Withdrawal Cooldown      [XX% Complete badge]  │
+  │  X.X days remaining  (10-day cooldown period)      │
+  │  [███████████████░░░░░░░░░░░]  progress bar        │
+  └───────────────────────────────────────────────────┘
 
 "AI Yield Aggregation Engine" Explainer Card:
   Staking distributes generated yield exclusively to mUSD stakers, using our
@@ -214,99 +199,123 @@ Action Card (card-gradient-border):
   in Web3 using a proprietary algorithm — Highest Yield, Pool Liquidity,
   Weighted Performance Over Time, Security/Risk Profile, Oracle Stability, Curators.
 
-CantonStake — Additional Canton-Only Widget:
-  ┌─── Stake Canton Coin (Boost Pool) ──────────────────┐
-  │  Explainer: "Stake 20% of your mUSD stake in Canton │
-  │  Coin to receive boosted yield of 2-4% PLUS 60% of  │
-  │  all validator rewards…"                             │
-  │  3 StatCards: Boost Pool APY · Validator Rewards ·   │
-  │  Points Multiplier                                    │
-  │  Canton Coin Amount input                             │
-  │  [Stake Canton Coin (Coming Soon)]                    │
-  └──────────────────────────────────────────────────────┘
+"Unstaking" Info Card:
+  When you unstake, you'll receive your mUSD back plus any accrued yield.
+  There is a 10-day cooldown period to process unstaking requests. Your
+  tokens continue to earn yield during the cooldown period.
 ```
+
+**CantonStake variant:**
+- Amber/yellow color scheme throughout
+- 3 StatCards: Total Staked · Current APY · Minted Points Earned
+- mUSD Stake/Unstake widget with DAML contract selector
+- **Canton Coin Staking Widget (Canton ONLY):**
+  ```
+  ┌─── Stake Canton Coin (Boost Pool) ──────────────────────────────────┐
+  │  Explainer: "Stake 20% of your mUSD stake in Canton Coin to        │
+  │  receive a boosted yield of 2-4% PLUS 60% of all validator rewards  │
+  │  PLUS a 10x Minted Points boost"                                    │
+  │                                                                      │
+  │  3 StatCards:                                                        │
+  │  • Boost Pool APY (2-4%)                                             │
+  │  • Validator Rewards (60% share)                                     │
+  │  • Points Multiplier (10×)                                           │
+  │                                                                      │
+  │  Canton Coin Stake / Unstake tabs                                    │
+  │  Canton Coin Amount input                                            │
+  │  [Stake Canton Coin (Coming Soon)] — disabled                        │
+  └──────────────────────────────────────────────────────────────────────┘
+  ```
+- Same AI Yield Aggregation Engine explainer
+- Same Unstaking info card
 
 ---
 
 ### 3. Borrow & Lend Page (`/borrow`)  — max-w-4xl
 
 ```
-PageHeader: "Borrow & Lend" · badge dynamic "Active Position" (warning) / "No Position" (brand)
+PageHeader: "Borrow & Lend"
+Subtitle: "mUSD stakers earn the interest"
 
-⚠ Liquidation Alert (red border-2, if liquidatable):
-  ┌───────────────────────────────────────────────────┐
-  │  🚨 Position At Risk of Liquidation               │
-  │  [Emergency Repay ($XX)]  [Add Collateral]         │
-  └───────────────────────────────────────────────────┘
+Collateral Reference Table (card):
+  ┌──────────────────────────────────────────────────────┐
+  │  📦 Supported Collateral                              │
+  │  ┌────────────┬──────────────┬──────────────────────┐│
+  │  │ Asset      │ Max LTV      │ Liquidation Threshold││
+  │  │ ETH        │ 75%          │ 80%                  ││
+  │  │ WBTC       │ 75%          │ 80%                  ││
+  │  │ smUSD      │ 90%          │ 93%                  ││
+  │  └────────────┴──────────────┴──────────────────────┘│
+  └──────────────────────────────────────────────────────┘
 
-⚠ Caution Warning (yellow alert, if HF < 1.2 but not liquidatable)
-
-4 StatCards (sm:2 lg:4):
-  • Total Collateral    (blue, 🔒 icon)
-  • Outstanding Debt    (red if > 0, 📄 icon)
-  • Available to Borrow (green, 💰 icon)
-  • Interest Rate       (APR, 📈 icon)
-
-Health Factor & Position Overview (card-gradient-border, only if debt > 0):
-  ┌───────────────────────────────────────────────────┐
-  │  ┌─── Health Factor ───┐  ┌── Position Summary ──┐│
-  │  │  🛡 Health Factor    │  │  📊 Position Summary  ││
-  │  │   2.45  (big, green) │  │  Collateral: $XX     ││
-  │  │  [██████████░░░]     │  │  Debt:       $XX     ││
-  │  │  Liq(1.0) Cau(1.5)  │  │  ─────────────       ││
-  │  │       Safe(3.0+)    │  │  Net:        $XX     ││
-  │  │  Status: Healthy     │  │  Utilization: XX%    ││
-  │  │                      │  │                      ││
-  │  │                      │  │  Your mUSD: $XX      ││
-  │  │                      │  │  [Close Position]    ││
-  │  └──────────────────────┘  └──────────────────────┘│
-  └───────────────────────────────────────────────────┘
-
-Collateral Positions Table (card):
-  ┌───────────────────────────────────────────────────┐
-  │  📦 Collateral Positions — X supported tokens      │
-  │  ┌────────┬───────────┬──────┬──────┬──────┬─────┐│
-  │  │ Token  │ Deposited │ USD  │ LTV  │ Liq. │ Pen.││
-  │  │ [◉ W]  │   100.0   │ $XX  │ 80%  │ 85%  │ 5%  ││
-  │  │ [◉ U]  │    50.0   │ $XX  │ 85%  │ 90%  │ 5%  ││
-  │  └────────┴───────────┴──────┴──────┴──────┴─────┘│
-  │  (LTV=brand badge, Threshold=yellow, Penalty=red)  │
-  └───────────────────────────────────────────────────┘
+Health Factor & Position Summary (card, only if debt > 0):
+  ┌───────────────────────────────────────────────────────┐
+  │  Health Factor: X.XX   Status: Healthy / At Risk      │
+  │  [████████████████░░░]  (color-coded gauge)            │
+  │  Collateral: $XX  ·  Debt: $XX  ·  Utilization: XX%   │
+  │  [Close Position]                                      │
+  └───────────────────────────────────────────────────────┘
 
 Action Card (card-gradient-border):
-  ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] [📈 Leverage] ─┐
-  │                                                                      │
-  │  ── Deposit/Borrow/Repay/Withdraw tabs ──                           │
-  │  Token selector (deposit/withdraw only)                              │
-  │  Input: amount [MAX] [Token badge]                                   │
-  │  Hints: Max borrowable / Current debt                                │
-  │  [ ====== Deposit / Borrow / Repay / Withdraw ===== ]               │
-  │  Success/Error alerts with Etherscan link                            │
-  │                                                                      │
-  │  ── Leverage tab ──                                                  │
-  │  Error banner (red, dismissible)                                     │
-  │  4 StatCards: WETH Balance · Max Leverage · Position · Debt          │
-  │  If no position:                                                     │
-  │    WETH deposit input [MAX]                                          │
-  │    LeverageSlider (1x-3x with presets)                               │
-  │    Position Preview (collateral/debt/loops/leverage)                  │
-  │    [Open X.Xx Leveraged Position]                                    │
-  │  If has position:                                                    │
-  │    Position grid: Deposit · Collateral · Debt · Leverage · Loops     │
-  │    [Close Position & Repay Debt] (danger variant)                    │
-  └────────────────────────────────────────────────────────────────────────┘
+  ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] [⚡ Loop] ────┐
+  │                                                                     │
+  │  ── Deposit/Borrow/Repay/Withdraw tabs ──                          │
+  │  Collateral selector dropdown (deposit/withdraw only):              │
+  │     ETH (LTV 75%, Liq 80%)                                         │
+  │     WBTC (LTV 75%, Liq 80%)                                        │
+  │     smUSD (LTV 90%, Liq 93%)                                       │
+  │  Amount input [MAX]                                                 │
+  │  [ ====== Deposit / Borrow / Repay / Withdraw ===== ]              │
+  │  Success/Error alerts                                               │
+  │                                                                     │
+  │  ── ⚡ Loop tab ──                                                  │
+  │  Leverage Drag Slider: 2x → 3x → 4x → 5x                          │
+  │  ┌──────────────────────────────────────────────┐                   │
+  │  │  3x   (big display)          Drag to select  │                   │
+  │  │  [=====●=============]  range input          │                   │
+  │  │   2x      3x      4x      5x                │                   │
+  │  └──────────────────────────────────────────────┘                   │
+  │  Collateral Amount input                                            │
+  │  Position Preview:                                                  │
+  │    Total Collateral · Estimated Debt · Loop Iterations · Leverage   │
+  │  [ ⚡ Open Xx Loop Position ]                                       │
+  │                                                                     │
+  │  Active Leverage Position (if exists):                              │
+  │    Deposited · Collateral · Outstanding Debt · Leverage             │
+  │    [Close Position & Repay Debt] (danger)                           │
+  └─────────────────────────────────────────────────────────────────────┘
 
-"How Borrowing Works" — 4 step cards:
-  ① Deposit → ② Borrow → ③ Repay → ④ Withdraw
+"How Borrowing Works" — 5 step cards:
+  ① Choose Collateral → ② Deposit → ③ Borrow → ④ Repay → ⑤ Stakers Earn
+
+"Loop Explainer" Card (gradient-border):
+  Multiply your sMUSD yield in one click.
+  Deposit your collateral → automatically borrow mUSD, stake it to sMUSD,
+  redeposit, and repeat up to your target leverage. No DEX swaps, no manual steps.
+  Your collateral earns leveraged sMUSD staking yield (6-14% base × your loop
+  multiplier), while your borrow cost is offset by the yield itself.
+  Choose 2x–5x and let the vault handle the rest.
 
 "Looping Strategies" — 2 strategy cards (sm:grid-cols-2):
   ┌─── sMUSD Maxi ─────────────────┐  ┌─── Canton Maxi ────────────────┐
   │  Low-Medium Risk                │  │  Medium Risk                    │
   │  Deposit → Mint → Stake → Loop  │  │  Deposit → Stake → Loop → Boost│
-  │  APY table: 1x-4x loops         │  │  APY table: 1x-4x + Boost Pool │
-  │  34-174% total APY               │  │  34-235% total APY              │
+  │  APY table: 2x–5x loops         │  │  APY table: 2x–5x + Boost Pool │
   └──────────────────────────────────┘  └─────────────────────────────────┘
 ```
+
+**CantonBorrow variant:**
+- Amber/yellow color scheme throughout
+- Canton-specific collateral reference table:
+  ```
+  │ Canton Coin │ 65%  │ 75%                  │
+  │ smUSD       │ 90%  │ 93%                  │
+  ```
+- DAML Vault CDP list with contract selection
+- Deposit/Borrow/Repay/Withdraw via exerciseChoice on Vault template
+- ⚡ Loop tab with 2x–5x slider (Coming Soon on Canton)
+- Same "How Borrowing Works" steps (with Canton Coin instead of ETH/WBTC)
+- Same Loop Explainer card
 
 ---
 
@@ -551,37 +560,50 @@ Layout
 │   │   └── Info Cards (Remaining Mintable + Available for Redemption)
 │   │
 │   ├── StakePage
-│   │   ├── PageHeader (badge: ERC-4626)
-│   │   ├── StatCard × 4
-│   │   ├── YourPosition Card (gradient-border)
-│   │   ├── CooldownTimer + progress bar
-│   │   ├── Balance Cards × 2
-│   │   ├── Action Card (stake/unstake tabs)
+│   │   ├── 2 StatCards (Total Staked, Current APY)
+│   │   ├── Stake/Unstake Widget (card-gradient-border)
+│   │   │   ├── 2 Balance Cards (mUSD, smUSD)
 │   │   │   ├── AmountInput + MAX + TokenBadge
 │   │   │   ├── Arrow Separator
 │   │   │   ├── OutputPreview
 │   │   │   ├── ExchangeInfo
-│   │   │   ├── CooldownWarning
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   ├── HowItWorks × 3
-│   │   └── AI Yield Aggregation Explainer Card
+│   │   ├── CooldownTimer (10-day cooldown, progress bar)
+│   │   ├── AI Yield Aggregation Explainer Card
+│   │   └── Unstaking Info Card
+│   │
+│   │   Canton variant adds:
+│   │   ├── 3rd StatCard (Minted Points Earned)
+│   │   ├── Canton Coin Boost Pool Widget
+│   │   │   ├── Explainer text
+│   │   │   ├── 3 StatCards (Boost APY, Validator Rewards, Points 10×)
+│   │   │   ├── Stake/Unstake tabs (Coming Soon)
+│   │   │   └── Amount Input (disabled)
 │   │
 │   ├── BorrowPage
-│   │   ├── PageHeader (badge: Active/No Position)
-│   │   ├── LiquidationAlert (conditional)
-│   │   ├── CautionWarning (conditional)
-│   │   ├── StatCard × 4
-│   │   ├── HealthFactor + PositionSummary (gradient-border, 2-col)
-│   │   ├── CollateralTable (token rows with badge pills)
-│   │   ├── Action Card (deposit/borrow/repay/withdraw/leverage tabs)
-│   │   │   ├── TokenSelector (deposit/withdraw)
-│   │   │   ├── AmountInput + MAX + TokenBadge
-│   │   │   ├── LeverageSlider + Position Preview (leverage tab)
+│   │   ├── Collateral Reference Table (ETH/WBTC/smUSD with LTV/Liq data)
+│   │   ├── HealthFactor + Position Summary (conditional on debt > 0)
+│   │   ├── Action Card (deposit/borrow/repay/withdraw/loop tabs)
+│   │   │   ├── CollateralSelector dropdown (deposit/withdraw)
+│   │   │   ├── AmountInput + MAX
+│   │   │   ├── ⚡ Loop tab:
+│   │   │   │   ├── Leverage Drag Slider (2x–5x range input)
+│   │   │   │   ├── Collateral Amount input
+│   │   │   │   ├── Position Preview (collateral/debt/loops/leverage)
+│   │   │   │   └── Open Loop Position button
+│   │   │   ├── Active Leverage Position display + Close button
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   ├── HowItWorks × 4
+│   │   ├── HowItWorks × 5 (Choose→Deposit→Borrow→Repay→Stakers Earn)
+│   │   ├── Loop Explainer Card
 │   │   └── LoopingStrategies × 2 (sMUSD Maxi + Canton Maxi)
+│   │
+│   │   Canton variant:
+│   │   ├── Canton collateral table (Canton Coin 65/75, smUSD 90/93)
+│   │   ├── DAML Vault CDP list with contract selection
+│   │   ├── Vault actions via exerciseChoice
+│   │   └── ⚡ Loop tab (Coming Soon on Canton)
 │   │
 │   ├── BridgePage
 │   │   ├── PageHeader (badge: Active/PAUSED)
