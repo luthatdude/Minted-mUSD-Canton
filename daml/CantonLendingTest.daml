@@ -14,6 +14,7 @@ import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import CantonLending
 import Governance (GovernanceActionLog(..), ActionType(..))
+import DA.Set qualified as Set
 
 -- ============================================================
 --                     TEST HELPERS
@@ -25,6 +26,22 @@ testMpaHash = "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abc"
 
 testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
+
+-- | Create a governance proof for tests
+createGovProof : Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator actionType desc = do
+  now <- getTime
+  submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-" <> desc
+      actionType
+      description = desc
+      payload = ""
+      payloadHash = ""
+      approvers = [operator]
+      executedBy = operator
+      executedAt = now
 
 -- | Standard test setup: operator, user, liquidator, price feeds, lending service
 data TestSetup = TestSetup with
@@ -70,7 +87,7 @@ setupTest = do
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500       -- 5% APR
-      reserveFactorBps = 2000    -- 20%
+      reserveFactorBps = 1000    -- 10%
       protocolReserves = 0.0
       minBorrow = 10.0           -- Min 10 mUSD
       closeFactorBps = 5000      -- 50% close factor
@@ -102,10 +119,12 @@ testPriceFeedUpdate = do
   -- FIX M-4: Advance time past the 10-second update cooldown
   passTime (seconds 15)
   -- Update CTN price to $0.20 (within 50% cap)
+  govProof <- createGovProof setup.operator ParameterUpdate "price-update"
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.20
       newSource = "temple-dex-twap"
+      governanceProofCid = govProof
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Price updated to 0.20" ((fromSome feed).priceUsd == 0.20)
   debug "✅ 2. Price feed update"
@@ -114,10 +133,12 @@ testPriceFeedMovementCap : Script ()
 testPriceFeedMovementCap = do
   setup <- setupTest
   -- Try to move price >50% — should fail
+  govProof <- createGovProof setup.operator ParameterUpdate "price-cap"
   submitMustFail setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.30       -- 76% increase from 0.17 — exceeds 50% cap
       newSource = "temple-dex-twap"
+      governanceProofCid = govProof
   debug "✅ 3. Price feed movement cap enforced"
 
 testPriceFeedEmergencyOverride : Script ()
@@ -126,10 +147,12 @@ testPriceFeedEmergencyOverride = do
   -- FIX M-6: Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
   -- Emergency update bypasses movement cap
+  emergProof <- createGovProof setup.operator EmergencyPause "emergency-override"
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.05       -- 70% drop — would fail normal update
       reason = "Flash crash on Temple DEX"
+      governanceProofCid = emergProof
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Emergency price set" ((fromSome feed).priceUsd == 0.05)
   debug "✅ 4. Emergency price override"
@@ -179,23 +202,6 @@ testDepositCTN = do
 testDepositUSDC : Script ()
 testDepositUSDC = do
   setup <- setupTest
-  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
-  now <- getTime
-  proofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-enable-usdc"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
-  enabledSvcCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_UpdateConfig with
-      newConfig = defaultUSDCConfig with enabled = True
-      governanceProofCid = proofCid
   -- Create CantonUSDC
   usdcCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonUSDC with
@@ -205,7 +211,7 @@ testDepositUSDC = do
       privacyObservers = []
 
   (newServiceCid, escrowCid) <- submit setup.user do
-    exerciseCmd enabledSvcCid Lending_DepositUSDC with
+    exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
 
@@ -251,22 +257,11 @@ testDepositFailsWhenPaused : Script ()
 testDepositFailsWhenPaused = do
   setup <- setupTest
   -- Pause the service
-  now <- getTime
-  pauseProofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-pause"
-      actionType = EmergencyPause
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  pauseProof <- createGovProof setup.operator EmergencyPause "pause"
   pausedServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
-      governanceProofCid = pauseProofCid
+      governanceProofCid = pauseProof
 
   coinCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonCoin with
@@ -478,10 +473,12 @@ testLiquidation = do
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
   -- FIX M-6: Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
+  emergProof <- createGovProof setup.operator EmergencyPause "ctn-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
+      governanceProofCid = emergProof
 
   -- Liquidator gets mUSD to repay
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do
@@ -566,23 +563,6 @@ testLiquidationHealthyPositionFails = do
 testMultiCollateralBorrow : Script ()
 testMultiCollateralBorrow = do
   setup <- setupTest
-  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
-  now <- getTime
-  proofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-enable-usdc-multi"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
-  enabledSvcCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_UpdateConfig with
-      newConfig = defaultUSDCConfig with enabled = True
-      governanceProofCid = proofCid
   -- Deposit CTN + USDC
   coinCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonCoin with
@@ -599,7 +579,7 @@ testMultiCollateralBorrow = do
       privacyObservers = []
 
   (svc1, ctnEscrowCid) <- submit setup.user do
-    exerciseCmd enabledSvcCid Lending_DepositCTN with
+    exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
@@ -784,22 +764,11 @@ testUpdateCollateralConfig : Script ()
 testUpdateCollateralConfig = do
   setup <- setupTest
   -- Update CTN config to lower LTV
-  now <- getTime
-  proofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-update-config"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  govProof <- createGovProof setup.operator ParameterUpdate "update-config"
   newServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_UpdateConfig with
       newConfig = defaultCTNConfig with collateralFactorBps = 5000
-      governanceProofCid = proofCid
+      governanceProofCid = govProof
 
   svc <- queryContractId setup.operator newServiceCid
   let configs = (fromSome svc).configs
@@ -810,22 +779,11 @@ testUpdateCollateralConfig = do
 testUpdateInterestRate : Script ()
 testUpdateInterestRate = do
   setup <- setupTest
-  now <- getTime
-  proofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-update-rate"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  govProof <- createGovProof setup.operator ParameterUpdate "update-rate"
   newServiceCid <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_UpdateRate with
       newRateBps = 800
-      governanceProofCid = proofCid
+      governanceProofCid = govProof
   svc <- queryContractId setup.operator newServiceCid
   assertMsg "Rate updated to 800" ((fromSome svc).interestRateBps == 800)
   debug "✅ 25. Update interest rate"
@@ -833,40 +791,19 @@ testUpdateInterestRate = do
 testPauseUnpause : Script ()
 testPauseUnpause = do
   setup <- setupTest
-  now <- getTime
-  pauseProofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-pause"
-      actionType = EmergencyPause
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  pauseProof <- createGovProof setup.operator EmergencyPause "pause-test"
   pausedSvc <- submit setup.operator do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
-      governanceProofCid = pauseProofCid
+      governanceProofCid = pauseProof
   svc <- queryContractId setup.operator pausedSvc
   assertMsg "Service paused" ((fromSome svc).paused)
 
-  unpauseProofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-unpause"
-      actionType = EmergencyPause
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  unpauseProof <- createGovProof setup.operator EmergencyPause "unpause-test"
   unpausedSvc <- submit setup.operator do
     exerciseCmd pausedSvc Lending_SetPaused with
       newPaused = False
-      governanceProofCid = unpauseProofCid
+      governanceProofCid = unpauseProof
   svc2 <- queryContractId setup.operator unpausedSvc
   assertMsg "Service unpaused" (not (fromSome svc2).paused)
   debug "✅ 26. Pause / unpause"
@@ -881,7 +818,7 @@ testWithdrawReserves = do
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500
-      reserveFactorBps = 2000
+      reserveFactorBps = 1000
       protocolReserves = 100.0  -- 100 mUSD in reserves
       minBorrow = 10.0
       closeFactorBps = 5000
@@ -891,22 +828,11 @@ testWithdrawReserves = do
       complianceRegistryCid = None
       observers = [setup.user]
 
-  now <- getTime
-  withdrawProofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-withdraw-reserves"
-      actionType = TreasuryWithdrawal
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
+  govProof <- createGovProof setup.operator ParameterUpdate "withdraw-reserves"
   (newSvcCid, reserveMusdCid) <- submit setup.operator do
     exerciseCmd reserveServiceCid Lending_WithdrawReserves with
       amount = 50.0
-      governanceProofCid = withdrawProofCid
+      governanceProofCid = govProof
 
   musd <- queryContractId setup.operator reserveMusdCid
   assertMsg "Got 50 mUSD reserves" ((fromSome musd).amount == 50.0)
@@ -945,23 +871,6 @@ testUnauthorizedDeposit = do
 testBorrowAgainstUSDCHighLTV : Script ()
 testBorrowAgainstUSDCHighLTV = do
   setup <- setupTest
-  -- Enable USDC collateral (disabled by default since DirectMint is preferred)
-  now <- getTime
-  proofCid <- submit setup.operator do
-    createCmd GovernanceActionLog with
-      operator = setup.operator
-      proposalId = "test-enable-usdc-highltv"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      approvers = [setup.operator]
-      executedBy = setup.operator
-      executedAt = now
-  enabledSvcCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_UpdateConfig with
-      newConfig = defaultUSDCConfig with enabled = True
-      governanceProofCid = proofCid
   -- Deposit 10000 USDC → 95% LTV → max borrow = 9500
   usdcCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonUSDC with
@@ -971,7 +880,7 @@ testBorrowAgainstUSDCHighLTV = do
       privacyObservers = []
 
   (svc1, escrowCid) <- submit setup.user do
-    exerciseCmd enabledSvcCid Lending_DepositUSDC with
+    exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
 

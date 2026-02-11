@@ -26,9 +26,12 @@ module CantonLoopStrategy where
 
 import DA.Time
 import DA.Optional (fromOptional)
+import DA.Foldable (forA_)
 import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: STRATEGY CONFIG
@@ -58,6 +61,85 @@ defaultLoopConfig = LoopConfig with
     minLoopAmountMusd = 10.0         -- 10 mUSD minimum per loop
     borrowFeeBps = 0                 -- No upfront fee (interest accrues)
     cooldownCheckEnabled = True
+
+-- | FIX LS-GOV: Governance-controlled loop strategy configuration.
+-- All config changes require GovernanceActionLog proof.
+-- Hard-coded safety ceilings prevent catastrophic misconfiguration.
+template CantonLoopStrategyConfig
+  with
+    operator             : Party
+    config               : LoopConfig
+    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    observers            : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure config.maxLoops >= 1 && config.maxLoops <= 10
+        && config.targetLtvBps >= 1000 && config.targetLtvBps <= 9500
+        && config.minHealthFactorBps >= 11000 && config.minHealthFactorBps <= 30000
+        && config.minLoopAmountMusd >= 1.0
+
+    key operator : Party
+    maintainer key
+
+    -- | Update max loops (governance-gated)
+    nonconsuming choice LoopConfig_UpdateMaxLoops : ContractId CantonLoopStrategyConfig
+      with
+        newMaxLoops : Int
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "MAX_LOOPS_RANGE" (newMaxLoops >= 1 && newMaxLoops <= 10)
+        archive self
+        create this with config = config with maxLoops = newMaxLoops
+
+    -- | Update target LTV (governance-gated)
+    nonconsuming choice LoopConfig_UpdateTargetLtv : ContractId CantonLoopStrategyConfig
+      with
+        newTargetLtvBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "TARGET_LTV_RANGE" (newTargetLtvBps >= 1000 && newTargetLtvBps <= 9500)
+        archive self
+        create this with config = config with targetLtvBps = newTargetLtvBps
+
+    -- | Update min health factor (governance-gated)
+    nonconsuming choice LoopConfig_UpdateMinHealthFactor : ContractId CantonLoopStrategyConfig
+      with
+        newMinHealthFactorBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "MIN_HF_RANGE" (newMinHealthFactorBps >= 11000 && newMinHealthFactorBps <= 30000)
+        archive self
+        create this with config = config with minHealthFactorBps = newMinHealthFactorBps
+
+    -- | Update compliance registry (governance-gated)
+    nonconsuming choice LoopConfig_SetComplianceRegistry : ContractId CantonLoopStrategyConfig
+      with
+        newComplianceRegistryCid : Optional (ContractId ComplianceRegistry)
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        archive self
+        create this with complianceRegistryCid = newComplianceRegistryCid
+
+    -- | Read config (nonconsuming, no governance needed)
+    nonconsuming choice LoopConfig_GetConfig : LoopConfig
+      with
+        requester : Party
+      controller requester
+      do return config
 
 -- ============================================================
 --                     SECTION 2: LOOP POSITION
@@ -92,15 +174,22 @@ template CantonLoopPosition
         && status `elem` ["active", "unwinding", "closed"]
 
     -- | User can request to unwind the entire position
-    choice LoopPosition_Unwind : ContractId CantonLoopUnwindRequest
+    -- FIX LS-LIFECYCLE: Transition status to "unwinding" before creating unwind request
+    choice LoopPosition_Unwind : (ContractId CantonLoopPosition, ContractId CantonLoopUnwindRequest)
       controller user
       do
         assertMsg "ALREADY_UNWINDING" (status /= "unwinding")
         assertMsg "ALREADY_CLOSED" (status /= "closed")
         now <- getTime
-        create CantonLoopUnwindRequest with
-          position = this
+        -- FIX LS-LIFECYCLE: Create new position with "unwinding" status (archive old via consuming)
+        unwindingPos <- create this with
+          status = "unwinding"
+          lastUpdated = now
+        req <- create CantonLoopUnwindRequest with
+          positionCid = unwindingPos
+          position = this with status = "unwinding"
           requestedAt = now
+        return (unwindingPos, req)
 
     -- | Operator updates position state after a loop iteration
     -- FIX D-H01: Added on-ledger health factor validation
@@ -137,13 +226,19 @@ template CantonLoopPosition
           lastUpdated = now
 
     -- | Mark position as closed after unwind completes
-    -- FIX D-H02: Validate that debt is fully repaid and status is "unwinding"
-    choice LoopPosition_Close : ()
+    -- FIX D-H02: Validate that status is "unwinding" and create a final "closed" record
+    -- FIX LS-LIFECYCLE: This is now reachable because LoopPosition_Unwind sets status = "unwinding"
+    choice LoopPosition_Close : ContractId CantonLoopPosition
       controller operator
       do
         assertMsg "NOT_UNWINDING" (status == "unwinding")
-        assertMsg "DEBT_NOT_REPAID" (totalBorrowed <= 0.0)
-        return ()
+        now <- getTime
+        create this with
+          status = "closed"
+          totalBorrowed = 0.0
+          smusdCids = []
+          cantonCoinCid = None
+          lastUpdated = now
 
 -- ============================================================
 --                     SECTION 3: LOOP EXECUTION REQUEST
@@ -152,6 +247,8 @@ template CantonLoopPosition
 -- | User requests to open a new loop strategy position
 -- FIX D-C01: Both operator AND user are signatories to prevent forging.
 -- Uses proposal pattern — user creates, operator must also sign to execute.
+-- FIX LS-GOV: References CantonLoopStrategyConfig for governance-approved parameters
+-- FIX LS-COMP: Compliance check on execute + unwind
 template CantonLoopRequest
   with
     operator       : Party
@@ -162,6 +259,7 @@ template CantonLoopRequest
     initialAmount  : Money                     -- USDC amount
     requestedLoops : Int                       -- How many loops to execute (≤ maxLoops)
     requestedAt    : Time
+    configCid      : ContractId CantonLoopStrategyConfig  -- FIX LS-GOV: Reference to governance-approved config
   where
     signatory user, operator
     ensure initialAmount > 0.0
@@ -169,6 +267,8 @@ template CantonLoopRequest
 
     -- | Operator executes the loop strategy
     -- FIX D-C02: Fetch and consume the USDC token to verify ownership and amount.
+    -- FIX LS-GOV: Validate config against governance-approved config
+    -- FIX LS-COMP: Compliance check before execution
     choice LoopRequest_Execute : ContractId CantonLoopPosition
       controller operator
       do
@@ -176,6 +276,18 @@ template CantonLoopRequest
         -- Validate config
         assertMsg "TOO_MANY_LOOPS" (requestedLoops <= config.maxLoops)
         assertMsg "MIN_AMOUNT" (initialAmount >= config.minLoopAmountMusd)
+
+        -- FIX LS-GOV: Fetch governance-approved config and validate
+        approvedCfg <- fetch configCid
+        let approved = approvedCfg.config
+        assertMsg "MAX_LOOPS_EXCEEDS_APPROVED" (config.maxLoops <= approved.maxLoops)
+        assertMsg "TARGET_LTV_EXCEEDS_APPROVED" (config.targetLtvBps <= approved.targetLtvBps)
+        assertMsg "MIN_HF_BELOW_APPROVED" (config.minHealthFactorBps >= approved.minHealthFactorBps)
+
+        -- FIX LS-COMP: Compliance check — reject blacklisted/frozen users
+        case approvedCfg.complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
+          None -> pure ()
 
         -- FIX D-C02: Fetch the USDC token, verify ownership + amount, and archive it
         usdcToken <- fetch initialUsdcCid
@@ -219,8 +331,10 @@ template CantonLoopRequest
 -- ============================================================
 
 -- | Request to unwind a loop position (repay all borrows, unstake all sMUSD)
+-- FIX LS-LIFECYCLE: Now holds positionCid for on-ledger lifecycle management
 template CantonLoopUnwindRequest
   with
+    positionCid : ContractId CantonLoopPosition  -- FIX LS-LIFECYCLE: Live contract reference
     position    : CantonLoopPosition
     requestedAt : Time
   where
@@ -236,21 +350,55 @@ template CantonLoopUnwindRequest
     --   6. Redeem mUSD → USDC via DirectMint
     --   7. Return USDC to user
     -- FIX D-H03: Validate returned amount against position state.
-    --   The operator cannot return more than the total deposited + reasonable yield,
-    --   and must return at least a minimum floor based on net position value.
+    -- FIX LS-PROOF: Require collateral proof (sMUSD CIDs archived + mUSD burned)
+    -- FIX LS-COMP: Compliance check on unwind
     choice UnwindRequest_Execute : ContractId CantonUSDC
       with
-        usdcReturned : Money    -- Final USDC amount after all fees/slippage
+        usdcReturned      : Money    -- Final USDC amount after all fees/slippage
+        smusdToArchive    : [ContractId CantonSMUSD]  -- FIX LS-PROOF: sMUSD positions to unstake
+        musdToBurn        : Optional (ContractId CantonMUSD)  -- FIX LS-PROOF: mUSD for debt repayment
+        configCid         : ContractId CantonLoopStrategyConfig  -- FIX LS-COMP: For compliance check
       controller position.operator
       do
         assertMsg "POSITIVE_RETURN" (usdcReturned > 0.0)
+
+        -- FIX LS-COMP: Compliance check on unwind
+        approvedCfg <- fetch configCid
+        case approvedCfg.complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateTransfer with sender = position.operator; receiver = position.user
+          None -> pure ()
+
+        -- FIX LS-PROOF: Archive all sMUSD collateral as proof of unstaking
+        -- Verify count matches position's recorded sMUSD CIDs
+        assertMsg "SMUSD_COUNT_MISMATCH" (length smusdToArchive == length position.smusdCids)
+        forA_ smusdToArchive (\cid -> do
+          smusd <- fetch cid
+          assertMsg "SMUSD_NOT_OPERATOR_ISSUED" (smusd.issuer == position.operator)
+          archive cid
+          )
+
+        -- FIX LS-PROOF: Burn mUSD to prove debt repayment
+        case musdToBurn of
+          Some musdCid -> do
+            musd <- fetch musdCid
+            assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == position.operator || musd.owner == position.user)
+            exercise musdCid CantonMUSD_Burn
+          None ->
+            -- No mUSD to burn is only valid if there was no debt
+            assertMsg "DEBT_EXISTS_BUT_NO_MUSD_BURN" (position.totalBorrowed <= 0.0)
+
         -- FIX D-H03: Cap max return to prevent unbounded minting.
-        -- Max possible = initial deposit × leverage × 2 (generous ceiling for gains)
-        -- Convert Money (Numeric 18) to Decimal (Numeric 10) for arithmetic
         let depositDec : Decimal = intToDecimal (truncate position.totalDeposited)
         let maxReturnDec = depositDec * position.leverageMultiplier * 2.0
         let returnedDec : Decimal = intToDecimal (truncate usdcReturned)
         assertMsg "RETURN_EXCEEDS_MAX" (returnedDec <= maxReturnDec)
+        -- FIX LS-PROOF: Minimum return floor — at least 10% of initial deposit
+        let minReturnDec = depositDec * 0.1
+        assertMsg "RETURN_BELOW_MIN" (returnedDec >= minReturnDec)
+
+        -- FIX LS-LIFECYCLE: Close the position on-ledger
+        exercise positionCid LoopPosition_Close
+
         -- Return USDC to user
         create CantonUSDC with
           issuer = position.operator
@@ -258,11 +406,14 @@ template CantonLoopUnwindRequest
           amount = usdcReturned
           privacyObservers = []
 
-    -- | User can cancel unwind (position stays active)
+    -- | User can cancel unwind (position returns to active)
+    -- FIX LS-LIFECYCLE: Exercise LoopPosition on-ledger to revert status
     choice UnwindRequest_Cancel : ContractId CantonLoopPosition
       controller position.user
       do
         now <- getTime
+        -- Archive the "unwinding" position and create a new "active" one
+        archive positionCid
         create position with
           status = "active"
           lastUpdated = now

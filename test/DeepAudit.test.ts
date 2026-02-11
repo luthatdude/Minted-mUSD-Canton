@@ -718,7 +718,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const reserve = await treasury.reserveBalance();
       const total = await treasury.totalValue();
       const reservePct = (reserve * 10000n) / total;
-      // TreasuryV2 reserve buffer is 10% (1000 bps) — separate from InterestRateModel reserveFactor
+      // Default reserve is 10% (1000 bps)
       expect(reservePct).to.be.gte(900n);
       expect(reservePct).to.be.lte(1100n);
     });
@@ -1063,9 +1063,9 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const interest = ethers.parseEther("1000");
       const [supplierAmt, reserveAmt] = await interestRateModel.splitInterest(interest);
 
-      // Default reserve factor is 20% (2000 bps)
-      expect(reserveAmt).to.equal(ethers.parseEther("200"));
-      expect(supplierAmt).to.equal(ethers.parseEther("800"));
+      // 10% reserve factor
+      expect(reserveAmt).to.equal(ethers.parseEther("100"));
+      expect(supplierAmt).to.equal(ethers.parseEther("900"));
     });
   });
 
