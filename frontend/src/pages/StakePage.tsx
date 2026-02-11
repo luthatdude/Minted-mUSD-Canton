@@ -475,6 +475,29 @@ export function StakePage() {
           </div>
         </div>
       </div>
+
+      {/* AI Yield Aggregation Explainer */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500/20">
+            <svg className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">AI Yield Aggregation Engine</h2>
+        </div>
+        <p className="text-sm text-gray-400 leading-relaxed">
+          Staking distributes generated yield exclusively to mUSD stakers, using our AI yield aggregation engine.
+          The AI deliberates across hundreds of protocols in Web3 using a proprietary algorithm, taking into consideration
+          many different variables: <span className="text-white font-medium">Highest Yield</span>,{" "}
+          <span className="text-white font-medium">Pool Liquidity</span>,{" "}
+          <span className="text-white font-medium">Weighted Performance Over Time</span>,{" "}
+          <span className="text-white font-medium">Security/Risk Profile</span>,{" "}
+          <span className="text-white font-medium">Oracle Stability</span>,{" "}
+          <span className="text-white font-medium">Curators</span>, and more. This ensures your staked mUSD
+          is always earning the best risk-adjusted yield available in DeFi.
+        </p>
+      </div>
     </div>
   );
 }

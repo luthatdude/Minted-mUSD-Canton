@@ -320,6 +320,210 @@ export function PointsPage() {
               </div>
             </Section>
           )}
+
+          {/* How It Works */}
+          <Section title="How It Works" subtitle="Every dollar-hour of participation earns points">
+            <div className="card p-6">
+              <p className="text-sm text-gray-400 leading-relaxed mb-4">
+                Deposit, stake, borrow, or provide liquidity — every dollar-hour of participation earns points.
+                The more you deploy and the longer you hold, the more you earn.
+              </p>
+              <div className="rounded-xl bg-surface-800/50 border border-white/5 p-4 text-center">
+                <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">Formula</p>
+                <p className="text-lg font-bold text-white">Your Points = USD Value × Multiplier × Hours</p>
+              </div>
+            </div>
+          </Section>
+
+          {/* 3 Seasons Multiplier Table */}
+          <Section title="3 Seasons — Early Adopters Earn the Most" subtitle="Multipliers decrease over time — get in early">
+            <div className="card overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/5 text-left text-xs uppercase text-gray-500">
+                    <th className="px-6 py-4">Season</th>
+                    <th className="px-6 py-4 text-right">Canton Boost Pool</th>
+                    <th className="px-6 py-4 text-right">sMUSD</th>
+                    <th className="px-6 py-4 text-right">Collateral</th>
+                    <th className="px-6 py-4 text-right">Borrow</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-white/5 bg-emerald-500/5">
+                    <td className="px-6 py-4 font-medium text-white">1 — Genesis</td>
+                    <td className="px-6 py-4 text-right font-bold text-emerald-400">10× 🔥</td>
+                    <td className="px-6 py-4 text-right text-white">4×</td>
+                    <td className="px-6 py-4 text-right text-white">3×</td>
+                    <td className="px-6 py-4 text-right text-white">2×</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="px-6 py-4 font-medium text-gray-300">2 — Growth</td>
+                    <td className="px-6 py-4 text-right text-gray-300">6×</td>
+                    <td className="px-6 py-4 text-right text-gray-300">2.5×</td>
+                    <td className="px-6 py-4 text-right text-gray-300">2×</td>
+                    <td className="px-6 py-4 text-right text-gray-300">1.5×</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 font-medium text-gray-400">3 — Maturity</td>
+                    <td className="px-6 py-4 text-right text-gray-400">4×</td>
+                    <td className="px-6 py-4 text-right text-gray-400">1.5×</td>
+                    <td className="px-6 py-4 text-right text-gray-400">1×</td>
+                    <td className="px-6 py-4 text-right text-gray-400">1×</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="px-6 py-3 text-xs text-gray-500 border-t border-white/5">
+                Multipliers shown for Canton. Ethereum multipliers are lower — Canton users always earn more.
+              </p>
+            </div>
+          </Section>
+
+          {/* What Earns Points */}
+          <Section title="What Earns Points" subtitle="Actions across both chains">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="card p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-400">Canton</span>
+                  <span className="text-xs text-gray-500">Higher multipliers</span>
+                </div>
+                <ul className="space-y-2 text-sm text-gray-300">
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Stake mUSD → sMUSD
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Deposit sMUSD or CTN as collateral
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Borrow mUSD
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Deposit $CC in the Canton Boost Pool ← <span className="font-semibold text-emerald-400">highest multiplier, always</span>
+                  </li>
+                </ul>
+              </div>
+              <div className="card p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="rounded-full bg-brand-500/20 px-3 py-1 text-xs font-bold text-brand-400">Ethereum</span>
+                </div>
+                <ul className="space-y-2 text-sm text-gray-300">
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-brand-400" /> Hold sMUSD
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-brand-400" /> Deposit ETH, WBTC, or sMUSD as collateral
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-brand-400" /> Borrow mUSD
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-brand-400" /> Open Leverage Vault positions
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </Section>
+
+          {/* Points APY by TVL */}
+          <Section title="Points APY (Implied)" subtitle="Your points APY depends on total protocol TVL — get in early, earn BIG">
+            <div className="card overflow-hidden">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/5 text-left text-xs uppercase text-gray-500">
+                    <th className="px-6 py-4">Weighted TVL</th>
+                    <th className="px-6 py-4 text-right">Canton Boost Pool 🔥</th>
+                    <th className="px-6 py-4 text-right">sMUSD (Canton)</th>
+                    <th className="px-6 py-4 text-right">sMUSD (Ethereum)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-white/5 bg-emerald-500/5">
+                    <td className="px-6 py-4 font-medium text-white">$5M</td>
+                    <td className="px-6 py-4 text-right font-bold text-emerald-400">354%</td>
+                    <td className="px-6 py-4 text-right text-white">142%</td>
+                    <td className="px-6 py-4 text-right text-gray-300">106%</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="px-6 py-4 font-medium text-white">$10M</td>
+                    <td className="px-6 py-4 text-right font-bold text-emerald-400">177%</td>
+                    <td className="px-6 py-4 text-right text-white">71%</td>
+                    <td className="px-6 py-4 text-right text-gray-300">53%</td>
+                  </tr>
+                  <tr className="border-b border-white/5">
+                    <td className="px-6 py-4 font-medium text-white">$25M</td>
+                    <td className="px-6 py-4 text-right font-bold text-emerald-400">71%</td>
+                    <td className="px-6 py-4 text-right text-white">28%</td>
+                    <td className="px-6 py-4 text-right text-gray-300">21%</td>
+                  </tr>
+                  <tr>
+                    <td className="px-6 py-4 font-medium text-white">$50M</td>
+                    <td className="px-6 py-4 text-right font-bold text-emerald-400">35%</td>
+                    <td className="px-6 py-4 text-right text-white">14%</td>
+                    <td className="px-6 py-4 text-right text-gray-300">11%</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="px-6 py-3 text-xs text-gray-500 border-t border-white/5">
+                Implied at $100M FDV. This is in addition to protocol yield.
+              </p>
+            </div>
+          </Section>
+
+          {/* Maximize Your Points */}
+          <Section title="Maximize Your Points" subtitle="Strategies to earn the most">
+            <div className="card p-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500/20 text-brand-400 font-bold text-sm flex-shrink-0">1</span>
+                  <div>
+                    <h4 className="font-medium text-white text-sm">Get in early</h4>
+                    <p className="text-xs text-gray-400">Season 1 multipliers are the highest</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm flex-shrink-0">2</span>
+                  <div>
+                    <h4 className="font-medium text-white text-sm">Use Canton</h4>
+                    <p className="text-xs text-gray-400">Every action earns more points than Ethereum</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm flex-shrink-0">3</span>
+                  <div>
+                    <h4 className="font-medium text-white text-sm">Loop your sMUSD</h4>
+                    <p className="text-xs text-gray-400">Leverage multiplies your points on every layer</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-yellow-500/20 text-yellow-400 font-bold text-sm flex-shrink-0">4</span>
+                  <div>
+                    <h4 className="font-medium text-white text-sm">Deposit $CC in the Boost Pool</h4>
+                    <p className="text-xs text-gray-400">10× in Season 1, always the highest multiplier</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Section>
+
+          {/* Airdrop */}
+          <Section title="Airdrop" subtitle="$MINT Token Generation Event">
+            <div className="card p-6">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-purple-500">
+                  <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-white">Points → $MINT Tokens</h3>
+                  <p className="text-sm text-gray-400">End of Season 3, proportional to your share of total points</p>
+                </div>
+              </div>
+              <p className="text-sm text-gray-400">
+                All points accumulated across all three seasons convert to $MINT tokens at TGE. Your allocation is proportional
+                to your share of the total points pool. The earlier and more actively you participate, the larger your share.
+              </p>
+            </div>
+          </Section>
         </div>
       )}
 
