@@ -11,8 +11,8 @@
 │  NAVBAR  (sticky top, glass blur, z-50)                                     │
 │  ┌──────────┬────────────────────────────────────────┬───────────────────┐   │
 │  │  Logo    │  Navigation Tabs                       │  Right Controls   │   │
-│  │  Minted  │  Dashboard · Mint · Stake ·            │  [ETH ⟷ Canton]  │   │
-│  │  Protocol│  Borrow & Lend · Bridge · Admin        │  [0x1a2b…3c4d]   │   │
+│  │  Minted  │  Dashboard · Stake ·                   │  [ETH ⟷ Canton]  │   │
+│  │  Protocol│  Borrow & Lend · Bridge · Admin         │  [0x1a2b…3c4d]   │   │
 │  └──────────┴────────────────────────────────────────┴───────────────────┘   │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
@@ -32,12 +32,12 @@
 ### Background
 - Dark surface (`bg-surface-950`) with animated gradient orbs (top-left blue, bottom-right purple)
 - Subtle cross-hatch SVG grid at 2% opacity
-- Orb colors swap to emerald when on Canton chain
+- Orb colors swap to amber when on Canton chain
 
 ### Chain Toggle
-- Pill toggle in the navbar: **Ethereum** (blue/brand) ⟷ **Canton** (emerald/green)
+- Pill toggle in the navbar: **Ethereum** (blue/brand) ⟷ **Canton** (amber/yellow)
 - Entire app swaps between Ethereum pages and Canton pages based on selection
-- Navbar active-tab underline color follows chain (brand-500 vs emerald-500)
+- Navbar active-tab underline color follows chain (brand-500 vs amber-500)
 
 ### Mobile
 - Hamburger button replaces nav tabs at `< lg` breakpoint
@@ -47,15 +47,14 @@
 
 ## Navigation Items
 
-| Key         | Label          | Icon                | Page Component (ETH)  | Page Component (Canton)  |
-|-------------|----------------|---------------------|-----------------------|--------------------------|
-| `dashboard` | Dashboard      | Home                | `DashboardPage`       | `CantonDashboard`        |
-| `mint`      | Mint           | Dollar circle       | `MintPage`            | `CantonMint`             |
-| `stake`     | Stake          | Trending up         | `StakePage`           | `CantonStake`            |
-| `borrow`    | Borrow & Lend  | Building            | `BorrowPage`          | `CantonBorrow`           |
-| `bridge`    | Bridge         | Arrows left-right   | `BridgePage`          | `CantonBridge`           |
-| `admin`     | Admin          | Settings gear       | `AdminPage`           | `CantonAdmin`            |
-| `points`    | Points         | Star                | `PointsPage`          | `PointsPage`             |
+| Key         | Label          | Icon                | Page Component (ETH)     | Page Component (Canton)    |
+|-------------|----------------|---------------------|--------------------------|----------------------------|
+| `dashboard` | Dashboard      | Home                | `DashboardMintPage`      | `CantonDashboardMint`      |
+| `stake`     | Stake          | Trending up         | `StakePage`              | `CantonStake`              |
+| `borrow`    | Borrow & Lend  | Building            | `BorrowPage`             | `CantonBorrow`             |
+| `bridge`    | Bridge         | Arrows left-right   | `BridgePage`             | `CantonBridge`             |
+| `admin`     | Admin          | Settings gear       | `AdminPage`              | `CantonAdmin`              |
+| `points`    | Points         | Star                | `PointsPage`             | `PointsPage`               |
 
 ---
 
@@ -108,82 +107,61 @@ Every page follows this structure:
 
 ---
 
-### 1. Dashboard Page (`/dashboard`)
+### 1. Dashboard / Mint Page (`/dashboard`) — Landing page after Launch App
+
+This is the FIRST page the user sees. Dashboard and Mint are merged into a single unified page.
 
 ```
-PageHeader: "Protocol Dashboard" · badge: chain name
+PageHeader: "Dashboard" · badge: chain name
+Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 
-┌─ Portfolio / Protocol toggle tabs ──────────────────────┐
+4 Key Metric StatCards (sm:2 lg:4):
+  • Your Balance       (blue, glow, mUSD balance)
+  • Your Staked Earnings (green, smUSD yield earned)
+  • Current APY        (purple, smUSD staking yield %)
+  • mUSD Supply        (default, % of cap)
 
-PORTFOLIO TAB:
-  ┌──────────────────────────────────────────────────────┐
-  │  Net Worth Banner  (card-gradient-border)             │
-  │  $XX,XXX.XX total · mUSD / smUSD / Collateral / Debt │
-  │  Health Factor badge (if borrowing)                   │
-  │  Liquidation warning (if at risk)                     │
-  └──────────────────────────────────────────────────────┘
-
-  4 StatCards:
-    • mUSD Balance       (blue)
-    • smUSD Balance       (purple, subValue = mUSD equivalent)
-    • Collateral Value    (green)
-    • Outstanding Debt    (red if > 0)
-
-  Position Breakdown:
-    Token table — symbol, amount, USD value
-
-PROTOCOL TAB:
-  4 StatCards:
-    • Total mUSD Supply   (brand)
-    • Supply Cap Usage     (utilization bar)
-    • Treasury Backing     (green)
-    • Vault TVL            (blue)
-
-  Protocol Metrics grid:
-    • Attested Canton Assets, Bridge Health, Collateral Ratio
-    • Mint Fee, Redeem Fee, Interest Rate
-    • Bridge status, Available reserves, Strategies deployed
-```
-
----
-
-### 2. Mint Page (`/mint`)  — max-w-3xl
-
-```
-PageHeader: "Mint & Redeem" · "Direct USDC ↔ mUSD" · badge "1:1 Peg"
-
-4 StatCards (sm:2 lg:4):
-  • Mint Fee         (formatBps)
-  • Redeem Fee       (formatBps)
-  • Remaining Mintable (formatUSD)
-  • Available for Redemption (formatUSD)
-
-2 Balance Cards (sm:2):
-  • Your USDC Balance
-  • Your mUSD Balance
-
-Action Card (card-gradient-border):
-  ┌─ [Mint USDC → mUSD]  [Redeem mUSD → USDC] ─────────┐
-  │                                                        │
-  │  Cross-chain source selector (optional Arbitrum/OP)    │
-  │                                                        │
-  │  Input:  amount  [MAX] [USDC/mUSD badge]               │
-  │              ↓                                         │
-  │  Output: preview  [mUSD/USDC badge]                    │
-  │                                                        │
-  │  Exchange info (rate, fee, min/max)                     │
-  │  [ ====== Mint mUSD / Redeem USDC button ========== ] │
-  │  Success/Error alerts with Etherscan link               │
-  └────────────────────────────────────────────────────────┘
+┌──────────────────────────── 2-Column Layout ─────────────────────────────┐
+│                                                                          │
+│  ┌── LEFT (2/5): Mint Widget ──┐  ┌── RIGHT (3/5): Data Panels ──────┐ │
+│  │  card-gradient-border        │  │                                   │ │
+│  │  ┌ Mint / Redeem tabs ─────┐│  │  ┌── Supply Growth Chart ──────┐ │ │
+│  │  │ [Mint]  [Redeem]        ││  │  │  SVG area chart               │ │ │
+│  │  └─────────────────────────┘│  │  │  Time range selector:          │ │ │
+│  │                              │  │  │  [1w] [1m] [3m] [6m] [1y]     │ │ │
+│  │  Collateral Dropdown:        │  │  │  Start/end date labels         │ │ │
+│  │  [USDC ▾] [USDT] [DAI]      │  │  │  Current supply value          │ │ │
+│  │                              │  │  └────────────────────────────────┘ │ │
+│  │  Input:  amount [MAX] token  │  │                                   │ │
+│  │            ↓                 │  │  ┌── Recent Activity ────────────┐ │ │
+│  │  Output: preview  token      │  │  │  Table: Type | Amount | Block | │ │
+│  │                              │  │  │  Mint/Redeem badges, links     │ │ │
+│  │  Fee info (rate, fee bps)    │  │  └────────────────────────────────┘ │ │
+│  │  [ ═══ Mint mUSD ═══ ]      │  │                                   │ │
+│  │  Success/Error alerts        │  │  3 Protocol Health StatCards:     │ │
+│  │                              │  │  • Total Backing  (green)         │ │
+│  │  2 mini-StatCards:           │  │  • smUSD Staked   (purple)        │ │
+│  │  • Remaining Mintable        │  │  • Supply Cap     (utilization %) │ │
+│  │  • Available to Redeem       │  │                                   │ │
+│  └──────────────────────────────┘  └───────────────────────────────────┘ │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
 
 "How It Works" Explainer Card:
   "Mint mUSD 1:1 against selected collateral, validated in real time by
   attestations on the Canton Network, then stake to begin earning."
 ```
 
+**Canton variant (`CantonDashboardMint`):**
+- Amber/yellow color scheme throughout
+- Collateral dropdown replaced by DAML contract selector
+- Hero stats show Canton contract counts and totals
+- Protocol services status grid (DirectMint, Staking, Oracle, Issuer, Pool)
+- Mint/redeem via `exerciseChoice` on DirectMintService DAML template
+
 ---
 
-### 3. Stake Page (`/stake`)  — max-w-3xl
+### 2. Stake Page (`/stake`)  — max-w-3xl
 
 ```
 PageHeader: "Stake & Earn" · "ERC-4626 vault" · badge "ERC-4626" (emerald)
@@ -250,7 +228,7 @@ CantonStake — Additional Canton-Only Widget:
 
 ---
 
-### 4. Borrow & Lend Page (`/borrow`)  — max-w-4xl
+### 3. Borrow & Lend Page (`/borrow`)  — max-w-4xl
 
 ```
 PageHeader: "Borrow & Lend" · badge dynamic "Active Position" (warning) / "No Position" (brand)
@@ -332,7 +310,7 @@ Action Card (card-gradient-border):
 
 ---
 
-### 5. Bridge Page (`/bridge`)  — max-w-4xl
+### 4. Bridge Page (`/bridge`)  — max-w-4xl
 
 ```
 PageHeader: "Canton Bridge" · badge dynamic "Active" (emerald) / "PAUSED" (warning)
@@ -386,7 +364,7 @@ Attestation History Table (card):
 
 ---
 
-### 6. Points Page (`/points`)
+### 5. Points Page (`/points`)
 
 ```
 PageHeader: "Points Program" · "Earn points for using the protocol. Points convert to MNTD token airdrop." · badge: season name
@@ -451,7 +429,7 @@ CALCULATOR TAB:
 
 ---
 
-### 7. Admin Page (`/admin`)  — max-w-4xl
+### 6. Admin Page (`/admin`)  — max-w-4xl
 
 ```
 Tab bar: [mUSD] [DirectMint] [Treasury] [Bridge] [Borrow] [Oracle]
