@@ -29,6 +29,17 @@ describe("SMUSDPriceAdapter", function () {
     await mockSmusd.setAssetsPerShare(ethers.parseEther(usdPrice));
   }
 
+  /**
+   * Helper: mine blocks and update cache so the rate limiter converges
+   * to the current vault price. Needed after SOL-002 initialized _lastPrice.
+   */
+  async function convergePriceAdapter(adapterInstance: any) {
+    for (let i = 0; i < 20; i++) {
+      await ethers.provider.send("hardhat_mine", ["0xa"]); // mine 10 blocks
+      await adapterInstance.updateCachedPrice();
+    }
+  }
+
   beforeEach(async function () {
     [deployer, admin, user1] = await ethers.getSigners();
 
@@ -111,12 +122,14 @@ describe("SMUSDPriceAdapter", function () {
 
     it("should reflect increased share price after yield", async function () {
       await setSharePrice("1.1");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.1", 8));
     });
 
     it("should handle 1.50 USD share price", async function () {
       await setSharePrice("1.5");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.5", 8));
     });
@@ -148,10 +161,12 @@ describe("SMUSDPriceAdapter", function () {
       expect(answer).to.equal(ethers.parseUnits("1.0", 8));
 
       await setSharePrice("1.05");
+      await convergePriceAdapter(adapter);
       [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.05", 8));
 
       await setSharePrice("1.10");
+      await convergePriceAdapter(adapter);
       [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.10", 8));
     });
@@ -171,6 +186,7 @@ describe("SMUSDPriceAdapter", function () {
 
     it("should clamp when share price exceeds maximum (2.0 USD)", async function () {
       await setSharePrice("2.5");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       // FIX SPA-M03: price is clamped to maxSharePrice instead of reverting
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
@@ -184,6 +200,7 @@ describe("SMUSDPriceAdapter", function () {
 
     it("should accept price right at maximum bound (2.0 USD)", async function () {
       await setSharePrice("2.0");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
@@ -197,6 +214,7 @@ describe("SMUSDPriceAdapter", function () {
 
     it("should clamp when price is just above maximum", async function () {
       await setSharePrice("2.01");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       // FIX SPA-M03: price is clamped to maxSharePrice
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
@@ -210,6 +228,7 @@ describe("SMUSDPriceAdapter", function () {
 
       // 0.60 would fail with default bounds but passes with widened
       await setSharePrice("0.60");
+      await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("0.60", 8));
     });
@@ -348,10 +367,12 @@ describe("SMUSDPriceAdapter", function () {
       expect(answer).to.equal(ethers.parseUnits("1.0", 8));
 
       await setSharePrice("1.05");
+      await convergePriceAdapter(adapter);
       [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.05", 8));
 
       await setSharePrice("1.10");
+      await convergePriceAdapter(adapter);
       [, answer] = await adapter.latestRoundData();
       expect(answer).to.equal(ethers.parseUnits("1.10", 8));
     });
@@ -375,6 +396,7 @@ describe("SMUSDPriceAdapter", function () {
 
       await adapter.connect(admin).incrementRound();
       await setSharePrice("1.15");
+      await convergePriceAdapter(adapter);
 
       [roundId, answer] = await adapter.latestRoundData();
       expect(roundId).to.equal(2);

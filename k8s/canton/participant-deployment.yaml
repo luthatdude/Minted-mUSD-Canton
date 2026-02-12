@@ -25,6 +25,13 @@ spec:
       port: 7575
       targetPort: 7575
       protocol: TCP
+    # FIX INFRA-007: Add metrics port so that the ServiceMonitor (service-monitors.yaml)
+    # can scrape Prometheus metrics. The ServiceMonitor selector matches
+    # app.kubernetes.io/name: canton-participant and references port "metrics".
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
   selector:
     app.kubernetes.io/name: canton-participant
 ---

@@ -19,6 +19,18 @@ import { createLogger, format, transports } from "winston";
 
 dotenv.config();
 
+// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL: Unhandled promise rejection:', reason);
+  process.exit(1);
+});
+
+// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+process.on('uncaughtException', (error) => {
+  console.error('FATAL: Uncaught exception:', error);
+  process.exit(1);
+});
+
 // ============================================================
 //                     TYPES
 // ============================================================
@@ -45,19 +57,28 @@ export interface OracleKeeperConfig {
 
 export const DEFAULT_KEEPER_CONFIG: OracleKeeperConfig = {
   rpcUrl: process.env.RPC_URL || "",
-  chainId: parseInt(process.env.CHAIN_ID || "1"),
+  chainId: parseInt(process.env.CHAIN_ID || "1", 10),
   privateKey: "",
   priceOracleAddress: process.env.PRICE_ORACLE_ADDRESS || "",
   monitoredTokens: {},
-  pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "30000"),
-  maxStalenessSeconds: parseInt(process.env.KEEPER_MAX_STALENESS || "600"),
-  maxDeviationBps: parseInt(process.env.KEEPER_MAX_DEVIATION_BPS || "500"),
+  pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "30000", 10),
+  maxStalenessSeconds: parseInt(process.env.KEEPER_MAX_STALENESS || "600", 10),
+  maxDeviationBps: parseInt(process.env.KEEPER_MAX_DEVIATION_BPS || "500", 10),
   externalFeedUrl:
     process.env.EXTERNAL_FEED_URL ||
     "https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
 };
+
+// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+if (DEFAULT_KEEPER_CONFIG.rpcUrl && DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('http://') && !DEFAULT_KEEPER_CONFIG.rpcUrl.includes('localhost') && !DEFAULT_KEEPER_CONFIG.rpcUrl.includes('127.0.0.1')) {
+  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
+}
+// FIX BE-004: Reject insecure HTTP transport in production
+if (process.env.NODE_ENV === 'production' && DEFAULT_KEEPER_CONFIG.rpcUrl && !DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('https://') && !DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('wss://')) {
+  throw new Error('FIX BE-004: Insecure RPC transport in production. RPC_URL must use https:// or wss://');
+}
 
 // ============================================================
 //                     PURE HELPERS (exported for testing)
@@ -161,7 +182,7 @@ export class OracleKeeper {
     this.config = config;
 
     const fetchReq = new ethers.FetchRequest(config.rpcUrl);
-    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
     this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
       staticNetwork: true,
       batchMaxCount: 1,

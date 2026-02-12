@@ -7,6 +7,9 @@
 #   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 
 # Build stage
+# INFRA-004: Pin to SHA256 digest in production for supply chain security:
+#   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
+# FROM node:20-alpine@sha256:<DIGEST> AS builder
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -25,6 +28,8 @@ COPY tsconfig.json* ./
 RUN npm run build
 
 # Production stage
+# INFRA-004: Pin to SHA256 digest in production (must match builder base):
+# FROM node:20-alpine@sha256:<DIGEST> AS production
 FROM node:20-alpine AS production
 
 # Security: run as non-root user

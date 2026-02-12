@@ -23,6 +23,18 @@ import MEVProtectedExecutor, { FlashbotsProvider, PrivateTxSender } from "./flas
 
 dotenv.config();
 
+// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL: Unhandled promise rejection:', reason);
+  process.exit(1);
+});
+
+// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+process.on('uncaughtException', (error) => {
+  console.error('FATAL: Uncaught exception:', error);
+  process.exit(1);
+});
+
 // FIX BE-SECRET-01: Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
 function readSecret(name: string, envVar: string): string {
   const secretPath = `/run/secrets/${name}`;
@@ -223,25 +235,30 @@ function loadConfig(): SniperConfig {
     throw new Error("FATAL: WS_RPC_URL environment variable is required");
   }
 
+  // FIX BE-004: Reject insecure HTTP transport in production
+  if (process.env.NODE_ENV === 'production' && !process.env.RPC_URL!.startsWith('https://') && !process.env.RPC_URL!.startsWith('wss://')) {
+    throw new Error('FIX BE-004: Insecure RPC transport in production. RPC_URL must use https:// or wss://');
+  }
+
   return {
     rpcUrl: process.env.RPC_URL,
     wsRpcUrl: process.env.WS_RPC_URL,
-    chainId: parseInt(process.env.CHAIN_ID || "1"),
+    chainId: parseInt(process.env.CHAIN_ID || "1", 10),
     // FIX BE-001: Validate private key is in valid secp256k1 range
     privateKey: readAndValidatePrivateKey("bot_private_key", "PRIVATE_KEY"),
 
     depositToken: process.env.SNIPER_DEPOSIT_TOKEN || "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
     depositAmountRaw: BigInt(process.env.SNIPER_DEPOSIT_AMOUNT || "1000000000"), // 1000 USDC default
-    slippageBps: parseInt(process.env.SNIPER_SLIPPAGE_BPS || "100"), // 1%
-    maxGasPriceGwei: parseInt(process.env.SNIPER_MAX_GAS_GWEI || "150"),
+    slippageBps: parseInt(process.env.SNIPER_SLIPPAGE_BPS || "100", 10), // 1%
+    maxGasPriceGwei: parseInt(process.env.SNIPER_MAX_GAS_GWEI || "150", 10),
 
     useFlashbots: process.env.SNIPER_USE_FLASHBOTS === "true",
     usePrivateRpc: process.env.SNIPER_USE_PRIVATE_RPC !== "false", // default ON
-    priorityFeeGwei: parseInt(process.env.SNIPER_PRIORITY_FEE_GWEI || "5"),
+    priorityFeeGwei: parseInt(process.env.SNIPER_PRIORITY_FEE_GWEI || "5", 10),
 
     targetAssets: (process.env.SNIPER_TARGET_ASSETS || "sUSDe,USDe").split(","),
-    minExpiryDays: parseInt(process.env.SNIPER_MIN_EXPIRY_DAYS || "30"),
-    maxExpiryDays: parseInt(process.env.SNIPER_MAX_EXPIRY_DAYS || "365"),
+    minExpiryDays: parseInt(process.env.SNIPER_MIN_EXPIRY_DAYS || "30", 10),
+    maxExpiryDays: parseInt(process.env.SNIPER_MAX_EXPIRY_DAYS || "365", 10),
 
     telegramEnabled: process.env.TELEGRAM_ENABLED === "true",
     // FIX BE-SECRET-02: Use Docker secret for Telegram bot token
@@ -313,7 +330,7 @@ class PendlePoolSniper {
     this.config = config;
     // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
     const fetchReq = new ethers.FetchRequest(config.rpcUrl);
-    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
     this.httpProvider = new ethers.JsonRpcProvider(fetchReq, undefined, {
       staticNetwork: true,
       batchMaxCount: 1,
