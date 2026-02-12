@@ -224,7 +224,7 @@ jobs:
 
       - name: Install relay dependencies
         working-directory: relay
-        run: npm ci || npm install
+        run: npm ci
 
       - name: TypeScript compile check
         working-directory: relay
@@ -250,7 +250,7 @@ jobs:
 
       - name: Install bot dependencies
         working-directory: bot
-        run: npm ci || npm install
+        run: npm ci
 
       - name: TypeScript compile check
         working-directory: bot

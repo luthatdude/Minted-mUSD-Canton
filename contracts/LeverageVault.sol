@@ -740,6 +740,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
 
         address collateralToken = pos.collateralToken;
 
+        // FIX SOL-003: Snapshot balances before operation to prevent sweeping other users' residuals
+        uint256 collateralBefore = IERC20(collateralToken).balanceOf(address(this));
+        uint256 musdBefore = musd.balanceOf(address(this));
+
         // Withdraw all collateral from vault to this contract
         uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);
         if (totalCollateralInVault > 0) {
@@ -778,14 +782,17 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // FIX SOL-C03: Only return remaining assets to user if repay succeeded.
         // If repay failed, collateral stays in contract for admin recovery via
         // emergencyWithdraw() — preventing orphaned bad debt.
+        // FIX SOL-003: Only return this user's portion, not full contract balance
         if (repaySucceeded) {
-            uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));
-            if (remainingCollateral > 0) {
-                IERC20(collateralToken).safeTransfer(user, remainingCollateral);
+            uint256 collateralAfter = IERC20(collateralToken).balanceOf(address(this));
+            uint256 userCollateral = collateralAfter > collateralBefore ? collateralAfter - collateralBefore : 0;
+            if (userCollateral > 0) {
+                IERC20(collateralToken).safeTransfer(user, userCollateral);
             }
-            uint256 remainingMusd = musd.balanceOf(address(this));
-            if (remainingMusd > 0) {
-                IERC20(address(musd)).safeTransfer(user, remainingMusd);
+            uint256 musdAfter = musd.balanceOf(address(this));
+            uint256 userMusd = musdAfter > musdBefore ? musdAfter - musdBefore : 0;
+            if (userMusd > 0) {
+                IERC20(address(musd)).safeTransfer(user, userMusd);
             }
         }
 

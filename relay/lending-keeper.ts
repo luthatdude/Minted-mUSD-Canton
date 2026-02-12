@@ -26,6 +26,30 @@ import Ledger from "@daml/ledger";
 import { readSecret } from "./utils";
 import { fetchTradecraftQuote, fetchTradecraftPoolState, PriceOracleService } from "./price-oracle";
 
+// FIX BE-008: Safe decimal parser for DAML Numeric values — avoids IEEE 754 precision loss
+function parseDamlNumericSafe(value: string, fieldName?: string): number {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Invalid DAML numeric value for ${fieldName || 'unknown'}: "${value}"`);
+  }
+  const num = Number(value);
+  if (isNaN(num) || !isFinite(num)) {
+    throw new Error(`Non-numeric DAML value for ${fieldName || 'unknown'}: "${value}"`);
+  }
+  return num;
+}
+
+// FIX BE-008: BigInt-based decimal parsing for precision-critical comparisons
+function parseDamlNumericBigInt(value: string, decimals: number = 18): bigint {
+  const trimmed = value.trim();
+  const negative = trimmed.startsWith('-');
+  const abs = negative ? trimmed.slice(1) : trimmed;
+  const parts = abs.split('.');
+  const intPart = parts[0] || '0';
+  const fracPart = (parts[1] || '').padEnd(decimals, '0').slice(0, decimals);
+  const result = BigInt(intPart) * BigInt('1' + '0'.repeat(decimals)) + BigInt(fracPart);
+  return negative ? -result : result;
+}
+
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
@@ -195,8 +219,8 @@ export class LendingKeeperBot {
     return contracts.map((c: any) => ({
       contractId: c.contractId,
       borrower: c.payload.borrower,
-      principalDebt: parseFloat(c.payload.principalDebt),
-      accruedInterest: parseFloat(c.payload.accruedInterest),
+      principalDebt: parseDamlNumericSafe(c.payload.principalDebt, 'principalDebt'),
+      accruedInterest: parseDamlNumericSafe(c.payload.accruedInterest, 'accruedInterest'),
       lastAccrualTime: c.payload.lastAccrualTime,
       interestRateBps: parseInt(c.payload.interestRateBps, 10),
     }));
@@ -217,7 +241,7 @@ export class LendingKeeperBot {
       contractId: c.contractId,
       owner: c.payload.owner,
       collateralType: c.payload.collateralType,
-      amount: parseFloat(c.payload.amount),
+      amount: parseDamlNumericSafe(c.payload.amount, 'amount'),
     }));
   }
 
@@ -499,8 +523,10 @@ export class LendingKeeperBot {
       }
 
       // Find an mUSD contract with enough balance
+      // FIX BE-008: Use BigInt comparison for precision-safe balance check
+      const maxRepayScaled = BigInt(Math.ceil(candidate.maxRepay * 1e18));
       const musdContract = keeperMusd.find(
-        (c: any) => parseFloat(c.payload.amount) >= candidate.maxRepay
+        (c: any) => parseDamlNumericBigInt(c.payload.amount, 18) >= maxRepayScaled
       );
 
       if (!musdContract) {
@@ -555,7 +581,8 @@ export class LendingKeeperBot {
 
       // FIX BE-H03: Re-compute health factor with fresh data before executing liquidation
       // The original scan data may be stale (user may have repaid or added collateral)
-      const freshDebt = parseFloat((freshDebtPositions[0] as any).payload.totalBorrowed || "0");
+      // FIX BE-008: Use parseDamlNumericSafe instead of parseFloat to avoid IEEE 754 precision loss
+      const freshDebt = parseDamlNumericSafe((freshDebtPositions[0] as any).payload.totalBorrowed || "0", 'freshDebt');
       const freshCollateralValue = freshEscrows.reduce((sum, e) => {
         const price = this.getPrice(e.collateralType);
         return sum + e.amount * price;

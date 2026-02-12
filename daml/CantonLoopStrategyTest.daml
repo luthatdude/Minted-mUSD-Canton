@@ -710,7 +710,7 @@ testHealthFactorCalculation = do
 
 testStrategyEstimate : Script ()
 testStrategyEstimate = do
-  let est = estimateStrategy SMUSDMaxiLoop 1000.0 5 0.06 0.04
+  let est = estimateStrategy SMUSDMaxiLoop defaultLoopConfig 1000.0 5 0.06 0.04
   assertMsg "Leverage > 4" (est.leverage > 4.0)
   assertMsg "Net APY positive" (est.netAPY > 0.0)
   assertMsg "Health factor > 1" (est.healthFactor > 1.0)

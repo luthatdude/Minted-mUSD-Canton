@@ -35,11 +35,18 @@ contract PriceOracle is AccessControl {
 
     // collateral token address => feed config
     mapping(address => FeedConfig) public feeds;
+
+    /// @dev FIX H-03: Maximum allowed staleness period (24 hours)
+    uint256 public constant MAX_STALE_PERIOD = 24 hours;
     
     /// @dev FIX S-H01: Circuit breaker - track last known prices and max deviation
     mapping(address => uint256) public lastKnownPrice;
     uint256 public maxDeviationBps = 2000; // 20% max price change per update
     bool public circuitBreakerEnabled = true;
+
+    /// @dev FIX H-04: Cooldown for circuit breaker toggle to prevent per-transaction manipulation
+    uint256 public constant CIRCUIT_BREAKER_COOLDOWN = 1 hours;
+    uint256 public lastCircuitBreakerToggle;
 
     event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
     event FeedRemoved(address indexed token);
@@ -61,8 +68,11 @@ contract PriceOracle is AccessControl {
     }
 
     /// @dev FIX S-H01: Toggle circuit breaker on/off
+    /// @dev FIX H-04: Enforce 1-hour cooldown to prevent per-transaction toggling
     function setCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
+        require(block.timestamp >= lastCircuitBreakerToggle + CIRCUIT_BREAKER_COOLDOWN, "CIRCUIT_BREAKER_COOLDOWN_ACTIVE");
         circuitBreakerEnabled = _enabled;
+        lastCircuitBreakerToggle = block.timestamp;
         emit CircuitBreakerToggled(_enabled);
     }
 
@@ -90,6 +100,8 @@ contract PriceOracle is AccessControl {
         require(token != address(0), "INVALID_TOKEN");
         require(feed != address(0), "INVALID_FEED");
         require(stalePeriod > 0, "INVALID_STALE_PERIOD");
+        // FIX H-03: Enforce upper bound on staleness to prevent accepting arbitrarily old prices
+        require(stalePeriod <= MAX_STALE_PERIOD, "STALE_PERIOD_TOO_HIGH");
         // FIX H-1: Validate tokenDecimals at config time to prevent precision issues
         require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
 

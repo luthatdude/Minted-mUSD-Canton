@@ -26,7 +26,7 @@ function readSecret(name: string, envVar: string): string {
 
 const config = {
   rpcUrl: process.env.RPC_URL!,
-  chainId: parseInt(process.env.CHAIN_ID || "1"),
+  chainId: parseInt(process.env.CHAIN_ID || "1", 10),
   // FIX BE-SECRET-01: Use Docker secret with env var fallback
   privateKey: readSecret("bot_private_key", "PRIVATE_KEY"),
   
@@ -38,12 +38,12 @@ const config = {
   musd: process.env.MUSD_ADDRESS!,
   
   // Bot settings
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
-  gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20"),
-  maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100"),
+  gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20", 10),
+  maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
   ethPriceUsd: parseFloat(process.env.ETH_PRICE_USD || "2500"),
-  maxTrackedBorrowers: parseInt(process.env.MAX_TRACKED_BORROWERS || "10000"),
+  maxTrackedBorrowers: parseInt(process.env.MAX_TRACKED_BORROWERS || "10000", 10),
   
   // Flashbots
   useFlashbots: process.env.USE_FLASHBOTS === "true",
@@ -173,10 +173,10 @@ class LiquidationBot {
   constructor() {
     // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
     const fetchReq = new ethers.FetchRequest(config.rpcUrl);
-    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
     this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
       staticNetwork: true,
-      pollingInterval: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
+      pollingInterval: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
       batchMaxCount: 1,
     });
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);

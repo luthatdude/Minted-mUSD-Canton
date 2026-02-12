@@ -363,12 +363,14 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     //     Must use globalTotalAssets for consistency with _convertToShares
     // ============================================================
 
-    /// @notice FIX ERC-4626: Max withdrawable assets for owner, accounting for global share price
-    /// @dev OZ default uses local totalAssets(). We override to use globalTotalAssets-based conversion.
+    /// @notice FIX SOL-001: Cap at local mUSD balance for ERC-4626 compliance.
+    /// globalTotalAssets may exceed what this vault actually holds in mUSD.
     function maxWithdraw(address owner) public view override returns (uint256) {
         if (paused()) return 0;
         if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) return 0;
-        return _convertToAssets(balanceOf(owner), Math.Rounding.Floor);
+        uint256 ownerMax = _convertToAssets(balanceOf(owner), Math.Rounding.Floor);
+        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
+        return ownerMax < vaultBalance ? ownerMax : vaultBalance;
     }
 
     /// @notice FIX ERC-4626: Max redeemable shares for owner

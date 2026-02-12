@@ -84,6 +84,15 @@ const DEFAULT_CONFIG: RelayConfig = {
   triggerAutoDeploy: process.env.TRIGGER_AUTO_DEPLOY !== "false",  // Default enabled
 };
 
+// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+if (DEFAULT_CONFIG.ethereumRpcUrl && DEFAULT_CONFIG.ethereumRpcUrl.startsWith('http://') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('localhost') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('127.0.0.1')) {
+  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
+}
+// FIX BE-004: Reject insecure HTTP transport in production
+if (process.env.NODE_ENV === 'production' && DEFAULT_CONFIG.ethereumRpcUrl && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('https://') && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('wss://')) {
+  throw new Error('FIX BE-004: Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
+}
+
 // ============================================================
 //                     DAML TYPES (generated)
 // ============================================================
@@ -717,7 +726,16 @@ class RelayService {
     const fs = await import("fs");
     const path = await import("path");
 
-    const dlqPath = path.join(process.cwd(), RelayService.DEAD_LETTER_FILE);
+    // FIX BE-005: Use configurable DLQ_PATH env var with fallback, create directory if needed
+    const dlqDir = process.env.DLQ_PATH || process.cwd();
+    try {
+      if (!fs.existsSync(dlqDir)) {
+        fs.mkdirSync(dlqDir, { recursive: true });
+      }
+    } catch (mkdirErr) {
+      console.warn(`[Relay] Cannot create DLQ directory ${dlqDir}: ${(mkdirErr as Error).message}`);
+    }
+    const dlqPath = path.join(dlqDir, RelayService.DEAD_LETTER_FILE);
 
     // Load existing dead-letter entries
     let entries: Array<{
@@ -753,9 +771,15 @@ class RelayService {
     }
 
     // Write atomically (write to temp, then rename)
+    // FIX BE-005: Wrap file writes in try/catch to handle read-only rootfs gracefully
     const tmpPath = dlqPath + ".tmp";
-    fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2));
-    fs.renameSync(tmpPath, dlqPath);
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(entries, null, 2));
+      fs.renameSync(tmpPath, dlqPath);
+    } catch (writeErr) {
+      console.error(`[Relay] DLQ write failed (read-only filesystem?): ${(writeErr as Error).message}`);
+      console.error(`[Relay] DLQ entry (logged instead): ${JSON.stringify({ attestationId, error, retryCount, timestamp: new Date().toISOString() })}`);
+    }
 
     console.error(
       `[Relay] DEAD-LETTER: Attestation ${attestationId} moved to ${RelayService.DEAD_LETTER_FILE} after ${retryCount} retries`
@@ -965,6 +989,12 @@ async function main(): Promise<void> {
 // FIX T-C03: Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
+
+// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+process.on("uncaughtException", (error) => {
+  console.error("[Main] Uncaught exception:", error);
   process.exit(1);
 });
 

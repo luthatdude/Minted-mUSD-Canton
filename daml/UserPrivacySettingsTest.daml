@@ -556,6 +556,8 @@ testObserverOnEscrow = do
       amount = 10000.0
       depositedAt = baseTime
       lastUpdatedAt = baseTime
+      originalSourceChain = None
+      originalCctpNonce = None
       privacyObservers = [auditor]
 
   escrow <- queryContractId auditor escrowCid
