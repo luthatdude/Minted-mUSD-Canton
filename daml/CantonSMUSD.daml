@@ -378,7 +378,9 @@ template CantonStakingService
           globalTotalShares = medianShares
           lastSyncEpoch = epochNumber
 
-    -- | Legacy SyncYield for backwards compatibility (deprecated)
+    -- ⚠️ DEPRECATED: Use SyncGlobalSharePrice instead.
+    -- This choice exists only for backwards compatibility with existing relay code.
+    -- It will be removed in the next major version.
     -- FIX D-H3: Governance-gated admin choice
     -- FIX DAML-D1: Converted to consuming (was nonconsuming+archive-self)
     -- FIX DAML-C04: Added same guards as SyncGlobalSharePrice (10% decrease cap, positivity)

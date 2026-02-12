@@ -41,6 +41,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    /// @notice FIX SOL-H-10: Role for authorized relayers to submit attestations
+    bytes32 public constant RELAYER_ROLE = keccak256("RELAYER_ROLE");
 
     IMUSD public musdToken;
 
@@ -285,10 +287,11 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Process Canton attestation and update mUSD supply cap
     /// @param att The attestation data from Canton validators
     /// @param signatures Validator signatures
+    /// @dev FIX SOL-H-10: Restricted to RELAYER_ROLE to prevent griefing via rate-limit exhaustion
     function processAttestation(
         Attestation calldata att,
         bytes[] calldata signatures
-    ) external nonReentrant whenNotPaused {
+    ) external nonReentrant whenNotPaused onlyRole(RELAYER_ROLE) {
         require(signatures.length >= minSignatures, "INSUFFICIENT_SIGNATURES");
         require(att.nonce == currentNonce + 1, "INVALID_NONCE");
         require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");

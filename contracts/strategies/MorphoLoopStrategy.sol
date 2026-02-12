@@ -14,17 +14,20 @@ import "../interfaces/IStrategy.sol";
  * @notice Leveraged USDC strategy using Morpho Blue recursive lending
  * @dev Deposits USDC → Borrow at 70% LTV → Redeposit → Loop for ~3.3x leverage
  *
- * Target Performance:
- *   Base Supply Rate:  ~5.9% (Morpho USDC vault)
- *   Borrow Rate:       ~4.5%
- *   Leverage:          3.33x (at 70% LTV)
- *   Net APY:           ~11.5% (supply*3.33 - borrow*2.33)
+ * FIX SOL-H-09: YIELD MODEL CLARIFICATION
+ *   Collateral in Morpho Blue earns 0% supply rate.
+ *   Strategy yield comes from:
+ *     - Morpho MORPHO token incentives/rewards on the market
+ *     - External reward programs (e.g., Morpho Blue market rewards)
+ *   The strategy is NOT profitable from supply/borrow rate spread alone.
+ *   Net yield depends on reward token value and reward rate.
  *
  * Safety Features:
  *   - Max 5 loops to prevent gas exhaustion
  *   - Health factor monitoring
  *   - Emergency deleverage capability
  *   - Configurable target LTV with safety buffer
+ *   - Profitability check before looping (maxBorrowRateForProfit)
  */
 
 /// @notice Morpho Blue Market interface
@@ -477,11 +480,11 @@ contract MorphoLoopStrategy is
         
         if (!profitable) {
             // Looping not profitable - supply as collateral without leverage
-            // This protects against paying high borrow interest with 0% supply yield
+            // FIX SOL-H-09: WARNING — collateral earns 0% interest in Morpho Blue.
+            // Without looping, this path only holds USDC as collateral with no yield.
+            // Consider depositing to a separate supply-only vault when not looping.
             emit LoopingSkipped(borrowRate, maxBorrowRateForProfit, "Borrow rate too high");
             
-            // FIX SOL-H02: Add forceApprove before supplyCollateral in non-profitable path
-            // Without this, supplyCollateral reverts since infinite approvals were removed (ML-M02)
             usdc.forceApprove(address(morpho), initialAmount);
             morpho.supplyCollateral(marketParams, initialAmount, address(this), "");
             return initialAmount;
@@ -490,7 +493,8 @@ contract MorphoLoopStrategy is
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
             // FIX ML-M02: Per-operation approval instead of infinite
             usdc.forceApprove(address(morpho), amountToSupply);
-            // Supply USDC as collateral
+            // FIX SOL-H-09: supplyCollateral earns 0% in Morpho Blue — strategy yield comes
+            // from Morpho rewards/incentives, NOT from supply rate. NatSpec updated accordingly.
             morpho.supplyCollateral(marketParams, amountToSupply, address(this), "");
             totalSupplied += amountToSupply;
 
@@ -811,22 +815,24 @@ contract MorphoLoopStrategy is
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // STORAGE GAP FOR UPGRADES
-    // ═══════════════════════════════════════════════════════════════════════
-    
-    /// @dev FIX HIGH: Storage gap for future upgrades - prevents storage collision
-    /// FIX: Adjusted from 40 to 38 after adding pendingImplementation + upgradeRequestTime
-    uint256[38] private __gap;
-
-    // ═══════════════════════════════════════════════════════════════════════
     // UPGRADES (TIMELOCKED)
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    /// @dev FIX SOL-C-05: Declared BEFORE __gap so future upgrades don't shift these slots
     address public pendingImplementation;
 
     /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
     uint256 public upgradeRequestTime;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // STORAGE GAP FOR UPGRADES
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    /// @dev FIX SOL-C-05: Storage gap declared AFTER upgrade variables (correct OZ convention).
+    ///      pendingImplementation + upgradeRequestTime are now before the gap.
+    ///      Future upgrades: add new vars above __gap, reduce gap size by count of new vars.
+    uint256[38] private __gap;
 
     /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
     uint256 public constant UPGRADE_DELAY = 48 hours;
