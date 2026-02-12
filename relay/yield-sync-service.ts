@@ -240,6 +240,24 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
+    // FIX R-05: Validate bridge private key before constructing wallet
+    const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
+    if (keyBytes.length !== 32) {
+      throw new Error(
+        `[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`
+      );
+    }
+    // Validate it's a valid secp256k1 scalar (0 < key < curve order)
+    const SECP256K1_ORDER = BigInt(
+      "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+    );
+    const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
+    if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
+      throw new Error(
+        "[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar"
+      );
+    }
+
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
     this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
