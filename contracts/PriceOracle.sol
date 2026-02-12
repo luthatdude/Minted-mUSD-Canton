@@ -102,8 +102,11 @@ contract PriceOracle is AccessControl {
     function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
-        (, int256 answer, , , ) = config.feed.latestRoundData();
+        // FIX CORE-M-04: Validate freshness before resetting circuit breaker reference
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
         require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        require(answeredInRound >= roundId, "STALE_ROUND");
         uint8 feedDecimals = config.feed.decimals();
         lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
     }

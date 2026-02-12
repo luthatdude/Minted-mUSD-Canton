@@ -289,7 +289,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
         if (cantonTotalShares == 0) {
             uint256 ethShares = totalSupply();
-            uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : _cantonShares;
+            // FIX VAULT-M-07: When no ETH shares exist, cap at absolute limit
+            // instead of no-op self-comparison. Admin should set up ETH deposits first.
+            uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : 1_000_000e18;
             require(_cantonShares <= maxInitialShares, "INITIAL_SHARES_TOO_LARGE");
         } else {
             // FIX: Magnitude limit - max 5% change per sync to prevent manipulation
@@ -361,6 +363,17 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         require(globalTotalShares() > 0, "NO_SHARES_EXIST");
         uint256 usdcValue = ITreasury(treasury).totalValue();
         uint256 newGlobalAssets = usdcValue * 1e12;
+
+        // FIX VAULT-M-01: Apply same growth cap as globalTotalAssets() to prevent
+        // a compromised strategy from inflating the cache baseline.
+        uint256 cached = lastKnownGlobalAssets;
+        if (cached > 0) {
+            uint256 maxAllowed = cached + (cached * MAX_GLOBAL_ASSETS_GROWTH_BPS) / 10000;
+            if (newGlobalAssets > maxAllowed) {
+                newGlobalAssets = maxAllowed;
+            }
+        }
+
         lastKnownGlobalAssets = newGlobalAssets;
         emit GlobalAssetsRefreshed(newGlobalAssets, usdcValue);
     }

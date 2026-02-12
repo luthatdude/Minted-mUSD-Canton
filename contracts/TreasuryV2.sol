@@ -276,7 +276,7 @@ contract TreasuryV2 is
         address _admin,
         address _feeRecipient
     ) external initializer {
-        if (_asset == address(0) || _vault == address(0) || _admin == address(0)) {
+        if (_asset == address(0) || _vault == address(0) || _admin == address(0) || _feeRecipient == address(0)) {
             revert ZeroAddress();
         }
 
@@ -817,7 +817,14 @@ contract TreasuryV2 is
     ) external onlyRole(STRATEGIST_ROLE) {
         if (strategy == address(0)) revert ZeroAddress();
         if (isStrategy[strategy]) revert StrategyExists();
-        if (strategies.length >= MAX_STRATEGIES) revert MaxStrategiesReached();
+        // FIX VAULT-M-08: Prevent overwriting pending request (bait-and-switch)
+        require(pendingAddStrategy.strategy == address(0), "ADD_ALREADY_PENDING");
+        // FIX VAULT-M-03: Count active strategies so removed ones don't permanently consume slots
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            if (strategies[i].active) activeCount++;
+        }
+        if (activeCount >= MAX_STRATEGIES) revert MaxStrategiesReached();
         if (targetBps > maxBps || minBps > targetBps) revert AllocationExceedsLimit();
 
         pendingAddStrategy = PendingStrategy({
@@ -843,7 +850,12 @@ contract TreasuryV2 is
         require(block.timestamp >= p.requestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
         // Re-validate
         if (isStrategy[p.strategy]) revert StrategyExists();
-        if (strategies.length >= MAX_STRATEGIES) revert MaxStrategiesReached();
+        // FIX VAULT-M-03: Count active strategies so removed ones don't permanently consume slots
+        uint256 activeCount = 0;
+        for (uint256 j = 0; j < strategies.length; j++) {
+            if (strategies[j].active) activeCount++;
+        }
+        if (activeCount >= MAX_STRATEGIES) revert MaxStrategiesReached();
 
         // Validate total allocation
         uint256 totalTarget = p.targetBps + reserveBps;
@@ -875,6 +887,8 @@ contract TreasuryV2 is
      */
     function requestRemoveStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
+        // FIX VAULT-M-08: Prevent overwriting pending request
+        require(pendingRemoveStrategy == address(0), "REMOVE_ALREADY_PENDING");
         pendingRemoveStrategy = strategy;
         pendingRemoveStrategyTime = block.timestamp;
         emit StrategyRemoveRequested(strategy, block.timestamp + UPGRADE_DELAY);

@@ -130,7 +130,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
-        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
+        // FIX CORE-M-07: Enforce minimum 1% penalty to ensure liquidation profitability
+        require(liquidationPenaltyBps >= 100 && liquidationPenaltyBps <= 2000, "INVALID_PENALTY");
 
         pendingAddCollateral = PendingCollateral({
             token: token,
@@ -177,7 +178,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
-        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
+        // FIX CORE-M-07: Enforce minimum 1% penalty to ensure liquidation profitability
+        require(liquidationPenaltyBps >= 100 && liquidationPenaltyBps <= 2000, "INVALID_PENALTY");
 
         pendingUpdateCollateral = PendingCollateral({
             token: token,
@@ -246,10 +248,14 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
         require(amount > 0, "INVALID_AMOUNT");
 
-        deposits[msg.sender][token] += amount;
+        // FIX CORE-M-03: Measure actual received tokens for fee-on-transfer safety
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
 
-        emit Deposited(msg.sender, token, amount);
+        deposits[msg.sender][token] += received;
+
+        emit Deposited(msg.sender, token, received);
     }
 
     /// @notice Deposit collateral on behalf of another user (for LeverageVault integration)
@@ -261,10 +267,14 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(amount > 0, "INVALID_AMOUNT");
         require(user != address(0), "INVALID_USER");
 
-        deposits[user][token] += amount;
+        // FIX CORE-M-03: Measure actual received tokens for fee-on-transfer safety
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
 
-        emit Deposited(user, token, amount);
+        deposits[user][token] += received;
+
+        emit Deposited(user, token, received);
     }
 
     /// @notice Withdraw collateral (BorrowModule checks health factor before allowing)

@@ -358,7 +358,8 @@ template CantonStakingService
 
         -- FIX DAML-R01: Use median price from attestations (not operator-supplied)
         let sortedPrices = sort prices
-        let mid = DA.List.length sortedPrices / 2
+        -- FIX DAML-M-02: Use lower-median for conservative bias on even attestor counts
+        let mid = (DA.List.length sortedPrices - 1) / 2
         let medianPrice = sortedPrices !! mid
 
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
@@ -392,24 +393,10 @@ template CantonStakingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
-        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
-        -- Convert to global share price model
-        let newSharePrice = if globalTotalShares > 0.0
-              then newTotalTreasuryAssets / globalTotalShares
-              else globalSharePrice
-        -- FIX DAML-C04: Apply same safety guards as SyncGlobalSharePrice
-        assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newSharePrice > 0.0)
-        let minAllowedPrice = globalSharePrice * 0.9
-        assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newSharePrice >= minAllowedPrice)
-        create this with
-          globalSharePrice = newSharePrice
-          globalTotalAssets = newTotalTreasuryAssets
-          lastSyncEpoch = epochNumber
+        -- FIX DAML-M-05: Fully deprecate — this choice bypasses attestation quorum
+        assertMsg "DEPRECATED_USE_SyncGlobalSharePrice" False
+        -- Unreachable: kept for type-checker only
+        create this
 
     -- | Admin: Pause/unpause
     -- FIX D-H3: Governance-gated admin choice

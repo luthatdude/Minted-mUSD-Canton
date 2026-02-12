@@ -212,6 +212,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         require(_vault != address(0), "INVALID_VAULT");
         require(_oracle != address(0), "INVALID_ORACLE");
         require(_musd != address(0), "INVALID_MUSD");
+        // FIX CORE-M-01: Cap interest rate at same limit as timelocked setter
+        require(_interestRateBps <= 5000, "RATE_TOO_HIGH");
+        // FIX CORE-M-02: Prevent zero minDebt which defeats dust-position protection
+        require(_minDebt > 0 && _minDebt <= 1e24, "INVALID_MIN_DEBT");
 
         vault = ICollateralVault(_vault);
         oracle = IPriceOracle(_oracle);
@@ -604,8 +608,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // repay/liquidation paths. Interest is still tracked in totalBorrows.
             if (supplierAmount > 0 && address(smusd) != address(0)) {
                 try musd.mint(address(this), supplierAmount) {
-                    // Approve and send to SMUSD
-                    IERC20(address(musd)).approve(address(smusd), supplierAmount);
+                    // FIX CORE-M-08: Use forceApprove for safe ERC20 approval
+                    IERC20(address(musd)).forceApprove(address(smusd), supplierAmount);
                     try smusd.receiveInterest(supplierAmount) {
                         totalInterestPaidToSuppliers += supplierAmount;
                         emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);

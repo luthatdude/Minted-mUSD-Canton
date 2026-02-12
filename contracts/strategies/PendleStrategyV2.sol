@@ -333,7 +333,7 @@ contract PendleStrategyV2 is
         address _admin,
         string calldata _category
     ) external initializer {
-        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0)) {
+        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
 
@@ -605,6 +605,10 @@ contract PendleStrategyV2 is
         (address bestMarket, IPendleMarketSelector.MarketInfo memory info) =
             marketSelector.selectBestMarket(marketCategory);
 
+        // FIX STRAT-M-06: Validate returned market to prevent address(0) interactions
+        require(bestMarket != address(0), "NO_VALID_MARKET");
+        require(info.pt != address(0), "INVALID_PT_TOKEN");
+
         currentMarket = bestMarket;
         currentPT = info.pt;
         currentSY = info.sy;
@@ -801,6 +805,8 @@ contract PendleStrategyV2 is
      * @param _threshold Time before expiry to trigger rollover
      */
     function setRolloverThreshold(uint256 _threshold) external onlyRole(STRATEGIST_ROLE) {
+        // FIX STRAT-M-07: Bounds check prevents DoS (overflow) and wasteful constant rollovers
+        require(_threshold >= 1 days && _threshold <= 30 days, "INVALID_THRESHOLD");
         emit RolloverThresholdUpdated(rolloverThreshold, _threshold);
         rolloverThreshold = _threshold;
     }

@@ -100,7 +100,7 @@ describe("CollateralVault", function () {
     it("should reject penalty > 20%", async function () {
       await expect(
         vault.requestAddCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
-      ).to.be.revertedWith("PENALTY_TOO_HIGH");
+      ).to.be.revertedWith("INVALID_PENALTY");
     });
 
     it("should cap at 50 supported tokens", async function () {
