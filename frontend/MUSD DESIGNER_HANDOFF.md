@@ -71,8 +71,8 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 ┌──────────────────────────────────────────────────────────────────┐
 │  THREE.js Animated Scene (full viewport, behind all content)     │
 │  • 2000 particles (spherical distribution, additive blending)    │
-│  • Central glowing orb (fresnel shader, pulsing)                 │
-│  • 3 orbiting torus rings                                        │
+│  •              │
+│                                        │
 │  • Neural-network connection lines between nearby particles      │
 │  • Mouse-follow camera (smooth lerp)                             │
 │  • Dark vignette overlay for text legibility                     │
