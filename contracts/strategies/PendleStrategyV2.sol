@@ -378,6 +378,12 @@ contract PendleStrategyV2 is
 
         // Auto-select market if not set or approaching expiry
         if (currentMarket == address(0) || _shouldRollover()) {
+            // FIX STRAT-C-02: Redeem existing PT before switching markets.
+            // Without this, old PT tokens are permanently stranded because
+            // _selectNewMarket() overwrites currentPT/currentMarket.
+            if (ptBalance > 0) {
+                _redeemPt(ptBalance);
+            }
             _selectNewMarket();
         }
 
@@ -659,7 +665,12 @@ contract PendleStrategyV2 is
         IPendleMarket market = IPendleMarket(currentMarket);
         bool expired = market.isExpired();
 
-        uint256 minUsdcOut = (ptAmount * (BPS - slippageBps)) / BPS;
+        // FIX STRAT-H-02: Use discounted PT value for minUsdcOut, not face value.
+        // Before maturity, PT trades at a discount (e.g., 5% APY = ~5% discount).
+        // Using face value (ptAmount) as basis makes minUsdcOut unachievable,
+        // blocking ALL pre-maturity withdrawals when discount > slippageBps.
+        uint256 expectedUsdc = expired ? ptAmount : _ptToUsdc(ptAmount);
+        uint256 minUsdcOut = (expectedUsdc * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
             tokenOut: address(usdc),
@@ -811,8 +822,15 @@ contract PendleStrategyV2 is
 
     /**
      * @notice Emergency withdraw all to USDC
+     * @param recipient Address to receive funds (must hold TREASURY_ROLE)
+     * @dev FIX STRAT-H-03: Sends to treasury-role holder instead of msg.sender.
+     *      Previously sent to guardian (msg.sender), which is inconsistent with
+     *      SkySUSDSStrategy and risks fund loss if guardian is a contract without
+     *      forwarding logic or if the guardian key is compromised.
      */
-    function emergencyWithdraw() external onlyRole(GUARDIAN_ROLE) {
+    function emergencyWithdraw(address recipient) external onlyRole(GUARDIAN_ROLE) {
+        require(recipient != address(0), "ZERO_RECIPIENT");
+        require(hasRole(TREASURY_ROLE, recipient), "RECIPIENT_MUST_BE_TREASURY");
         _pause();
 
         // FIX: Capture ptBalance before _redeemPt() zeroes it
@@ -825,12 +843,8 @@ contract PendleStrategyV2 is
         uint256 balance = usdc.balanceOf(address(this));
         emit EmergencyWithdraw(ptRedeemed, balance);
 
-        // FIX SOL-H-08: Transfer USDC directly to msg.sender (guardian/admin)
-        // instead of leaving it stranded. The guardian can then forward to treasury.
-        // Previously, USDC was left in contract and treasury had to call withdrawAll(),
-        // which could fail if the treasury contract's logic gate blocked paused strategies.
         if (balance > 0) {
-            usdc.safeTransfer(msg.sender, balance);
+            usdc.safeTransfer(recipient, balance);
         }
     }
 

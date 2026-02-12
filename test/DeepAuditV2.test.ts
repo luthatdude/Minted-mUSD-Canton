@@ -1071,12 +1071,14 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       ).to.be.revertedWith("STALE_PRICE");
     });
 
-    it("should reject stale prices in unsafe variant too", async function () {
+    it("should allow stale prices in unsafe variant (FIX CORE-H-01)", async function () {
+      // FIX CORE-H-01: Unsafe variants no longer revert on stale prices.
+      // Liquidations must proceed during feed outages using last available price.
       await time.increase(3601);
 
-      await expect(
-        priceOracle.getPriceUnsafe(await weth.getAddress())
-      ).to.be.revertedWith("STALE_PRICE");
+      // getPriceUnsafe should succeed even with stale data
+      const price = await priceOracle.getPriceUnsafe(await weth.getAddress());
+      expect(price).to.be.gt(0);
     });
 
     it("should check isFeedHealthy correctly", async function () {

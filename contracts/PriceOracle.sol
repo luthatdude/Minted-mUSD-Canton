@@ -283,13 +283,16 @@ contract PriceOracle is AccessControl {
     /// @dev During market crashes (>20% move), the circuit breaker blocks getPrice(),
     ///      which prevents liquidations. This function allows liquidation to proceed
     ///      using the raw Chainlink price, ensuring bad debt doesn't accumulate.
+    /// @dev FIX CORE-H-01: Removed staleness revert. During Chainlink feed outages,
+    ///      liquidations must still proceed using the last available price. The safe
+    ///      getPrice() enforces staleness; this Unsafe variant intentionally does not.
     function getPriceUnsafe(address token) external view returns (uint256 price) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
         require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        // FIX CORE-H-01: No staleness revert — liquidations must proceed during feed outages
         require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();
@@ -299,13 +302,14 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice FIX P1-H4: Get USD value WITHOUT circuit breaker, for liquidation paths
+    /// @dev FIX CORE-H-01: Removed staleness revert to match getPriceUnsafe
     function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256 valueUsd) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
         require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        // FIX CORE-H-01: No staleness revert — liquidations must proceed during feed outages
         require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();

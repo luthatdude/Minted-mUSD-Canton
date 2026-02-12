@@ -408,12 +408,14 @@ template YieldAttestation
         -- FIX C-02: Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
+        -- FIX DAML-H-01: Bind signature to payload via attestationId
         sig <- create YieldSignature with
           requestCid = self
           validator
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+          payloadHash = payload.attestationId
         
         -- FIX C-02: Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
@@ -435,8 +437,11 @@ template YieldAttestation
         let sigValidators = map (.validator) sigs
         -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
         let sigNonces = map (.nonce) sigs
+        -- FIX DAML-H-01: Verify payloadHash binding to prevent signature re-association
+        let sigPayloadHashes = map (.payloadHash) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
+        assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -449,6 +454,7 @@ template YieldSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
+    payloadHash : Text  -- FIX DAML-H-01: Bind signature to payload (attestationId)
   where
     signatory validator
     observer aggregator

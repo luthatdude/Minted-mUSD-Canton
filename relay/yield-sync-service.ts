@@ -430,23 +430,45 @@ class YieldSyncService {
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 3: Sync global share price to Canton
+    // STEP 3: Collect attestation quorum and sync global share price to Canton
+    // FIX RELAY-H-02: Route through multi-attestor quorum instead of direct
+    // operator exercise. Independent validators must submit SharePriceAttestations
+    // before sync is accepted. This eliminates the single-relay trust boundary.
     // ═══════════════════════════════════════════════════════════════════
-    console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
+    console.log(`\n[YieldSync] Step 3: Collecting attestation quorum for Canton sync...`);
+
+    // FIX RELAY-H-02: Wait for independent validators to submit SharePriceAttestations.
+    // Each validator independently reads Ethereum share price and creates an attestation.
+    // The relay (operator) collects attestation CIDs once quorum is reached.
+    const attestationCids = await this.collectAttestationQuorum(this.currentEpoch);
+
+    if (attestationCids.length === 0) {
+      console.error(`[YieldSync] ❌ Insufficient attestations for epoch ${this.currentEpoch}, skipping sync`);
+      return;
+    }
+
+    // FIX RELAY-H-02: Retrieve pre-approved governance proof for parameter update
+    const governanceProofCid = await this.getGovernanceProof("CantonSMUSD");
+
+    if (!governanceProofCid) {
+      console.error(`[YieldSync] ❌ No governance proof available for CantonSMUSD ParameterUpdate, skipping sync`);
+      return;
+    }
+
+    console.log(`[YieldSync] Collected ${attestationCids.length} attestations, exercising SyncGlobalSharePrice...`);
 
     await (this.ledger.exercise as any)(
       "CantonSMUSD:CantonStakingService",
       cantonService.contractId,
       "SyncGlobalSharePrice",
       {
-        newGlobalSharePrice: this.toNumeric18(globalSharePrice),
-        newGlobalTotalAssets: this.toNumeric18(globalTotalAssets),
-        newGlobalTotalShares: this.toNumeric18(globalTotalShares),
+        attestationCids,
         epochNumber: this.currentEpoch.toString(),
+        governanceProofCid,
       }
     );
 
-    console.log(`[YieldSync] ✅ Global share price synced to Canton!`);
+    console.log(`[YieldSync] ✅ Global share price synced to Canton (quorum-verified)!`);
 
     // ═══════════════════════════════════════════════════════════════════
     // STEP 4: Update state and log summary
@@ -462,6 +484,91 @@ class YieldSyncService {
     console.log(`[YieldSync]   - Same share price: ${globalSharePrice}`);
     console.log(`[YieldSync]   - Equal yield rate`);
     console.log(`[YieldSync] Next sync in ${this.config.syncIntervalMs / 1000}s`);
+  }
+
+  // ============================================================
+  //  FIX RELAY-H-02: Attestation Quorum Collection
+  // ============================================================
+
+  /**
+   * FIX RELAY-H-02: Collect attestation quorum from independent validators.
+   * Polls for SharePriceAttestation contracts matching the current epoch
+   * until quorum (≥2/3 of authorized validators) is reached or timeout.
+   *
+   * Each validator independently observes Ethereum share price and creates
+   * a SharePriceAttestation on Canton. The relay collects CIDs once enough
+   * unique validators have attested.
+   */
+  private async collectAttestationQuorum(epochNumber: number): Promise<string[]> {
+    const maxWaitMs = 300_000;     // 5 minutes max wait for attestations
+    const pollIntervalMs = 10_000; // Poll every 10 seconds
+    const minRequired = Math.max(1, Math.ceil(this.config.validatorParties.length * 2 / 3));
+    const startTime = Date.now();
+
+    console.log(`[YieldSync] Waiting for attestation quorum: need ${minRequired}/${this.config.validatorParties.length} validators`);
+
+    while (Date.now() - startTime < maxWaitMs) {
+      // Query for SharePriceAttestation contracts matching this epoch
+      const attestations = await (this.ledger.query as any)(
+        "CantonSMUSD:SharePriceAttestation",
+        { operator: this.config.cantonParty }
+      );
+
+      // Filter for correct epoch and authorized validators, deduplicate by attestor
+      const seenAttestors = new Set<string>();
+      const uniqueCids: string[] = [];
+
+      for (const a of attestations) {
+        const attestor = a.payload.attestor;
+        const epoch = parseInt(a.payload.epochNumber, 10);
+
+        if (
+          epoch === epochNumber &&
+          this.config.validatorParties.includes(attestor) &&
+          !seenAttestors.has(attestor)
+        ) {
+          seenAttestors.add(attestor);
+          uniqueCids.push(a.contractId);
+        }
+      }
+
+      console.log(`[YieldSync] Found ${uniqueCids.length}/${minRequired} attestations for epoch ${epochNumber}`);
+
+      if (uniqueCids.length >= minRequired) {
+        console.log(`[YieldSync] ✅ Quorum reached with ${uniqueCids.length} attestations`);
+        return uniqueCids;
+      }
+
+      await this.sleep(pollIntervalMs);
+    }
+
+    console.error(`[YieldSync] ❌ Timeout waiting for attestation quorum (epoch ${epochNumber})`);
+    return [];
+  }
+
+  /**
+   * FIX RELAY-H-02: Retrieve a pre-approved governance proof for CantonSMUSD ParameterUpdate.
+   * Governance proofs are created through the MultiSigProposal flow (Proposal_Execute)
+   * and must be approved by the required governor quorum before they can be used.
+   */
+  private async getGovernanceProof(targetModule: string): Promise<string | null> {
+    const proofs = await (this.ledger.query as any)(
+      "Governance:GovernanceActionLog",
+      { operator: this.config.cantonParty, targetModule }
+    );
+
+    // Find a proof matching ParameterUpdate action type
+    const validProof = proofs.find(
+      (p: any) => p.payload.actionType === "ParameterUpdate"
+    );
+
+    if (validProof) {
+      console.log(`[YieldSync] Found governance proof: ${validProof.payload.proposalId}`);
+      return validProof.contractId;
+    }
+
+    console.warn(`[YieldSync] No governance proof found for ${targetModule} ParameterUpdate`);
+    return null;
   }
 
   // ============================================================

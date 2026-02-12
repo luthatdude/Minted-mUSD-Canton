@@ -390,9 +390,15 @@ contract MorphoLoopStrategy is
         // Add collateral value
         uint256 collateralValue = pos.collateral;
 
-        // Net value = supply + collateral - borrow
-        if (supplyValue + collateralValue > borrowValue) {
-            return supplyValue + collateralValue - borrowValue;
+        // FIX STRAT-H-01: Include idle USDC balance in total value.
+        // After _loop(), the last borrow sits as idle USDC (~24% of principal).
+        // Previously this was excluded, underreporting NAV.
+        uint256 idleUsdc = usdc.balanceOf(address(this));
+
+        // Net value = supply + collateral + idle USDC - borrow
+        uint256 gross = supplyValue + collateralValue + idleUsdc;
+        if (gross > borrowValue) {
+            return gross - borrowValue;
         }
         return 0;
     }
@@ -524,48 +530,54 @@ contract MorphoLoopStrategy is
      * @return freed Amount actually freed and available for transfer
      */
     function _deleverage(uint256 principalNeeded) internal returns (uint256 freed) {
-        IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
-        
         // FIX: Track starting balance to calculate actual net freed
         uint256 startingBalance = usdc.balanceOf(address(this));
-        
-        // Calculate current borrow amount
-        (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
-        uint256 currentBorrow = 0;
-        if (totalBorrowShares > 0) {
-            currentBorrow = (uint256(pos.borrowShares) * totalBorrowAssets) / totalBorrowShares;
-        }
 
-        // Iteratively repay and withdraw
-        for (uint256 i = 0; i < MAX_LOOPS && currentBorrow > 0; i++) {
-            // Withdraw some collateral (respecting LTV)
-            uint256 maxWithdraw = _maxWithdrawable();
-            if (maxWithdraw == 0) break;
+        // FIX STRAT-C-01: Restructured deleverage loop.
+        // Previous code checked _maxWithdrawable() first, which returns 0 when
+        // position LTV (70%) > safeLtv (65%), making partial withdrawals impossible.
+        // New approach: repay with available USDC first to lower LTV, THEN withdraw.
+        for (uint256 i = 0; i < MAX_LOOPS * 2; i++) {
+            IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
 
-            uint256 toWithdraw = maxWithdraw > principalNeeded ? principalNeeded : maxWithdraw;
-            
-            morpho.withdrawCollateral(marketParams, toWithdraw, address(this), address(this));
-            // FIX: Don't count as freed here - calculate at end based on actual balance
+            // Calculate current borrow amount
+            (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
+            uint256 currentBorrow = 0;
+            if (totalBorrowShares > 0) {
+                currentBorrow = (uint256(pos.borrowShares) * totalBorrowAssets) / totalBorrowShares;
+            }
 
-            // Use withdrawn funds to repay debt
+            // If no debt, withdraw collateral directly and exit
+            if (currentBorrow == 0) {
+                uint256 needed = principalNeeded > pos.collateral ? pos.collateral : principalNeeded;
+                if (needed > 0) {
+                    morpho.withdrawCollateral(marketParams, needed, address(this), address(this));
+                }
+                break;
+            }
+
+            // Step 1: Repay with any available USDC balance FIRST (lowers LTV)
             uint256 balance = usdc.balanceOf(address(this));
-            if (balance > startingBalance && currentBorrow > 0) {
-                // Only use newly withdrawn funds for repayment
-                uint256 available = balance - startingBalance;
-                uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
-                // FIX ML-M02: Per-operation approval
+            if (balance > 0 && currentBorrow > 0) {
+                uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
                 usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
             }
-            
-            // Check if we've freed enough (balance increased by principalNeeded)
+
+            // Step 2: Now withdraw freed collateral (LTV is lower after repayment)
+            uint256 maxWithdraw = _maxWithdrawable();
+            if (maxWithdraw == 0) break; // Fully repaid or can't free more
+
+            uint256 toWithdraw = maxWithdraw > principalNeeded ? principalNeeded : maxWithdraw;
+            morpho.withdrawCollateral(marketParams, toWithdraw, address(this), address(this));
+
+            // Check if we've freed enough
             uint256 currentBalance = usdc.balanceOf(address(this));
             if (currentBalance >= startingBalance + principalNeeded) break;
         }
-        
-        // FIX C-STRAT-02: Return actual net increase in balance, not total collateral withdrawn
-        // This is what's actually available for transfer
+
+        // Return actual net increase in balance
         uint256 endingBalance = usdc.balanceOf(address(this));
         freed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
     }

@@ -238,13 +238,14 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- AUDIT NOTE DAML-C02: Burn is controller issuer only, but this is safe because:
-    -- 1. Both issuer AND owner are signatories on CantonMUSD — owner consented at creation
-    -- 2. Protocol services (staking, lending, redemption, loop) exercise burns internally
-    -- 3. Making dual-consent would break all protocol burns (CantonSMUSD, CantonLending, etc.)
-    -- 4. Burn is rate-limited by BurnRateLimiter (DAML-R05) as a separate backstop
+    -- FIX DAML-H-02: Changed from `controller issuer` to `controller [issuer, owner]`.
+    -- Previously, the operator (issuer) could unilaterally burn any user's mUSD.
+    -- Now both parties must authorize. This is safe because ALL protocol burn paths
+    -- (DirectMint_Redeem, Lending_Repay, Lending_Liquidate, Stake, UnwindRequest_Execute)
+    -- have both operator (signatory) and user (controller) authority available.
+    -- BurnRateLimiter (DAML-R05) remains as an additional defence-in-depth backstop.
     choice CantonMUSD_Burn : ()
-      controller issuer
+      controller [issuer, owner]
       do
         return ()
 

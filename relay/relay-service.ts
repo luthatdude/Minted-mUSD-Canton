@@ -629,10 +629,13 @@ class RelayService {
     messageHash: string
   ): Promise<string[]> {
     const formatted: string[] = [];
-    // FIX BE-002: Use raw messageHash for ecrecover validation (NOT EIP-191 prefixed).
-    // Validators sign the raw keccak256 hash. Using hashMessage() would add an EIP-191
-    // prefix, causing ecrecover to recover the wrong address. The on-chain BLEBridgeV9
-    // contract also verifies against the raw hash.
+    // FIX RELAY-H-01: Use EIP-191 prefixed hash for ecrecover validation.
+    // Validators sign ethers.hashMessage(messageHash) (EIP-191 prefixed).
+    // On-chain BLEBridgeV9 also uses messageHash.toEthSignedMessageHash() before
+    // ECDSA.recover(). The relay pre-verification must use the same EIP-191 hash
+    // to match. Previously used raw messageHash, causing address mismatch and
+    // rejecting all valid v1/v2 validator signatures.
+    const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
 
     for (const sig of validatorSigs) {
       try {
@@ -665,17 +668,20 @@ class RelayService {
         // If signature is DER encoded (from AWS KMS)
         else {
           const derBuffer = Buffer.from(sig.ecdsaSignature.replace("0x", ""), "hex");
+          // FIX RELAY-H-01: Use EIP-191 prefixed hash for DER-to-RSV conversion.
+          // Validators compute recovery ID against ethSignedHash, not raw messageHash.
           rsvSignature = formatKMSSignature(
             derBuffer,
-            messageHash,
+            ethSignedHash,
             validatorEthAddress  // FIX: Use mapped Ethereum address, not DAML Party
           );
         }
 
-        // FIX IC-08 + BE-002: Pre-verify signature using ecrecover before including.
-        // Use raw messageHash (not EIP-191 prefixed) to match what validators actually signed.
+        // FIX IC-08 + RELAY-H-01: Pre-verify signature using ecrecover before including.
+        // Use EIP-191 prefixed hash to match what validators actually signed and
+        // what on-chain BLEBridgeV9.processAttestation() uses for recovery.
         try {
-          const recoveredAddress = ethers.recoverAddress(messageHash, rsvSignature);
+          const recoveredAddress = ethers.recoverAddress(ethSignedHash, rsvSignature);
           // FIX CRITICAL: Compare to mapped Ethereum address, not DAML Party
           const expectedAddress = validatorEthAddress.toLowerCase();
 
