@@ -316,6 +316,18 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return shares.mulDiv(globalTotalAssets() + 1, totalShares + 10 ** _decimalsOffset(), rounding);
     }
 
+    /// @notice FIX M-02: Override totalAssets to return globalTotalAssets for ERC-4626 compliance.
+    /// @dev    ERC-4626 specifies that totalAssets() MUST return the total amount of
+    ///         underlying assets managed by the vault. Because this vault represents
+    ///         both Ethereum and Canton shareholders, the canonical value is
+    ///         globalTotalAssets(). Without this override, ERC-4626 consumers
+    ///         (aggregators, routers, front-ends) would see only the local mUSD
+    ///         balance, under-reporting the true asset base and breaking share-price
+    ///         calculations.
+    function totalAssets() public view override returns (uint256) {
+        return globalTotalAssets();
+    }
+
     // ============================================================
     //                     EMERGENCY CONTROLS
     // ============================================================

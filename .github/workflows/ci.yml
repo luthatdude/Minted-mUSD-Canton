@@ -176,6 +176,78 @@ jobs:
         continue-on-error: true  # SARIF upload can fail on forks
 
   # ============================================================
+  #  M-05: UUPS Storage Layout Validation
+  # ============================================================
+  storage-layout:
+    name: UUPS Storage Layout Check
+    runs-on: ubuntu-latest
+    needs: solidity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate UUPS storage layouts
+        run: npx hardhat run scripts/validate-storage-layout.ts
+
+  # ============================================================
+  #  MYTHRIL: Symbolic Execution Analysis
+  # ============================================================
+  mythril:
+    name: Mythril Symbolic Analysis
+    runs-on: ubuntu-latest
+    needs: solidity
+    continue-on-error: true  # Advisory — Mythril can timeout on complex contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Install Mythril
+        run: |
+          pip3 install mythril
+
+      - name: Run Mythril on core contracts
+        run: |
+          CORE_CONTRACTS=(
+            "contracts/BorrowModule.sol"
+            "contracts/CollateralVault.sol"
+            "contracts/DirectMintV2.sol"
+            "contracts/LiquidationEngine.sol"
+            "contracts/SMUSD.sol"
+            "contracts/PriceOracle.sol"
+            "contracts/MUSD.sol"
+          )
+          EXIT_CODE=0
+          for contract in "${CORE_CONTRACTS[@]}"; do
+            echo "═══════════════════════════════════════════════"
+            echo "  Analyzing: $contract"
+            echo "═══════════════════════════════════════════════"
+            myth analyze "$contract" \
+              --solv 0.8.26 \
+              --execution-timeout 300 \
+              --max-depth 12 \
+              --strategy bfs \
+              2>&1 || EXIT_CODE=$?
+          done
+          exit $EXIT_CODE
+
+  # ============================================================
   #  DAML: Build & Test
   # ============================================================
   daml:
