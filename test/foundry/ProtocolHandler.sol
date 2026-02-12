@@ -172,23 +172,27 @@ contract ProtocolHandler is Test {
     function warpTime(uint256 seconds_) external {
         seconds_ = bound(seconds_, 60, 7 days);
         vm.warp(block.timestamp + seconds_);
+        // Refresh mock feed timestamp so oracle doesn't see stale prices after warp
+        (, int256 currentPrice,,,) = ethFeed.latestRoundData();
+        ethFeed.setAnswer(currentPrice);
     }
 
     /// @notice Change ETH price (bounded to +/- 15% of current)
     function setEthPrice(uint256 newPrice) external {
         (, int256 currentPrice,,,) = ethFeed.latestRoundData();
         uint256 current = uint256(currentPrice);
+        if (current == 0) return;
 
         // Bound to +/- 15% to stay within circuit breaker
         uint256 lower = current * 85 / 100;
         uint256 upper = current * 115 / 100;
+        if (lower == 0) lower = 1;
         newPrice = bound(newPrice, lower, upper);
 
         ethFeed.setAnswer(int256(newPrice));
 
-        // Update oracle's lastKnownPrice
-        vm.prank(address(this));
-        oracle.resetLastKnownPrice(address(weth));
+        // Update oracle's lastKnownPrice (may revert if circuit breaker trips)
+        try oracle.resetLastKnownPrice(address(weth)) {} catch {}
     }
 
     /// @notice Get all actor addresses for invariant checks
