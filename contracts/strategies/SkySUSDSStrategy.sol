@@ -258,8 +258,15 @@ contract SkySUSDSStrategy is
         // 1. Redeem sUSDS shares → USDS
         uint256 usdsReceived = sUsdsVault.redeem(sharesNeeded, address(this), address(this));
 
-        // 2. Convert USDS → USDC via PSM
-        uint256 usdcToReceive = usdsReceived / SCALING_FACTOR; // 18→6 decimal scaling
+        // 2. Convert USDS → USDC via PSM (accounting for tout fee)
+        // FIX STRAT-M-09: When tout > 0, PSM deducts extra USDS. Reduce gemAmt to avoid revert.
+        uint256 tout = psm.tout();
+        uint256 usdcToReceive;
+        if (tout > 0) {
+            usdcToReceive = (usdsReceived * 1e18) / (SCALING_FACTOR * (1e18 + tout));
+        } else {
+            usdcToReceive = usdsReceived / SCALING_FACTOR;
+        }
         usds.forceApprove(address(psm), usdsReceived);
         uint256 usdcBefore = usdc.balanceOf(address(this));
         psm.buyGem(address(this), usdcToReceive);
@@ -289,8 +296,15 @@ contract SkySUSDSStrategy is
         // 1. Redeem all sUSDS → USDS
         uint256 usdsReceived = sUsdsVault.redeem(shares, address(this), address(this));
 
-        // 2. Convert all USDS → USDC via PSM
-        uint256 usdcToReceive = usdsReceived / SCALING_FACTOR;
+        // 2. Convert all USDS → USDC via PSM (accounting for tout fee)
+        // FIX STRAT-M-09: When tout > 0, PSM deducts extra USDS. Reduce gemAmt to avoid revert.
+        uint256 tout = psm.tout();
+        uint256 usdcToReceive;
+        if (tout > 0) {
+            usdcToReceive = (usdsReceived * 1e18) / (SCALING_FACTOR * (1e18 + tout));
+        } else {
+            usdcToReceive = usdsReceived / SCALING_FACTOR;
+        }
         usds.forceApprove(address(psm), usdsReceived);
         uint256 usdcBefore = usdc.balanceOf(address(this));
         psm.buyGem(address(this), usdcToReceive);
@@ -307,13 +321,15 @@ contract SkySUSDSStrategy is
     /// @inheritdoc IStrategy
     function totalValue() public view override returns (uint256) {
         uint256 shares = sUsdsVault.balanceOf(address(this));
-        if (shares == 0) return 0;
+        uint256 usdcValue = 0;
 
-        // Convert sUSDS shares → USDS amount → USDC amount
-        uint256 usdsValue = sUsdsVault.convertToAssets(shares);
-        uint256 usdcValue = usdsValue / SCALING_FACTOR;
+        if (shares > 0) {
+            // Convert sUSDS shares → USDS amount → USDC amount
+            uint256 usdsValue = sUsdsVault.convertToAssets(shares);
+            usdcValue = usdsValue / SCALING_FACTOR;
+        }
 
-        // Include any idle USDC sitting in this contract
+        // FIX STRAT-M-08: Always include idle USDC, even when shares == 0
         uint256 idleUsdc = usdc.balanceOf(address(this));
 
         return usdcValue + idleUsdc;
@@ -416,7 +432,14 @@ contract SkySUSDSStrategy is
         // Convert all USDS to USDC
         uint256 usdsBalance = usds.balanceOf(address(this));
         if (usdsBalance > 0) {
-            uint256 usdcToReceive = usdsBalance / SCALING_FACTOR;
+            // FIX STRAT-M-09: Account for PSM tout fee to avoid revert
+            uint256 tout = psm.tout();
+            uint256 usdcToReceive;
+            if (tout > 0) {
+                usdcToReceive = (usdsBalance * 1e18) / (SCALING_FACTOR * (1e18 + tout));
+            } else {
+                usdcToReceive = usdsBalance / SCALING_FACTOR;
+            }
             if (usdcToReceive > 0) {
                 // FIX: Approve USDS for PSM before conversion
                 usds.forceApprove(address(psm), usdsBalance);

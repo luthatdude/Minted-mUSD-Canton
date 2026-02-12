@@ -453,6 +453,7 @@ template ReserveTracker
         depositAmount : Money
       controller operator
       do
+        assertMsg "DEPOSIT_AMOUNT_MUST_BE_POSITIVE" (depositAmount > 0.0)  -- FIX DAML-M-04
         now <- getTime
         create this with
           totalDeposited = totalDeposited + depositAmount
@@ -465,6 +466,7 @@ template ReserveTracker
         redeemAmount : Money
       controller operator
       do
+        assertMsg "REDEEM_AMOUNT_MUST_BE_POSITIVE" (redeemAmount > 0.0)  -- FIX DAML-M-04
         assertMsg "INSUFFICIENT_SUPPLY" (cantonMUSDSupply >= redeemAmount)
         now <- getTime
         create this with
@@ -478,6 +480,7 @@ template ReserveTracker
         bridgeAmount : Money
       controller operator
       do
+        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)  -- FIX DAML-M-04
         now <- getTime
         create this with
           totalBridgedOut = totalBridgedOut + bridgeAmount
@@ -489,6 +492,7 @@ template ReserveTracker
         bridgeAmount : Money
       controller operator
       do
+        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)  -- FIX DAML-M-04
         now <- getTime
         create this with
           totalBridgedIn = totalBridgedIn + bridgeAmount
@@ -793,6 +797,8 @@ template CantonDirectMintService
           createdAt = now
           fulfilled = False
           expiresAt = addRelTime now (hours 72)  -- FIX DAML-C-02: 72-hour timeout for refund
+          agreementHash = musd.agreementHash  -- FIX DAML-M-01: Preserve MPA for refund
+          agreementUri = musd.agreementUri    -- FIX DAML-M-01: Preserve MPA for refund
 
         -- Track burn in rate limit window (burns offset mints)
         let windowElapsed = subTime now lastRateLimitReset
@@ -936,6 +942,8 @@ template RedemptionRequest
     createdAt : Time
     fulfilled : Bool
     expiresAt : Time          -- FIX DAML-C-02: Timeout for refund eligibility
+    agreementHash : Text      -- FIX DAML-M-01: Preserve MPA hash for refund compliance
+    agreementUri : Text       -- FIX DAML-M-01: Preserve MPA URI for refund compliance
   where
     signatory operator, user  -- User is signatory since they initiated redemption
 
@@ -946,13 +954,13 @@ template RedemptionRequest
         assertMsg "ALREADY_FULFILLED" (not fulfilled)
         now <- getTime
         assertMsg "NOT_YET_EXPIRED" (now > expiresAt)
-        -- Refund by re-minting the burned mUSD amount to the user
+        -- FIX DAML-M-01: Use stored agreement fields to satisfy CantonMUSD ensure clause
         create CantonMUSD with
           issuer = operator
           owner = user
           amount = musdBurned
-          agreementHash = ""
-          agreementUri = ""
+          agreementHash = agreementHash
+          agreementUri = agreementUri
           privacyObservers = []
 
     -- Operator fulfills after bridge-in from Ethereum delivers USDC

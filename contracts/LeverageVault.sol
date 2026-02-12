@@ -696,6 +696,12 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     ) external onlyRole(LEVERAGE_ADMIN_ROLE) {
         require(_maxLoops > 0 && _maxLoops <= 20, "INVALID_MAX_LOOPS");
         require(_maxSlippageBps <= 500, "SLIPPAGE_TOO_HIGH"); // Max 5%
+        // FIX VAULT-M-05: Validate fee tier matches Uniswap V3 valid tiers
+        require(
+            _defaultPoolFee == 100 || _defaultPoolFee == 500 ||
+            _defaultPoolFee == 3000 || _defaultPoolFee == 10000,
+            "INVALID_FEE_TIER"
+        );
 
         maxLoops = _maxLoops;
         minBorrowPerLoop = _minBorrowPerLoop;
