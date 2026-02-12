@@ -25,7 +25,7 @@ describe("PendleStrategyV2", function () {
 
     // Deploy PendleMarketSelector as upgradeable
     const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address], {
+    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address, admin.address], {
       kind: "uups",
       initializer: "initialize",
     });
