@@ -106,7 +106,7 @@ export class FlashbotsProvider {
       body,
     });
 
-    const json = await response.json();
+    const json: any = await response.json();
 
     if (json.error) {
       throw new Error(`Flashbots error: ${json.error.message}`);
