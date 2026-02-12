@@ -286,10 +286,11 @@ testMultiAttestorSync = do
       epochNumber = 1
       governanceProofCid = govProof
 
-  -- Verify the median price was applied (sorted: [1.045, 1.05], mid=1 → 1.05)
+  -- Verify the lower-median price was applied (FIX DAML-M-02: conservative bias)
+  -- sorted: [1.045, 1.05], mid = (2-1)/2 = 0 → 1.045
   price <- submit operator do
     exerciseCmd stakingCid2 GetSharePrice
-  assertMsg "Median price applied" (price == 1.05)
+  assertMsg "Median price applied" (price == 1.045)
   debug "✅ Integration 3: Multi-attestor share price sync (DAML-R01)"
 
 -- ============================================================
