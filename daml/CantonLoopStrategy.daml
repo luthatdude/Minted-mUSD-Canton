@@ -217,6 +217,8 @@ template CantonLoopPosition
         newLeverage   : Decimal
       controller operator
       do
+        -- FIX DAML-H-03: Prevent recording loops on non-active positions
+        assertMsg "POSITION_NOT_ACTIVE" (status == "active")
         assertMsg "MAX_LOOPS_REACHED" (loopsCompleted < config.maxLoops)
         assertMsg "POSITIVE_AMOUNTS" (musdMinted > 0.0 && musdStaked > 0.0 && musdBorrowed > 0.0)
 

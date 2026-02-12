@@ -1692,6 +1692,10 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     await bridge.grantRole(VALIDATOR_ROLE, deployer.address);
     await bridge.grantRole(EMERGENCY_ROLE, admin.address);
 
+    // Grant RELAYER_ROLE so deployer can call processAttestation()
+    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    await bridge.grantRole(RELAYER_ROLE, deployer.address);
+
     // Grant CAP_MANAGER to bridge on MUSD
     const CAP_MANAGER = await musd.CAP_MANAGER_ROLE();
     await musd.grantRole(CAP_MANAGER, await bridge.getAddress());

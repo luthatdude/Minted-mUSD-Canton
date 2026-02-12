@@ -164,8 +164,9 @@ template AttestationRequest
 
 
 -- 4. THE SIGNATURE RECORD
--- Note: Only aggregator is signatory to allow archiving in FinalizeAttestation.
--- Validator is observer since they provided the signature via ProvideSignature choice.
+-- FIX DAML-C-01: Both aggregator AND validator are signatories.
+-- The ProvideSignature choice (controller validator) provides the validator's authorization.
+-- This prevents the aggregator from forging any validator's signature.
 template ValidatorSignature
   with
     requestId: ContractId AttestationRequest
@@ -174,8 +175,7 @@ template ValidatorSignature
     ecdsaSignature: Text
     nonce: Int
   where
-    signatory aggregator
-    observer validator
+    signatory aggregator, validator
 
 
 -- 5. HELPER: Create new attestation request

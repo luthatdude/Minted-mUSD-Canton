@@ -32,6 +32,11 @@ template MUSD
           requester = owner
           instructions = reason
     -- IMPROVED: Provider must supply a reason for locking (transparency).
+    -- AUDIT NOTE DAML-H09: MUSD_Lock is provider-only.
+    -- Mitigation: Both provider AND owner are signatories on MUSD,
+    -- so the owner consented to provider's authority at token creation.
+    -- The 'reason' field provides audit trail transparency.
+    -- For enhanced security, consider requiring governance proof in production.
     choice MUSD_Lock : ContractId MUSD_Locked
       with
         reason : Text

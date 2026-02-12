@@ -20,6 +20,8 @@ import { timelockSetFeed, timelockAddCollateral, refreshFeeds } from "./helpers/
 // ============================================================
 
 describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
+  const futureDeadline = () => 99999999999; // Far future deadline (won't expire even after many timelock time advances)
+
   async function deployFullFixture() {
     const [owner, user1, user2, attacker] = await ethers.getSigners();
 
@@ -125,7 +127,8 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         ethers.parseEther("10"),
         20, // 2.0x leverage
         0,  // default max loops
-        0   // default slippage
+        0,  // default slippage
+        futureDeadline()
       );
       await tx.wait();
 
@@ -142,11 +145,11 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         await weth.getAddress(),
         ethers.parseEther("10"),
         15, // 1.5x
-        0, 0
+        0, 0, futureDeadline()
       );
 
       // Close should work normally
-      await leverageVault.connect(user1).closeLeveragedPosition(0, 0);
+      await leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline());
 
       // Position should be cleared
       const pos = await leverageVault.getPosition(user1.address);
@@ -160,7 +163,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Attempt to open a second position should fail
@@ -168,7 +171,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         leverageVault.connect(user1).openLeveragedPosition(
           await weth.getAddress(),
           ethers.parseEther("5"),
-          15, 0, 0
+          15, 0, 0, futureDeadline()
         )
       ).to.be.revertedWith("POSITION_EXISTS");
     });
@@ -186,14 +189,14 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // User2 opens a leveraged position
       await leverageVault.connect(user2).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("20"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Simulate: send some "residual" WETH directly to the LeverageVault contract
@@ -203,7 +206,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       const user1WethBefore = await weth.balanceOf(user1.address);
 
       // Emergency close user1's position
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       const user1WethAfter = await weth.balanceOf(user1.address);
 
@@ -223,16 +226,16 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
       await leverageVault.connect(user2).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("15"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Emergency close user1
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       // User1 position should be deleted
       const pos1 = await leverageVault.getPosition(user1.address);
@@ -250,12 +253,12 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Non-admin should be rejected
       await expect(
-        leverageVault.connect(attacker).emergencyClosePosition(user1.address)
+        leverageVault.connect(attacker).emergencyClosePosition(user1.address, 0)
       ).to.be.reverted;
     });
 
@@ -263,7 +266,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       const { leverageVault, user1, owner } = await loadFixture(deployFullFixture);
 
       await expect(
-        leverageVault.connect(owner).emergencyClosePosition(user1.address)
+        leverageVault.connect(owner).emergencyClosePosition(user1.address, 0)
       ).to.be.revertedWith("NO_POSITION");
     });
   });
@@ -280,7 +283,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         leverageVault.connect(attacker).openLeveragedPosition(
           await weth.getAddress(),
           0, // Zero collateral
-          20, 0, 0
+          20, 0, 0, futureDeadline()
         )
       ).to.be.revertedWith("INVALID_AMOUNT");
     });
@@ -294,7 +297,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           await weth.getAddress(),
           ethers.parseEther("10"),
           100, // 10x leverage (exceeds max)
-          0, 0
+          0, 0, futureDeadline()
         )
       ).to.be.revertedWith("LEVERAGE_EXCEEDS_MAX");
     });
@@ -307,7 +310,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           await weth.getAddress(),
           ethers.parseEther("10"),
           5, // 0.5x — below minimum
-          0, 0
+          0, 0, futureDeadline()
         )
       ).to.be.revertedWith("LEVERAGE_TOO_LOW");
     });
@@ -322,7 +325,8 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           ethers.parseEther("10"),
           20,
           0,
-          500 // 5% slippage (exceeds global 1% max)
+          500, // 5% slippage (exceeds global 1% max)
+          futureDeadline()
         )
       ).to.be.revertedWith("USER_SLIPPAGE_EXCEEDS_MAX");
     });
@@ -337,7 +341,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         leverageVault.connect(attacker).openLeveragedPosition(
           fakeToken,
           ethers.parseEther("10"),
-          20, 0, 0
+          20, 0, 0, futureDeadline()
         )
       ).to.be.revertedWith("TOKEN_NOT_ENABLED");
     });
@@ -353,12 +357,12 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         await weth.getAddress(),
         depositAmount,
         15, // 1.5x
-        0, 0
+        0, 0, futureDeadline()
       );
 
       // Close immediately — in a perfect mock environment with no fees,
       // user should get back approximately what they put in
-      await leverageVault.connect(user1).closeLeveragedPosition(0, 0);
+      await leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline());
 
       const wethAfter = await weth.balanceOf(user1.address);
 
@@ -378,7 +382,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Get debt amount (add 1% buffer for interest accrued between blocks)
@@ -408,7 +412,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         await weth.getAddress(),
         ethers.parseEther("10"),
         20, // 2x leverage to ensure debt
-        0, 0
+        0, 0, futureDeadline()
       );
 
       const debtNeeded = await leverageVault.getMusdNeededToClose(user1.address);
@@ -449,7 +453,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
         leverageVault.connect(user1).openLeveragedPosition(
           await weth.getAddress(),
           ethers.parseEther("10"),
-          15, 0, 0
+          15, 0, 0, futureDeadline()
         )
       ).to.be.reverted; // EnforcedPause
     });
@@ -461,7 +465,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Pause
@@ -469,7 +473,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       // Try to close — should be blocked
       await expect(
-        leverageVault.connect(user1).closeLeveragedPosition(0, 0)
+        leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline())
       ).to.be.reverted; // EnforcedPause
     });
 
@@ -480,7 +484,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       await leverageVault.connect(owner).pause();
@@ -497,14 +501,14 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(user1).openLeveragedPosition(
         await weth.getAddress(),
         ethers.parseEther("10"),
-        15, 0, 0
+        15, 0, 0, futureDeadline()
       );
 
       // Pause the contract
       await leverageVault.connect(owner).pause();
 
       // Emergency close should still work (it has no whenNotPaused modifier)
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       const pos = await leverageVault.getPosition(user1.address);
       expect(pos.totalCollateral).to.equal(0);

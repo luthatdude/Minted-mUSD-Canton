@@ -345,6 +345,11 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
+        // FIX SOL-H-06: Block USDC withdrawal unless contract is paused (true emergency).
+        // Prevents admin from draining in-flight user deposits during normal operation.
+        if (token == address(usdc)) {
+            require(paused(), "USDC_WITHDRAW_ONLY_WHEN_PAUSED");
+        }
         if (token == address(0)) {
             (bool success, ) = to.call{value: amount}("");
             if (!success) revert TransferFailed();

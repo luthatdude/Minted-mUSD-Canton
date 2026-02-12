@@ -13,6 +13,7 @@ module InterestRateService where
 
 import DA.Time
 import DA.Optional (fromOptional)
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
 -- ============================================================
 --                     RATE PARAMETERS
@@ -138,13 +139,18 @@ template InterestRateService
         return (supplierAmount, reserveAmount)
 
     -- | Sync market state from Ethereum (via bridge attestation)
+    -- FIX DAML-H-04: Governance-gated to prevent compromised operator feeding arbitrary data
     choice RateService_SyncMarketState : ContractId InterestRateService
       with
         newTotalBorrows : Decimal
         newTotalSupply : Decimal
         ethBlockNumber : Int
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX DAML-H-04: Verify governance approval before syncing market state
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "STALE_DATA" (ethBlockNumber > marketState.ethBlockNumber)
         assertMsg "INVALID_BORROWS" (newTotalBorrows >= 0.0)
         assertMsg "INVALID_SUPPLY" (newTotalSupply >= 0.0)

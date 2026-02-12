@@ -54,6 +54,10 @@ describe("BLEBridgeV9", function () {
     await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     await bridge.grantRole(EMERGENCY_ROLE, emergency.address);
 
+    // Grant RELAYER_ROLE so deployer can call processAttestation()
+    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    await bridge.grantRole(RELAYER_ROLE, deployer.address);
+
     for (const v of validators) {
       await bridge.grantRole(VALIDATOR_ROLE, v.address);
     }

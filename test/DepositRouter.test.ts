@@ -348,6 +348,9 @@ describe("DepositRouter", function () {
 
       const fees = await router.accumulatedFees();
 
+      // Pause required before USDC emergency withdrawal
+      await router.connect(admin).pause();
+
       await router.connect(admin).emergencyWithdraw(
         await usdc.getAddress(),
         treasury.address,

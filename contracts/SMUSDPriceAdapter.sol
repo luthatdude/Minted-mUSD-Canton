@@ -202,9 +202,11 @@ contract SMUSDPriceAdapter is AccessControl {
         return priceUsd;
     }
 
-    /// @notice Public function to update the cached price (called by keepers/admin)
-    /// @dev Separating read + write to allow view functions to stay view-compatible
-    function updateCachedPrice() external {
+    /// @notice Update the cached price (called by keepers/admin)
+    /// @dev FIX SOL-C-01: Restricted to ADAPTER_ADMIN_ROLE to prevent permissionless
+    ///      same-block price manipulation. An attacker could call updateCachedPrice()
+    ///      then donate to SMUSD vault in the same block, bypassing the rate limiter.
+    function updateCachedPrice() external onlyRole(ADAPTER_ADMIN_ROLE) {
         uint256 price = _getSharePriceUsd();
         _lastPrice = price;
         _lastPriceBlock = block.number;

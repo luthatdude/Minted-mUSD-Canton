@@ -157,8 +157,56 @@ contract TreasuryV2 is
     event ReserveBpsChangeRequested(uint256 bps, uint256 readyAt);
     event ReserveBpsChangeCancelled(uint256 bps);
 
-    /// @dev Storage gap for future upgrades (40 - 4 old vars - 10 new vars = 26)
-    uint256[26] private __gap;
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX SOL-H-04: Timelocked strategy update
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Pending strategy parameter update (timelocked)
+    struct PendingStrategyUpdate {
+        address strategy;           // slot +0 (packed with bool below? no, bool in +5)
+        uint256 targetBps;          // slot +1
+        uint256 minBps;             // slot +2
+        uint256 maxBps;             // slot +3
+        bool autoAllocate;          // slot +4 (packs into 1 slot)
+        uint256 requestTime;        // slot +5
+    }
+    PendingStrategyUpdate public pendingStrategyUpdate;  // 6 slots
+
+    event StrategyUpdateRequested(address indexed strategy, uint256 targetBps, uint256 readyAt);
+    event StrategyUpdateCancelled(address indexed strategy);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX SOL-H-01: STORAGE GAP — fully documented slot layout
+    //
+    // Slot occupancy before __gap:
+    //   1: asset (IERC20)
+    //   2: vault (address)
+    //   3: strategies (StrategyConfig[] pointer)
+    //   4: strategyIndex (mapping pointer)
+    //   5: isStrategy (mapping pointer)
+    //   6: reserveBps (uint256)
+    //   7-9: fees (ProtocolFees — 3 slots)
+    //  10: lastRecordedValue
+    //  11: lastFeeAccrual
+    //  12: minAutoAllocateAmount
+    //  13: pendingImplementation
+    //  14: upgradeRequestTime
+    //  15: pendingVault
+    //  16: vaultChangeRequestTime
+    //  17-22: pendingAddStrategy (PendingStrategy — 6 slots)
+    //  23: pendingRemoveStrategy
+    //  24: pendingRemoveStrategyTime
+    //  25: pendingFeeConfigBps
+    //  26: pendingFeeConfigRecipient
+    //  27: pendingFeeConfigTime
+    //  28: pendingReserveBps
+    //  29: pendingReserveBpsTime
+    //  30: pendingReserveBpsSet
+    //  31-36: pendingStrategyUpdate (PendingStrategyUpdate — 6 slots)
+    //  37-56: __gap[20]
+    //  Total: 56 slots reserved
+    // ═══════════════════════════════════════════════════════════════════════
+    uint256[20] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -884,7 +932,66 @@ contract TreasuryV2 is
     }
 
     /**
+     * @notice FIX SOL-H-04: Request strategy allocation update (timelocked)
+     * @dev Prevents ALLOCATOR_ROLE from instantly redirecting funds to malicious strategy
+     */
+
+    function requestUpdateStrategy(
+        address strategy,
+        uint256 targetBps,
+        uint256 minBps,
+        uint256 maxBps,
+        bool autoAllocate
+    ) external onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        require(pendingStrategyUpdate.strategy == address(0), "UPDATE_ALREADY_PENDING");
+        pendingStrategyUpdate = PendingStrategyUpdate({
+            strategy: strategy,
+            targetBps: targetBps,
+            minBps: minBps,
+            maxBps: maxBps,
+            autoAllocate: autoAllocate,
+            requestTime: block.timestamp
+        });
+        emit StrategyUpdateRequested(strategy, targetBps, block.timestamp + UPGRADE_DELAY);
+    }
+
+    function cancelUpdateStrategy() external onlyRole(ALLOCATOR_ROLE) {
+        address strategy = pendingStrategyUpdate.strategy;
+        delete pendingStrategyUpdate;
+        emit StrategyUpdateCancelled(strategy);
+    }
+
+    function executeUpdateStrategy() external onlyRole(ALLOCATOR_ROLE) {
+        PendingStrategyUpdate memory pending = pendingStrategyUpdate;
+        require(pending.strategy != address(0), "NO_PENDING");
+        require(block.timestamp >= pending.requestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
+        if (!isStrategy[pending.strategy]) revert StrategyNotFound();
+
+        uint256 idx = strategyIndex[pending.strategy];
+
+        // Validate new allocation
+        uint256 totalTarget = pending.targetBps + reserveBps;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            if (i != idx && strategies[i].active) {
+                totalTarget += strategies[i].targetBps;
+            }
+        }
+        if (totalTarget > BPS) revert TotalAllocationInvalid();
+
+        strategies[idx].targetBps = pending.targetBps;
+        strategies[idx].minBps = pending.minBps;
+        strategies[idx].maxBps = pending.maxBps;
+        strategies[idx].autoAllocate = pending.autoAllocate;
+
+        delete pendingStrategyUpdate;
+        emit StrategyUpdated(pending.strategy, pending.targetBps);
+    }
+
+    /**
      * @notice Update strategy allocation
+     * @dev FIX SOL-H-04: Restricted to DEFAULT_ADMIN_ROLE for emergency use only.
+     *      Normal updates should use requestUpdateStrategy/executeUpdateStrategy.
      */
     function updateStrategy(
         address strategy,
@@ -892,7 +999,7 @@ contract TreasuryV2 is
         uint256 minBps,
         uint256 maxBps,
         bool autoAllocate
-    ) external onlyRole(ALLOCATOR_ROLE) {
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
 
         uint256 idx = strategyIndex[strategy];
