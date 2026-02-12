@@ -9,7 +9,7 @@
  * The root can be posted on-chain or published via API for anyone to verify.
  */
 
-import crypto from "crypto";
+import { keccak256 as ethersKeccak256, toUtf8Bytes } from "ethers";
 import fs from "fs";
 import path from "path";
 
@@ -52,10 +52,11 @@ export interface MerkleProof {
 
 /**
  * Keccak-256 hash (matches Solidity's keccak256).
- * Using Node's crypto — in production, use ethers.keccak256.
+ * Uses ethers.keccak256 for Solidity-compatible hashing, ensuring
+ * roots match on-chain keccak256(abi.encodePacked(...)).
  */
 function keccak256(data: string): string {
-  return "0x" + crypto.createHash("sha256").update(data).digest("hex");
+  return ethersKeccak256(toUtf8Bytes(data));
 }
 
 /**

@@ -8,7 +8,7 @@ import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
 import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
-import { timelockSetFees, timelockSetFeeRecipient } from "./helpers/timelock";
+import { timelockSetFees, timelockSetFeeRecipient, timelockSetLimits } from "./helpers/timelock";
 
 describe("DirectMintV2", function () {
   let directMint: DirectMintV2;
@@ -277,8 +277,7 @@ describe("DirectMintV2", function () {
       const newMinRedeem = ethers.parseUnits("10", USDC_DECIMALS);
       const newMaxRedeem = ethers.parseUnits("500000", USDC_DECIMALS);
 
-      await expect(directMint.setLimits(newMinMint, newMaxMint, newMinRedeem, newMaxRedeem))
-        .to.emit(directMint, "LimitsUpdated");
+      await timelockSetLimits(directMint, deployer, newMinMint, newMaxMint, newMinRedeem, newMaxRedeem);
 
       expect(await directMint.minMintAmount()).to.equal(newMinMint);
       expect(await directMint.maxMintAmount()).to.equal(newMaxMint);
@@ -286,7 +285,7 @@ describe("DirectMintV2", function () {
 
     it("Should reject invalid limits (min > max)", async function () {
       await expect(
-        directMint.setLimits(1000, 100, 1, 1000) // min > max
+        directMint.requestLimits(1000, 100, 1, 1000) // min > max
       ).to.be.revertedWith("INVALID_MINT_LIMITS");
     });
   });

@@ -9,281 +9,334 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 /// @title InterestRateModel
 /// @notice Calculates dynamic interest rates based on utilization
 /// @dev Uses a two-slope (kinked) model similar to Compound/Aave:
-///      - Below kink: gentler slope for normal utilization
-///      - Above kink: steeper slope to incentivize repayment
-///
+/// - Below kink: gentler slope for normal utilization
+/// - Above kink: steeper slope to incentivize repayment
 /// Formula:
-///   If utilization <= kink:
-///     BorrowRate = baseRateBps + (utilization * multiplierBps / 10000)
-///   Else:
-///     BorrowRate = baseRateBps + (kink * multiplierBps / 10000) 
-///                  + ((utilization - kink) * jumpMultiplierBps / 10000)
-///
-///   SupplyRate = BorrowRate * utilization * (1 - reserveFactorBps/10000) / 10000
-///
+/// If utilization <= kink:
+/// BorrowRate = baseRateBps + (utilization * multiplierBps / 10000)
+/// Else:
+/// BorrowRate = baseRateBps + (kink * multiplierBps / 10000) 
+/// + ((utilization - kink) * jumpMultiplierBps / 10000)
+/// SupplyRate = BorrowRate * utilization * (1 - reserveFactorBps/10000) / 10000
 contract InterestRateModel is AccessControl {
-    bytes32 public constant RATE_ADMIN_ROLE = keccak256("RATE_ADMIN_ROLE");
+ bytes32 public constant RATE_ADMIN_ROLE = keccak256("RATE_ADMIN_ROLE");
 
-    // ============================================================
-    //                  RATE PARAMETERS (all in BPS)
-    // ============================================================
+ // ============================================================
+ // RATE PARAMETERS (all in BPS)
+ // ============================================================
 
-    /// @notice Base interest rate per year (e.g., 200 = 2%)
-    uint256 public baseRateBps;
+ /// @notice Base interest rate per year (e.g., 200 = 2%)
+ uint256 public baseRateBps;
 
-    /// @notice Multiplier per utilization below kink (e.g., 1000 = 10% at 100% util)
-    uint256 public multiplierBps;
+ /// @notice Multiplier per utilization below kink (e.g., 1000 = 10% at 100% util)
+ uint256 public multiplierBps;
 
-    /// @notice Utilization point where rate slope increases (e.g., 8000 = 80%)
-    uint256 public kinkBps;
+ /// @notice Utilization point where rate slope increases (e.g., 8000 = 80%)
+ uint256 public kinkBps;
 
-    /// @notice Multiplier per utilization above kink (e.g., 5000 = 50% additional)
-    uint256 public jumpMultiplierBps;
+ /// @notice Multiplier per utilization above kink (e.g., 5000 = 50% additional)
+ uint256 public jumpMultiplierBps;
 
-    /// @notice Portion of interest that goes to protocol reserves (e.g., 1000 = 10%)
-    uint256 public reserveFactorBps;
+ /// @notice Portion of interest that goes to protocol reserves (e.g., 1000 = 10%)
+ uint256 public reserveFactorBps;
 
-    // ============================================================
-    //                  CONSTANTS
-    // ============================================================
+ // ============================================================
+ // CONSTANTS
+ // ============================================================
 
-    uint256 private constant BPS = 10000;
-    uint256 private constant SECONDS_PER_YEAR = 365 days;
-    /// @dev 1e18 scaling factor to avoid integer truncation in per-second rates
-    uint256 private constant WAD = 1e18;
+ uint256 private constant BPS = 10000;
+ uint256 private constant SECONDS_PER_YEAR = 365 days;
+ /// @dev 1e18 scaling factor to avoid integer truncation in per-second rates
+ uint256 private constant WAD = 1e18;
 
-    // ============================================================
-    //                  EVENTS
-    // ============================================================
+ // ============================================================
+ // EVENTS
+ // ============================================================
 
-    event RateParamsUpdated(
-        uint256 baseRateBps,
-        uint256 multiplierBps,
-        uint256 kinkBps,
-        uint256 jumpMultiplierBps,
-        uint256 reserveFactorBps
-    );
+ event RateParamsUpdated(
+ uint256 baseRateBps,
+ uint256 multiplierBps,
+ uint256 kinkBps,
+ uint256 jumpMultiplierBps,
+ uint256 reserveFactorBps
+ );
+ event RateParamsChangeRequested(
+ uint256 baseRateBps,
+ uint256 multiplierBps,
+ uint256 kinkBps,
+ uint256 jumpMultiplierBps,
+ uint256 reserveFactorBps,
+ uint256 readyAt
+ );
+ event RateParamsChangeCancelled();
 
-    // ============================================================
-    //                  ERRORS
-    // ============================================================
+ // ============================================================
+ // ERRORS
+ // ============================================================
 
-    error InvalidParameter();
-    error KinkTooHigh();
-    error KinkTooLow();
-    error ReserveFactorTooHigh();
-    error BaseRateTooHigh();
-    error MultiplierZero();
+ error InvalidParameter();
+ error KinkTooHigh();
+ error KinkTooLow();
+ error ReserveFactorTooHigh();
+ error BaseRateTooHigh();
+ error MultiplierZero();
 
-    // ============================================================
-    //                  CONSTRUCTOR
-    // ============================================================
+ // ============================================================
+ // ADMIN TIMELOCK (48h)
+ // ============================================================
 
-    /// @notice Initialize with default parameters
-    /// @param _admin The admin address for rate updates
-    constructor(address _admin) {
-        require(_admin != address(0), "INVALID_ADMIN");
-        // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
-        // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
-        baseRateBps = 200;           // 2% base rate
-        multiplierBps = 1000;        // 10% at 100% utilization (pre-kink slope)
-        kinkBps = 8000;              // 80% utilization kink point
-        jumpMultiplierBps = 5000;    // 50% additional above kink
-        reserveFactorBps = 1000;     // 10% to protocol reserves
+ uint256 public constant ADMIN_DELAY = 48 hours;
 
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(RATE_ADMIN_ROLE, _admin);
-    }
+ struct PendingParams {
+ uint256 baseRateBps;
+ uint256 multiplierBps;
+ uint256 kinkBps;
+ uint256 jumpMultiplierBps;
+ uint256 reserveFactorBps;
+ uint256 requestTime;
+ bool pending;
+ }
+ PendingParams public pendingParams;
 
-    // ============================================================
-    //                  RATE CALCULATION
-    // ============================================================
+ // ============================================================
+ // CONSTRUCTOR
+ // ============================================================
 
-    /// @notice Calculate utilization rate
-    /// @param totalBorrows Total amount borrowed (18 decimals)
-    /// @param totalSupply Total amount supplied/available (18 decimals)
-    /// @return Utilization in BPS (10000 = 100%)
-    function utilizationRate(uint256 totalBorrows, uint256 totalSupply) 
-        public 
-        pure 
-        returns (uint256) 
-    {
-        if (totalSupply == 0) return 0;
-        // Cap at 100% utilization
-        if (totalBorrows >= totalSupply) return BPS;
-        return (totalBorrows * BPS) / totalSupply;
-    }
+ /// @notice Initialize with default parameters
+ /// @param _admin The admin address for rate updates
+ constructor(address _admin) {
+ require(_admin != address(0), "INVALID_ADMIN");
+ // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
+ // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
+ baseRateBps = 200; // 2% base rate
+ multiplierBps = 1000; // 10% at 100% utilization (pre-kink slope)
+ kinkBps = 8000; // 80% utilization kink point
+ jumpMultiplierBps = 5000; // 50% additional above kink
+ reserveFactorBps = 1000; // 10% to protocol reserves
 
-    /// @notice Calculate borrow rate per second, scaled by WAD (1e18)
-    /// @param totalBorrows Total amount borrowed
-    /// @param totalSupply Total amount supplied
-    /// @return Borrow rate per second in BPS * WAD / SECONDS_PER_YEAR
-    /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
-    ///      Callers should divide the accumulated result by WAD after multiplying by seconds.
-    function getBorrowRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
-        public
-        view
-        returns (uint256)
-    {
-        uint256 annualRate = getBorrowRateAnnual(totalBorrows, totalSupply);
-        return (annualRate * WAD) / SECONDS_PER_YEAR;
-    }
+ _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+ _grantRole(RATE_ADMIN_ROLE, _admin);
+ }
 
-    /// @notice Calculate annual borrow rate in BPS
-    /// @param totalBorrows Total amount borrowed
-    /// @param totalSupply Total amount supplied
-    /// @return Annual borrow rate in BPS
-    function getBorrowRateAnnual(uint256 totalBorrows, uint256 totalSupply)
-        public
-        view
-        returns (uint256)
-    {
-        uint256 util = utilizationRate(totalBorrows, totalSupply);
+ // ============================================================
+ // RATE CALCULATION
+ // ============================================================
 
-        if (util <= kinkBps) {
-            // Below kink: linear increase
-            return baseRateBps + (util * multiplierBps) / BPS;
-        } else {
-            // Above kink: steeper increase
-            uint256 normalRate = baseRateBps + (kinkBps * multiplierBps) / BPS;
-            uint256 excessUtil = util - kinkBps;
-            return normalRate + (excessUtil * jumpMultiplierBps) / BPS;
-        }
-    }
+ /// @notice Calculate utilization rate
+ /// @param totalBorrows Total amount borrowed (18 decimals)
+ /// @param totalSupply Total amount supplied/available (18 decimals)
+ /// @return Utilization in BPS (10000 = 100%)
+ function utilizationRate(uint256 totalBorrows, uint256 totalSupply) 
+ public 
+ pure 
+ returns (uint256) 
+ {
+ if (totalSupply == 0) return 0;
+ // Cap at 100% utilization
+ if (totalBorrows >= totalSupply) return BPS;
+ return (totalBorrows * BPS) / totalSupply;
+ }
 
-    /// @notice Calculate supply rate per second, scaled by WAD (1e18)
-    /// @dev SupplyRate = BorrowRate * Utilization * (1 - ReserveFactor)
-    /// @param totalBorrows Total amount borrowed
-    /// @param totalSupply Total amount supplied
-    /// @return Supply rate per second in BPS * WAD / SECONDS_PER_YEAR
-    /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
-    function getSupplyRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
-        public
-        view
-        returns (uint256)
-    {
-        uint256 annualRate = getSupplyRateAnnual(totalBorrows, totalSupply);
-        return (annualRate * WAD) / SECONDS_PER_YEAR;
-    }
+ /// @notice Calculate borrow rate per second, scaled by WAD (1e18)
+ /// @param totalBorrows Total amount borrowed
+ /// @param totalSupply Total amount supplied
+ /// @return Borrow rate per second in BPS * WAD / SECONDS_PER_YEAR
+ /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
+ /// Callers should divide the accumulated result by WAD after multiplying by seconds.
+ function getBorrowRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
+ public
+ view
+ returns (uint256)
+ {
+ uint256 annualRate = getBorrowRateAnnual(totalBorrows, totalSupply);
+ return (annualRate * WAD) / SECONDS_PER_YEAR;
+ }
 
-    /// @notice Calculate annual supply rate in BPS
-    /// @param totalBorrows Total amount borrowed
-    /// @param totalSupply Total amount supplied
-    /// @return Annual supply rate in BPS
-    function getSupplyRateAnnual(uint256 totalBorrows, uint256 totalSupply)
-        public
-        view
-        returns (uint256)
-    {
-        uint256 borrowRate = getBorrowRateAnnual(totalBorrows, totalSupply);
-        uint256 util = utilizationRate(totalBorrows, totalSupply);
-        uint256 oneMinusReserve = BPS - reserveFactorBps;
-        
-        // SupplyRate = BorrowRate * Utilization * (1 - ReserveFactor)
-        return (borrowRate * util * oneMinusReserve) / (BPS * BPS);
-    }
+ /// @notice Calculate annual borrow rate in BPS
+ /// @param totalBorrows Total amount borrowed
+ /// @param totalSupply Total amount supplied
+ /// @return Annual borrow rate in BPS
+ function getBorrowRateAnnual(uint256 totalBorrows, uint256 totalSupply)
+ public
+ view
+ returns (uint256)
+ {
+ uint256 util = utilizationRate(totalBorrows, totalSupply);
 
-    /// @notice Calculate interest owed for a given principal and time
-    /// @param principal The borrowed amount (18 decimals)
-    /// @param totalBorrows Total borrows in the system
-    /// @param totalSupply Total supply in the system
-    /// @param secondsElapsed Time since last accrual
-    /// @return Total interest owed (18 decimals)
-    function calculateInterest(
-        uint256 principal,
-        uint256 totalBorrows,
-        uint256 totalSupply,
-        uint256 secondsElapsed
-    ) external view returns (uint256) {
-        if (principal == 0 || secondsElapsed == 0) return 0;
-        
-        uint256 annualRateBps = getBorrowRateAnnual(totalBorrows, totalSupply);
-        // interest = principal * annualRate * secondsElapsed / (BPS * SECONDS_PER_YEAR)
-        // Reorder multiplication to avoid precision loss
-        return (principal * annualRateBps * secondsElapsed) / (BPS * SECONDS_PER_YEAR);
-    }
+ if (util <= kinkBps) {
+ // Below kink: linear increase
+ return baseRateBps + (util * multiplierBps) / BPS;
+ } else {
+ // Above kink: steeper increase
+ uint256 normalRate = baseRateBps + (kinkBps * multiplierBps) / BPS;
+ uint256 excessUtil = util - kinkBps;
+ return normalRate + (excessUtil * jumpMultiplierBps) / BPS;
+ }
+ }
 
-    /// @notice Split interest payment into supplier portion and reserve portion
-    /// @param interestAmount Total interest paid
-    /// @return supplierAmount Amount distributed to suppliers
-    /// @return reserveAmount Amount kept as protocol reserves
-    function splitInterest(uint256 interestAmount)
-        external
-        view
-        returns (uint256 supplierAmount, uint256 reserveAmount)
-    {
-        reserveAmount = (interestAmount * reserveFactorBps) / BPS;
-        supplierAmount = interestAmount - reserveAmount;
-    }
+ /// @notice Calculate supply rate per second, scaled by WAD (1e18)
+ /// @dev SupplyRate = BorrowRate * Utilization * (1 - ReserveFactor)
+ /// @param totalBorrows Total amount borrowed
+ /// @param totalSupply Total amount supplied
+ /// @return Supply rate per second in BPS * WAD / SECONDS_PER_YEAR
+ /// @dev Returns (annualRateBps * 1e18) / SECONDS_PER_YEAR to avoid integer truncation.
+ function getSupplyRatePerSecond(uint256 totalBorrows, uint256 totalSupply)
+ public
+ view
+ returns (uint256)
+ {
+ uint256 annualRate = getSupplyRateAnnual(totalBorrows, totalSupply);
+ return (annualRate * WAD) / SECONDS_PER_YEAR;
+ }
 
-    // ============================================================
-    //                  VIEW FUNCTIONS
-    // ============================================================
+ /// @notice Calculate annual supply rate in BPS
+ /// @param totalBorrows Total amount borrowed
+ /// @param totalSupply Total amount supplied
+ /// @return Annual supply rate in BPS
+ function getSupplyRateAnnual(uint256 totalBorrows, uint256 totalSupply)
+ public
+ view
+ returns (uint256)
+ {
+ uint256 borrowRate = getBorrowRateAnnual(totalBorrows, totalSupply);
+ uint256 util = utilizationRate(totalBorrows, totalSupply);
+ uint256 oneMinusReserve = BPS - reserveFactorBps;
+ 
+ // SupplyRate = BorrowRate * Utilization * (1 - ReserveFactor)
+ return (borrowRate * util * oneMinusReserve) / (BPS * BPS);
+ }
 
-    /// @notice Get all rate parameters in one call
-    function getParams() external view returns (
-        uint256 _baseRateBps,
-        uint256 _multiplierBps,
-        uint256 _kinkBps,
-        uint256 _jumpMultiplierBps,
-        uint256 _reserveFactorBps
-    ) {
-        return (baseRateBps, multiplierBps, kinkBps, jumpMultiplierBps, reserveFactorBps);
-    }
+ /// @notice Calculate interest owed for a given principal and time
+ /// @param principal The borrowed amount (18 decimals)
+ /// @param totalBorrows Total borrows in the system
+ /// @param totalSupply Total supply in the system
+ /// @param secondsElapsed Time since last accrual
+ /// @return Total interest owed (18 decimals)
+ function calculateInterest(
+ uint256 principal,
+ uint256 totalBorrows,
+ uint256 totalSupply,
+ uint256 secondsElapsed
+ ) external view returns (uint256) {
+ if (principal == 0 || secondsElapsed == 0) return 0;
+ 
+ uint256 annualRateBps = getBorrowRateAnnual(totalBorrows, totalSupply);
+ // interest = principal * annualRate * secondsElapsed / (BPS * SECONDS_PER_YEAR)
+ // Reorder multiplication to avoid precision loss
+ return (principal * annualRateBps * secondsElapsed) / (BPS * SECONDS_PER_YEAR);
+ }
 
-    /// @notice Calculate rates at various utilization points for UI display
-    /// @return rates Array of [utilization, borrowRate, supplyRate] at 10% increments
-    function getRateCurve() external view returns (uint256[3][11] memory rates) {
-        for (uint256 i = 0; i <= 10; i++) {
-            uint256 util = i * 1000; // 0%, 10%, 20%, ... 100%
-            // Create a mock scenario: if util is X%, then borrows = X * supply / 100
-            // For display purposes, assume supply = 1e18
-            uint256 mockSupply = 1e18;
-            uint256 mockBorrows = (mockSupply * util) / BPS;
-            
-            rates[i][0] = util;
-            rates[i][1] = getBorrowRateAnnual(mockBorrows, mockSupply);
-            rates[i][2] = getSupplyRateAnnual(mockBorrows, mockSupply);
-        }
-    }
+ /// @notice Split interest payment into supplier portion and reserve portion
+ /// @param interestAmount Total interest paid
+ /// @return supplierAmount Amount distributed to suppliers
+ /// @return reserveAmount Amount kept as protocol reserves
+ function splitInterest(uint256 interestAmount)
+ external
+ view
+ returns (uint256 supplierAmount, uint256 reserveAmount)
+ {
+ reserveAmount = (interestAmount * reserveFactorBps) / BPS;
+ supplierAmount = interestAmount - reserveAmount;
+ }
 
-    // ============================================================
-    //                  ADMIN FUNCTIONS
-    // ============================================================
+ // ============================================================
+ // VIEW FUNCTIONS
+ // ============================================================
 
-    /// @notice Update rate parameters (governance-controlled)
-    function setParams(
-        uint256 _baseRateBps,
-        uint256 _multiplierBps,
-        uint256 _kinkBps,
-        uint256 _jumpMultiplierBps,
-        uint256 _reserveFactorBps
-    ) external onlyRole(RATE_ADMIN_ROLE) {
-        // Validate parameters
-        if (_baseRateBps > 2000) revert BaseRateTooHigh();           // Max 20% base rate
-        if (_kinkBps > BPS) revert KinkTooHigh();
-        if (_kinkBps < 1000) revert KinkTooLow();                   // Min 10% kink
-        if (_multiplierBps == 0) revert MultiplierZero();
-        if (_jumpMultiplierBps == 0) revert MultiplierZero();
-        if (_reserveFactorBps > 5000) revert ReserveFactorTooHigh(); // Max 50% to reserves
-        
-        // Sanity check: max annual rate at 100% util should be < 100%
-        uint256 maxRate = _baseRateBps + (_kinkBps * _multiplierBps) / BPS 
-                         + ((BPS - _kinkBps) * _jumpMultiplierBps) / BPS;
-        if (maxRate > 10000) revert InvalidParameter(); // Max 100% APR
+ /// @notice Get all rate parameters in one call
+ function getParams() external view returns (
+ uint256 _baseRateBps,
+ uint256 _multiplierBps,
+ uint256 _kinkBps,
+ uint256 _jumpMultiplierBps,
+ uint256 _reserveFactorBps
+ ) {
+ return (baseRateBps, multiplierBps, kinkBps, jumpMultiplierBps, reserveFactorBps);
+ }
 
-        baseRateBps = _baseRateBps;
-        multiplierBps = _multiplierBps;
-        kinkBps = _kinkBps;
-        jumpMultiplierBps = _jumpMultiplierBps;
-        reserveFactorBps = _reserveFactorBps;
+ /// @notice Calculate rates at various utilization points for UI display
+ /// @return rates Array of [utilization, borrowRate, supplyRate] at 10% increments
+ function getRateCurve() external view returns (uint256[3][11] memory rates) {
+ for (uint256 i = 0; i <= 10; i++) {
+ uint256 util = i * 1000; // 0%, 10%, 20%, ... 100%
+ // Create a mock scenario: if util is X%, then borrows = X * supply / 100
+ // For display purposes, assume supply = 1e18
+ uint256 mockSupply = 1e18;
+ uint256 mockBorrows = (mockSupply * util) / BPS;
+ 
+ rates[i][0] = util;
+ rates[i][1] = getBorrowRateAnnual(mockBorrows, mockSupply);
+ rates[i][2] = getSupplyRateAnnual(mockBorrows, mockSupply);
+ }
+ }
 
-        emit RateParamsUpdated(
-            _baseRateBps,
-            _multiplierBps,
-            _kinkBps,
-            _jumpMultiplierBps,
-            _reserveFactorBps
-        );
-    }
+ // ============================================================
+ // ADMIN FUNCTIONS (48h TIMELOCKED)
+ // ============================================================
+
+ /// @notice Propose new rate parameters (48h delay)
+ /// @dev Validates parameters at request time so invalid proposals fail fast.
+ function requestSetParams(
+ uint256 _baseRateBps,
+ uint256 _multiplierBps,
+ uint256 _kinkBps,
+ uint256 _jumpMultiplierBps,
+ uint256 _reserveFactorBps
+ ) external onlyRole(RATE_ADMIN_ROLE) {
+ require(!pendingParams.pending, "PROPOSAL_ALREADY_PENDING");
+ // Validate parameters
+ if (_baseRateBps > 2000) revert BaseRateTooHigh();
+ if (_kinkBps > BPS) revert KinkTooHigh();
+ if (_kinkBps < 1000) revert KinkTooLow();
+ if (_multiplierBps == 0) revert MultiplierZero();
+ if (_jumpMultiplierBps == 0) revert MultiplierZero();
+ if (_reserveFactorBps > 5000) revert ReserveFactorTooHigh();
+
+ uint256 maxRate = _baseRateBps + (_kinkBps * _multiplierBps) / BPS
+ + ((BPS - _kinkBps) * _jumpMultiplierBps) / BPS;
+ if (maxRate > 10000) revert InvalidParameter();
+
+ pendingParams = PendingParams({
+ baseRateBps: _baseRateBps,
+ multiplierBps: _multiplierBps,
+ kinkBps: _kinkBps,
+ jumpMultiplierBps: _jumpMultiplierBps,
+ reserveFactorBps: _reserveFactorBps,
+ requestTime: block.timestamp,
+ pending: true
+ });
+
+ emit RateParamsChangeRequested(
+ _baseRateBps, _multiplierBps, _kinkBps,
+ _jumpMultiplierBps, _reserveFactorBps,
+ block.timestamp + ADMIN_DELAY
+ );
+ }
+
+ /// @notice Cancel pending rate parameter change
+ function cancelSetParams() external onlyRole(RATE_ADMIN_ROLE) {
+ require(pendingParams.pending, "NO_PENDING");
+ delete pendingParams;
+ emit RateParamsChangeCancelled();
+ }
+
+ /// @notice Execute pending rate parameter change after 48h delay
+ function executeSetParams() external onlyRole(RATE_ADMIN_ROLE) {
+ PendingParams memory p = pendingParams;
+ require(p.pending, "NO_PENDING");
+ require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+
+ baseRateBps = p.baseRateBps;
+ multiplierBps = p.multiplierBps;
+ kinkBps = p.kinkBps;
+ jumpMultiplierBps = p.jumpMultiplierBps;
+ reserveFactorBps = p.reserveFactorBps;
+
+ delete pendingParams;
+
+ emit RateParamsUpdated(
+ p.baseRateBps, p.multiplierBps, p.kinkBps,
+ p.jumpMultiplierBps, p.reserveFactorBps
+ );
+ }
 }
