@@ -30,6 +30,7 @@ contract CollateralVaultUpgradeable is
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     address public borrowModule;
 
@@ -44,22 +45,6 @@ contract CollateralVaultUpgradeable is
     address[] public supportedTokens;
     mapping(address => mapping(address => uint256)) public deposits;
 
-    // ── Timelock (48h propose → execute via MintedTimelockController) ──
-    uint256 public constant ADMIN_DELAY = 48 hours;
-
-    address public pendingBorrowModule;
-    uint256 public pendingBorrowModuleTime;
-
-    struct PendingCollateral {
-        address token;
-        uint256 collateralFactorBps;
-        uint256 liquidationThresholdBps;
-        uint256 liquidationPenaltyBps;
-        uint256 requestTime;
-    }
-    PendingCollateral public pendingAddCollateral;
-    PendingCollateral public pendingUpdateCollateral;
-
     // ── Events ──────────────────────────────────────────────────────────
     event CollateralAdded(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
     event CollateralUpdated(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
@@ -69,12 +54,6 @@ contract CollateralVaultUpgradeable is
     event Withdrawn(address indexed user, address indexed token, uint256 amount);
     event Seized(address indexed user, address indexed token, uint256 amount, address indexed liquidator);
     event BorrowModuleUpdated(address indexed oldModule, address indexed newModule);
-    event BorrowModuleChangeRequested(address indexed module, uint256 readyAt);
-    event BorrowModuleChangeCancelled(address indexed module);
-    event CollateralAddRequested(address indexed token, uint256 factorBps, uint256 liqThreshold, uint256 readyAt);
-    event CollateralAddCancelled(address indexed token);
-    event CollateralUpdateRequested(address indexed token, uint256 factorBps, uint256 liqThreshold, uint256 readyAt);
-    event CollateralUpdateCancelled(address indexed token);
 
     // ── Storage gap for future upgrades ─────────────────────────────────
     uint256[40] private __gap;
@@ -84,7 +63,9 @@ contract CollateralVaultUpgradeable is
         _disableInitializers();
     }
 
-    function initialize() public initializer {
+    function initialize(address _timelockController) public initializer {
+        require(_timelockController != address(0), "INVALID_TIMELOCK");
+
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -92,136 +73,77 @@ contract CollateralVaultUpgradeable is
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(VAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
     }
 
-    /// @dev Only DEFAULT_ADMIN_ROLE can authorize upgrades (through TimelockController)
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @dev Only the MintedTimelockController can authorize upgrades (48h delay enforced by OZ TimelockController)
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(TIMELOCK_ROLE) {}
 
     // ══════════════════════════════════════════════════════════════════════
-    // TIMELOCKED ADMIN — setBorrowModule
+    // ADMIN SETTERS (executed via MintedTimelockController)
     // ══════════════════════════════════════════════════════════════════════
 
-    function requestBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
+    /// @notice Set borrow module — must be called through MintedTimelockController
+    /// @dev Timelock delay (48h) is enforced by the OZ TimelockController, not here
+    function setBorrowModule(address _borrowModule) external onlyRole(TIMELOCK_ROLE) {
         require(_borrowModule != address(0), "INVALID_MODULE");
-        require(pendingBorrowModule == address(0), "CHANGE_ALREADY_PENDING");
-        pendingBorrowModule = _borrowModule;
-        pendingBorrowModuleTime = block.timestamp;
-        emit BorrowModuleChangeRequested(_borrowModule, block.timestamp + ADMIN_DELAY);
-    }
-
-    function cancelBorrowModule() external onlyRole(VAULT_ADMIN_ROLE) {
-        address cancelled = pendingBorrowModule;
-        pendingBorrowModule = address(0);
-        pendingBorrowModuleTime = 0;
-        emit BorrowModuleChangeCancelled(cancelled);
-    }
-
-    function executeBorrowModule() external onlyRole(VAULT_ADMIN_ROLE) {
-        require(pendingBorrowModule != address(0), "NOTHING_PENDING");
-        require(block.timestamp >= pendingBorrowModuleTime + ADMIN_DELAY, "TIMELOCK_NOT_ELAPSED");
         address old = borrowModule;
-        borrowModule = pendingBorrowModule;
-        pendingBorrowModule = address(0);
-        pendingBorrowModuleTime = 0;
-        emit BorrowModuleUpdated(old, borrowModule);
+        borrowModule = _borrowModule;
+        emit BorrowModuleUpdated(old, _borrowModule);
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // TIMELOCKED ADMIN — addCollateral
+    // ADMIN — addCollateral (via MintedTimelockController)
     // ══════════════════════════════════════════════════════════════════════
 
-    function requestAddCollateral(
+    /// @notice Add a new collateral token — must be called through MintedTimelockController
+    function addCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
-    ) external onlyRole(VAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
         require(collateralFactorBps <= 9000, "FACTOR_TOO_HIGH");
         require(liquidationThresholdBps > collateralFactorBps, "THRESHOLD_MUST_EXCEED_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
         require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
-        require(pendingAddCollateral.token == address(0), "ADD_ALREADY_PENDING");
 
-        pendingAddCollateral = PendingCollateral({
-            token: token,
+        collateralConfigs[token] = CollateralConfig({
+            enabled: true,
             collateralFactorBps: collateralFactorBps,
             liquidationThresholdBps: liquidationThresholdBps,
-            liquidationPenaltyBps: liquidationPenaltyBps,
-            requestTime: block.timestamp
+            liquidationPenaltyBps: liquidationPenaltyBps
         });
-        emit CollateralAddRequested(token, collateralFactorBps, liquidationThresholdBps, block.timestamp + ADMIN_DELAY);
-    }
-
-    function cancelAddCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
-        address cancelled = pendingAddCollateral.token;
-        delete pendingAddCollateral;
-        emit CollateralAddCancelled(cancelled);
-    }
-
-    function executeAddCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
-        PendingCollateral memory p = pendingAddCollateral;
-        require(p.token != address(0), "NOTHING_PENDING");
-        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_NOT_ELAPSED");
-
-        collateralConfigs[p.token] = CollateralConfig({
-            enabled: true,
-            collateralFactorBps: p.collateralFactorBps,
-            liquidationThresholdBps: p.liquidationThresholdBps,
-            liquidationPenaltyBps: p.liquidationPenaltyBps
-        });
-        supportedTokens.push(p.token);
-        delete pendingAddCollateral;
-        emit CollateralAdded(p.token, p.collateralFactorBps, p.liquidationThresholdBps);
+        supportedTokens.push(token);
+        emit CollateralAdded(token, collateralFactorBps, liquidationThresholdBps);
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // TIMELOCKED ADMIN — updateCollateral
+    // ADMIN — updateCollateral (via MintedTimelockController)
     // ══════════════════════════════════════════════════════════════════════
 
-    function requestUpdateCollateral(
+    /// @notice Update an existing collateral config — must be called through MintedTimelockController
+    function updateCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
-    ) external onlyRole(VAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         require(collateralConfigs[token].enabled, "TOKEN_NOT_ACTIVE");
         require(collateralFactorBps <= 9000, "FACTOR_TOO_HIGH");
         require(liquidationThresholdBps > collateralFactorBps, "THRESHOLD_MUST_EXCEED_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
         require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
-        require(pendingUpdateCollateral.token == address(0), "UPDATE_ALREADY_PENDING");
 
-        pendingUpdateCollateral = PendingCollateral({
-            token: token,
+        collateralConfigs[token] = CollateralConfig({
+            enabled: true,
             collateralFactorBps: collateralFactorBps,
             liquidationThresholdBps: liquidationThresholdBps,
-            liquidationPenaltyBps: liquidationPenaltyBps,
-            requestTime: block.timestamp
+            liquidationPenaltyBps: liquidationPenaltyBps
         });
-        emit CollateralUpdateRequested(token, collateralFactorBps, liquidationThresholdBps, block.timestamp + ADMIN_DELAY);
-    }
-
-    function cancelUpdateCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
-        address cancelled = pendingUpdateCollateral.token;
-        delete pendingUpdateCollateral;
-        emit CollateralUpdateCancelled(cancelled);
-    }
-
-    function executeUpdateCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
-        PendingCollateral memory p = pendingUpdateCollateral;
-        require(p.token != address(0), "NOTHING_PENDING");
-        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_NOT_ELAPSED");
-
-        collateralConfigs[p.token] = CollateralConfig({
-            enabled: true,
-            collateralFactorBps: p.collateralFactorBps,
-            liquidationThresholdBps: p.liquidationThresholdBps,
-            liquidationPenaltyBps: p.liquidationPenaltyBps
-        });
-        delete pendingUpdateCollateral;
-        emit CollateralUpdated(p.token, p.collateralFactorBps, p.liquidationThresholdBps);
+        emit CollateralUpdated(token, collateralFactorBps, liquidationThresholdBps);
     }
 
     // ══════════════════════════════════════════════════════════════════════
