@@ -6,6 +6,15 @@ import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 
+// INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
+// Prevents NODE_TLS_REJECT_UNAUTHORIZED=0 from disabling cert validation in production
+if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+  }
+}
+
 // Never load .env files containing private keys via dotenv.
 function readSecret(name: string, envVar: string): string {
   const secretPath = `/run/secrets/${name}`;
@@ -58,6 +67,14 @@ function loadConfig() {
 
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) throw new Error("FATAL: RPC_URL is required");
+  // INFRA-H-01: Reject insecure HTTP RPC in production
+  if (process.env.NODE_ENV === "production" && !rpcUrl.startsWith("https://") && !rpcUrl.startsWith("wss://")) {
+    throw new Error("FATAL: RPC_URL must use https:// or wss:// in production");
+  }
+  if (!rpcUrl.startsWith("https://") && !rpcUrl.startsWith("wss://") &&
+      !rpcUrl.includes("localhost") && !rpcUrl.includes("127.0.0.1")) {
+    console.warn("WARNING: Using insecure HTTP transport for RPC. Use HTTPS in production.");
+  }
 
   const requiredAddrs = [
     "BORROW_MODULE_ADDRESS", "LIQUIDATION_ENGINE_ADDRESS",

@@ -18,8 +18,11 @@ import { ethers } from "ethers";
 // Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
 // Use shared readSecret utility
-import { readSecret } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 import * as fs from "fs";
+
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -126,6 +129,8 @@ class ValidatorNode {
 
     // Initialize Ethereum provider for bridge verification
     if (process.env.ETHEREUM_RPC_URL) {
+      // INFRA-H-01: Validate HTTPS for Ethereum RPC in production
+      requireHTTPS(process.env.ETHEREUM_RPC_URL, "ETHEREUM_RPC_URL");
       this.ethereumProvider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL);
     }
 
