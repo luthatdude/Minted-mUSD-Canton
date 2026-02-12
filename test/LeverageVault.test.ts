@@ -377,11 +377,36 @@ describe('LeverageVault', function () {
       // Send some tokens directly to the contract
       await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
 
+      // FIX V3-AUDIT: Emergency withdraw now requires request → 48h wait → execute
+      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
+
+      // Should revert before timelock expires
+      await expect(leverageVault.executeEmergencyWithdraw()).to.be.revertedWith('TIMELOCK_ACTIVE');
+
+      // Advance time past 48h
+      await ethers.provider.send('evm_increaseTime', [48 * 3600 + 1]);
+      await ethers.provider.send('evm_mine', []);
+
       const balanceBefore = await weth.balanceOf(owner.address);
-      await leverageVault.emergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
+      await leverageVault.executeEmergencyWithdraw();
       const balanceAfter = await weth.balanceOf(owner.address);
 
       expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther('5'));
+    });
+
+    it('should allow cancelling emergency withdraw', async function () {
+      await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
+      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
+      await leverageVault.cancelEmergencyWithdraw();
+      await expect(leverageVault.executeEmergencyWithdraw()).to.be.revertedWith('NO_PENDING_WITHDRAW');
+    });
+
+    it('should reject duplicate emergency withdraw request', async function () {
+      await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
+      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
+      await expect(
+        leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('1'))
+      ).to.be.revertedWith('WITHDRAW_ALREADY_PENDING');
     });
   });
 
