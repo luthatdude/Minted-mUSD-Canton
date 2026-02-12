@@ -6,236 +6,259 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
-import "./interfaces/ISMUSD.sol";
+
+/// @dev ERC-4626 interface for reading share price
+interface ISMUSD {
+    /// @notice Convert 1 share to assets (mUSD)
+    function convertToAssets(uint256 shares) external view returns (uint256);
+    /// @notice Total assets under management
+    function totalAssets() external view returns (uint256);
+    /// @notice Total shares outstanding
+    function totalSupply() external view returns (uint256);
+    /// @notice Decimals offset used in share price
+    function decimalsOffset() external view returns (uint8);
+}
+
+/// @dev Minimal ERC-20 interface for balance checks
+interface IERC20Minimal {
+    function balanceOf(address account) external view returns (uint256);
+}
 
 /// @title SMUSDPriceAdapter
 /// @notice Chainlink AggregatorV3-compatible price feed for sMUSD.
-/// Reports: USD price of 1 sMUSD = sharePrice × mUSD_price.
-/// Since mUSD is pegged 1:1 to USD, sharePrice ≈ sMUSD price in USD.
+///         Reports: USD price of 1 sMUSD = sharePrice × mUSD_price.
+///         Since mUSD is pegged 1:1 to USD, sharePrice ≈ sMUSD price in USD.
 /// @dev Used by PriceOracle to value sMUSD collateral in the CollateralVault.
-/// The share price is derived from the ERC-4626 vault's convertToAssets(),
-/// which accounts for accrued interest from borrowers.
+///      The share price is derived from the ERC-4626 vault's convertToAssets(),
+///      which accounts for accrued interest from borrowers.
 contract SMUSDPriceAdapter is AccessControl {
- bytes32 public constant ADAPTER_ADMIN_ROLE = keccak256("ADAPTER_ADMIN_ROLE");
+    bytes32 public constant ADAPTER_ADMIN_ROLE = keccak256("ADAPTER_ADMIN_ROLE");
 
- /// @notice The SMUSD ERC-4626 vault
- address public immutable smusd;
+    /// @notice The SMUSD ERC-4626 vault
+    address public immutable smusd;
 
- /// @notice Price decimals (matches Chainlink convention: 8 decimals)
- uint8 public constant DECIMALS = 8;
+    /// @notice Price decimals (matches Chainlink convention: 8 decimals)
+    uint8 public constant DECIMALS = 8;
 
- /// @notice 1 full sMUSD share (18 decimals)
- uint256 private constant ONE_SHARE = 1e18;
+    /// @notice 1 full sMUSD share (18 decimals)
+    uint256 private constant ONE_SHARE = 1e18;
 
- /// @notice Minimum valid share price (0.95 USD) — protects against vault manipulation
- uint256 public minSharePrice = 0.95e8;
+    /// @notice Maximum blocks for rate limiter (~1 hour at 12s blocks)
+    /// @dev FIX CRIT-07: Prevents unbounded rate limiter growth after extended inactivity
+    uint256 private constant MAX_RATE_LIMIT_BLOCKS = 300;
 
- /// @notice Maximum valid share price (2.0 USD) — protects against donation attacks
- uint256 public maxSharePrice = 2.0e8;
+    /// @notice Minimum valid share price (0.95 USD) — protects against vault manipulation
+    uint256 public minSharePrice = 0.95e8;
 
- /// @notice Minimum totalSupply to trust convertToAssets (anti-donation-attack)
- /// @dev If totalSupply < this, the vault is too small and share price is unreliable
- uint256 public minTotalSupply = 1e18; // 1 full share minimum
+    /// @notice Maximum valid share price (2.0 USD) — protects against donation attacks
+    uint256 public maxSharePrice = 2.0e8;
 
- /// @notice Maximum allowed price change per block (rate limiter, 8 decimals)
- /// @dev Prevents single-block donation from moving price more than 5%
- uint256 public maxPriceChangePerBlock = 0.05e8; // 5 cents = 5% on a $1 token
+    /// @notice Minimum totalSupply to trust convertToAssets (anti-donation-attack)
+    /// @dev If totalSupply < this, the vault is too small and share price is unreliable
+    uint256 public minTotalSupply = 1000e18; // FIX CRIT-08: 1000 shares minimum for donation protection
 
- /// @notice Cached price from the last query (for rate limiting)
- uint256 private _lastPrice;
+    /// @notice Maximum allowed price change per block (rate limiter, 8 decimals)
+    /// @dev Prevents single-block donation from moving price more than 5%
+    uint256 public maxPriceChangePerBlock = 0.05e8; // 5 cents = 5% on a $1 token
 
- /// @notice Block number of the last query
- uint256 private _lastPriceBlock;
+    /// @notice Cached price from the last query (for rate limiting)
+    uint256 private _lastPrice;
 
- /// @notice Internal round tracking
- uint80 private _roundId;
+    /// @notice Block number of the last query
+    uint256 private _lastPriceBlock;
 
- event SharePriceBoundsUpdated(uint256 minPrice, uint256 maxPrice);
- event DonationProtectionUpdated(uint256 minTotalSupply, uint256 maxPriceChangePerBlock);
+    /// @notice Internal round tracking
+    uint80 private _roundId;
 
- error InvalidSharePrice(uint256 price);
- error SMUSDZeroAddress();
- error VaultTotalSupplyTooLow(uint256 totalSupply, uint256 minRequired);
+    event SharePriceBoundsUpdated(uint256 minPrice, uint256 maxPrice);
+    event DonationProtectionUpdated(uint256 minTotalSupply, uint256 maxPriceChangePerBlock);
 
- constructor(address _smusd, address _admin) {
- if (_smusd == address(0)) revert SMUSDZeroAddress();
+    error InvalidSharePrice(uint256 price);
+    error SMUSDZeroAddress();
+    error VaultTotalSupplyTooLow(uint256 totalSupply, uint256 minRequired);
 
- smusd = _smusd;
- _roundId = 1;
- // Initialize _lastPrice to prevent rate limiter bypass on first query
- _lastPrice = minSharePrice;
- _lastPriceBlock = block.number;
+    constructor(address _smusd, address _admin) {
+        if (_smusd == address(0)) revert SMUSDZeroAddress();
 
- _grantRole(DEFAULT_ADMIN_ROLE, _admin);
- _grantRole(ADAPTER_ADMIN_ROLE, _admin);
- }
+        smusd = _smusd;
+        _roundId = 1;
 
- // ============================================================
- // AGGREGATOR V3 INTERFACE
- // ============================================================
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(ADAPTER_ADMIN_ROLE, _admin);
+    }
 
- /// @notice Returns 8 (standard Chainlink USD feed decimals)
- function decimals() external pure returns (uint8) {
- return DECIMALS;
- }
+    // ============================================================
+    //                  AGGREGATOR V3 INTERFACE
+    // ============================================================
 
- /// @notice Returns the description of this feed
- function description() external pure returns (string memory) {
- return "sMUSD / USD";
- }
+    /// @notice Returns 8 (standard Chainlink USD feed decimals)
+    function decimals() external pure returns (uint8) {
+        return DECIMALS;
+    }
 
- /// @notice Returns the version of this feed
- function version() external pure returns (uint256) {
- return 1;
- }
+    /// @notice Returns the description of this feed
+    function description() external pure returns (string memory) {
+        return "sMUSD / USD";
+    }
 
- /// @notice Get the latest price data in Chainlink AggregatorV3 format
- function latestRoundData()
- external
- view
- returns (
- uint80 roundId,
- int256 answer,
- uint256 startedAt,
- uint256 updatedAt,
- uint80 answeredInRound
- )
- {
- uint256 price = _getSharePriceUsd();
- return (
- _roundId,
- int256(price),
- block.timestamp,
- block.timestamp, // Always "fresh" since it's derived from on-chain vault state
- _roundId
- );
- }
+    /// @notice Returns the version of this feed
+    function version() external pure returns (uint256) {
+        return 1;
+    }
 
- /// @notice Get data for a specific round (returns latest for all rounds)
- function getRoundData(uint80 /* _roundId_ */)
- external
- view
- returns (
- uint80 roundId,
- int256 answer,
- uint256 startedAt,
- uint256 updatedAt,
- uint80 answeredInRound
- )
- {
- uint256 price = _getSharePriceUsd();
- return (
- _roundId,
- int256(price),
- block.timestamp,
- block.timestamp,
- _roundId
- );
- }
+    /// @notice Get the latest price data in Chainlink AggregatorV3 format
+    function latestRoundData()
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
+    {
+        uint256 price = _getSharePriceUsd();
+        return (
+            _roundId,
+            int256(price),
+            block.timestamp,
+            block.timestamp,  // Always "fresh" since it's derived from on-chain vault state
+            _roundId
+        );
+    }
 
- // ============================================================
- // INTERNAL
- // ============================================================
+    /// @notice Get data for a specific round (returns latest for all rounds)
+    function getRoundData(uint80 /* _roundId_ */)
+        external
+        view
+        returns (
+            uint80 roundId,
+            int256 answer,
+            uint256 startedAt,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        )
+    {
+        uint256 price = _getSharePriceUsd();
+        return (
+            _roundId,
+            int256(price),
+            block.timestamp,
+            block.timestamp,
+            _roundId
+        );
+    }
 
- /// @notice Event emitted when price is clamped to bounds
- event SharePriceClamped(uint256 rawPrice, uint256 clampedPrice);
+    // ============================================================
+    //                  INTERNAL
+    // ============================================================
 
- /// @notice Derive sMUSD price in USD (8 decimals) from vault share price
- /// @dev SPA-M01: Round is managed via incrementRound() admin function.
- /// @dev Clamps to bounds instead of reverting to prevent downstream DoS
- /// @dev Cross-checks totalSupply floor + rate-limits per-block price moves
- function _getSharePriceUsd() internal view returns (uint256) {
- // Reject price if vault has near-zero shares
- // With very few shares, a small donation can wildly inflate convertToAssets
- uint256 totalSupply = ISMUSD(smusd).totalSupply();
- if (totalSupply < minTotalSupply) {
- // Vault too small to trust — return last known price or minSharePrice
- return _lastPrice > 0 ? _lastPrice : minSharePrice;
- }
+    /// @notice FIX SPA-M03: Event emitted when price is clamped to bounds
+    event SharePriceClamped(uint256 rawPrice, uint256 clampedPrice);
 
- // Cross-check totalAssets vs actual underlying balance
- // If totalAssets greatly exceeds the vault's actual token balance, someone donated
- // Note: totalAssets is used implicitly via convertToAssets; the totalSupply check
- // above is the primary guard since donation attacks work by inflating assets/shares ratio
+    /// @notice Derive sMUSD price in USD (8 decimals) from vault share price
+    /// @dev SPA-M01: Round is managed via incrementRound() admin function.
+    /// @dev FIX SPA-M03: Clamps to bounds instead of reverting to prevent downstream DoS
+    /// @dev FIX DONATION-ATTACK: Cross-checks totalSupply floor + rate-limits per-block price moves
+    function _getSharePriceUsd() internal view returns (uint256) {
+        // FIX DONATION-ATTACK: Reject price if vault has near-zero shares
+        // With very few shares, a small donation can wildly inflate convertToAssets
+        uint256 totalSupply = ISMUSD(smusd).totalSupply();
+        if (totalSupply < minTotalSupply) {
+            // Vault too small to trust — return last known price or minSharePrice
+            return _lastPrice > 0 ? _lastPrice : minSharePrice;
+        }
 
- // convertToAssets(1e18) returns how much mUSD (18 decimals) 1 sMUSD is worth
- uint256 assetsPerShare = ISMUSD(smusd).convertToAssets(ONE_SHARE);
+        // FIX DONATION-ATTACK: Cross-check totalAssets vs actual underlying balance
+        // If totalAssets greatly exceeds the vault's actual token balance, someone donated
+        // Note: totalAssets is used implicitly via convertToAssets; the totalSupply check
+        // above is the primary guard since donation attacks work by inflating assets/shares ratio
 
- // Convert from 18 decimals (mUSD) to 8 decimals (Chainlink USD)
- uint256 priceUsd = assetsPerShare / 1e10;
+        // convertToAssets(1e18) returns how much mUSD (18 decimals) 1 sMUSD is worth
+        uint256 assetsPerShare = ISMUSD(smusd).convertToAssets(ONE_SHARE);
 
- // Clamp to bounds instead of reverting to prevent downstream DoS
- if (priceUsd < minSharePrice) {
- priceUsd = minSharePrice;
- } else if (priceUsd > maxSharePrice) {
- priceUsd = maxSharePrice;
- }
+        // Convert from 18 decimals (mUSD) to 8 decimals (Chainlink USD)
+        uint256 priceUsd = assetsPerShare / 1e10;
 
- // Rate-limit per-block price movement
- // If the price jumped too much from last block, clamp the change
- if (_lastPrice > 0 && _lastPriceBlock < block.number) {
- uint256 blocksSinceLast = block.number - _lastPriceBlock;
- uint256 maxAllowedChange = maxPriceChangePerBlock * blocksSinceLast;
- if (priceUsd > _lastPrice + maxAllowedChange) {
- priceUsd = _lastPrice + maxAllowedChange;
- } else if (_lastPrice > maxAllowedChange && priceUsd < _lastPrice - maxAllowedChange) {
- priceUsd = _lastPrice - maxAllowedChange;
- }
- }
+        // FIX SPA-M03: Clamp to bounds instead of reverting to prevent downstream DoS
+        if (priceUsd < minSharePrice) {
+            priceUsd = minSharePrice;
+        } else if (priceUsd > maxSharePrice) {
+            priceUsd = maxSharePrice;
+        }
 
- return priceUsd;
- }
+        // FIX DONATION-ATTACK: Rate-limit per-block price movement
+        // If the price jumped too much from last block, clamp the change
+        if (_lastPrice > 0 && _lastPriceBlock < block.number) {
+            uint256 blocksSinceLast = block.number - _lastPriceBlock;
+            // FIX CRIT-07: Cap blocks to prevent unbounded rate limiter growth
+            // After MAX_RATE_LIMIT_BLOCKS, the rate limiter becomes ineffective
+            if (blocksSinceLast > MAX_RATE_LIMIT_BLOCKS) {
+                blocksSinceLast = MAX_RATE_LIMIT_BLOCKS;
+            }
+            uint256 maxAllowedChange = maxPriceChangePerBlock * blocksSinceLast;
+            if (priceUsd > _lastPrice + maxAllowedChange) {
+                priceUsd = _lastPrice + maxAllowedChange;
+            } else if (_lastPrice > maxAllowedChange && priceUsd < _lastPrice - maxAllowedChange) {
+                priceUsd = _lastPrice - maxAllowedChange;
+            }
+        }
 
- /// @notice Update the cached price (called by keepers/admin)
- /// @dev Restricted to ADAPTER_ADMIN_ROLE to prevent permissionless
- /// same-block price manipulation. An attacker could call updateCachedPrice()
- /// then donate to SMUSD vault in the same block, bypassing the rate limiter.
- function updateCachedPrice() external onlyRole(ADAPTER_ADMIN_ROLE) {
- uint256 price = _getSharePriceUsd();
- _lastPrice = price;
- _lastPriceBlock = block.number;
- }
+        return priceUsd;
+    }
 
- // ============================================================
- // ADMIN
- // ============================================================
+    /// @notice Public function to update the cached price (called by keepers/admin)
+    /// @dev Separating read + write to allow view functions to stay view-compatible
+    /// @notice FIX: Restrict cache updates to admin to prevent manipulation
+    /// @dev Also increments roundId so consumers can detect updates
+    function updateCachedPrice() external onlyRole(ADAPTER_ADMIN_ROLE) {
+        uint256 price = _getSharePriceUsd();
+        _lastPrice = price;
+        _lastPriceBlock = block.number;
+        _roundId++;
+    }
 
- /// @notice Update share price bounds (governance-controlled)
- /// @param _minPrice Minimum valid price (8 decimals)
- /// @param _maxPrice Maximum valid price (8 decimals)
- function setSharePriceBounds(
- uint256 _minPrice,
- uint256 _maxPrice
- ) external onlyRole(ADAPTER_ADMIN_ROLE) {
- require(_minPrice > 0, "MIN_ZERO");
- require(_maxPrice > _minPrice, "MAX_LTE_MIN");
- require(_maxPrice <= 10e8, "MAX_TOO_HIGH"); // Cap at $10
+    // ============================================================
+    //                  ADMIN
+    // ============================================================
 
- minSharePrice = _minPrice;
- maxSharePrice = _maxPrice;
+    /// @notice Update share price bounds (governance-controlled)
+    /// @param _minPrice Minimum valid price (8 decimals)
+    /// @param _maxPrice Maximum valid price (8 decimals)
+    function setSharePriceBounds(
+        uint256 _minPrice,
+        uint256 _maxPrice
+    ) external onlyRole(ADAPTER_ADMIN_ROLE) {
+        require(_minPrice > 0, "MIN_ZERO");
+        require(_maxPrice > _minPrice, "MAX_LTE_MIN");
+        require(_maxPrice <= 10e8, "MAX_TOO_HIGH"); // Cap at $10
 
- emit SharePriceBoundsUpdated(_minPrice, _maxPrice);
- }
+        minSharePrice = _minPrice;
+        maxSharePrice = _maxPrice;
 
- /// @notice Update donation attack protection parameters
- /// @param _minTotalSupply Minimum totalSupply to trust vault price
- /// @param _maxPriceChangePerBlock Max price delta allowed per block (8 decimals)
- function setDonationProtection(
- uint256 _minTotalSupply,
- uint256 _maxPriceChangePerBlock
- ) external onlyRole(ADAPTER_ADMIN_ROLE) {
- require(_minTotalSupply > 0, "MIN_SUPPLY_ZERO");
- require(_maxPriceChangePerBlock > 0, "MAX_CHANGE_ZERO");
- require(_maxPriceChangePerBlock <= 0.50e8, "MAX_CHANGE_TOO_HIGH"); // Cap at 50%
+        emit SharePriceBoundsUpdated(_minPrice, _maxPrice);
+    }
 
- minTotalSupply = _minTotalSupply;
- maxPriceChangePerBlock = _maxPriceChangePerBlock;
+    /// @notice Update donation attack protection parameters
+    /// @param _minTotalSupply Minimum totalSupply to trust vault price
+    /// @param _maxPriceChangePerBlock Max price delta allowed per block (8 decimals)
+    function setDonationProtection(
+        uint256 _minTotalSupply,
+        uint256 _maxPriceChangePerBlock
+    ) external onlyRole(ADAPTER_ADMIN_ROLE) {
+        require(_minTotalSupply > 0, "MIN_SUPPLY_ZERO");
+        require(_maxPriceChangePerBlock > 0, "MAX_CHANGE_ZERO");
+        require(_maxPriceChangePerBlock <= 0.50e8, "MAX_CHANGE_TOO_HIGH"); // Cap at 50%
 
- emit DonationProtectionUpdated(_minTotalSupply, _maxPriceChangePerBlock);
- }
+        minTotalSupply = _minTotalSupply;
+        maxPriceChangePerBlock = _maxPriceChangePerBlock;
 
- /// @notice Increment round (for keepers/admin to signal fresh data)
- function incrementRound() external onlyRole(ADAPTER_ADMIN_ROLE) {
- _roundId++;
- }
+        emit DonationProtectionUpdated(_minTotalSupply, _maxPriceChangePerBlock);
+    }
+
+    /// @notice Increment round (for keepers/admin to signal fresh data)
+    function incrementRound() external onlyRole(ADAPTER_ADMIN_ROLE) {
+        _roundId++;
+    }
 }

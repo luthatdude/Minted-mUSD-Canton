@@ -1,21 +1,21 @@
 import React, { useState } from "react";
 import { Layout } from "@/components/Layout";
-import { LandingPage } from "@/components/LandingPage";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 // Ethereum pages
-import { DashboardMintPage } from "./DashboardMintPage";
+import { DashboardPage } from "./DashboardPage";
+import { MintPage } from "./MintPage";
 import { StakePage } from "./StakePage";
 import { BorrowPage } from "./BorrowPage";
 import { BridgePage } from "./BridgePage";
 import { AdminPage } from "./AdminPage";
-import { PointsPage } from "./PointsPage";
 
 // Canton pages
-import { CantonDashboardMint } from "@/components/canton/CantonDashboardMint";
+import { CantonDashboard } from "@/components/canton/CantonDashboard";
+import { CantonMint } from "@/components/canton/CantonMint";
 import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
@@ -27,13 +27,14 @@ export default function Home() {
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
   const [page, setPage] = useState("dashboard");
-  const [appLaunched, setAppLaunched] = useState(false);
 
   function renderPage() {
     if (chainState.chain === "canton") {
       switch (page) {
         case "dashboard":
-          return <CantonDashboardMint />;
+          return <CantonDashboard />;
+        case "mint":
+          return <CantonMint />;
         case "stake":
           return <CantonStake />;
         case "borrow":
@@ -42,35 +43,28 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
-        case "points":
-          return <PointsPage />;
         default:
-          return <CantonDashboardMint />;
+          return <CantonDashboard />;
       }
     }
 
     // Ethereum - pages will use hooks internally
     switch (page) {
       case "dashboard":
-        return <DashboardMintPage />;
+        return <DashboardPage />;
+      case "mint":
+        return <MintPage />;
       case "stake":
         return <StakePage />;
       case "borrow":
         return <BorrowPage />;
       case "bridge":
         return <BridgePage />;
-      case "points":
-        return <PointsPage />;
       case "admin":
         return <AdminPage />;
       default:
-        return <DashboardMintPage />;
+        return <DashboardPage />;
     }
-  }
-
-  // Show landing page until user clicks "Launch App"
-  if (!appLaunched) {
-    return <LandingPage onLaunchApp={() => setAppLaunched(true)} />;
   }
 
   return (
