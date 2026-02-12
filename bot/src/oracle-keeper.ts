@@ -315,7 +315,6 @@ export class OracleKeeper {
       if (!resp.ok) return null;
       const data = await resp.json();
 
-      // FIX H-09: Schema validation for CoinGecko response.
       // Prevents MITM/malformed response from injecting arbitrary price data.
       // Expected format: { "ethereum": { "usd": 2500.0 } }
       if (typeof data !== "object" || data === null || Array.isArray(data)) {

@@ -195,7 +195,6 @@ template CantonMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
@@ -227,7 +226,6 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- FIX CRITICAL C-02: Issuer-only burn replaced with burn-proposal pattern.
     -- Owner must consent to burns via CantonMUSDBurnProposal (below).
     -- Only the RedemptionService (exercised by owner) can call this directly.
     choice CantonMUSD_Burn : ()
@@ -235,7 +233,6 @@ template CantonMUSD
       do
         return ()
 
--- | FIX CRITICAL C-02: Burn proposal pattern — issuer proposes, owner must accept.
 -- Prevents unilateral burns. For compliance freezes, use separate FreezeProposal.
 template CantonMUSDBurnProposal
   with
@@ -264,7 +261,6 @@ template CantonMUSDBurnProposal
       do
         return ()
 
--- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonMUSDTransferProposal
   with
@@ -336,7 +332,7 @@ template BridgeOutRequest
 template ReserveTracker
   with
     operator : Party
-    governance : Party           -- FIX HIGH-18: Governance co-signer for reserve mutations
+    governance : Party
     totalDeposited : Money      -- Total USDC ever deposited via Canton mint
     totalRedeemed : Money       -- Total USDC ever redeemed back
     totalBridgedOut : Money     -- Total successfully bridged to Ethereum
@@ -344,7 +340,7 @@ template ReserveTracker
     cantonMUSDSupply : Money    -- Current outstanding Canton mUSD
     lastUpdated : Time
   where
-    signatory operator, governance  -- FIX HIGH-18: Both must sign
+    signatory operator, governance
 
     ensure totalDeposited >= 0.0
         && totalRedeemed >= 0.0
@@ -353,7 +349,6 @@ template ReserveTracker
         && cantonMUSDSupply >= 0.0
 
     -- Record a new deposit (mint)
-    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordDeposit : ContractId ReserveTracker
       with
         depositAmount : Money
@@ -366,7 +361,6 @@ template ReserveTracker
           lastUpdated = now
 
     -- Record a redemption (burn)
-    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordRedemption : ContractId ReserveTracker
       with
         redeemAmount : Money
@@ -380,7 +374,6 @@ template ReserveTracker
           lastUpdated = now
 
     -- Record successful bridge-out to Ethereum
-    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordBridgeOut : ContractId ReserveTracker
       with
         bridgeAmount : Money
@@ -392,7 +385,6 @@ template ReserveTracker
           lastUpdated = now
 
     -- Record bridge-in from Ethereum (for redemptions)
-    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordBridgeIn : ContractId ReserveTracker
       with
         bridgeAmount : Money
@@ -483,7 +475,6 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        -- FIX: CantonUSDC_Transfer now returns proposal; accept it
         usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
@@ -507,7 +498,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
         -- Without this, old instances remain active with stale state,
         -- allowing users to bypass supply cap and rate limits
         archive self
@@ -524,7 +514,6 @@ template CantonDirectMintService
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
-    -- FIX: USDCx must be bridged to Ethereum Treasury so it can earn yield via
     -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
     -- and deposits into TreasuryV2.
     choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
@@ -578,7 +567,6 @@ template CantonDirectMintService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
         -- The relay will:
         --   1. Redeem USDCx via xReserve → receive USDC on Ethereum
         --   2. Deposit USDC into TreasuryV2 for yield generation
@@ -593,7 +581,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         -- Update service state including rate limit tracking
@@ -654,7 +641,6 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         newService <- create this with
@@ -667,17 +653,14 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
-    -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
       controller operator
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
-        -- FIX D-M02: Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with supplyCap = newCap
 
@@ -686,7 +669,6 @@ template CantonDirectMintService
         newPaused : Bool
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
 
@@ -696,7 +678,6 @@ template CantonDirectMintService
       controller operator
       do
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with dailyMintLimit = newLimit
 
@@ -705,7 +686,6 @@ template CantonDirectMintService
         newRegistryCid : Optional (ContractId ComplianceRegistry)
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
@@ -713,7 +693,6 @@ template CantonDirectMintService
       controller operator
       do
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with accumulatedFees = 0.0
 

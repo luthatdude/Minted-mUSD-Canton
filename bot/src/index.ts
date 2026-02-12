@@ -6,7 +6,6 @@ import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 
-// FIX C-03: Read secrets from Docker secrets file, fallback to env vars.
 // Never load .env files containing private keys via dotenv.
 function readSecret(name: string, envVar: string): string {
   const secretPath = `/run/secrets/${name}`;
@@ -23,7 +22,6 @@ const SECP256K1_N = BigInt(
   "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
 );
 
-// FIX C-04: Validate private key format and range at startup
 function readAndValidatePrivateKey(secretName: string, envVar: string): string {
   const key = readSecret(secretName, envVar);
   if (!key) {
@@ -40,7 +38,6 @@ function readAndValidatePrivateKey(secretName: string, envVar: string): string {
   return key;
 }
 
-// FIX H-07: Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[FATAL] Unhandled rejection at:", promise, "reason:", reason);
   process.exit(1);
@@ -55,7 +52,6 @@ process.on("uncaughtException", (error) => {
 //                     CONFIGURATION
 // ============================================================
 
-// FIX C-03/C-04: Validate all required config at startup with clear error messages.
 // Private key loaded via Docker secrets / env — never from .env file.
 function loadConfig() {
   const privateKey = readAndValidatePrivateKey("bot_private_key", "PRIVATE_KEY");
@@ -278,7 +274,6 @@ class LiquidationBot {
     );
   }
 
-  // FIX H-06: Use bounded approval instead of infinite MaxUint256.
   // Approve only the amount needed for the current liquidation + buffer.
   // This limits exposure if the liquidation engine contract has a vulnerability.
   private async ensureApproval(requiredAmount?: bigint): Promise<void> {
@@ -452,7 +447,6 @@ class LiquidationBot {
         return;
       }
 
-      // FIX H-06: Ensure bounded per-tx approval before liquidation
       await this.ensureApproval(opp.debtToRepay);
       
       let success = false;
