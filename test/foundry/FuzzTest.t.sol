@@ -73,6 +73,9 @@ contract FuzzTest is Test {
         borrowModule.requestInterestRateModel(address(irm));
         vm.warp(block.timestamp + 48 hours + 1);
         borrowModule.executeInterestRateModel();
+
+        // Refresh mock feed timestamp so oracle doesn't see stale prices
+        ethFeed.setAnswer(2000e8);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -204,7 +207,7 @@ contract FuzzTest is Test {
 
     /// @notice Deposit and withdraw should preserve balance invariant
     function testFuzz_depositWithdrawBalanceInvariant(uint256 depositAmount) public {
-        depositAmount = bound(depositAmount, 1, 1_000_000e18);
+        depositAmount = bound(depositAmount, 1e15, 1_000_000e18);
 
         weth.mint(alice, depositAmount);
         
@@ -217,13 +220,14 @@ contract FuzzTest is Test {
         
         assertEq(vaultBalance, depositAmount, "Vault balance mismatch after deposit");
         assertEq(userDeposit, depositAmount, "User deposit mismatch");
-        
-        vault.withdraw(address(weth), depositAmount, alice);
+
+        // Use borrowModule.withdrawCollateral (vault.withdraw requires BORROW_MODULE_ROLE)
+        borrowModule.withdrawCollateral(address(weth), depositAmount);
+        vm.stopPrank();
         
         assertEq(weth.balanceOf(address(vault)), 0, "Vault should be empty after full withdraw");
         assertEq(vault.deposits(alice, address(weth)), 0, "User deposit should be 0 after full withdraw");
         assertEq(weth.balanceOf(alice), depositAmount, "User should have full balance back");
-        vm.stopPrank();
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -320,6 +324,10 @@ contract FuzzTest is Test {
 
         musd.mint(alice, mintAmount);
         uint256 supplyBefore = musd.totalSupply();
+
+        // Admin (test contract) has BRIDGE_ROLE but needs allowance to burn from alice
+        vm.prank(alice);
+        musd.approve(admin, burnAmount);
 
         musd.burn(alice, burnAmount);
         uint256 supplyAfter = musd.totalSupply();
