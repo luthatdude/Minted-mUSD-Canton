@@ -890,6 +890,10 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await bridge.grantRole(VALIDATOR_ROLE, validator2.address);
       await bridge.grantRole(VALIDATOR_ROLE, validator3.address);
 
+      // Grant RELAYER_ROLE so default signer can call processAttestation()
+      const RELAYER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("RELAYER_ROLE"));
+      await bridge.grantRole(RELAYER_ROLE, admin.address);
+
       // Grant CAP_MANAGER_ROLE to bridge
       await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     });

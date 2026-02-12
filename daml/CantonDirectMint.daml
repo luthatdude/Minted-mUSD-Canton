@@ -140,6 +140,10 @@ template USDCx
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
 
+    -- AUDIT NOTE DAML-H05: Burn is controller issuer only, but this is safe because:
+    -- 1. Both issuer AND owner are signatories on USDCx — owner consented at creation
+    -- 2. Protocol services (DirectMint_MintWithUSDCx) exercise burns internally
+    -- 3. Making dual-consent would break protocol burns
     choice USDCx_Burn : ()
       controller issuer
       do return ()
@@ -391,6 +395,27 @@ template BridgeOutRequest
         assertMsg "MUST_BE_PENDING" (status == "pending")
         create this with status = "failed"
 
+    -- FIX DAML-H-06: Retry failed bridge
+    choice BridgeOut_Retry : ContractId BridgeOutRequest
+      controller operator
+      do
+        assertMsg "MUST_BE_FAILED" (status == "failed")
+        now <- getTime
+        create this with status = "pending", createdAt = now
+
+    -- FIX DAML-H-06: Refund user for permanently failed bridge
+    choice BridgeOut_RefundUser : ContractId CantonUSDC
+      with
+        usdcIssuer : Party
+      controller operator
+      do
+        assertMsg "MUST_BE_FAILED" (status == "failed")
+        create CantonUSDC with
+          issuer = usdcIssuer
+          owner = user
+          amount = amount
+          privacyObservers = []
+
 -- ============================================================
 --                     SECTION 4: RESERVE TRACKER
 -- ============================================================
@@ -467,6 +492,16 @@ template ReserveTracker
         create this with
           totalBridgedIn = totalBridgedIn + bridgeAmount
           lastUpdated = now
+
+    -- FIX DAML-C-03: Allow services to cross-check supply
+    -- NOTE: ReserveTracker.cantonMUSDSupply and CantonDirectMintService.currentSupply
+    -- are intentionally dual-tracked. ReserveTracker is the authoritative accounting ledger;
+    -- currentSupply is a cached value for fast access. Use this choice to cross-check.
+    nonconsuming choice Reserve_GetSupply : Money
+      with
+        requester : Party
+      controller requester
+      do return cantonMUSDSupply
 
     -- | FIX DAML-011: Governance-gated emergency reset for the ReserveTracker.
     -- Allows admin to reset all accounting counters in case of discrepancies
@@ -756,6 +791,7 @@ template CantonDirectMintService
           feeAmount = feeAmount
           createdAt = now
           fulfilled = False
+          expiresAt = addRelTime now (hours 72)  -- FIX DAML-C-02: 72-hour timeout for refund
 
         -- Track burn in rate limit window (burns offset mints)
         let windowElapsed = subTime now lastRateLimitReset
@@ -898,8 +934,25 @@ template RedemptionRequest
     feeAmount : Money         -- Fee deducted
     createdAt : Time
     fulfilled : Bool
+    expiresAt : Time          -- FIX DAML-C-02: Timeout for refund eligibility
   where
     signatory operator, user  -- User is signatory since they initiated redemption
+
+    -- FIX DAML-C-02: Refund user if redemption not fulfilled before timeout
+    choice Redemption_Refund : ContractId CantonMUSD
+      controller user
+      do
+        assertMsg "ALREADY_FULFILLED" (not fulfilled)
+        now <- getTime
+        assertMsg "NOT_YET_EXPIRED" (now > expiresAt)
+        -- Refund by re-minting the burned mUSD amount to the user
+        create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = musdBurned
+          agreementHash = ""
+          agreementUri = ""
+          privacyObservers = []
 
     -- Operator fulfills after bridge-in from Ethereum delivers USDC
     choice Redemption_Fulfill : (ContractId RedemptionRequest, ContractId CantonUSDC)

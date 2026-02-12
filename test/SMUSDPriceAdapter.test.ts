@@ -55,6 +55,9 @@ describe("SMUSDPriceAdapter", function () {
       admin.address
     );
     await adapter.waitForDeployment();
+
+    // Grant ADAPTER_ADMIN_ROLE to deployer so convergePriceAdapter() can call updateCachedPrice()
+    await adapter.connect(admin).grantRole(await adapter.ADAPTER_ADMIN_ROLE(), deployer.address);
   });
 
   // ============================================================

@@ -129,8 +129,9 @@ template BridgeOutAttestation
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
-        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
+        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -232,8 +233,9 @@ template BridgeInAttestation
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
-        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
+        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         now <- getTime
@@ -316,6 +318,8 @@ template SupplyCapAttestation
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+          -- FIX DAML-H-02: Bind signature to payload content
+          payloadHash = payload.attestationId
         
         -- FIX C-01: Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
@@ -328,8 +332,9 @@ template SupplyCapAttestation
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
-        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
+        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
@@ -338,6 +343,9 @@ template SupplyCapAttestation
         let sigNonces = map (.nonce) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
+        -- FIX DAML-H-02: Verify payload hash binds signatures to full payload content
+        let sigPayloadHashes = map (\s -> s.payloadHash) sigs
+        assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -354,6 +362,7 @@ template SupplyCapSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
+    payloadHash : Text        -- FIX DAML-H-02: Bind signature to payload content
   where
     signatory validator
     observer aggregator
@@ -417,8 +426,9 @@ template YieldAttestation
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
-        let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
+        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids

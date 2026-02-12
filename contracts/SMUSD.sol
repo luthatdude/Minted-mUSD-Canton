@@ -73,6 +73,10 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     ///         silent fallback to local totalAssets on treasury failure
     uint256 public lastKnownGlobalAssets;
 
+    /// @notice FIX SOL-C-02: Maximum allowed growth rate per refresh (5% = 500 bps)
+    /// @dev Prevents a single compromised strategy from inflating totalValue() unboundedly
+    uint256 public constant MAX_GLOBAL_ASSETS_GROWTH_BPS = 500;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
@@ -224,9 +228,48 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // UNIFIED CROSS-CHAIN YIELD: Global share price calculation
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// @notice FIX SOL-H-02: Pending treasury address for timelocked change
+    address public pendingTreasury;
+    uint256 public pendingTreasuryTime;
+    uint256 public constant TREASURY_CHANGE_DELAY = 48 hours;
+
+    event TreasuryChangeRequested(address indexed newTreasury, uint256 readyAt);
+    event TreasuryChangeCancelled(address indexed cancelledTreasury);
+
+    /// @notice Request treasury change (48h timelock)
+    /// @dev FIX SOL-H-02: Prevents instant share price manipulation by compromised admin
+    function requestSetTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_treasury != address(0), "ZERO_ADDRESS");
+        require(pendingTreasury == address(0), "CHANGE_ALREADY_PENDING");
+        pendingTreasury = _treasury;
+        pendingTreasuryTime = block.timestamp;
+        emit TreasuryChangeRequested(_treasury, block.timestamp + TREASURY_CHANGE_DELAY);
+    }
+
+    /// @notice Cancel pending treasury change
+    function cancelSetTreasury() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingTreasury;
+        pendingTreasury = address(0);
+        pendingTreasuryTime = 0;
+        emit TreasuryChangeCancelled(cancelled);
+    }
+
+    /// @notice Execute treasury change after timelock
+    function executeSetTreasury() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingTreasury != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingTreasuryTime + TREASURY_CHANGE_DELAY, "TIMELOCK_ACTIVE");
+        address oldTreasury = treasury;
+        treasury = pendingTreasury;
+        pendingTreasury = address(0);
+        pendingTreasuryTime = 0;
+        emit TreasuryUpdated(oldTreasury, treasury);
+    }
+
     /// @notice Set the treasury address for global asset calculation
+    /// @dev FIX SOL-H-02: Only callable when no treasury is set (initialization only)
     function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_treasury != address(0), "ZERO_ADDRESS");
+        require(treasury == address(0), "USE_TIMELOCKED_SETTER");
         address oldTreasury = treasury;
         treasury = _treasury;
         emit TreasuryUpdated(oldTreasury, _treasury);
@@ -285,7 +328,18 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // slither-disable-next-line calls-loop
         try ITreasury(treasury).totalValue() returns (uint256 usdcValue) {
             // FIX: Convert USDC (6 decimals) to mUSD (18 decimals)
-            return usdcValue * 1e12;
+            uint256 newGlobalAssets = usdcValue * 1e12;
+
+            // FIX SOL-C-02: Clamp growth to MAX_GLOBAL_ASSETS_GROWTH_BPS per refresh.
+            // Prevents single compromised strategy from inflating totalValue() unboundedly.
+            uint256 cached = lastKnownGlobalAssets;
+            if (cached > 0) {
+                uint256 maxAllowed = cached + (cached * MAX_GLOBAL_ASSETS_GROWTH_BPS) / 10000;
+                if (newGlobalAssets > maxAllowed) {
+                    return maxAllowed;
+                }
+            }
+            return newGlobalAssets;
         } catch {
             // FIX SOL-C01: Use cached value instead of local totalAssets fallback.
             // If no cache exists yet, fall back to local (first-use safety).

@@ -123,6 +123,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     /// @notice FIX TR-H01: Track failed mints for admin retry
     mapping(bytes32 => FailedMint) public failedMints;
     bytes32[] public failedMintIds;
+    /// @notice FIX SOL-H-05: Maximum failed mints before requiring cleanup
+    uint256 public constant MAX_FAILED_MINTS = 100;
 
     // ============ Errors ============
     
@@ -213,6 +215,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
             usdc.forceApprove(directMint, 0);
             usdc.safeTransfer(treasury, received);
             // FIX TR-H01: Track failed mint for admin retry
+            // FIX SOL-H-05: Enforce max failed mints to prevent unbounded array growth
+            require(failedMintIds.length < MAX_FAILED_MINTS, "TOO_MANY_FAILED_MINTS");
             failedMints[vm.hash] = FailedMint({
                 recipient: recipient,
                 amount: received,

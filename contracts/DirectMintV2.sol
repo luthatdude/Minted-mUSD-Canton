@@ -175,10 +175,15 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         // Burn user's mUSD
         musd.burn(msg.sender, musdAmount);
 
-        // Withdraw from TreasuryV2 (handles reserve + strategy unwinding)
-        treasury.withdraw(msg.sender, usdcOut);
+        // FIX SOL-H-03: Withdraw full usdcEquivalent from Treasury, keep fee here.
+        // Previously, only usdcOut was withdrawn and feeUsdc stayed in Treasury,
+        // creating phantom yield that Treasury's _accrueFees() would count and
+        // charge 40% performance fee on. Now fee is extracted immediately.
+        treasury.withdraw(address(this), usdcEquivalent);
+        // Send net amount to user
+        usdc.safeTransfer(msg.sender, usdcOut);
 
-        // Track redeem fees (these remain in the Treasury)
+        // Track redeem fees (these are now held in this contract, not Treasury)
         if (feeUsdc > 0) {
             redeemFees += feeUsdc;
         }
@@ -351,13 +356,13 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         emit FeesWithdrawn(feeRecipient, fees);
     }
 
-    /// @notice FIX C-02: Withdraw accumulated redeem fees from Treasury
-    /// Redeem fees stay in Treasury during redeem(); this function extracts them.
+    /// @notice FIX SOL-H-03: Withdraw accumulated redeem fees (now held in this contract)
+    /// Redeem fees are extracted from Treasury during redeem() and held here.
     function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
         uint256 fees = redeemFees;
         require(fees > 0, "NO_REDEEM_FEES");
         redeemFees = 0;
-        treasury.withdraw(feeRecipient, fees);
+        usdc.safeTransfer(feeRecipient, fees);
         emit FeesWithdrawn(feeRecipient, fees);
     }
 

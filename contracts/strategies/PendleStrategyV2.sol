@@ -272,7 +272,15 @@ contract PendleStrategyV2 is
     /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
     uint256 public ptDiscountRateBps;
 
-    /// @dev Storage gap for upgrades (reduced from 39 to 37 for pendingImplementation + upgradeRequestTime)
+    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
+    /// @dev FIX SOL-C-05: Declared BEFORE __gap so future upgrades don't shift these slots
+    address public pendingImplementation;
+
+    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
+    uint256 public upgradeRequestTime;
+
+    /// @dev FIX SOL-C-05: Storage gap declared AFTER upgrade variables (correct OZ convention).
+    ///      Future upgrades: add new vars above __gap, reduce gap size by count of new vars.
     uint256[37] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -817,7 +825,13 @@ contract PendleStrategyV2 is
         uint256 balance = usdc.balanceOf(address(this));
         emit EmergencyWithdraw(ptRedeemed, balance);
 
-        // Keep USDC in contract for treasury to withdraw
+        // FIX SOL-H-08: Transfer USDC directly to msg.sender (guardian/admin)
+        // instead of leaving it stranded. The guardian can then forward to treasury.
+        // Previously, USDC was left in contract and treasury had to call withdrawAll(),
+        // which could fail if the treasury contract's logic gate blocked paused strategies.
+        if (balance > 0) {
+            usdc.safeTransfer(msg.sender, balance);
+        }
     }
 
     /**
@@ -847,12 +861,6 @@ contract PendleStrategyV2 is
     // ═══════════════════════════════════════════════════════════════════════
     // UUPS UPGRADE (TIMELOCKED)
     // ═══════════════════════════════════════════════════════════════════════
-
-    /// @notice FIX INSTITUTIONAL: Pending implementation for timelocked upgrade
-    address public pendingImplementation;
-
-    /// @notice FIX INSTITUTIONAL: Timestamp of upgrade request
-    uint256 public upgradeRequestTime;
 
     /// @notice FIX INSTITUTIONAL: 48-hour upgrade delay
     uint256 public constant UPGRADE_DELAY = 48 hours;
