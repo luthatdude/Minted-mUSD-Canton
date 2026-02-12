@@ -40,12 +40,15 @@ interface ValidatorConfig {
   cantonAssetApiUrl: string;
   cantonAssetApiKey: string;
 
-  // AWS KMS
+  // AWS KMS — primary and rotation keys
   awsRegion: string;
-  kmsKeyId: string;
+  kmsKeyId: string;               // Primary signing key
+  kmsRotationKeyId: string;       // FIX INFRA-03: Secondary key for zero-downtime rotation
+  kmsKeyRotationEnabled: boolean; // Whether rotation is active
 
-  // Ethereum
-  ethereumAddress: string;
+  // Ethereum — addresses for both keys
+  ethereumAddress: string;              // Primary key ETH address
+  rotationEthereumAddress: string;      // Rotation key ETH address
   bridgeContractAddress: string;
 
   // Operational
@@ -64,8 +67,11 @@ const DEFAULT_CONFIG: ValidatorConfig = {
 
   awsRegion: process.env.AWS_REGION || "us-east-1",
   kmsKeyId: process.env.KMS_KEY_ID || "",
+  kmsRotationKeyId: process.env.KMS_ROTATION_KEY_ID || "",
+  kmsKeyRotationEnabled: process.env.KMS_KEY_ROTATION_ENABLED === "true",
 
   ethereumAddress: process.env.VALIDATOR_ETH_ADDRESS || "",
+  rotationEthereumAddress: process.env.ROTATION_ETH_ADDRESS || "",
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
@@ -265,8 +271,25 @@ class ValidatorNode {
   private lastSignedTotalValue: bigint = 0n;
   private readonly MAX_VALUE_JUMP_BPS = parseInt(process.env.MAX_VALUE_JUMP_BPS || "2000", 10); // 20%
 
+  // FIX INFRA-03: KMS key rotation state
+  private activeKmsKeyId: string;
+  private activeEthAddress: string;
+  private rotationInProgress: boolean = false;
+
   constructor(config: ValidatorConfig) {
     this.config = config;
+
+    // FIX INFRA-03: Initialize with primary key, support rotation
+    this.activeKmsKeyId = config.kmsKeyId;
+    this.activeEthAddress = config.ethereumAddress;
+
+    if (config.kmsKeyRotationEnabled && config.kmsRotationKeyId) {
+      console.log(`[Validator] Key rotation ENABLED`);
+      console.log(`[Validator]   Primary key: ${config.kmsKeyId}`);
+      console.log(`[Validator]   Rotation key: ${config.kmsRotationKeyId}`);
+      console.log(`[Validator]   Primary ETH: ${config.ethereumAddress}`);
+      console.log(`[Validator]   Rotation ETH: ${config.rotationEthereumAddress}`);
+    }
 
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
@@ -289,6 +312,54 @@ class ValidatorNode {
     console.log(`[Validator] Party: ${config.validatorParty}`);
     console.log(`[Validator] Canton API: ${config.cantonAssetApiUrl}`);
     console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
+  }
+
+  /**
+   * FIX INFRA-03: Switch to rotation key for zero-downtime key rotation
+   *
+   * Key rotation flow:
+   *   1. Generate new KMS key, get its ETH address
+   *   2. Grant VALIDATOR_ROLE to new address on BLEBridgeV9 (via timelock)
+   *   3. Set KMS_ROTATION_KEY_ID + ROTATION_ETH_ADDRESS + KMS_KEY_ROTATION_ENABLED=true
+   *   4. Call activateRotationKey() — starts signing with new key
+   *   5. Verify signatures working, then revoke old key's VALIDATOR_ROLE
+   *   6. Promote: move rotation key to primary config, clear rotation fields
+   */
+  async activateRotationKey(): Promise<void> {
+    if (!this.config.kmsRotationKeyId || !this.config.rotationEthereumAddress) {
+      throw new Error("Rotation key not configured");
+    }
+
+    console.log(`[Validator] ⚠️ ACTIVATING ROTATION KEY`);
+    console.log(`[Validator]   Old: ${this.activeKmsKeyId} → ${this.activeEthAddress}`);
+    console.log(`[Validator]   New: ${this.config.kmsRotationKeyId} → ${this.config.rotationEthereumAddress}`);
+
+    // Test signing with rotation key before switching
+    try {
+      const testHash = ethers.id("rotation-key-test");
+      await this.signWithKMSKey(testHash, this.config.kmsRotationKeyId, this.config.rotationEthereumAddress);
+      console.log(`[Validator] ✓ Rotation key signing test passed`);
+    } catch (error: any) {
+      throw new Error(`Rotation key signing test FAILED: ${error.message}`);
+    }
+
+    this.rotationInProgress = true;
+    this.activeKmsKeyId = this.config.kmsRotationKeyId;
+    this.activeEthAddress = this.config.rotationEthereumAddress;
+    this.rotationInProgress = false;
+
+    console.log(`[Validator] ✅ Now signing with rotation key: ${this.activeKmsKeyId}`);
+  }
+
+  /**
+   * FIX INFRA-03: Get current active key status
+   */
+  getKeyStatus(): { activeKeyId: string; activeEthAddress: string; rotationAvailable: boolean } {
+    return {
+      activeKeyId: this.activeKmsKeyId,
+      activeEthAddress: this.activeEthAddress,
+      rotationAvailable: !!(this.config.kmsRotationKeyId && this.config.rotationEthereumAddress),
+    };
   }
 
   async start(): Promise<void> {
@@ -505,8 +576,8 @@ class ValidatorNode {
     this.signedAttestations.add(attestationId);
 
     try {
-      // Build message hash
-      const messageHash = this.buildMessageHash(payload);
+      // Build message hash (includes cantonStateHash for on-ledger verification)
+      const messageHash = this.buildMessageHash(payload, cantonStateHash);
 
       // Sign with KMS
       const signature = await this.signWithKMS(messageHash);
@@ -549,29 +620,50 @@ class ValidatorNode {
     }
   }
 
-  private buildMessageHash(payload: AttestationPayload): string {
+  private buildMessageHash(payload: AttestationPayload, cantonStateHash?: string): string {
     const idBytes32 = ethers.id(payload.attestationId);
     const timestamp = Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600);
 
+    // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
+    const entropy = (payload as any).entropy
+      ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
+      : ethers.ZeroHash;
+
+    // FIX CROSS-CHAIN-01: Include Canton state hash for on-ledger verification
+    const stateHash = cantonStateHash
+      ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
+      : ethers.ZeroHash;
+
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.totalCantonValue, 18),
         BigInt(payload.nonce),
         BigInt(timestamp),
+        entropy,
+        stateHash,
         BigInt(payload.targetChainId),
         payload.targetBridgeAddress,
       ]
     );
   }
 
+  // FIX INFRA-03: Sign with currently active KMS key (supports key rotation)
   private async signWithKMS(messageHash: string): Promise<string> {
+    return this.signWithKMSKey(messageHash, this.activeKmsKeyId, this.activeEthAddress);
+  }
+
+  /**
+   * FIX INFRA-03: Sign with a specific KMS key
+   * Used for both normal signing and rotation key testing
+   */
+  private async signWithKMSKey(messageHash: string, keyId: string, ethAddress: string): Promise<string> {
     const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
     const hashBytes = Buffer.from(ethSignedHash.slice(2), "hex");
 
     const command = new SignCommand({
-      KeyId: this.config.kmsKeyId,
+      KeyId: keyId,
       Message: hashBytes,
       MessageType: "DIGEST",
       SigningAlgorithm: "ECDSA_SHA_256",
@@ -580,13 +672,13 @@ class ValidatorNode {
     const response = await this.kmsClient.send(command);
 
     if (!response.Signature) {
-      throw new Error("KMS returned empty signature");
+      throw new Error(`KMS key ${keyId} returned empty signature`);
     }
 
     return formatKMSSignature(
       Buffer.from(response.Signature),
       ethSignedHash,
-      this.config.ethereumAddress
+      ethAddress
     );
   }
 

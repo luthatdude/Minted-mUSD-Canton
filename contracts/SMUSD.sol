@@ -58,6 +58,20 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     uint256 public constant MAX_SHARE_CHANGE_BPS = 500;
 
     // ═══════════════════════════════════════════════════════════════════════
+    // FIX C-02: 24h rolling window to prevent compounding manipulation
+    // Without this cap, ±5% per sync × 24 syncs/day = 1.05^24 ≈ 3.22x inflation
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Baseline share count at start of current 24h window
+    uint256 public cantonSharesBaseline;
+
+    /// @notice Timestamp when current 24h baseline was set
+    uint256 public cantonSharesBaselineTime;
+
+    /// @notice Maximum cumulative deviation from baseline over 24h (20% = 2000 bps)
+    uint256 public constant MAX_DAILY_CUMULATIVE_CHANGE_BPS = 2000;
+
+    // ═══════════════════════════════════════════════════════════════════════
     // INTEREST ROUTING: Track interest from BorrowModule
     // ═══════════════════════════════════════════════════════════════════════
     
@@ -214,6 +228,20 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
             require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
             require(_cantonShares >= maxDecrease, "SHARE_DECREASE_TOO_LARGE");
+        }
+
+        // FIX C-02: 24h cumulative deviation cap
+        // Resets baseline every 24h; within window, total change from baseline ≤ 20%
+        // This prevents compounding: even if each sync is ≤5%, cumulative drift is bounded
+        if (cantonSharesBaseline == 0 || block.timestamp >= cantonSharesBaselineTime + 24 hours) {
+            cantonSharesBaseline = cantonTotalShares > 0 ? cantonTotalShares : _cantonShares;
+            cantonSharesBaselineTime = block.timestamp;
+        }
+        if (cantonSharesBaseline > 0) {
+            uint256 maxCumulative = (cantonSharesBaseline * (10000 + MAX_DAILY_CUMULATIVE_CHANGE_BPS)) / 10000;
+            uint256 minCumulative = (cantonSharesBaseline * (10000 - MAX_DAILY_CUMULATIVE_CHANGE_BPS)) / 10000;
+            require(_cantonShares <= maxCumulative, "DAILY_CUMULATIVE_INCREASE_EXCEEDED");
+            require(_cantonShares >= minCumulative, "DAILY_CUMULATIVE_DECREASE_EXCEEDED");
         }
         
         cantonTotalShares = _cantonShares;

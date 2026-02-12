@@ -412,14 +412,20 @@ class ValidatorNode {
     const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
     const timestamp = Math.max(1, rawTimestamp);
 
+    // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
+    const entropy = (payload as any).entropy
+      ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
+      : ethers.ZeroHash;
+
     // This must match what BLEBridgeV9 expects
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
         BigInt(timestamp),
+        entropy,
         chainId,
         // Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
         process.env.BRIDGE_CONTRACT_ADDRESS || (() => { throw new Error("BRIDGE_CONTRACT_ADDRESS not set"); })(),
