@@ -803,7 +803,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //          H-01 FIX: RECONCILE totalBorrows WITH USER DEBT
+    //          RECONCILE totalBorrows WITH USER DEBT
     // ============================================================
 
     event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);

@@ -689,7 +689,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  if (deposited == 0) continue;
 
  (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
- // Do NOT skip disabled tokens (same fix as _weightedCollateralValue)
+ // Do NOT skip disabled tokens — count all collateral for health factor
  if (liqThreshold == 0) continue;
 
  uint256 valueUsd = oracle.getValueUsdUnsafe(tokens[i], deposited);
