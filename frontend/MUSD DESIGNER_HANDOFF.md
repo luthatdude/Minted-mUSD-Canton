@@ -102,9 +102,6 @@ No other buttons, links, features sections, or footer.
 
 ### Background: THREE.js Animated Scene
 - Full-viewport 3D canvas behind all content
-- ~2000 particles in a spherical distribution with additive blending
-- Central pulsing orb (fresnel shader effect)
-- 3 orbiting torus rings at different angles and speeds
 - Neural-network-style connection lines between nearby particles
 - Mouse-follow camera with smooth lerp
 - Dark vignette overlay so text remains legible
