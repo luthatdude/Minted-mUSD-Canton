@@ -5,6 +5,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { InterestRateModel } from "../typechain-types";
+import { timelockSetIRMParams } from "./helpers/timelock";
 
 describe("InterestRateModel", function () {
   async function deployFixture() {
@@ -168,13 +169,7 @@ describe("InterestRateModel", function () {
     it("Should allow RATE_ADMIN to update params", async function () {
       const { model, admin } = await loadFixture(deployFixture);
 
-      await model.connect(admin).setParams(
-        300,   // 3% base
-        1500,  // 15% multiplier
-        7500,  // 75% kink
-        6000,  // 60% jump
-        1500   // 15% reserve
-      );
+      await timelockSetIRMParams(model, admin, 300, 1500, 7500, 6000, 1500);
 
       expect(await model.baseRateBps()).to.equal(300);
       expect(await model.multiplierBps()).to.equal(1500);
@@ -187,7 +182,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 1000, 15000, 5000, 1000)
+        model.connect(admin).requestSetParams(200, 1000, 15000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "KinkTooHigh");
     });
 
@@ -195,7 +190,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 1000, 8000, 5000, 6000)
+        model.connect(admin).requestSetParams(200, 1000, 8000, 5000, 6000)
       ).to.be.revertedWithCustomError(model, "ReserveFactorTooHigh");
     });
 
@@ -205,7 +200,7 @@ describe("InterestRateModel", function () {
       // maxRate = 2000 + (8000*5000)/10000 + (2000*10000)/10000 = 2000+4000+2000 = 8000 → OK
       // maxRate = 2000 + (8000*5000)/10000 + (2000*30000)/10000 = 2000+4000+6000 = 12000 → > 10000
       await expect(
-        model.connect(admin).setParams(2000, 5000, 8000, 30000, 1000)
+        model.connect(admin).requestSetParams(2000, 5000, 8000, 30000, 1000)
       ).to.be.revertedWithCustomError(model, "InvalidParameter");
     });
 
@@ -213,7 +208,7 @@ describe("InterestRateModel", function () {
       const { model, user } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(user).setParams(300, 1500, 7500, 6000, 1500)
+        model.connect(user).requestSetParams(300, 1500, 7500, 6000, 1500)
       ).to.be.reverted;
     });
   });
@@ -321,7 +316,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(2100, 1000, 8000, 5000, 1000)
+        model.connect(admin).requestSetParams(2100, 1000, 8000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "BaseRateTooHigh");
     });
 
@@ -329,7 +324,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 1000, 500, 5000, 1000)
+        model.connect(admin).requestSetParams(200, 1000, 500, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "KinkTooLow");
     });
 
@@ -337,7 +332,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 0, 8000, 5000, 1000)
+        model.connect(admin).requestSetParams(200, 0, 8000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "MultiplierZero");
     });
 
@@ -345,7 +340,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 1000, 8000, 0, 1000)
+        model.connect(admin).requestSetParams(200, 1000, 8000, 0, 1000)
       ).to.be.revertedWithCustomError(model, "MultiplierZero");
     });
 
@@ -354,7 +349,7 @@ describe("InterestRateModel", function () {
 
       // Max allowed: baseRate=2000, kink=1000 (minimum), multiplier=1, jump=1
       // maxRate = 2000 + (1000*1)/10000 + ((10000-1000)*1)/10000 = 2000 + 0 + 0 = 2000
-      await model.connect(admin).setParams(2000, 1, 1000, 1, 0);
+      await timelockSetIRMParams(model, admin, 2000, 1, 1000, 1, 0);
       expect(await model.baseRateBps()).to.equal(2000);
       expect(await model.kinkBps()).to.equal(1000);
     });

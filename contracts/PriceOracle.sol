@@ -5,366 +5,403 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
-
-interface IAggregatorV3 {
-    function latestRoundData()
-        external
-        view
-        returns (
-            uint80 roundId,
-            int256 answer,
-            uint256 startedAt,
-            uint256 updatedAt,
-            uint80 answeredInRound
-        );
-    function decimals() external view returns (uint8);
-}
+import "./interfaces/IAggregatorV3.sol";
 
 /// @title PriceOracle
 /// @notice Aggregates Chainlink price feeds for collateral assets (ETH, BTC, etc.)
 /// @dev All prices are normalized to 18 decimals (USD value per 1 full token unit)
 contract PriceOracle is AccessControl {
-    bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
+ bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
 
-    struct FeedConfig {
-        IAggregatorV3 feed;
-        uint256 stalePeriod;  // Max age in seconds before data is considered stale
-        uint8 tokenDecimals;  // Decimals of the collateral token (e.g., 18 for ETH, 8 for WBTC)
-        bool enabled;
-    }
+ struct FeedConfig {
+ IAggregatorV3 feed;
+ uint256 stalePeriod; // Max age in seconds before data is considered stale
+ uint8 tokenDecimals; // Decimals of the collateral token (e.g., 18 for ETH, 8 for WBTC)
+ bool enabled;
+ }
 
-    // collateral token address => feed config
-    mapping(address => FeedConfig) public feeds;
+ // collateral token address => feed config
+ mapping(address => FeedConfig) public feeds;
 
-    /// @dev FIX H-03: Maximum allowed staleness period (24 hours)
-    uint256 public constant MAX_STALE_PERIOD = 24 hours;
-    
-    /// @dev FIX S-H01: Circuit breaker - track last known prices and max deviation
-    mapping(address => uint256) public lastKnownPrice;
-    uint256 public maxDeviationBps = 2000; // 20% max price change per update
-    bool public circuitBreakerEnabled = true;
+ /// @dev Maximum allowed staleness period (24 hours)
+ uint256 public constant MAX_STALE_PERIOD = 24 hours;
+ 
+ /// @dev Circuit breaker - track last known prices and max deviation
+ mapping(address => uint256) public lastKnownPrice;
+ uint256 public maxDeviationBps = 2000; // 20% max price change per update
+ bool public circuitBreakerEnabled = true;
 
-    /// @dev FIX H-04: Cooldown for circuit breaker toggle to prevent per-transaction manipulation
-    uint256 public constant CIRCUIT_BREAKER_COOLDOWN = 1 hours;
-    uint256 public lastCircuitBreakerToggle;
+ /// @dev Cooldown for circuit breaker toggle to prevent per-transaction manipulation
+ uint256 public constant CIRCUIT_BREAKER_COOLDOWN = 1 hours;
+ uint256 public lastCircuitBreakerToggle;
 
-    event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
-    event FeedRemoved(address indexed token);
-    /// @dev FIX S-H01: Event for circuit breaker triggers
-    event CircuitBreakerTriggered(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 deviationBps);
-    event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
-    event CircuitBreakerToggled(bool enabled);
-    /// @dev FIX CODEX-P1: Emitted when permissionless refreshPrice() advances cached price
-    event PriceRefreshed(address indexed token, uint256 oldPrice, uint256 newPrice);
+ event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
+ event FeedRemoved(address indexed token);
+ /// @dev Event for circuit breaker triggers
+ event CircuitBreakerTriggered(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 deviationBps);
+ event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
+ event CircuitBreakerToggled(bool enabled);
+ /// @dev Emitted when permissionless refreshPrice() advances cached price
+ event PriceRefreshed(address indexed token, uint256 oldPrice, uint256 newPrice);
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
-    // ═══════════════════════════════════════════════════════════════════════
+ // ═══════════════════════════════════════════════════════════════════════
+ // ADMIN TIMELOCK (48h propose → execute)
+ // ═══════════════════════════════════════════════════════════════════════
 
-    uint256 public constant ADMIN_DELAY = 48 hours;
+ uint256 public constant ADMIN_DELAY = 48 hours;
 
-    struct PendingFeed {
-        address token;
-        address feed;
-        uint256 stalePeriod;
-        uint8 tokenDecimals;
-        uint256 requestTime;
-    }
-    PendingFeed public pendingSetFeed;
-    address public pendingRemoveFeedToken;
-    uint256 public pendingRemoveFeedTime;
+ struct PendingFeed {
+ address token;
+ address feed;
+ uint256 stalePeriod;
+ uint8 tokenDecimals;
+ uint256 requestTime;
+ }
+ PendingFeed public pendingSetFeed;
+ address public pendingRemoveFeedToken;
+ uint256 public pendingRemoveFeedTime;
 
-    event FeedChangeRequested(address indexed token, address feed, uint256 readyAt);
-    event FeedChangeCancelled(address indexed token);
-    event FeedRemoveRequested(address indexed token, uint256 readyAt);
-    event FeedRemoveCancelled(address indexed token);
+ event FeedChangeRequested(address indexed token, address feed, uint256 readyAt);
+ event FeedChangeCancelled(address indexed token);
+ event FeedRemoveRequested(address indexed token, uint256 readyAt);
+ event FeedRemoveCancelled(address indexed token);
+ event MaxDeviationChangeRequested(uint256 newBps, uint256 readyAt);
+ event MaxDeviationChangeCancelled(uint256 cancelledBps);
+ event CircuitBreakerToggleRequested(bool enabled, uint256 readyAt);
+ event CircuitBreakerToggleCancelled();
 
-    constructor() {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
-    }
+ // ── Timelocked deviation & circuit breaker ──────────
+ uint256 public pendingMaxDeviationBps;
+ uint256 public pendingMaxDeviationTime;
+ bool public pendingMaxDeviationSet;
+ bool public pendingCircuitBreakerValue;
+ uint256 public pendingCircuitBreakerTime;
+ bool public pendingCircuitBreakerSet;
 
-    /// @dev FIX S-H01: Set max deviation for circuit breaker (in basis points)
-    function setMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(_maxDeviationBps >= 100 && _maxDeviationBps <= 5000, "DEVIATION_OUT_OF_RANGE"); // 1% to 50%
-        emit MaxDeviationUpdated(maxDeviationBps, _maxDeviationBps);
-        maxDeviationBps = _maxDeviationBps;
-    }
+ constructor() {
+ _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+ _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
+ }
 
-    /// @dev FIX S-H01: Toggle circuit breaker on/off
-    /// @dev FIX H-04: Enforce 1-hour cooldown to prevent per-transaction toggling
-    function setCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(block.timestamp >= lastCircuitBreakerToggle + CIRCUIT_BREAKER_COOLDOWN, "CIRCUIT_BREAKER_COOLDOWN_ACTIVE");
-        circuitBreakerEnabled = _enabled;
-        lastCircuitBreakerToggle = block.timestamp;
-        emit CircuitBreakerToggled(_enabled);
-    }
+ /// @notice Propose max deviation change (48h delay)
+ function requestSetMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(_maxDeviationBps >= 100 && _maxDeviationBps <= 5000, "DEVIATION_OUT_OF_RANGE");
+ require(!pendingMaxDeviationSet, "PROPOSAL_ALREADY_PENDING");
+ pendingMaxDeviationBps = _maxDeviationBps;
+ pendingMaxDeviationTime = block.timestamp;
+ pendingMaxDeviationSet = true;
+ emit MaxDeviationChangeRequested(_maxDeviationBps, block.timestamp + ADMIN_DELAY);
+ }
+ function cancelSetMaxDeviation() external onlyRole(ORACLE_ADMIN_ROLE) {
+ uint256 cancelled = pendingMaxDeviationBps;
+ pendingMaxDeviationBps = 0;
+ pendingMaxDeviationTime = 0;
+ pendingMaxDeviationSet = false;
+ emit MaxDeviationChangeCancelled(cancelled);
+ }
+ function executeSetMaxDeviation() external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(pendingMaxDeviationSet, "NO_PENDING");
+ require(block.timestamp >= pendingMaxDeviationTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+ emit MaxDeviationUpdated(maxDeviationBps, pendingMaxDeviationBps);
+ maxDeviationBps = pendingMaxDeviationBps;
+ pendingMaxDeviationBps = 0;
+ pendingMaxDeviationTime = 0;
+ pendingMaxDeviationSet = false;
+ }
 
-    /// @dev FIX S-H01: Manually update last known price (for recovery after circuit breaker trip)
-    function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
-        // FIX CORE-M-04: Validate freshness before resetting circuit breaker reference
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        require(answeredInRound >= roundId, "STALE_ROUND");
-        uint8 feedDecimals = config.feed.decimals();
-        lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
-    }
+ /// @notice Propose circuit breaker toggle (48h delay)
+ function requestSetCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(block.timestamp >= lastCircuitBreakerToggle + CIRCUIT_BREAKER_COOLDOWN, "CIRCUIT_BREAKER_COOLDOWN_ACTIVE");
+ require(!pendingCircuitBreakerSet, "PROPOSAL_ALREADY_PENDING");
+ pendingCircuitBreakerValue = _enabled;
+ pendingCircuitBreakerTime = block.timestamp;
+ pendingCircuitBreakerSet = true;
+ emit CircuitBreakerToggleRequested(_enabled, block.timestamp + ADMIN_DELAY);
+ }
+ function cancelSetCircuitBreakerEnabled() external onlyRole(ORACLE_ADMIN_ROLE) {
+ pendingCircuitBreakerValue = false;
+ pendingCircuitBreakerTime = 0;
+ pendingCircuitBreakerSet = false;
+ emit CircuitBreakerToggleCancelled();
+ }
+ function executeSetCircuitBreakerEnabled() external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(pendingCircuitBreakerSet, "NO_PENDING");
+ require(block.timestamp >= pendingCircuitBreakerTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+ circuitBreakerEnabled = pendingCircuitBreakerValue;
+ lastCircuitBreakerToggle = block.timestamp;
+ pendingCircuitBreakerValue = false;
+ pendingCircuitBreakerTime = 0;
+ pendingCircuitBreakerSet = false;
+ emit CircuitBreakerToggled(circuitBreakerEnabled);
+ }
 
-    /// @notice FIX H-01: Request registering/updating a Chainlink price feed (48h delay)
-    function requestSetFeed(
-        address token,
-        address feed,
-        uint256 stalePeriod,
-        uint8 tokenDecimals
-    ) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(token != address(0), "INVALID_TOKEN");
-        require(feed != address(0), "INVALID_FEED");
-        require(stalePeriod > 0, "INVALID_STALE_PERIOD");
-        require(stalePeriod <= MAX_STALE_PERIOD, "STALE_PERIOD_TOO_HIGH");
-        require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
-        {
-            uint8 fd = IAggregatorV3(feed).decimals();
-            require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
-        }
+ /// @dev Manually update last known price (for recovery after circuit breaker trip)
+ function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
+ // Validate freshness before resetting circuit breaker reference
+ (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+ require(answeredInRound >= roundId, "STALE_ROUND");
+ uint8 feedDecimals = config.feed.decimals();
+ lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
+ }
 
-        pendingSetFeed = PendingFeed({
-            token: token,
-            feed: feed,
-            stalePeriod: stalePeriod,
-            tokenDecimals: tokenDecimals,
-            requestTime: block.timestamp
-        });
-        emit FeedChangeRequested(token, feed, block.timestamp + ADMIN_DELAY);
-    }
+ /// @notice Request registering/updating a Chainlink price feed (48h delay)
+ function requestSetFeed(
+ address token,
+ address feed,
+ uint256 stalePeriod,
+ uint8 tokenDecimals
+ ) external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(token != address(0), "INVALID_TOKEN");
+ require(pendingSetFeed.requestTime == 0, "PROPOSAL_ALREADY_PENDING");
+ require(feed != address(0), "INVALID_FEED");
+ require(stalePeriod > 0, "INVALID_STALE_PERIOD");
+ require(stalePeriod <= MAX_STALE_PERIOD, "STALE_PERIOD_TOO_HIGH");
+ require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
+ {
+ uint8 fd = IAggregatorV3(feed).decimals();
+ require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
+ }
 
-    function cancelSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
-        address cancelled = pendingSetFeed.token;
-        delete pendingSetFeed;
-        emit FeedChangeCancelled(cancelled);
-    }
+ pendingSetFeed = PendingFeed({
+ token: token,
+ feed: feed,
+ stalePeriod: stalePeriod,
+ tokenDecimals: tokenDecimals,
+ requestTime: block.timestamp
+ });
+ emit FeedChangeRequested(token, feed, block.timestamp + ADMIN_DELAY);
+ }
 
-    function executeSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
-        PendingFeed memory p = pendingSetFeed;
-        require(p.token != address(0), "NO_PENDING");
-        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+ function cancelSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+ address cancelled = pendingSetFeed.token;
+ delete pendingSetFeed;
+ emit FeedChangeCancelled(cancelled);
+ }
 
-        feeds[p.token] = FeedConfig({
-            feed: IAggregatorV3(p.feed),
-            stalePeriod: p.stalePeriod,
-            tokenDecimals: p.tokenDecimals,
-            enabled: true
-        });
+ function executeSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+ PendingFeed memory p = pendingSetFeed;
+ require(p.token != address(0), "NO_PENDING");
+ require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
 
-        // Auto-initialize lastKnownPrice from the feed
-        try IAggregatorV3(p.feed).latestRoundData() returns (
-            uint80, int256 answer, uint256, uint256, uint80
-        ) {
-            if (answer > 0) {
-                uint256 feedDecimals = IAggregatorV3(p.feed).decimals();
-                lastKnownPrice[p.token] = uint256(answer) * (10 ** (18 - feedDecimals));
-            }
-        } catch {}
+ feeds[p.token] = FeedConfig({
+ feed: IAggregatorV3(p.feed),
+ stalePeriod: p.stalePeriod,
+ tokenDecimals: p.tokenDecimals,
+ enabled: true
+ });
 
-        delete pendingSetFeed;
-        emit FeedUpdated(p.token, p.feed, p.stalePeriod, p.tokenDecimals);
-    }
+ // Auto-initialize lastKnownPrice from the feed
+ try IAggregatorV3(p.feed).latestRoundData() returns (
+ uint80, int256 answer, uint256, uint256, uint80
+ ) {
+ if (answer > 0) {
+ uint256 feedDecimals = IAggregatorV3(p.feed).decimals();
+ lastKnownPrice[p.token] = uint256(answer) * (10 ** (18 - feedDecimals));
+ }
+ } catch {}
 
-    /// @notice FIX H-01: Request removing a price feed (48h delay)
-    function requestRemoveFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
-        require(feeds[token].enabled, "FEED_NOT_FOUND");
-        pendingRemoveFeedToken = token;
-        pendingRemoveFeedTime = block.timestamp;
-        emit FeedRemoveRequested(token, block.timestamp + ADMIN_DELAY);
-    }
+ delete pendingSetFeed;
+ emit FeedUpdated(p.token, p.feed, p.stalePeriod, p.tokenDecimals);
+ }
 
-    function cancelRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
-        address cancelled = pendingRemoveFeedToken;
-        pendingRemoveFeedToken = address(0);
-        pendingRemoveFeedTime = 0;
-        emit FeedRemoveCancelled(cancelled);
-    }
+ /// @notice Request removing a price feed (48h delay)
+ function requestRemoveFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+ require(feeds[token].enabled, "FEED_NOT_FOUND");
+ require(pendingRemoveFeedToken == address(0), "PROPOSAL_ALREADY_PENDING");
+ pendingRemoveFeedToken = token;
+ pendingRemoveFeedTime = block.timestamp;
+ emit FeedRemoveRequested(token, block.timestamp + ADMIN_DELAY);
+ }
 
-    function executeRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
-        address token = pendingRemoveFeedToken;
-        require(token != address(0), "NO_PENDING");
-        require(block.timestamp >= pendingRemoveFeedTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
-        require(feeds[token].enabled, "FEED_NOT_FOUND");
+ function cancelRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+ address cancelled = pendingRemoveFeedToken;
+ pendingRemoveFeedToken = address(0);
+ pendingRemoveFeedTime = 0;
+ emit FeedRemoveCancelled(cancelled);
+ }
 
-        delete feeds[token];
-        delete lastKnownPrice[token];
-        pendingRemoveFeedToken = address(0);
-        pendingRemoveFeedTime = 0;
-        emit FeedRemoved(token);
-    }
+ function executeRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+ address token = pendingRemoveFeedToken;
+ require(token != address(0), "NO_PENDING");
+ require(block.timestamp >= pendingRemoveFeedTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+ require(feeds[token].enabled, "FEED_NOT_FOUND");
 
-    /// @notice Get the USD price of a collateral token, normalized to 18 decimals
-    /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed() / refreshPrice().
-    ///      Keeping getPrice as view ensures interface compatibility.
-    function getPrice(address token) external view returns (uint256 price) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
+ delete feeds[token];
+ delete lastKnownPrice[token];
+ pendingRemoveFeedToken = address(0);
+ pendingRemoveFeedTime = 0;
+ emit FeedRemoved(token);
+ }
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        require(answeredInRound >= roundId, "STALE_ROUND");
+ /// @notice Get the USD price of a collateral token, normalized to 18 decimals
+ /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed() / refreshPrice().
+ /// Keeping getPrice as view ensures interface compatibility.
+ function getPrice(address token) external view returns (uint256 price) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
 
-        uint8 feedDecimals = config.feed.decimals();
-        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-        price = uint256(answer) * (10 ** (18 - feedDecimals));
+ (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+ require(answeredInRound >= roundId, "STALE_ROUND");
 
-        // Circuit breaker check
-        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
-            uint256 oldPrice = lastKnownPrice[token];
-            uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
-            uint256 deviationBps = (diff * 10000) / oldPrice;
-            require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
-        }
-    }
+ uint8 feedDecimals = config.feed.decimals();
+ require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+ price = uint256(answer) * (10 ** (18 - feedDecimals));
 
-    /// @notice FIX S-H01: Update cached price (call before getPrice if circuit breaker trips)
-    /// @dev This allows keepers to update the price after verifying the deviation is legitimate
-    function updatePrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
-        
-        (, int256 answer, , uint256 updatedAt, ) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        
-        uint8 feedDecimals = config.feed.decimals();
-        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
-        uint256 oldPrice = lastKnownPrice[token];
-        
-        if (oldPrice > 0) {
-            uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
-            uint256 deviationBps = (diff * 10000) / oldPrice;
-            emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
-        }
-        
-        lastKnownPrice[token] = newPrice;
-    }
+ // Circuit breaker check
+ if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+ uint256 oldPrice = lastKnownPrice[token];
+ uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
+ uint256 deviationBps = (diff * 10000) / oldPrice;
+ require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
+ }
+ }
 
-    /// @notice FIX CODEX-P1: Permissionless price refresh — anyone can call to advance
-    ///         lastKnownPrice when the current feed price is within deviation tolerance.
-    /// @dev Solves the circuit breaker freeze: after a legitimate market move that stays
-    ///      within maxDeviationBps, bots/keepers call refreshPrice() to ratchet the
-    ///      cached price forward. For moves ABOVE the threshold, admin updatePrice()
-    ///      is still required (intentional — large deviations need human review).
-    ///      Without this, a series of small moves (each <threshold) that accumulate
-    ///      beyond the threshold would permanently freeze getPrice().
-    function refreshPrice(address token) external {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
+ /// @notice Update cached price (call before getPrice if circuit breaker trips)
+ /// @dev This allows keepers to update the price after verifying the deviation is legitimate
+ function updatePrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
+ 
+ (, int256 answer, , uint256 updatedAt, ) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+ 
+ uint8 feedDecimals = config.feed.decimals();
+ uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+ uint256 oldPrice = lastKnownPrice[token];
+ 
+ if (oldPrice > 0) {
+ uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
+ uint256 deviationBps = (diff * 10000) / oldPrice;
+ emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
+ }
+ 
+ lastKnownPrice[token] = newPrice;
+ }
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        require(answeredInRound >= roundId, "STALE_ROUND");
+ /// @notice Permissionless price refresh — anyone can call to advance
+ /// lastKnownPrice when the current feed price is within deviation tolerance.
+ /// @dev Solves the circuit breaker freeze: after a legitimate market move that stays
+ /// within maxDeviationBps, bots/keepers call refreshPrice() to ratchet the
+ /// cached price forward. For moves ABOVE the threshold, admin updatePrice()
+ /// is still required (intentional — large deviations need human review).
+ /// Without this, a series of small moves (each <threshold) that accumulate
+ /// beyond the threshold would permanently freeze getPrice().
+ function refreshPrice(address token) external {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
 
-        uint8 feedDecimals = config.feed.decimals();
-        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+ (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+ require(answeredInRound >= roundId, "STALE_ROUND");
 
-        // Only update if within deviation tolerance (same check as getPrice)
-        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
-            uint256 oldPrice = lastKnownPrice[token];
-            uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
-            uint256 deviationBps = (diff * 10000) / oldPrice;
-            require(deviationBps <= maxDeviationBps, "DEVIATION_TOO_LARGE");
-        }
+ uint8 feedDecimals = config.feed.decimals();
+ uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
 
-        lastKnownPrice[token] = newPrice;
-        emit PriceRefreshed(token, lastKnownPrice[token], newPrice);
-    }
+ // Only update if within deviation tolerance (same check as getPrice)
+ if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+ uint256 oldPrice = lastKnownPrice[token];
+ uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
+ uint256 deviationBps = (diff * 10000) / oldPrice;
+ require(deviationBps <= maxDeviationBps, "DEVIATION_TOO_LARGE");
+ }
 
-    /// @notice Get the USD value of a specific amount of collateral
-    /// @param token The collateral token address
-    /// @param amount The amount of collateral (in token's native decimals)
-    /// @return valueUsd USD value scaled to 18 decimals
-    /// FIX C-05: Now calls _getPriceInternal() to avoid external self-call gas overhead.
-    /// FIX PO-M02: Previously used this.getPrice(token) which is an external self-call.
-    function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
-        uint256 priceNormalized = _getPriceInternal(token);
-        valueUsd = (amount * priceNormalized) / (10 ** feeds[token].tokenDecimals);
-    }
+ lastKnownPrice[token] = newPrice;
+ emit PriceRefreshed(token, lastKnownPrice[token], newPrice);
+ }
 
-    /// @notice FIX PO-M02: Internal price function to avoid external self-calls
-    /// @dev Same logic as getPrice() but callable internally without external call overhead
-    function _getPriceInternal(address token) internal view returns (uint256 price) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
+ /// @notice Get the USD value of a specific amount of collateral
+ /// @param token The collateral token address
+ /// @param amount The amount of collateral (in token's native decimals)
+ /// @return valueUsd USD value scaled to 18 decimals
+ /// Now calls _getPriceInternal() to avoid external self-call gas overhead.
+ /// Previously used this.getPrice(token) which is an external self-call.
+ function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
+ uint256 priceNormalized = _getPriceInternal(token);
+ valueUsd = (amount * priceNormalized) / (10 ** feeds[token].tokenDecimals);
+ }
 
-        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        require(answeredInRound >= roundId, "STALE_ROUND");
+ /// @notice Internal price function to avoid external self-calls
+ /// @dev Same logic as getPrice() but callable internally without external call overhead
+ function _getPriceInternal(address token) internal view returns (uint256 price) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
 
-        uint8 feedDecimals = config.feed.decimals();
-        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-        price = uint256(answer) * (10 ** (18 - feedDecimals));
+ (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+ require(answeredInRound >= roundId, "STALE_ROUND");
 
-        // Circuit breaker check
-        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
-            uint256 oldPrice = lastKnownPrice[token];
-            uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
-            uint256 deviationBps = (diff * 10000) / oldPrice;
-            require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
-        }
-    }
+ uint8 feedDecimals = config.feed.decimals();
+ require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+ price = uint256(answer) * (10 ** (18 - feedDecimals));
 
-    /// @notice FIX P1-H4: Get price WITHOUT circuit breaker check, for liquidation paths
-    /// @dev During market crashes (>20% move), the circuit breaker blocks getPrice(),
-    ///      which prevents liquidations. This function allows liquidation to proceed
-    ///      using the raw Chainlink price, ensuring bad debt doesn't accumulate.
-    /// @dev FIX CORE-H-01: Removed staleness revert. During Chainlink feed outages,
-    ///      liquidations must still proceed using the last available price. The safe
-    ///      getPrice() enforces staleness; this Unsafe variant intentionally does not.
-    function getPriceUnsafe(address token) external view returns (uint256 price) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
+ // Circuit breaker check
+ if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+ uint256 oldPrice = lastKnownPrice[token];
+ uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
+ uint256 deviationBps = (diff * 10000) / oldPrice;
+ require(deviationBps <= maxDeviationBps, "CIRCUIT_BREAKER_TRIGGERED");
+ }
+ }
 
-        (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        // FIX CORE-H-01: No staleness revert — liquidations must proceed during feed outages
-        require(answeredInRound >= roundId, "STALE_ROUND");
+ /// @notice Get price WITHOUT circuit breaker check, for liquidation paths
+ /// @dev During market crashes (>20% move), the circuit breaker blocks getPrice(),
+ /// which prevents liquidations. This function allows liquidation to proceed
+ /// using the raw Chainlink price, ensuring bad debt doesn't accumulate.
+ /// @dev Removed staleness revert. During Chainlink feed outages,
+ /// liquidations must still proceed using the last available price. The safe
+ /// getPrice() enforces staleness; this Unsafe variant intentionally does not.
+ function getPriceUnsafe(address token) external view returns (uint256 price) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
 
-        uint8 feedDecimals = config.feed.decimals();
-        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-        price = uint256(answer) * (10 ** (18 - feedDecimals));
-        // No circuit breaker check — raw Chainlink price
-    }
+ (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ // No staleness revert — liquidations must proceed during feed outages
+ require(answeredInRound >= roundId, "STALE_ROUND");
 
-    /// @notice FIX P1-H4: Get USD value WITHOUT circuit breaker, for liquidation paths
-    /// @dev FIX CORE-H-01: Removed staleness revert to match getPriceUnsafe
-    function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256 valueUsd) {
-        FeedConfig storage config = feeds[token];
-        require(config.enabled, "FEED_NOT_ENABLED");
+ uint8 feedDecimals = config.feed.decimals();
+ require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+ price = uint256(answer) * (10 ** (18 - feedDecimals));
+ // No circuit breaker check — raw Chainlink price
+ }
 
-        (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
-        require(answer > 0, "INVALID_PRICE");
-        // FIX CORE-H-01: No staleness revert — liquidations must proceed during feed outages
-        require(answeredInRound >= roundId, "STALE_ROUND");
+ /// @notice Get USD value WITHOUT circuit breaker, for liquidation paths
+ /// @dev Removed staleness revert to match getPriceUnsafe
+ function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256 valueUsd) {
+ FeedConfig storage config = feeds[token];
+ require(config.enabled, "FEED_NOT_ENABLED");
 
-        uint8 feedDecimals = config.feed.decimals();
-        require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
-        uint256 priceNormalized = uint256(answer) * (10 ** (18 - feedDecimals));
-        valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
-    }
+ (uint80 roundId, int256 answer, , , uint80 answeredInRound) = config.feed.latestRoundData();
+ require(answer > 0, "INVALID_PRICE");
+ // No staleness revert — liquidations must proceed during feed outages
+ require(answeredInRound >= roundId, "STALE_ROUND");
 
-    /// @notice Check if a feed is active and returning fresh data
-    function isFeedHealthy(address token) external view returns (bool) {
-        FeedConfig storage config = feeds[token];
-        if (!config.enabled) return false;
+ uint8 feedDecimals = config.feed.decimals();
+ require(feedDecimals <= 18, "UNSUPPORTED_FEED_DECIMALS");
+ uint256 priceNormalized = uint256(answer) * (10 ** (18 - feedDecimals));
+ valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
+ }
 
-        try config.feed.latestRoundData() returns (
-            uint80, int256 answer, uint256, uint256 updatedAt, uint80
-        ) {
-            return answer > 0 && (block.timestamp - updatedAt <= config.stalePeriod);
-        } catch {
-            return false;
-        }
-    }
+ /// @notice Check if a feed is active and returning fresh data
+ function isFeedHealthy(address token) external view returns (bool) {
+ FeedConfig storage config = feeds[token];
+ if (!config.enabled) return false;
+
+ try config.feed.latestRoundData() returns (
+ uint80, int256 answer, uint256, uint256 updatedAt, uint80
+ ) {
+ return answer > 0 && (block.timestamp - updatedAt <= config.stalePeriod);
+ } catch {
+ return false;
+ }
+ }
 }

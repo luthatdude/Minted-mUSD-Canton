@@ -27,6 +27,7 @@
 
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
+import { verifyMessage } from "ethers";
 import fs from "fs";
 import path from "path";
 import { SnapshotService } from "./snapshot";
@@ -97,6 +98,61 @@ function rateLimiter(req: Request, res: Response, next: NextFunction): void {
   entry.count++;
   if (entry.count > RATE_LIMIT_MAX) {
     res.status(429).json({ error: "RATE_LIMIT_EXCEEDED", retryAfterMs: entry.resetAt - now });
+    return;
+  }
+
+  next();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Wallet Signature Auth Middleware
+// Referral write endpoints require EIP-191 signed message.
+// Client must send { address, signature, message } where
+// message = `minted:referral:<address>:<timestamp>` and
+// timestamp is within 5 minutes of server time.
+// ═══════════════════════════════════════════════════════════════
+
+const SIG_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+function requireWalletSig(req: Request, res: Response, next: NextFunction): void {
+  const { address, signature, message } = req.body;
+  if (!address || !signature || !message) {
+    res.status(401).json({ error: "SIGNATURE_REQUIRED", detail: "Provide address, signature, and message" });
+    return;
+  }
+
+  // Validate message format: minted:referral:<address>:<timestamp>
+  const parts = (message as string).split(":");
+  if (parts.length !== 4 || parts[0] !== "minted" || parts[1] !== "referral") {
+    res.status(401).json({ error: "INVALID_MESSAGE_FORMAT", detail: "Expected minted:referral:<address>:<timestamp>" });
+    return;
+  }
+
+  const msgAddress = parts[2];
+  const msgTimestamp = parseInt(parts[3], 10);
+
+  // Check address matches
+  if (msgAddress.toLowerCase() !== (address as string).toLowerCase()) {
+    res.status(401).json({ error: "ADDRESS_MISMATCH", detail: "Message address does not match request address" });
+    return;
+  }
+
+  // Check timestamp freshness
+  const now = Date.now();
+  if (isNaN(msgTimestamp) || Math.abs(now - msgTimestamp) > SIG_MAX_AGE_MS) {
+    res.status(401).json({ error: "SIGNATURE_EXPIRED", detail: "Message timestamp is too old or invalid" });
+    return;
+  }
+
+  // Verify EIP-191 signature
+  try {
+    const recovered = verifyMessage(message, signature);
+    if (recovered.toLowerCase() !== (address as string).toLowerCase()) {
+      res.status(401).json({ error: "SIGNATURE_INVALID", detail: "Recovered address does not match" });
+      return;
+    }
+  } catch {
+    res.status(401).json({ error: "SIGNATURE_INVALID", detail: "Could not verify signature" });
     return;
   }
 
@@ -235,8 +291,8 @@ export class PointsServer {
       res.json(this.referralService.getGlobalMetrics());
     });
 
-    // ── Referral (writes — would require wallet sig in prod) ──
-    r.post("/api/referral/create", (req, res) => {
+    // ── Referral (writes — requires wallet signature) ──
+    r.post("/api/referral/create", requireWalletSig, (req, res) => {
       try {
         const { address } = req.body;
         if (!address) {
@@ -250,7 +306,7 @@ export class PointsServer {
       }
     });
 
-    r.post("/api/referral/link", (req, res) => {
+    r.post("/api/referral/link", requireWalletSig, (req, res) => {
       try {
         const { referee, code } = req.body;
         if (!referee || !code) {
