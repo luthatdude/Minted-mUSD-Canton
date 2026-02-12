@@ -272,6 +272,35 @@ contract PriceOracle is AccessControl {
         valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
     }
 
+    /// @notice M-01 FIX: Keeperless price refresh after circuit breaker cooldown.
+    /// @dev    Anyone can call this once the cooldown has elapsed for a tripped token.
+    ///         Reads the current Chainlink answer, validates freshness, and resets the
+    ///         circuit breaker — no KEEPER_ROLE required. This ensures the oracle
+    ///         recovers even when no keeper bot is running.
+    /// @param token The collateral token whose price to refresh
+    function refreshPrice(address token) external {
+        require(circuitBreakerTrippedAt[token] > 0, "CB_NOT_TRIPPED");
+        require(
+            block.timestamp >= circuitBreakerTrippedAt[token] + circuitBreakerCooldown,
+            "COOLDOWN_NOT_ELAPSED"
+        );
+
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (, int256 answer, , uint256 updatedAt, ) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+
+        uint8 feedDecimals = config.feed.decimals();
+        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+
+        lastKnownPrice[token] = newPrice;
+        circuitBreakerTrippedAt[token] = 0;
+
+        emit CircuitBreakerAutoRecovered(token, newPrice);
+    }
+
     /// @notice Check if a feed is active and returning fresh data
     function isFeedHealthy(address token) external view returns (bool) {
         FeedConfig storage config = feeds[token];

@@ -801,4 +801,34 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     function accrueInterest(address user) external nonReentrant {
         _accrueInterest(user);
     }
+
+    // ============================================================
+    //          H-01 FIX: RECONCILE totalBorrows WITH USER DEBT
+    // ============================================================
+
+    event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);
+
+    /// @notice Reconcile totalBorrows with the actual sum of all user debts
+    /// @dev    Fixes H-01 — accounting drift can accumulate from rounding in
+    ///         interest accrual, repayment, and liquidation. This function
+    ///         computes the true aggregate debt by iterating tracked borrowers
+    ///         and snaps totalBorrows to that value.
+    ///         Callable by BORROW_ADMIN_ROLE; should be run periodically (e.g. weekly).
+    /// @param  borrowers Array of all addresses that have (or had) debt positions.
+    ///         Off-chain indexer supplies this list from Borrowed / Repaid events.
+    function reconcileTotalBorrows(address[] calldata borrowers) external onlyRole(BORROW_ADMIN_ROLE) nonReentrant {
+        _accrueGlobalInterest();
+
+        uint256 sumDebt = 0;
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            DebtPosition storage pos = positions[borrowers[i]];
+            sumDebt += pos.principal + pos.accruedInterest;
+        }
+
+        uint256 oldTotal = totalBorrows;
+        int256 drift = int256(oldTotal) - int256(sumDebt);
+        totalBorrows = sumDebt;
+
+        emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);
+    }
 }
