@@ -215,25 +215,31 @@ template EscrowedCollateral
       do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
+    -- DAML-CRIT-01: Added caller validation for on-ledger audit trail
     choice Escrow_AddCollateral : ContractId EscrowedCollateral
       with
         addAmount : Money
+        caller : Party
       controller operator
       do
         assertMsg "ADD_AMOUNT_POSITIVE" (addAmount > 0.0)
+        assertMsg "CALLER_MUST_BE_OWNER" (caller == owner)
         now <- getTime
         create this with
           amount = amount + addAmount
           lastUpdatedAt = now
 
     -- | Withdraw collateral (partial) — health check done at LendingService level
+    -- DAML-CRIT-01: Added caller validation for on-ledger audit trail
     choice Escrow_WithdrawPartial : (ContractId EscrowedCollateral, Money)
       with
         withdrawAmount : Money
+        caller : Party
       controller operator  -- Only service can withdraw (after health check)
       do
         assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
         assertMsg "INSUFFICIENT_COLLATERAL" (amount > withdrawAmount)
+        assertMsg "CALLER_MUST_BE_OWNER" (caller == owner)
         now <- getTime
         newEscrow <- create this with
           amount = amount - withdrawAmount
@@ -241,9 +247,13 @@ template EscrowedCollateral
         return (newEscrow, withdrawAmount)
 
     -- | Withdraw ALL collateral (consuming) — health check done at LendingService level
+    -- DAML-CRIT-01: Added caller validation for on-ledger audit trail
     choice Escrow_WithdrawAll : Money
+      with
+        caller : Party
       controller operator
       do
+        assertMsg "CALLER_MUST_BE_OWNER" (caller == owner)
         return amount
 
     -- | Seize collateral for liquidation (operator-controlled)
@@ -393,6 +403,7 @@ template CantonDebtPosition
 -- | CantonLendingService — Central coordinator for Canton-native lending.
 -- Manages collateral configs, orchestrates deposits/borrows/liquidations.
 -- Operator syncs prices from Tradecraft (primary) / Temple (fallback) DEX APIs.
+-- DAML-H-02: Added supply-cap tracking for Canton-side mUSD minting coordination
 template CantonLendingService
   with
     operator           : Party
@@ -404,6 +415,9 @@ template CantonLendingService
     minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
     closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
     paused             : Bool
+    -- DAML-H-02: Supply cap tracking
+    cantonSupplyCap    : Money                  -- Maximum mUSD mintable via Canton lending
+    cantonCurrentSupply : Money                 -- Current mUSD minted via Canton lending
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
@@ -428,7 +442,9 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Deposit CantonCoin as collateral (escrows the actual token)
-    choice Lending_DepositCTN : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+    -- DAML-H-03: Nonconsuming — deposits don't modify service state, enabling
+    -- concurrent deposits without unnecessary service contract churn
+    nonconsuming choice Lending_DepositCTN : (ContractId CantonLendingService, ContractId EscrowedCollateral)
       with
         user    : Party
         coinCid : ContractId CantonCoin
@@ -449,6 +465,7 @@ template CantonLendingService
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = coin.amount
+            caller = user
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -458,11 +475,11 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, escrowCid)
+        return (self, escrowCid)
 
     -- | Deposit CantonUSDC as collateral
-    choice Lending_DepositUSDC : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositUSDC : (ContractId CantonLendingService, ContractId EscrowedCollateral)
       with
         user    : Party
         usdcCid : ContractId CantonUSDC
@@ -482,6 +499,7 @@ template CantonLendingService
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = usdc.amount
+            caller = user
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -491,11 +509,11 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, escrowCid)
+        return (self, escrowCid)
 
     -- | Deposit USDCx as collateral
-    choice Lending_DepositUSDCx : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositUSDCx : (ContractId CantonLendingService, ContractId EscrowedCollateral)
       with
         user     : Party
         usdcxCid : ContractId USDCx
@@ -515,6 +533,7 @@ template CantonLendingService
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = usdcx.amount
+            caller = user
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -524,11 +543,11 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, escrowCid)
+        return (self, escrowCid)
 
     -- | Deposit CantonSMUSD as collateral
-    choice Lending_DepositSMUSD : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositSMUSD : (ContractId CantonLendingService, ContractId EscrowedCollateral)
       with
         user     : Party
         smusdCid : ContractId CantonSMUSD
@@ -549,6 +568,7 @@ template CantonLendingService
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = smusd.shares
+            caller = user
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -558,8 +578,7 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, escrowCid)
+        return (self, escrowCid)
 
     -- ──────────────────────────────────────────────────────
     --  BORROW mUSD
@@ -579,6 +598,8 @@ template CantonLendingService
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
+        -- DAML-H-02: Supply cap check — prevents unbounded Canton-side mUSD minting
+        assertMsg "EXCEEDS_CANTON_SUPPLY_CAP" (cantonCurrentSupply + borrowAmount <= cantonSupplyCap)
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
@@ -620,9 +641,10 @@ template CantonLendingService
             interestRateBps
             privacyObservers = userObs
 
-        -- Update service
+        -- Update service (DAML-H-02: track Canton supply)
         newService <- create this with
           totalBorrows = totalBorrows + borrowAmount
+          cantonCurrentSupply = cantonCurrentSupply + borrowAmount
         return (newService, debtCid, musdCid)
 
     -- ──────────────────────────────────────────────────────
@@ -658,10 +680,12 @@ template CantonLendingService
         -- Calculate reserve portion of interest
         let reserveAmount = interestPaid * intToNumeric reserveFactorBps / 10000.0
         let repayFromBorrows = min musd.amount totalBorrows
+        let repayFromSupply = min musd.amount cantonCurrentSupply
 
         newService <- create this with
           totalBorrows = totalBorrows - repayFromBorrows
           protocolReserves = protocolReserves + reserveAmount
+          cantonCurrentSupply = cantonCurrentSupply - repayFromSupply
 
         return (newService, newDebtCid)
 
@@ -671,7 +695,8 @@ template CantonLendingService
 
     -- | Withdraw collateral. Must pass health check after withdrawal.
     -- Returns the recreated token to the user.
-    choice Lending_WithdrawCTN : (ContractId CantonLendingService, ContractId CantonCoin)
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawCTN : (ContractId CantonLendingService, ContractId CantonCoin)
       with
         user           : Party
         escrowCid      : ContractId EscrowedCollateral
@@ -705,10 +730,12 @@ template CantonLendingService
 
         -- Execute withdrawal
         if withdrawAmount >= escrow.amount then do
-          _ <- exercise escrowCid Escrow_WithdrawAll
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
           pure ()
         else do
-          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
           pure ()
 
         -- Recreate the CantonCoin token for the user
@@ -719,14 +746,14 @@ template CantonLendingService
           amount = withdrawAmount
           privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, coinCid)
+        return (self, coinCid)
 
     -- ──────────────────────────────────────────────────────
     -- ──────────────────────────────────────────────────────
 
     -- | Withdraw USDC collateral. Must pass health check after withdrawal.
-    choice Lending_WithdrawUSDC : (ContractId CantonLendingService, ContractId CantonUSDC)
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawUSDC : (ContractId CantonLendingService, ContractId CantonUSDC)
       with
         user           : Party
         escrowCid      : ContractId EscrowedCollateral
@@ -755,10 +782,12 @@ template CantonLendingService
         else pure ()
 
         if withdrawAmount >= escrow.amount then do
-          _ <- exercise escrowCid Escrow_WithdrawAll
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
           pure ()
         else do
-          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
           pure ()
 
         userObs <- lookupUserObservers operator user
@@ -768,11 +797,11 @@ template CantonLendingService
           amount = withdrawAmount
           privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, usdcCid)
+        return (self, usdcCid)
 
     -- | Withdraw USDCx collateral.
-    choice Lending_WithdrawUSDCx : (ContractId CantonLendingService, ContractId USDCx)
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawUSDCx : (ContractId CantonLendingService, ContractId USDCx)
       with
         user           : Party
         escrowCid      : ContractId EscrowedCollateral
@@ -801,10 +830,12 @@ template CantonLendingService
         else pure ()
 
         if withdrawAmount >= escrow.amount then do
-          _ <- exercise escrowCid Escrow_WithdrawAll
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
           pure ()
         else do
-          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
           pure ()
 
         userObs <- lookupUserObservers operator user
@@ -816,11 +847,11 @@ template CantonLendingService
           cctpNonce = 0
           privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, usdcxCid)
+        return (self, usdcxCid)
 
     -- | Withdraw CantonSMUSD collateral.
-    choice Lending_WithdrawSMUSD : (ContractId CantonLendingService, ContractId CantonSMUSD)
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawSMUSD : (ContractId CantonLendingService, ContractId CantonSMUSD)
       with
         user           : Party
         escrowCid      : ContractId EscrowedCollateral
@@ -849,10 +880,12 @@ template CantonLendingService
         else pure ()
 
         if withdrawAmount >= escrow.amount then do
-          _ <- exercise escrowCid Escrow_WithdrawAll
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
           pure ()
         else do
-          _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
           pure ()
 
         -- rather than resetting to now (which would unfairly restart cooldown timers)
@@ -865,8 +898,7 @@ template CantonLendingService
           stakedAt = escrow.depositedAt
           privacyObservers = userObs
 
-        newService <- create this with {}
-        return (newService, smusdCid)
+        return (self, smusdCid)
 
     -- ──────────────────────────────────────────────────────
     --  LIQUIDATION

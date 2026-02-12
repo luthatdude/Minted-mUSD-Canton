@@ -71,15 +71,23 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  /// silent fallback to local totalAssets on treasury failure
  uint256 public lastKnownGlobalAssets;
 
- /// @notice Maximum allowed growth rate per refresh (5% = 500 bps)
- /// @dev Prevents a single compromised strategy from inflating totalValue() unboundedly
- uint256 public constant MAX_GLOBAL_ASSETS_GROWTH_BPS = 500;
+ /// @notice Maximum allowed growth rate per refresh (10% = 1000 bps)
+ /// @dev S-H-02: Increased from 500 to 1000 bps to prevent DoS on legitimate
+ ///      large deposits while still capping manipulation. At 1h refresh interval,
+ ///      even 10% per-refresh is safe — an attacker would need to sustain a compromised
+ ///      strategy for multiple hours to meaningfully inflate totalValue().
+ uint256 public constant MAX_GLOBAL_ASSETS_GROWTH_BPS = 1000;
 
     /// @dev Prevents rapid-fire ratcheting of the cache baseline
     uint256 public constant MIN_REFRESH_INTERVAL = 1 hours;
 
     uint256 public lastRefreshTime;
  event GlobalAssetsRefreshed(uint256 newGlobalAssets, uint256 usdcValue);
+ event YieldDistributed(address indexed from, uint256 amount);
+ event CooldownUpdated(address indexed account, uint256 timestamp);
+ event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
+ event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
+ event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
 
  /// @custom:oz-upgrades-unsafe-allow constructor
  constructor() {
@@ -127,6 +135,7 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
+ }
  lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.deposit(assets, receiver);
@@ -143,6 +152,7 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
+ }
  lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.mint(shares, receiver);
@@ -332,10 +342,14 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  return newGlobalAssets;
  } catch {
  // Use cached value instead of local totalAssets fallback.
- // If no cache exists yet, fall back to local (first-use safety).
  uint256 cached = lastKnownGlobalAssets;
  if (cached > 0) {
  return cached;
+ }
+ // If Canton shares exist but Treasury is unreachable and no cache,
+ // revert to prevent share price manipulation via undervaluation.
+ if (cantonTotalShares > 0) {
+ revert("TREASURY_UNREACHABLE");
  }
  return totalAssets();
  }
@@ -366,6 +380,9 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
 
     lastKnownGlobalAssets = newGlobalAssets;
     lastRefreshTime = block.timestamp;
+    emit GlobalAssetsRefreshed(newGlobalAssets, usdcValue);
+ }
+
  /// @notice Global share price used for both chains
  /// @dev sharePrice = globalTotalAssets / globalTotalShares
  /// @return Share price in asset decimals (6 for USDC)

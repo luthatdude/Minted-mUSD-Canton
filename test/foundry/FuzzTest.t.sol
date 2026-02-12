@@ -40,12 +40,12 @@ contract FuzzTest is Test {
         ethFeed = new MockAggregatorV3(8, 2000e8);
 
         musd = new MUSD(100_000_000e18);
-        smusd = new SMUSD(IERC20(address(musd)), address(this));
-        oracle = new PriceOracle(address(this));
+        smusd = new SMUSD(IERC20(address(musd)));
+        oracle = new PriceOracle();
         irm = new InterestRateModel(address(this), address(this));
         vault = new CollateralVault(address(this));
         borrowModule = new BorrowModule(
-            address(vault), address(oracle), address(musd), 500, 100e18, address(this)
+            address(vault), address(oracle), address(musd), 500, 100e18
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),

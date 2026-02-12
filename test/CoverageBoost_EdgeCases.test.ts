@@ -21,7 +21,7 @@ describe("socializeBadDebt — Incomplete List Invariant", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const oracle = await PriceOracle.deploy(admin.address);
+    const oracle = await PriceOracle.deploy();
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
@@ -40,8 +40,7 @@ describe("socializeBadDebt — Incomplete List Invariant", function () {
       await oracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100"),
-      admin.address
+      ethers.parseEther("100")
     );
 
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();

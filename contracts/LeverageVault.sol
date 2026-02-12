@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./TimelockGoverned.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -64,7 +65,7 @@ interface IBorrowModule {
 /// @notice Automatic multi-loop leverage with integrated Uniswap V3 swaps.
 ///         Users can open leveraged positions in a single transaction.
 /// @dev Integrates with CollateralVault, BorrowModule, and Uniswap V3.
-contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
+contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
     using SafeERC20 for IERC20;
 
     bytes32 public constant LEVERAGE_ADMIN_ROLE = keccak256("LEVERAGE_ADMIN_ROLE");
@@ -175,7 +176,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         address _collateralVault,
         address _borrowModule,
         address _priceOracle,
-        address _musd
+        address _musd,
+        address _timelock
     ) {
         require(_swapRouter != address(0), "INVALID_ROUTER");
         require(_collateralVault != address(0), "INVALID_VAULT");
@@ -199,6 +201,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+
+        // S-H-03: Initialize timelock for config changes
+        _setTimelock(_timelock);
     }
 
     // ============================================================
@@ -634,12 +639,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Update leverage configuration
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
     function setConfig(
         uint256 _maxLoops,
         uint256 _minBorrowPerLoop,
         uint24 _defaultPoolFee,
         uint256 _maxSlippageBps
-    ) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+    ) external onlyTimelock {
         require(_maxLoops > 0 && _maxLoops <= 20, "INVALID_MAX_LOOPS");
         require(_maxSlippageBps <= 500, "SLIPPAGE_TOO_HIGH"); // Max 5%
 
@@ -653,7 +659,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Set maximum allowed leverage (toggle between presets: 1.5x, 2x, 2.5x, 3x)
     /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
-    function setMaxLeverage(uint256 _maxLeverageX10) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
+    function setMaxLeverage(uint256 _maxLeverageX10) external onlyTimelock {
         require(_maxLeverageX10 >= 10 && _maxLeverageX10 <= 40, "INVALID_MAX_LEVERAGE"); // 1x to 4x range
         uint256 oldMax = maxLeverageX10;
         maxLeverageX10 = _maxLeverageX10;

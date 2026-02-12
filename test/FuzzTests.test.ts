@@ -222,7 +222,7 @@ describe("FUZZ: SMUSD ERC-4626 Properties", function () {
     const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);
@@ -356,7 +356,7 @@ describe("FUZZ: LiquidationEngine", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy(owner.address);
+    const priceOracle = await PriceOracle.deploy();
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
@@ -382,8 +382,7 @@ describe("FUZZ: LiquidationEngine", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100"),
-      owner.address
+      ethers.parseEther("100")
     );
 
     const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
@@ -543,7 +542,7 @@ describe("FUZZ: Arithmetic Edge Cases", function () {
     const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.connect(bridge).mint(user1.address, ethers.parseEther("10000000"));

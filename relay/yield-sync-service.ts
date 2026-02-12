@@ -22,19 +22,7 @@
 import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
-import { readSecret, readAndValidatePrivateKey } from "./utils";
-
-// Handle unhandled promise rejections to prevent silent failures
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('FATAL: Unhandled promise rejection:', reason);
-  process.exit(1);
-});
-
-// Handle uncaught exceptions to prevent silent crashes
-process.on('uncaughtException', (error) => {
-  console.error('FATAL: Uncaught exception:', error);
-  process.exit(1);
-});
+import { readSecret } from "./utils";
 
 // ============================================================
 //                     CONFIGURATION
@@ -63,11 +51,18 @@ interface YieldSyncConfig {
 }
 
 const DEFAULT_CONFIG: YieldSyncConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-02: No insecure fallback — require explicit RPC URL in production
+  ethereumRpcUrl: (() => {
+    const url = process.env.ETHEREUM_RPC_URL;
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required");
+    if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
+      throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
+    }
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
-  // Validate private key is in valid secp256k1 range
-  bridgePrivateKey: readAndValidatePrivateKey("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
+  bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
 
   cantonHost: process.env.CANTON_HOST || "localhost",
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
@@ -80,15 +75,6 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
   minYieldThreshold: process.env.MIN_YIELD_THRESHOLD || "1000000000",  // $1000 (6 decimals)
   epochStartNumber: parseInt(process.env.EPOCH_START || "1", 10),
 };
-
-// Warn if using insecure HTTP transport for Ethereum RPC
-if (DEFAULT_CONFIG.ethereumRpcUrl && DEFAULT_CONFIG.ethereumRpcUrl.startsWith('http://') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('localhost') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('127.0.0.1')) {
-  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
-}
-// Reject insecure HTTP transport in production
-if (process.env.NODE_ENV === 'production' && DEFAULT_CONFIG.ethereumRpcUrl && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('https://') && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('wss://')) {
-  throw new Error('Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
-}
 
 // ============================================================
 //                     CONTRACT ABIs
@@ -251,14 +237,6 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
-    // Validate Ethereum addresses before use
-    if (!config.treasuryAddress || !ethers.isAddress(config.treasuryAddress)) {
-      throw new Error(`Invalid TREASURY_ADDRESS: ${config.treasuryAddress}`);
-    }
-    if (!config.smusdAddress || !ethers.isAddress(config.smusdAddress)) {
-      throw new Error(`Invalid SMUSD_ADDRESS: ${config.smusdAddress}`);
-    }
-
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
     this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
@@ -416,59 +394,24 @@ class YieldSyncService {
     const sharePriceIncrease = globalSharePrice - this.lastGlobalSharePrice;
     console.log(`[YieldSync] Share price increase: ${sharePriceIncrease}`);
 
-    // Sanity bound — reject share price changes > 10% per epoch
-    // Prevents relay compromise from pushing catastrophic price updates
-    // (DAML-side SyncGlobalSharePrice has its own 10% decrease cap + quorum)
-    if (this.lastGlobalSharePrice > 0n) {
-      const maxIncreaseBps = 1000n; // 10% max increase per epoch
-      const maxAllowed = this.lastGlobalSharePrice + (this.lastGlobalSharePrice * maxIncreaseBps / 10000n);
-      if (globalSharePrice > maxAllowed) {
-        console.error(`[YieldSync] ❌ REJECTED: Share price increase exceeds 10% cap`);
-        console.error(`[YieldSync]   last=${this.lastGlobalSharePrice}, new=${globalSharePrice}, max=${maxAllowed}`);
-        return;
-      }
-    }
-
     // ═══════════════════════════════════════════════════════════════════
-    // STEP 3: Collect attestation quorum and sync global share price to Canton
-    // Route through multi-attestor quorum instead of direct
-    // operator exercise. Independent validators must submit SharePriceAttestations
-    // before sync is accepted. This eliminates the single-relay trust boundary.
+    // STEP 3: Sync global share price to Canton
     // ═══════════════════════════════════════════════════════════════════
-    console.log(`\n[YieldSync] Step 3: Collecting attestation quorum for Canton sync...`);
-
-    // Wait for independent validators to submit SharePriceAttestations.
-    // Each validator independently reads Ethereum share price and creates an attestation.
-    // The relay (operator) collects attestation CIDs once quorum is reached.
-    const attestationCids = await this.collectAttestationQuorum(this.currentEpoch);
-
-    if (attestationCids.length === 0) {
-      console.error(`[YieldSync] ❌ Insufficient attestations for epoch ${this.currentEpoch}, skipping sync`);
-      return;
-    }
-
-    // Retrieve pre-approved governance proof for parameter update
-    const governanceProofCid = await this.getGovernanceProof("CantonSMUSD");
-
-    if (!governanceProofCid) {
-      console.error(`[YieldSync] ❌ No governance proof available for CantonSMUSD ParameterUpdate, skipping sync`);
-      return;
-    }
-
-    console.log(`[YieldSync] Collected ${attestationCids.length} attestations, exercising SyncGlobalSharePrice...`);
+    console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
 
     await (this.ledger.exercise as any)(
       "CantonSMUSD:CantonStakingService",
       cantonService.contractId,
       "SyncGlobalSharePrice",
       {
-        attestationCids,
+        newGlobalSharePrice: this.toNumeric18(globalSharePrice),
+        newGlobalTotalAssets: this.toNumeric18(globalTotalAssets),
+        newGlobalTotalShares: this.toNumeric18(globalTotalShares),
         epochNumber: this.currentEpoch.toString(),
-        governanceProofCid,
       }
     );
 
-    console.log(`[YieldSync] ✅ Global share price synced to Canton (quorum-verified)!`);
+    console.log(`[YieldSync] ✅ Global share price synced to Canton!`);
 
     // ═══════════════════════════════════════════════════════════════════
     // STEP 4: Update state and log summary
@@ -484,91 +427,6 @@ class YieldSyncService {
     console.log(`[YieldSync]   - Same share price: ${globalSharePrice}`);
     console.log(`[YieldSync]   - Equal yield rate`);
     console.log(`[YieldSync] Next sync in ${this.config.syncIntervalMs / 1000}s`);
-  }
-
-  // ============================================================
-  //  Attestation Quorum Collection
-  // ============================================================
-
-  /**
-   * Collect attestation quorum from independent validators.
-   * Polls for SharePriceAttestation contracts matching the current epoch
-   * until quorum (≥2/3 of authorized validators) is reached or timeout.
-   *
-   * Each validator independently observes Ethereum share price and creates
-   * a SharePriceAttestation on Canton. The relay collects CIDs once enough
-   * unique validators have attested.
-   */
-  private async collectAttestationQuorum(epochNumber: number): Promise<string[]> {
-    const maxWaitMs = 300_000;     // 5 minutes max wait for attestations
-    const pollIntervalMs = 10_000; // Poll every 10 seconds
-    const minRequired = Math.max(1, Math.ceil(this.config.validatorParties.length * 2 / 3));
-    const startTime = Date.now();
-
-    console.log(`[YieldSync] Waiting for attestation quorum: need ${minRequired}/${this.config.validatorParties.length} validators`);
-
-    while (Date.now() - startTime < maxWaitMs) {
-      // Query for SharePriceAttestation contracts matching this epoch
-      const attestations = await (this.ledger.query as any)(
-        "CantonSMUSD:SharePriceAttestation",
-        { operator: this.config.cantonParty }
-      );
-
-      // Filter for correct epoch and authorized validators, deduplicate by attestor
-      const seenAttestors = new Set<string>();
-      const uniqueCids: string[] = [];
-
-      for (const a of attestations) {
-        const attestor = a.payload.attestor;
-        const epoch = parseInt(a.payload.epochNumber, 10);
-
-        if (
-          epoch === epochNumber &&
-          this.config.validatorParties.includes(attestor) &&
-          !seenAttestors.has(attestor)
-        ) {
-          seenAttestors.add(attestor);
-          uniqueCids.push(a.contractId);
-        }
-      }
-
-      console.log(`[YieldSync] Found ${uniqueCids.length}/${minRequired} attestations for epoch ${epochNumber}`);
-
-      if (uniqueCids.length >= minRequired) {
-        console.log(`[YieldSync] ✅ Quorum reached with ${uniqueCids.length} attestations`);
-        return uniqueCids;
-      }
-
-      await this.sleep(pollIntervalMs);
-    }
-
-    console.error(`[YieldSync] ❌ Timeout waiting for attestation quorum (epoch ${epochNumber})`);
-    return [];
-  }
-
-  /**
-   * Retrieve a pre-approved governance proof for CantonSMUSD ParameterUpdate.
-   * Governance proofs are created through the MultiSigProposal flow (Proposal_Execute)
-   * and must be approved by the required governor quorum before they can be used.
-   */
-  private async getGovernanceProof(targetModule: string): Promise<string | null> {
-    const proofs = await (this.ledger.query as any)(
-      "Governance:GovernanceActionLog",
-      { operator: this.config.cantonParty, targetModule }
-    );
-
-    // Find a proof matching ParameterUpdate action type
-    const validProof = proofs.find(
-      (p: any) => p.payload.actionType === "ParameterUpdate"
-    );
-
-    if (validProof) {
-      console.log(`[YieldSync] Found governance proof: ${validProof.payload.proposalId}`);
-      return validProof.contractId;
-    }
-
-    console.warn(`[YieldSync] No governance proof found for ${targetModule} ParameterUpdate`);
-    return null;
   }
 
   // ============================================================
