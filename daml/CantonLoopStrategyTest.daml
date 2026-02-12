@@ -25,8 +25,8 @@ baseTime = datetime 2026 Feb 6 12 0 0
 
 -- | Create a governance proof for tests
 -- FIX CRIT-01: Now requires a proposer (governor) party separate from operator
-createGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator proposer actionType desc = do
+createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator proposer actionType targetModule desc = do
   now <- getTime
   submitMulti [operator, proposer] [] do
     createCmd GovernanceActionLog with
@@ -34,6 +34,8 @@ createGovProof operator proposer actionType desc = do
       proposer
       proposalId = "test-" <> desc
       actionType
+      -- FIX DAML-H03: Module-scoped governance proof
+      targetModule
       description = desc
       payload = ""
       payloadHash = ""
@@ -135,7 +137,7 @@ testConfigCreation = do
 testConfigUpdateMaxLoops : Script ()
 testConfigUpdateMaxLoops = do
   setup <- setupLoopTest
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "update-max-loops"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-max-loops"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMaxLoops with
       newMaxLoops = 8
@@ -147,7 +149,7 @@ testConfigUpdateMaxLoops = do
 testConfigUpdateTargetLtv : Script ()
 testConfigUpdateTargetLtv = do
   setup <- setupLoopTest
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "update-ltv"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-ltv"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateTargetLtv with
       newTargetLtvBps = 8500
@@ -159,7 +161,7 @@ testConfigUpdateTargetLtv = do
 testConfigUpdateMinHealthFactor : Script ()
 testConfigUpdateMinHealthFactor = do
   setup <- setupLoopTest
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "update-hf"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-hf"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMinHealthFactor with
       newMinHealthFactorBps = 15000
@@ -171,7 +173,7 @@ testConfigUpdateMinHealthFactor = do
 testConfigSetComplianceRegistry : Script ()
 testConfigSetComplianceRegistry = do
   setup <- setupLoopTest
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "set-registry"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "set-registry"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
       newComplianceRegistryCid = None
@@ -185,7 +187,7 @@ testConfigRejectWrongActionType : Script ()
 testConfigRejectWrongActionType = do
   setup <- setupLoopTest
   -- Use EmergencyPause proof for ParameterUpdate choice
-  wrongProof <- createGovProof setup.operator setup.governor EmergencyPause "wrong-type"
+  wrongProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLoopStrategy" "wrong-type"
   submitMustFail setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMaxLoops with
       newMaxLoops = 8
@@ -197,21 +199,21 @@ testConfigRejectUnsafeValues : Script ()
 testConfigRejectUnsafeValues = do
   setup <- setupLoopTest
   -- Max loops > 10 should fail (hard safety ceiling)
-  proof1 <- createGovProof setup.operator setup.governor ParameterUpdate "unsafe-loops"
+  proof1 <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "unsafe-loops"
   submitMustFail setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMaxLoops with
       newMaxLoops = 15
       governanceProofCid = proof1
 
   -- Target LTV > 9500 should fail
-  proof2 <- createGovProof setup.operator setup.governor ParameterUpdate "unsafe-ltv"
+  proof2 <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "unsafe-ltv"
   submitMustFail setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateTargetLtv with
       newTargetLtvBps = 9900
       governanceProofCid = proof2
 
   -- Min HF < 11000 should fail
-  proof3 <- createGovProof setup.operator setup.governor ParameterUpdate "unsafe-hf"
+  proof3 <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "unsafe-hf"
   submitMustFail setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMinHealthFactor with
       newMinHealthFactorBps = 10000
@@ -264,7 +266,7 @@ testLoopRequestRejectsBlacklisted = do
       reason = "OFAC sanctioned"
 
   -- Update config with new registry
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "update-reg"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-reg"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
       newComplianceRegistryCid = Some newRegCid
@@ -361,7 +363,7 @@ testRecordLoopMaxReached : Script ()
 testRecordLoopMaxReached = do
   setup <- setupLoopTest
   -- Create config with maxLoops = 1
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "single-loop"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "single-loop"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_UpdateMaxLoops with
       newMaxLoops = 1
@@ -748,7 +750,7 @@ testUnwindRejectsBlacklistedUser = do
       reason = "Suspicious activity"
 
   -- Update config with new registry
-  proof <- createGovProof setup.operator setup.governor ParameterUpdate "bl-reg"
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "bl-reg"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
       newComplianceRegistryCid = Some newRegCid

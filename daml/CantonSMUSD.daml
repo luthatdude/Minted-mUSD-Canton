@@ -55,11 +55,18 @@ template CantonSMUSD
       do create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
+    -- FIX DAML-H01: Added compliance check (was missing — unlike CantonMUSD_Transfer)
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- FIX DAML-H01: Compliance check is mandatory — validates sender/receiver
+        -- against blacklist and freeze list, matching CantonMUSD_Transfer pattern
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
@@ -318,6 +325,8 @@ template CantonStakingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
 
         -- FIX DAML-R01: Require minimum number of attestations (quorum)
@@ -384,6 +393,8 @@ template CantonStakingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         -- Convert to global share price model
         let newSharePrice = if globalTotalShares > 0.0
@@ -410,6 +421,8 @@ template CantonStakingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         create this with paused = newPaused
 
     -- FIX DAML-012: Governance-gated reset of unstake mint counter
@@ -421,6 +434,8 @@ template CantonStakingService
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         create this with unstakeMintedTotal = 0.0
 
     -- FIX DAML-012: Governance-gated update of unstake mint cap
@@ -432,5 +447,7 @@ template CantonStakingService
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         assertMsg "CAP_MUST_BE_POSITIVE" (newCap > 0.0)
         create this with unstakeMintCap = newCap

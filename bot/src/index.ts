@@ -56,6 +56,16 @@ if (!config.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(config.privateKey)) {
   process.exit(1);
 }
 
+// FIX BE-002: Validate private key is within secp256k1 curve order range
+{
+  const SECP256K1_N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
+  const keyBigInt = BigInt(config.privateKey.startsWith('0x') ? config.privateKey : '0x' + config.privateKey);
+  if (keyBigInt <= 0n || keyBigInt >= SECP256K1_N) {
+    console.error('FATAL: Private key out of secp256k1 curve range');
+    process.exit(1);
+  }
+}
+
 // ============================================================
 //                     LOGGER
 // ============================================================
@@ -290,6 +300,11 @@ class LiquidationBot {
   stop(): void {
     logger.info("Stopping bot...");
     this.isRunning = false;
+
+    // FIX BE-001: Remove event listeners to prevent memory leaks
+    this.borrowModule.removeAllListeners();
+    this.collateralVault.removeAllListeners();
+    this.liquidationEngine.removeAllListeners();
   }
 
   private async checkAndLiquidate(): Promise<void> {

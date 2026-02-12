@@ -218,6 +218,8 @@ template BridgeInAttestation
           aggregator
           ecdsaSignature
           nonce = payload.nonce
+          -- FIX DAML-H02: Bind signature to payload content (matching BridgeOut_Sign)
+          payloadHash = payload.attestationId
 
         -- FIX M-5: Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
@@ -244,6 +246,10 @@ template BridgeInAttestation
         -- Enforce all sigs belong to this attestation (by nonce, not contract ID)
         -- Contract ID changes on each BridgeIn_Sign, but nonce stays constant
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
+        -- FIX DAML-H02: Also verify payload hash to bind signatures to full payload
+        -- Matching BridgeOut_Finalize pattern for parity
+        let sigPayloadHashes = map (\s -> s.payloadHash) sigs
+        assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
         assertMsg "DUPLICATE_VALIDATORS" (length (dedup sigValidators) == length sigValidators)
 
@@ -256,6 +262,10 @@ template BridgeInSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
+    -- FIX DAML-H02: Bind signature to full payload (attestationId)
+    -- Without this, validators sign without binding to payload content,
+    -- unlike BridgeOutSignature which already has this field
+    payloadHash : Text
   where
     signatory validator
     observer aggregator

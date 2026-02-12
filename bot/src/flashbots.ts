@@ -4,6 +4,16 @@
 import { ethers, Wallet } from "ethers";
 import { createLogger, format, transports } from "winston";
 
+// FIX BE-003: Crash handlers to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL: Unhandled promise rejection:', reason);
+  process.exit(1);
+});
+process.on('uncaughtException', (error) => {
+  console.error('FATAL: Uncaught exception:', error);
+  process.exit(1);
+});
+
 const logger = createLogger({
   level: "info",
   format: format.combine(

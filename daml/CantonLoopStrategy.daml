@@ -97,6 +97,8 @@ template CantonLoopStrategyConfig
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
         assertMsg "MAX_LOOPS_RANGE" (newMaxLoops >= 1 && newMaxLoops <= 10)
         create this with config = config with maxLoops = newMaxLoops
 
@@ -111,6 +113,8 @@ template CantonLoopStrategyConfig
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
         assertMsg "TARGET_LTV_RANGE" (newTargetLtvBps >= 1000 && newTargetLtvBps <= 9500)
         create this with config = config with targetLtvBps = newTargetLtvBps
 
@@ -125,6 +129,8 @@ template CantonLoopStrategyConfig
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
         assertMsg "MIN_HF_RANGE" (newMinHealthFactorBps >= 11000 && newMinHealthFactorBps <= 30000)
         create this with config = config with minHealthFactorBps = newMinHealthFactorBps
 
@@ -139,6 +145,8 @@ template CantonLoopStrategyConfig
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
         create this with complianceRegistryCid = newComplianceRegistryCid
 
     -- | Read config (nonconsuming, no governance needed)
