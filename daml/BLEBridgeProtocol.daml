@@ -42,7 +42,7 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    -- FIX D-C02: Require strictly positive value to prevent collateral verification bypass
+    -- Require strictly positive value to prevent collateral verification bypass
     ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
@@ -75,19 +75,19 @@ data BridgeOutPayload = BridgeOutPayload with
 -- | Bridge-out attestation request.
 -- Created when backing stables need to move from Canton to Ethereum Treasury.
 -- Validators verify the Canton reserve matches, then sign.
--- FIX D-02: Added signedValidators set to prevent duplicate signatures
+-- Added signedValidators set to prevent duplicate signatures
 template BridgeOutAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeOutPayload
     positionCids : [ContractId InstitutionalEquityPosition]
-    signedValidators : [Party]    -- FIX D-02: Track who has already signed
+    signedValidators : [Party]    -- Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
-    -- FIX D-02: Made CONSUMING to update signedValidators and prevent double-signing
+    -- Made CONSUMING to update signedValidators and prevent double-signing
     -- Previously nonconsuming allowed validators to sign the same attestation multiple times
     choice BridgeOut_Sign : (ContractId BridgeOutAttestation, ContractId BridgeOutSignature)
       with
@@ -96,7 +96,7 @@ template BridgeOutAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX D-02: Prevent duplicate signatures
+        -- Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         -- D-03: Check expiration
@@ -108,7 +108,7 @@ template BridgeOutAttestation
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
-        -- FIX DAML-C09: Include payload hash (attestationId) to bind signature to full payload
+        -- Include payload hash (attestationId) to bind signature to full payload
         sig <- create BridgeOutSignature with
           requestCid = self
           validator
@@ -117,20 +117,20 @@ template BridgeOutAttestation
           nonce = payload.nonce
           payloadHash = payload.attestationId
         
-        -- FIX D-02: Return updated attestation with validator added to signedValidators
+        -- Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- Use 67% BFT supermajority instead of 50% majority
     -- BFT consensus requires >2/3 honest validators to prevent Byzantine attacks
     choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
       with
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
-        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        -- BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- Standardized quorum formula to match BLEProtocol.daml
         let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -143,7 +143,7 @@ template BridgeOutAttestation
 
         -- Enforce all sigs belong to this attestation (by nonce AND payload hash)
         -- Contract ID changes on each BridgeOut_Sign, but nonce stays constant
-        -- FIX DAML-C09: Also verify payload hash to bind signatures to full payload
+        -- Also verify payload hash to bind signatures to full payload
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
         let sigPayloadHashes = map (\s -> s.payloadHash) sigs
         assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
@@ -164,7 +164,7 @@ template BridgeOutSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
-    payloadHash : Text  -- FIX DAML-C09: Bind signature to full payload (attestationId)
+    payloadHash : Text  -- Bind signature to full payload (attestationId)
   where
     signatory validator
     observer aggregator
@@ -187,18 +187,18 @@ data BridgeInPayload = BridgeInPayload with
 
 -- | Bridge-in attestation.
 -- Created when Ethereum Treasury sends USDC back to Canton for redemptions.
--- FIX M-5: Added signedValidators tracking for consistency with BridgeOutAttestation
+-- Added signedValidators tracking for consistency with BridgeOutAttestation
 template BridgeInAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeInPayload
-    signedValidators : [Party]    -- FIX M-5: Track who has already signed
+    signedValidators : [Party]    -- Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
-    -- FIX M-5: Changed from nonconsuming to consuming to prevent double-signing
+    -- Changed from nonconsuming to consuming to prevent double-signing
     -- Mirrors BridgeOut_Sign pattern: archives old, creates new with updated tracker
     choice BridgeIn_Sign : (ContractId BridgeInAttestation, ContractId BridgeInSignature)
       with
@@ -207,7 +207,7 @@ template BridgeInAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX M-5: Prevent duplicate signatures
+        -- Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         now <- getTime
@@ -219,22 +219,22 @@ template BridgeInAttestation
           aggregator
           ecdsaSignature
           nonce = payload.nonce
-          -- FIX DAML-H02: Bind signature to payload content (matching BridgeOut_Sign)
+          -- Bind signature to payload content (matching BridgeOut_Sign)
           payloadHash = payload.attestationId
 
-        -- FIX M-5: Return updated attestation with validator added to signedValidators
+        -- Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize and archive — USDC can now be minted on Canton
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- Use 67% BFT supermajority instead of 50% majority
     choice BridgeIn_Finalize : [ContractId BridgeInSignature]
       with
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
-        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        -- BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- Standardized quorum formula to match BLEProtocol.daml
         let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -248,7 +248,7 @@ template BridgeInAttestation
         -- Enforce all sigs belong to this attestation (by nonce, not contract ID)
         -- Contract ID changes on each BridgeIn_Sign, but nonce stays constant
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
-        -- FIX DAML-H02: Also verify payload hash to bind signatures to full payload
+        -- Also verify payload hash to bind signatures to full payload
         -- Matching BridgeOut_Finalize pattern for parity
         let sigPayloadHashes = map (\s -> s.payloadHash) sigs
         assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
@@ -264,7 +264,7 @@ template BridgeInSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
-    -- FIX DAML-H02: Bind signature to full payload (attestationId)
+    -- Bind signature to full payload (attestationId)
     -- Without this, validators sign without binding to payload content,
     -- unlike BridgeOutSignature which already has this field
     payloadHash : Text
@@ -294,14 +294,14 @@ template SupplyCapAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : SupplyCapPayload
-    signedValidators : [Party]  -- FIX C-01: Track who has already signed
+    signedValidators : [Party]  -- Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
     ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
 
-    -- FIX C-01: Changed to consuming choice to prevent double-signing
+    -- Changed to consuming choice to prevent double-signing
     choice SupplyCap_Sign : (ContractId SupplyCapAttestation, ContractId SupplyCapSignature)
       with
         validator : Party
@@ -309,7 +309,7 @@ template SupplyCapAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX C-01: Prevent double-signing
+        -- Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
         sig <- create SupplyCapSignature with
@@ -318,32 +318,32 @@ template SupplyCapAttestation
           aggregator
           ecdsaSignature
           nonce = payload.nonce
-          -- FIX DAML-H-02: Bind signature to payload content
+          -- Bind signature to payload content
           payloadHash = payload.attestationId
         
-        -- FIX C-01: Update attestation with new signed validator
+        -- Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize: archives attestation, returns the verified global state
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- Use 67% BFT supermajority instead of 50% majority
     choice SupplyCap_Finalize : SupplyCapPayload
       with
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
-        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        -- BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- Standardized quorum formula to match BLEProtocol.daml
         let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        -- Verify nonce instead of requestCid (since attestation is recreated on each sign)
         let sigNonces = map (.nonce) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
-        -- FIX DAML-H-02: Verify payload hash binds signatures to full payload content
+        -- Verify payload hash binds signatures to full payload content
         let sigPayloadHashes = map (\s -> s.payloadHash) sigs
         assertMsg "SIGNATURE_PAYLOAD_HASH_MISMATCH" (all (== payload.attestationId) sigPayloadHashes)
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
@@ -362,7 +362,7 @@ template SupplyCapSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
-    payloadHash : Text        -- FIX DAML-H-02: Bind signature to payload content
+    payloadHash : Text        -- Bind signature to payload content
   where
     signatory validator
     observer aggregator
@@ -389,7 +389,7 @@ template YieldAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : YieldPayload
-    signedValidators : [Party]  -- FIX C-02: Track who has already signed
+    signedValidators : [Party]  -- Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
@@ -397,7 +397,7 @@ template YieldAttestation
     -- Treasury assets must be >= mUSD supply (no undercollateralization)
     ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
 
-    -- FIX C-02: Changed to consuming choice to prevent double-signing
+    -- Changed to consuming choice to prevent double-signing
     choice Yield_Sign : (ContractId YieldAttestation, ContractId YieldSignature)
       with
         validator : Party
@@ -405,10 +405,10 @@ template YieldAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX C-02: Prevent double-signing
+        -- Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        -- FIX DAML-H-01: Bind signature to payload via attestationId
+        -- Bind signature to payload via attestationId
         sig <- create YieldSignature with
           requestCid = self
           validator
@@ -417,27 +417,27 @@ template YieldAttestation
           nonce = payload.nonce
           payloadHash = payload.attestationId
         
-        -- FIX C-02: Update attestation with new signed validator
+        -- Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize: returns verified yield data for smUSD sync
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- Use 67% BFT supermajority instead of 50% majority
     choice Yield_Finalize : YieldPayload
       with
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
-        -- FIX DAML-H-01: Standardized quorum formula to match BLEProtocol.daml
+        -- BFT supermajority threshold: ceil(2n/3) via (2n+2)/3
+        -- Standardized quorum formula to match BLEProtocol.daml
         let requiredSignatures = ((length validatorGroup) * 2 + 2) / 3
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        -- Verify nonce instead of requestCid (since attestation is recreated on each sign)
         let sigNonces = map (.nonce) sigs
-        -- FIX DAML-H-01: Verify payloadHash binding to prevent signature re-association
+        -- Verify payloadHash binding to prevent signature re-association
         let sigPayloadHashes = map (.payloadHash) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
@@ -454,7 +454,7 @@ template YieldSignature
     aggregator : Party
     ecdsaSignature : Text
     nonce : Int
-    payloadHash : Text  -- FIX DAML-H-01: Bind signature to payload (attestationId)
+    payloadHash : Text  -- Bind signature to payload (attestationId)
   where
     signatory validator
     observer aggregator

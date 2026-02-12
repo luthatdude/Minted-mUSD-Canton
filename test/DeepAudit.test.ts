@@ -669,7 +669,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const hf = await borrowModule.healthFactor(user1.address);
 
-      // FIX DA-03: Assert health factor is actually below threshold instead of
+      // Assert health factor is actually below threshold instead of
       // silently skipping all assertions when it's not
       expect(hf).to.be.lt(10000n, "Health factor should be below 1.0 for liquidation test");
 

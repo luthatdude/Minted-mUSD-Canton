@@ -223,7 +223,7 @@ bridgeOutAttestationTest = script do
       validatorGroup = validators
       payload
       positionCids = [pos1Cid, pos2Cid]
-      signedValidators = []  -- FIX: Initialize empty list
+      signedValidators = []
 
   -- 3-of-5 validators sign (choice now returns updated attestation + signature)
   (attCid2, sig1Cid) <- submit validator1 do
@@ -337,9 +337,9 @@ supplyCapSyncTest = script do
       aggregator
       validatorGroup = validators
       payload
-      signedValidators = []  -- FIX: Initialize empty
+      signedValidators = []
 
-  -- FIX: Sign choice now returns (newAttCid, sigCid)
+  -- Sign choice now returns (newAttCid, sigCid)
   (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid SupplyCap_Sign with
       validator = validator1
@@ -393,9 +393,9 @@ yieldAttestationTest = script do
       aggregator
       validatorGroup = validators
       payload
-      signedValidators = []  -- FIX: Initialize empty
+      signedValidators = []
 
-  -- FIX: Sign choice now returns (newAttCid, sigCid)
+  -- Sign choice now returns (newAttCid, sigCid)
   (attCid2, sig1) <- submit validator1 do
     exerciseCmd attCid Yield_Sign with
       validator = validator1

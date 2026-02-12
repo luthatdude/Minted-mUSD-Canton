@@ -111,7 +111,7 @@ template InterestRateService
         return ((borrowRate * util * oneMinusReserve) / (10000 * 10000))
 
     -- | Calculate interest for a given principal and duration
-    -- FIX IRS-02: Return 0 for zero/negative principal or duration to match Solidity behavior
+    -- Return 0 for zero/negative principal or duration to match Solidity behavior
     nonconsuming choice RateService_CalculateInterest : Decimal
       with
         requester : Party
@@ -139,7 +139,7 @@ template InterestRateService
         return (supplierAmount, reserveAmount)
 
     -- | Sync market state from Ethereum (via bridge attestation)
-    -- FIX DAML-H-04: Governance-gated to prevent compromised operator feeding arbitrary data
+    -- Governance-gated to prevent compromised operator feeding arbitrary data
     choice RateService_SyncMarketState : ContractId InterestRateService
       with
         newTotalBorrows : Decimal
@@ -148,7 +148,7 @@ template InterestRateService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-H-04: Verify governance approval before syncing market state
+        -- Verify governance approval before syncing market state
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "STALE_DATA" (ethBlockNumber > marketState.ethBlockNumber)

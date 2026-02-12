@@ -148,7 +148,7 @@ describe("LiquidationEngine", function () {
       // New collateral value: 10 * 1500 = $15,000
       // Health factor = (15000 * 0.80) / 14000 = 0.857 < 1.0
       await ethFeed.setAnswer(150000000000n); // $1500
-      // FIX: Update circuit breaker cache after price change
+      // Update circuit breaker cache after price change
       await priceOracle.updatePrice(await weth.getAddress());
 
       expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
@@ -431,7 +431,7 @@ describe("LiquidationEngine", function () {
   });
 
   // ================================================================
-  // FIX C-02: Bad Debt Detection & Socialization Tests
+  // Bad Debt Detection & Socialization Tests
   // ================================================================
   describe("Bad Debt Detection (C-02)", function () {
     it("Should detect and record bad debt when liquidation exhausts all collateral", async function () {

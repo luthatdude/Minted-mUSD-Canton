@@ -16,7 +16,7 @@ import { expect } from "chai";
 import { YieldScanner, YieldOpportunity, ScanResult } from "../bot/src/yield-scanner";
 
 // ============================================================
-//  1. parseInt with Radix 10 (FIX BE-007 / H-7)
+//  1. parseInt with Radix 10
 // ============================================================
 
 describe("TEST-003: parseInt radix 10 correctness", function () {
@@ -60,7 +60,7 @@ describe("TEST-003: parseInt radix 10 correctness", function () {
 });
 
 // ============================================================
-//  2. RPC URL Validation (FIX BE-004)
+//  2. RPC URL Validation
 // ============================================================
 
 describe("TEST-003: RPC URL transport security validation", function () {
@@ -107,7 +107,7 @@ describe("TEST-003: RPC URL transport security validation", function () {
 });
 
 // ============================================================
-//  3. unhandledRejection Handling (FIX BE-003)
+//  3. unhandledRejection Handling
 // ============================================================
 
 describe("TEST-003: unhandledRejection handling pattern", function () {
@@ -149,7 +149,7 @@ describe("TEST-003: unhandledRejection handling pattern", function () {
 });
 
 // ============================================================
-//  4. Graceful Shutdown Pattern (FIX BE-009)
+//  4. Graceful Shutdown Pattern
 // ============================================================
 
 describe("TEST-003: Graceful shutdown patterns", function () {

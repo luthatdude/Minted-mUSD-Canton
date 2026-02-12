@@ -11,7 +11,7 @@
  *  3. SMUSD: ERC-4626 compliance (convertToShares/convertToAssets consistency)
  *  4. Cross-contract integration paths
  *
- *  FIX AUDIT-01: SMUSD convertToShares/convertToAssets now delegates to
+ *  SMUSD convertToShares/convertToAssets now delegates to
  *  internal _convertToShares/_convertToAssets for ERC-4626 spec compliance.
  */
 
@@ -313,8 +313,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       expect(price).to.equal(ethers.parseEther("2600"));
     });
 
-    it("should allow stale prices (FIX CORE-H-01: liquidations during outages)", async function () {
-      // FIX CORE-H-01: Unsafe variants no longer revert on stale prices.
+    it("should allow stale prices (liquidations during outages)", async function () {
+      // Unsafe variants no longer revert on stale prices.
       // Liquidations must proceed during feed outages using last available price.
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
@@ -365,8 +365,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       expect(value).to.equal(ethers.parseEther("50000"));
     });
 
-    it("should allow stale prices (FIX CORE-H-01: liquidations during outages)", async function () {
-      // FIX CORE-H-01: Unsafe variants no longer revert on stale prices.
+    it("should allow stale prices (liquidations during outages)", async function () {
+      // Unsafe variants no longer revert on stale prices.
       // Liquidations must proceed during feed outages using last available price.
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
@@ -947,9 +947,9 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
         .to.be.reverted;
     });
 
-    // FIX CR-05: repay() must remain available even when paused,
+    // repay() must remain available even when paused,
     // so users can reduce debt and avoid unfair liquidation.
-    it("should ALLOW repay when paused (CR-05 fix)", async function () {
+    it("should ALLOW repay when paused", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
       await f.borrowModule.connect(f.owner).pause();
@@ -1146,7 +1146,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECTION 3: SMUSD — ERC-4626 Compliance (FIX AUDIT-01)
+//  SECTION 3: SMUSD — ERC-4626 Compliance
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
@@ -1175,7 +1175,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
   }
 
   describe("convertToShares / convertToAssets consistency", function () {
-    it("convertToShares should match deposit result (FIX AUDIT-01)", async function () {
+    it("convertToShares should match deposit result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // First user deposits to create a non-trivial share price
@@ -1197,13 +1197,13 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       // The key check: previewDeposit should also match
       const previewDeposit = await smusd.previewDeposit(depositAmount);
 
-      // With FIX AUDIT-01, these should be consistent (within rounding)
+      // These should be consistent (within rounding)
       // previewDeposit uses _convertToShares with Floor rounding
       // convertToShares now also delegates to _convertToShares with Floor rounding
       expect(previewShares).to.equal(previewDeposit);
     });
 
-    it("convertToAssets should match redeem result (FIX AUDIT-01)", async function () {
+    it("convertToAssets should match redeem result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // Deposit
@@ -1219,7 +1219,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       const previewAssets = await smusd.convertToAssets(shares);
       const previewRedeem = await smusd.previewRedeem(shares);
 
-      // With FIX AUDIT-01, these should be consistent
+      // These should be consistent
       expect(previewAssets).to.equal(previewRedeem);
     });
 
@@ -1632,7 +1632,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     return { directMint, musd, usdc, treasury, deployer, user1 };
   }
 
-  describe("Minimum fee enforcement (FIX S-M08)", function () {
+  describe("Minimum fee enforcement", function () {
     it("should charge minimum 1 wei USDC fee even on tiny redemptions", async function () {
       const { directMint, musd, usdc, deployer, user1 } = await loadFixture(deployMintFixture);
 

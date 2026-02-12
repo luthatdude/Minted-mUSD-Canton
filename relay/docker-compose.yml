@@ -1,16 +1,16 @@
 # Minted Bridge - Docker Compose
-# FIX C-11: Use Docker secrets for sensitive values instead of env vars
-# FIX H-22: Added network isolation, resource limits, and read-only rootfs
-# FIX M-22: Health check binds to localhost
+# Use Docker secrets for sensitive values instead of env vars
+# Added network isolation, resource limits, and read-only rootfs
+# Health check binds to localhost
 #
 # Usage:
 #   docker-compose up relay         # Start relay service only
 #   docker-compose up validator1    # Start validator 1
 #   docker-compose up               # Start everything
 
-# FIX 5C-L01: Removed deprecated 'version' field (docker compose v2+ ignores it)
+# Removed deprecated 'version' field (docker compose v2+ ignores it)
 
-# FIX C-11: Define secrets (files must be created on host)
+# Define secrets (files must be created on host)
 secrets:
   canton_token:
     file: ./secrets/canton_token
@@ -29,7 +29,7 @@ secrets:
   validator3_aws_secret_key:
     file: ./secrets/validator3_aws_secret_key
 
-# FIX H-22: Network isolation
+# Network isolation
 networks:
   bridge_internal:
     driver: bridge
@@ -57,19 +57,19 @@ services:
       - CONFIRMATIONS=${CONFIRMATIONS:-2}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-5000}
       - HEALTH_PORT=8080
-      # FIX M-22: Bind health server to localhost
+      # Bind health server to localhost
       - HEALTH_BIND_HOST=127.0.0.1
       - NODE_ENV=production
-    # FIX C-11: Mount secrets instead of env vars for sensitive values
-    # FIX BE-L03: Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
+    # Mount secrets instead of env vars for sensitive values
+    # Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
     secrets:
       - canton_token
       - bridge_private_key
-    # FIX M-22: Only expose health port to localhost
+    # Only expose health port to localhost
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
-    # FIX H-22: Resource limits and security hardening
+    # Resource limits and security hardening
     read_only: true
     tmpfs:
       - /tmp
@@ -85,7 +85,7 @@ services:
     networks:
       - bridge_internal
       - bridge_external
-    # FIX I-H01: Use node instead of curl (not available in alpine)
+    # Use node instead of curl (not available in alpine)
     healthcheck:
       test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://127.0.0.1:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -118,7 +118,7 @@ services:
       - YIELD_SYNC_INTERVAL_MS=${YIELD_SYNC_INTERVAL_MS:-3600000}
       - MIN_YIELD_THRESHOLD=${MIN_YIELD_THRESHOLD:-1000000000}
       - NODE_ENV=production
-    # FIX BE-L03: Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
+    # Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
     secrets:
       - canton_token
       - bridge_private_key
@@ -169,9 +169,9 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # FIX 5C-L04: Set NODE_ENV for HTTPS enforcement in validator-node-v2
+      # Set NODE_ENV for HTTPS enforcement in validator-node-v2
       - NODE_ENV=production
-    # FIX C-11: Use secrets for AWS credentials
+    # Use secrets for AWS credentials
     secrets:
       - canton_token
       - validator1_aws_access_key
@@ -191,7 +191,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # FIX I-M01: Healthcheck for validator (process-level since no HTTP endpoint)
+    # Healthcheck for validator (process-level since no HTTP endpoint)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
@@ -219,7 +219,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # FIX TEST-F03: Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
+      # Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
       - NODE_ENV=production
     secrets:
       - canton_token
@@ -240,7 +240,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # FIX I-M01: Healthcheck for validator (process-level)
+    # Healthcheck for validator (process-level)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
@@ -268,7 +268,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # FIX TEST-F03: Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
+      # Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
       - NODE_ENV=production
     secrets:
       - canton_token
@@ -289,7 +289,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # FIX I-M01: Healthcheck for validator (process-level)
+    # Healthcheck for validator (process-level)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s

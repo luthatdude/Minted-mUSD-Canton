@@ -62,7 +62,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: nginx
-          # FIX IC-07: Pin nginx image to SHA256 digest for supply chain security
+          # Pin nginx image to SHA256 digest for supply chain security
           # nginx 1.27.2-alpine - verify digest before deployment
           image: nginx@sha256:2140dad235c130ac861018a4e13a6bc8aea3a35f3a40e20c1b060d51a7efd250
           ports:

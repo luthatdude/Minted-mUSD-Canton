@@ -18,14 +18,14 @@ spec:
       port: 5011
       targetPort: 5011
       protocol: TCP
-    # FIX IC-04: Removed admin-api port from Service exposure
+    # Removed admin-api port from Service exposure
     # Admin API is bound to localhost only (see participant-config.yaml)
     # Use kubectl port-forward for admin access when needed
     - name: json-api
       port: 7575
       targetPort: 7575
       protocol: TCP
-    # FIX INFRA-007: Add metrics port so that the ServiceMonitor (service-monitors.yaml)
+    # Add metrics port so that the ServiceMonitor (service-monitors.yaml)
     # can scrape Prometheus metrics. The ServiceMonitor selector matches
     # app.kubernetes.io/name: canton-participant and references port "metrics".
     - name: metrics
@@ -70,7 +70,7 @@ spec:
       # Wait for postgres to be ready before starting Canton
       initContainers:
         - name: wait-for-postgres
-          # FIX IC-07: Pin image to SHA256 digest for supply chain security
+          # Pin image to SHA256 digest for supply chain security
           image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
           command: ['sh', '-c', 'until nc -z postgres.musd-canton.svc.cluster.local 5432; do echo "Waiting for PostgreSQL..."; sleep 2; done']
           securityContext:
@@ -87,14 +87,14 @@ spec:
               memory: 32Mi
       containers:
         - name: canton
-          # FIX INFRA-002: Pin to SHA256 digest for supply chain security
+          # Pin to SHA256 digest for supply chain security
           # REQUIRED: Before deployment, pull the real image and record the actual digest:
           #   docker pull digitalasset/canton-open-source:2.9.3
           #   docker inspect --format='{{index .RepoDigests 0}}' digitalasset/canton-open-source:2.9.3
           # Then replace the tag-only reference below with:
           #   image: digitalasset/canton-open-source@sha256:<actual-digest>
           image: digitalasset/canton-open-source:2.9.3  # MUST pin to @sha256:<digest> before mainnet
-          imagePullPolicy: Always  # FIX INFRA-002: Ensure latest tag-matching image until digest is pinned
+          imagePullPolicy: Always  # Ensure latest tag-matching image until digest is pinned
           args:
             - "-c"
             - "/etc/canton/participant.conf"
@@ -169,14 +169,14 @@ spec:
             failureThreshold: 30  # 150s max startup
 
         - name: json-api
-          # FIX INFRA-002: Pin to SHA256 digest for supply chain security
+          # Pin to SHA256 digest for supply chain security
           # REQUIRED: Before deployment, pull the real image and record the actual digest:
           #   docker pull digitalasset/daml-sdk:2.9.3
           #   docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
           # Then replace the tag-only reference below with:
           #   image: digitalasset/daml-sdk@sha256:<actual-digest>
           image: digitalasset/daml-sdk:2.9.3  # MUST pin to @sha256:<digest> before mainnet
-          imagePullPolicy: Always  # FIX INFRA-002: Ensure latest tag-matching image until digest is pinned
+          imagePullPolicy: Always  # Ensure latest tag-matching image until digest is pinned
           command:
             - "daml"
             - "json-api"
@@ -186,7 +186,7 @@ spec:
             - "5011"
             - "--http-port"
             - "7575"
-            # FIX IC-03: Removed --allow-insecure-tokens
+            # Removed --allow-insecure-tokens
             # Require JWT-based authentication for all API calls
             - "--access-token-file"
             - "/etc/canton/secrets/json-api-token"
@@ -216,7 +216,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            # FIX IC-03: Mount JWT secrets for JSON API authentication
+            # Mount JWT secrets for JSON API authentication
             - name: json-api-secrets
               mountPath: /etc/canton/secrets
               readOnly: true
@@ -244,7 +244,7 @@ spec:
         - name: tls-certs
           secret:
             secretName: canton-tls
-        # FIX IC-03: JSON API authentication secrets
+        # JSON API authentication secrets
         - name: json-api-secrets
           secret:
             secretName: json-api-credentials

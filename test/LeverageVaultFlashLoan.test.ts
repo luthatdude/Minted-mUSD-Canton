@@ -432,7 +432,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
   });
 
   // ============================================================
-  //  4. Pausable Emergency Controls (FIX H-03)
+  //  4. Pausable Emergency Controls
   // ============================================================
 
   describe("Pausable emergency controls", function () {

@@ -216,14 +216,14 @@ describe("CollateralVault", function () {
     it("withdrawFor: should send collateral to specified recipient", async function () {
       const amount = ethers.parseEther("5");
       const balBefore = await weth.balanceOf(user2.address);
-      // FIX: Add skipHealthCheck parameter (5th param) - true to skip health check for this test
+      // Add skipHealthCheck parameter (5th param) - true to skip health check for this test
       await vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), amount, user2.address, true);
       expect(await weth.balanceOf(user2.address)).to.equal(balBefore + amount);
     });
 
     it("withdrawFor: should reject zero recipient", async function () {
       await expect(
-        // FIX: Add skipHealthCheck parameter (5th param)
+        // Add skipHealthCheck parameter (5th param)
         vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), ethers.parseEther("1"), ethers.ZeroAddress, true)
       ).to.be.revertedWith("INVALID_RECIPIENT");
     });

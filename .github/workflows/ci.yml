@@ -62,14 +62,14 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          # FIX P1: Coverage threshold is now BLOCKING for institutional audit readiness
+          # Coverage threshold is now BLOCKING for institutional audit readiness
           COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
           echo "Statement coverage: $COVERAGE%"
           if (( $(echo "$COVERAGE < 80" | bc -l) )); then
             echo "::error::Coverage below 80% threshold — institutional audit requires ≥80%"
             exit 1
           fi
-        # FIX P1: Removed continue-on-error to make coverage gate blocking
+        # Removed continue-on-error to make coverage gate blocking
 
       - name: Upload coverage
         if: always()
@@ -168,7 +168,7 @@ jobs:
           # Create DAML directories
           mkdir -p "$DAML_HOME/bin" "$DAML_HOME/sdk/$DAML_SDK_VERSION"
           
-          # FIX INFRA-002: Download installer to file and verify checksum before execution
+          # Download installer to file and verify checksum before execution
           # instead of pipe-to-bash pattern (curl | bash) which is vulnerable to MITM/supply-chain attacks
           INSTALLER_PATH="$(mktemp /tmp/daml-install-XXXXXX.sh)"
           curl -sSL https://get.daml.com/ -o "$INSTALLER_PATH"
@@ -230,7 +230,7 @@ jobs:
         working-directory: relay
         run: npx tsc --noEmit
 
-      # FIX TEST-F01: Run relay security tests (secp256k1 validation, DER parsing, EIP-2 normalization)
+      # Run relay security tests (secp256k1 validation, DER parsing, EIP-2 normalization)
       - name: Run relay tests
         working-directory: relay
         run: npm test
@@ -341,13 +341,13 @@ jobs:
 
       - name: Install kubeconform
         env:
-          # FIX INFRA-001: Pin version for reproducible builds
+          # Pin version for reproducible builds
           # To update: download new release, run `sha256sum kubeconform-linux-amd64.tar.gz`
           KUBECONFORM_VERSION: "0.6.7"
         run: |
           KUBECONFORM_URL="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           wget -q "$KUBECONFORM_URL" -O kubeconform-linux-amd64.tar.gz
-          # FIX INFRA-001: Log checksum for audit trail and verify download integrity
+          # Log checksum for audit trail and verify download integrity
           echo "Downloaded kubeconform v${KUBECONFORM_VERSION} SHA-256: $(sha256sum kubeconform-linux-amd64.tar.gz | cut -d' ' -f1)"
           # Verify the archive is valid before extracting
           file kubeconform-linux-amd64.tar.gz | grep -q 'gzip' || { echo "SECURITY: Downloaded file is not a valid gzip archive"; exit 1; }

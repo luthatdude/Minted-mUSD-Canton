@@ -199,16 +199,16 @@ template CantonMUSD
     -- they are bound by the Master Participation Agreement.
     -- Agreement hash and URI are stored in the agreementHash / agreementUri fields.
 
-    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
-    -- FIX INSTITUTIONAL: Added compliance check for transfers (anti-blacklist/freeze)
-    -- FIX DAML-C01: complianceRegistryCid is now REQUIRED (not Optional) to prevent bypass
+    -- Use proposal pattern for safe dual-signatory transfers
+    -- Added compliance check for transfers (anti-blacklist/freeze)
+    -- complianceRegistryCid is now REQUIRED (not Optional) to prevent bypass
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- FIX DAML-C01: Compliance check is mandatory — caller must provide valid CID
+        -- Compliance check is mandatory — caller must provide valid CID
         exercise complianceRegistryCid ValidateTransfer with
           sender = owner
           receiver = newOwner
@@ -238,7 +238,7 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- FIX DAML-H-02: Changed from `controller issuer` to `controller [issuer, owner]`.
+    -- Changed from `controller issuer` to `controller [issuer, owner]`.
     -- Previously, the operator (issuer) could unilaterally burn any user's mUSD.
     -- Now both parties must authorize. This is safe because ALL protocol burn paths
     -- (DirectMint_Redeem, Lending_Repay, Lending_Liquidate, Stake, UnwindRequest_Execute)
@@ -249,7 +249,7 @@ template CantonMUSD
       do
         return ()
 
--- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
+-- | Transfer proposal for CantonMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonMUSDTransferProposal
   with
@@ -272,11 +272,11 @@ template CantonMUSDTransferProposal
       do create musd
 
 -- ============================================================
---                     SECTION 2b: BURN RATE LIMITER (FIX DAML-R05)
+--                     SECTION 2b: BURN RATE LIMITER
 -- ============================================================
 
 -- | BurnRateLimiter — Per-epoch burn rate limiting for all mUSD burn paths.
--- FIX DAML-R05: CantonMUSD_Burn has no rate guards on its own (it's controller issuer).
+-- CantonMUSD_Burn has no rate guards on its own (it's controller issuer).
 -- This template provides centralized, on-ledger burn tracking across ALL protocol
 -- paths (staking unstake, lending repay, direct mint redeem) to prevent mass-burn
 -- attacks even if the operator key is compromised.
@@ -339,7 +339,7 @@ template BurnRateLimiter
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
         create this with epochBurnLimit = newLimit
@@ -353,7 +353,7 @@ template BurnRateLimiter
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         create this with paused = newPaused
 
@@ -396,7 +396,7 @@ template BridgeOutRequest
         assertMsg "MUST_BE_PENDING" (status == "pending")
         create this with status = "failed"
 
-    -- FIX DAML-H-06: Retry failed bridge
+    -- Retry failed bridge
     choice BridgeOut_Retry : ContractId BridgeOutRequest
       controller operator
       do
@@ -404,7 +404,7 @@ template BridgeOutRequest
         now <- getTime
         create this with status = "pending", createdAt = now
 
-    -- FIX DAML-H-06: Refund user for permanently failed bridge
+    -- Refund user for permanently failed bridge
     choice BridgeOut_RefundUser : ContractId CantonUSDC
       with
         usdcIssuer : Party
@@ -428,7 +428,7 @@ template BridgeOutRequest
 template ReserveTracker
   with
     operator : Party
-    -- FIX DAML-011: Governance party provides oversight of all reserve tracking mutations
+    -- Governance party provides oversight of all reserve tracking mutations
     governance : Party
     totalDeposited : Money      -- Total USDC ever deposited via Canton mint
     totalRedeemed : Money       -- Total USDC ever redeemed back
@@ -438,7 +438,7 @@ template ReserveTracker
     lastUpdated : Time
   where
     signatory operator
-    -- FIX DAML-011: Governance observer ensures all reserve changes are visible for audit
+    -- Governance observer ensures all reserve changes are visible for audit
     observer governance
 
     ensure totalDeposited >= 0.0
@@ -453,7 +453,7 @@ template ReserveTracker
         depositAmount : Money
       controller operator
       do
-        assertMsg "DEPOSIT_AMOUNT_MUST_BE_POSITIVE" (depositAmount > 0.0)  -- FIX DAML-M-04
+        assertMsg "DEPOSIT_AMOUNT_MUST_BE_POSITIVE" (depositAmount > 0.0)
         now <- getTime
         create this with
           totalDeposited = totalDeposited + depositAmount
@@ -466,7 +466,7 @@ template ReserveTracker
         redeemAmount : Money
       controller operator
       do
-        assertMsg "REDEEM_AMOUNT_MUST_BE_POSITIVE" (redeemAmount > 0.0)  -- FIX DAML-M-04
+        assertMsg "REDEEM_AMOUNT_MUST_BE_POSITIVE" (redeemAmount > 0.0)
         assertMsg "INSUFFICIENT_SUPPLY" (cantonMUSDSupply >= redeemAmount)
         now <- getTime
         create this with
@@ -480,7 +480,7 @@ template ReserveTracker
         bridgeAmount : Money
       controller operator
       do
-        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)  -- FIX DAML-M-04
+        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)
         now <- getTime
         create this with
           totalBridgedOut = totalBridgedOut + bridgeAmount
@@ -492,13 +492,13 @@ template ReserveTracker
         bridgeAmount : Money
       controller operator
       do
-        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)  -- FIX DAML-M-04
+        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)
         now <- getTime
         create this with
           totalBridgedIn = totalBridgedIn + bridgeAmount
           lastUpdated = now
 
-    -- FIX DAML-C-03: Allow services to cross-check supply
+    -- Allow services to cross-check supply
     -- NOTE: ReserveTracker.cantonMUSDSupply and CantonDirectMintService.currentSupply
     -- are intentionally dual-tracked. ReserveTracker is the authoritative accounting ledger;
     -- currentSupply is a cached value for fast access. Use this choice to cross-check.
@@ -508,7 +508,7 @@ template ReserveTracker
       controller requester
       do return cantonMUSDSupply
 
-    -- | FIX DAML-011: Governance-gated emergency reset for the ReserveTracker.
+    -- | Governance-gated emergency reset for the ReserveTracker.
     -- Allows admin to reset all accounting counters in case of discrepancies
     -- between Canton and Ethereum state. Requires GovernanceActionLog proof.
     -- Normal accounting choices (RecordDeposit, RecordRedemption, etc.) remain
@@ -525,7 +525,7 @@ template ReserveTracker
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "DEPOSITED_NON_NEGATIVE" (newTotalDeposited >= 0.0)
         assertMsg "REDEEMED_NON_NEGATIVE" (newTotalRedeemed >= 0.0)
@@ -579,13 +579,13 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
-    -- FIX DAML-019: Revoked minters retain redemption visibility via separate observer list.
+    -- Revoked minters retain redemption visibility via separate observer list.
     -- When a minter is revoked from authorizedMinters, add them to redemptionObservers
     -- so they can still see this service contract and exercise DirectMint_Redeem.
     redemptionObservers : [Party]
   where
     signatory operator
-    -- FIX DAML-019: redemptionObservers included so revoked minters retain redemption visibility
+    -- redemptionObservers included so revoked minters retain redemption visibility
     observer usdcIssuer, authorizedMinters, redemptionObservers
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
@@ -627,7 +627,7 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        -- FIX: CantonUSDC_Transfer now returns proposal; accept it
+        -- CantonUSDC_Transfer returns proposal; accept it
         usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
@@ -651,7 +651,7 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         -- Without this, old instances remain active with stale state,
         -- allowing users to bypass supply cap and rate limits
         archive self
@@ -668,7 +668,7 @@ template CantonDirectMintService
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
-    -- FIX: USDCx must be bridged to Ethereum Treasury so it can earn yield via
+    -- USDCx must be bridged to Ethereum Treasury so it can earn yield via
     -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
     -- and deposits into TreasuryV2.
     choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
@@ -723,7 +723,7 @@ template CantonDirectMintService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
+        -- Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
         -- The relay will:
         --   1. Redeem USDCx via xReserve → receive USDC on Ethereum
         --   2. Deposit USDC into TreasuryV2 for yield generation
@@ -738,7 +738,7 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
 
         -- Update service state including rate limit tracking
@@ -777,7 +777,7 @@ template CantonDirectMintService
         let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
         let netAmount = musd.amount - feeAmount
 
-        -- FIX DAML-002: Atomic coupling of BurnRateLimiter + CantonMUSD_Burn.
+        -- Atomic coupling of BurnRateLimiter + CantonMUSD_Burn.
         -- Both operations execute in the SAME DAML transaction (same `do` block),
         -- guaranteeing atomicity: if the burn fails, rate-limit state rolls back,
         -- and if the rate limit is exceeded, the burn never executes.
@@ -796,9 +796,9 @@ template CantonDirectMintService
           feeAmount = feeAmount
           createdAt = now
           fulfilled = False
-          expiresAt = addRelTime now (hours 72)  -- FIX DAML-C-02: 72-hour timeout for refund
-          agreementHash = musd.agreementHash  -- FIX DAML-M-01: Preserve MPA for refund
-          agreementUri = musd.agreementUri    -- FIX DAML-M-01: Preserve MPA for refund
+          expiresAt = addRelTime now (hours 72)  -- 72-hour timeout for refund
+          agreementHash = musd.agreementHash  -- Preserve MPA for refund
+          agreementUri = musd.agreementUri    -- Preserve MPA for refund
 
         -- Track burn in rate limit window (burns offset mints)
         let windowElapsed = subTime now lastRateLimitReset
@@ -808,7 +808,7 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
 
         newService <- create this with
@@ -821,8 +821,8 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
-    -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
-    -- FIX INSTITUTIONAL: Requires governance proof for supply cap changes
+    -- Added rate limiting - cap changes limited to 20% per update
+    -- Requires governance proof for supply cap changes
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
@@ -830,53 +830,53 @@ template CantonDirectMintService
       controller operator
       do
         -- Verify governance approval
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
-        -- FIX D-M02: Limit cap changes to max 20% increase per update
+        -- Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
         create this with supplyCap = newCap
 
-    -- FIX DAML-S6: Governance-gated (was previously operator-only bypass)
+    -- Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
         create this with paused = newPaused
 
-    -- FIX DAML-S6: Governance-gated (was previously operator-only bypass)
+    -- Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
         create this with dailyMintLimit = newLimit
 
-    -- FIX INSTITUTIONAL: Compliance registry changes require governance proof
+    -- Compliance registry changes require governance proof
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
         newRegistryCid : Optional (ContractId ComplianceRegistry)
@@ -884,32 +884,32 @@ template CantonDirectMintService
       controller operator
       do
         -- Verify governance approval for compliance changes
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
-    -- FIX DAML-010: Governance-gated fee withdrawal (was previously operator-only bypass)
+    -- Governance-gated fee withdrawal (was previously operator-only bypass)
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
       with
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-010: Consume governance proof (prevents replay)
+        -- Consume governance proof (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
+        -- Archive old service before creating new one
         archive self
         create this with accumulatedFees = 0.0
 
-    -- FIX DAML-019: Add revoked minter to redemption observers for continued visibility
+    -- Add revoked minter to redemption observers for continued visibility
     choice DirectMint_AddRedemptionObserver : ContractId CantonDirectMintService
       with
         party : Party
@@ -918,7 +918,7 @@ template CantonDirectMintService
         archive self
         create this with redemptionObservers = party :: redemptionObservers
 
-    -- FIX DAML-019: Remove party from redemption observers after all redemptions fulfilled
+    -- Remove party from redemption observers after all redemptions fulfilled
     choice DirectMint_RemoveRedemptionObserver : ContractId CantonDirectMintService
       with
         party : Party
@@ -941,20 +941,20 @@ template RedemptionRequest
     feeAmount : Money         -- Fee deducted
     createdAt : Time
     fulfilled : Bool
-    expiresAt : Time          -- FIX DAML-C-02: Timeout for refund eligibility
-    agreementHash : Text      -- FIX DAML-M-01: Preserve MPA hash for refund compliance
-    agreementUri : Text       -- FIX DAML-M-01: Preserve MPA URI for refund compliance
+    expiresAt : Time          -- Timeout for refund eligibility
+    agreementHash : Text      -- Preserve MPA hash for refund compliance
+    agreementUri : Text       -- Preserve MPA URI for refund compliance
   where
     signatory operator, user  -- User is signatory since they initiated redemption
 
-    -- FIX DAML-C-02: Refund user if redemption not fulfilled before timeout
+    -- Refund user if redemption not fulfilled before timeout
     choice Redemption_Refund : ContractId CantonMUSD
       controller user
       do
         assertMsg "ALREADY_FULFILLED" (not fulfilled)
         now <- getTime
         assertMsg "NOT_YET_EXPIRED" (now > expiresAt)
-        -- FIX DAML-M-01: Use stored agreement fields to satisfy CantonMUSD ensure clause
+        -- Use stored agreement fields to satisfy CantonMUSD ensure clause
         create CantonMUSD with
           issuer = operator
           owner = user

@@ -33,12 +33,12 @@ describe("BLE Protocol Production Test", function () {
       validators.map((v) => v.getAddress())
     );
 
-    // Deploy MUSD with initial supply cap (FIX M-02)
+    // Deploy MUSD with initial supply cap
     const MUSDFactory = await ethers.getContractFactory("MUSD");
     musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP)) as MUSD;
     await musd.waitForDeployment();
 
-    // Deploy Bridge with MUSD address (FIX B-01)
+    // Deploy Bridge with MUSD address
     const BridgeFactory = await ethers.getContractFactory("BLEBridgeV8");
     bridge = (await upgrades.deployProxy(BridgeFactory, [
       MIN_SIGNATURES,
@@ -65,7 +65,7 @@ describe("BLE Protocol Production Test", function () {
     await smusd.waitForDeployment();
   });
 
-  // FIX TEST-01: Helper to sort signatures by recovered signer address
+  // Helper to sort signatures by recovered signer address
   async function signAndSort(
     hash: string,
     signers: HardhatEthersSigner[]
@@ -96,7 +96,7 @@ describe("BLE Protocol Production Test", function () {
       const attId = ethers.id("att-1");
       const chainId = (await ethers.provider.getNetwork()).chainId;
 
-      // FIX M-21: Hash schema matches BLEBridgeV8's abi.encodePacked format
+      // Hash schema matches BLEBridgeV8's abi.encodePacked format
       // Note: BLEBridgeV9 uses a different 6-param schema (no target/amount/isMint).
       // Tests target BLEBridgeV8 specifically.
       const hash = ethers.solidityPackedKeccak256(
@@ -122,7 +122,7 @@ describe("BLE Protocol Production Test", function () {
         ]
       );
 
-      // FIX TEST-01: Sort signatures by signer address
+      // Sort signatures by signer address
       const sigs = await signAndSort(hash, validators.slice(0, 3));
 
       // Verify balance before
@@ -140,7 +140,7 @@ describe("BLE Protocol Production Test", function () {
         sigs
       );
 
-      // FIX TEST-02: This now works because bridge actually mints
+      // This now works because bridge actually mints
       expect(await musd.balanceOf(user.address)).to.equal(amount);
       expect(await bridge.currentNonce()).to.equal(nonce);
       expect(await bridge.totalCantonAssets()).to.equal(assets);
@@ -288,7 +288,7 @@ describe("BLE Protocol Production Test", function () {
       ).to.be.revertedWith("GLOBAL_CR_LOW");
     });
 
-    // FIX B-05: Test attestation ID reuse prevention
+    // Test attestation ID reuse prevention
     it("Should reject reused attestation ID", async function () {
       const amount = ethers.parseEther("500");
       const assets = ethers.parseEther("550");
@@ -374,7 +374,7 @@ describe("BLE Protocol Production Test", function () {
     });
   });
 
-  // FIX TEST-03: Blacklist functionality tests
+  // Blacklist functionality tests
   describe("Compliance - Blacklist", function () {
     it("Should prevent minting to blacklisted address", async function () {
       await musd.setBlacklist(user.address, true);
@@ -422,11 +422,11 @@ describe("BLE Protocol Production Test", function () {
           },
           sigs
         )
-      // FIX H-01: MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
+      // MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
       ).to.be.revertedWith("COMPLIANCE_REJECT");
     });
 
-    // FIX M-01: Test burn from blacklisted address is rejected
+    // Test burn from blacklisted address is rejected
     it("Should prevent burning from blacklisted address", async function () {
       // First mint to user
       const amount = ethers.parseEther("1000");
@@ -513,12 +513,12 @@ describe("BLE Protocol Production Test", function () {
           },
           sigs2
         )
-      // FIX H-01: MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
+      // MUSD._update uses "COMPLIANCE_REJECT" for both sender and receiver
       ).to.be.revertedWith("COMPLIANCE_REJECT");
     });
   });
 
-  // FIX TEST-03: Rate limiting tests
+  // Rate limiting tests
   describe("Rate Limiting", function () {
     it("Should enforce daily mint limit", async function () {
       const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -607,7 +607,7 @@ describe("BLE Protocol Production Test", function () {
       ).to.be.revertedWith("RATE_LIMIT");
     });
 
-    // FIX B-03: Test that burns allow re-minting (net rate limiting)
+    // Test that burns allow re-minting (net rate limiting)
     it("Should allow reminting after burn (net rate limiting)", async function () {
       const chainId = (await ethers.provider.getNetwork()).chainId;
       const halfLimit = DAILY_MINT_LIMIT / 2n;
@@ -735,7 +735,7 @@ describe("BLE Protocol Production Test", function () {
     });
   });
 
-  // FIX TEST-03: Vault cooldown tests
+  // Vault cooldown tests
   describe("SMUSD Vault Cooldown", function () {
     beforeEach(async function () {
       // Mint some MUSD to user for vault testing
@@ -794,7 +794,7 @@ describe("BLE Protocol Production Test", function () {
       ).to.be.revertedWith("COOLDOWN_ACTIVE");
     });
 
-    // FIX S-02: Test redeem also enforces cooldown
+    // Test redeem also enforces cooldown
     it("Should enforce cooldown on redeem", async function () {
       const depositAmount = ethers.parseEther("1000");
 
@@ -807,7 +807,7 @@ describe("BLE Protocol Production Test", function () {
       ).to.be.revertedWith("COOLDOWN_ACTIVE");
     });
 
-    // FIX S-01: Test cooldown propagation on transfer
+    // Test cooldown propagation on transfer
     it("Should propagate cooldown on transfer", async function () {
       const depositAmount = ethers.parseEther("1000");
       const [, , , recipient] = await ethers.getSigners();
