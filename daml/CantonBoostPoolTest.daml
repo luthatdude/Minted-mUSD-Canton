@@ -995,7 +995,7 @@ test_UnauthorizedDeposit = script do
   setTime baseTime
 
   -- Bob tries to deposit his Canton using Alice's sMUSD as qualifier
-  submitMustFail bob do
+  submitMultiMustFail [bob] [operator] do
     exerciseCmd poolCid Deposit with
       user = bob
       cantonCid
@@ -1031,7 +1031,7 @@ test_UnauthorizedWithdraw = script do
   setTime (addRelTime baseTime (seconds 172801))
 
   -- Bob tries to withdraw Alice's LP
-  submitMustFail bob do
+  submitMultiMustFail [bob] [operator] do
     exerciseCmd poolCid2 Withdraw with
       user = bob
       lpCid  -- Alice's LP — should fail LP_OWNER_MISMATCH
@@ -1547,38 +1547,38 @@ test_NonOperatorAdmin = script do
       executedAt = now
 
   -- Attacker cannot pause
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_SetPaused with
       newPaused = True
       governanceProofCid = proofCid
 
   -- Attacker cannot update fees
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
       governanceProofCid = paramProofCid
 
   -- Attacker cannot distribute rewards
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid DistributeRewards with
       rewardAmount = 1000.0
       epochNumber = 1
       governanceProofCid = paramProofCid
 
   -- Attacker cannot sync prices
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid SyncCantonPrice with
       newPriceMusd = 0.200
       governanceProofCid = paramProofCid
 
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid SyncSharePrice with
       newGlobalSharePrice = 1.10
       governanceProofCid = paramProofCid
 
   -- Attacker cannot withdraw protocol rewards
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid WithdrawProtocolRewards with
       withdrawAmount = 1.0
       governanceProofCid = treasuryProofCid
