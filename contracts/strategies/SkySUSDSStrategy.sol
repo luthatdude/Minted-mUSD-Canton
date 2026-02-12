@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
+import "../TimelockGoverned.sol";
 
 /**
  * @title SkySUSDSStrategy
@@ -70,7 +71,8 @@ contract SkySUSDSStrategy is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -90,8 +92,7 @@ contract SkySUSDSStrategy is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-    /// @notice FIX CRIT-06: Timelock role for upgrade authorization — prevents instant upgrades
-    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+    // TIMELOCK_ROLE replaced by TimelockGoverned — upgrades go through MintedTimelockController
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -160,18 +161,21 @@ contract SkySUSDSStrategy is
         address _psm,
         address _sUsds,
         address _treasury,
-        address _admin
+        address _admin,
+        address _timelock
     ) external initializer {
         if (_usdc == address(0) || _usds == address(0) || _psm == address(0)
             || _sUsds == address(0) || _treasury == address(0) || _admin == address(0))
         {
             revert ZeroAddress();
         }
+        require(_timelock != address(0), "ZERO_TIMELOCK");
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         usds = IERC20(_usds);
@@ -184,7 +188,12 @@ contract SkySUSDSStrategy is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
-        _grantRole(TIMELOCK_ROLE, _admin);
+        // TimelockGoverned replaces TIMELOCK_ROLE — upgrades go through MintedTimelockController
+
+        // FIX C-06: Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        // Without this, DEFAULT_ADMIN can grant itself TIMELOCK_ROLE and bypass the 48h
+        // upgrade delay, enabling instant implementation swap to drain all funds
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
         // FIX HIGH-07: Removed infinite approvals from initialize().
         // Per-operation approvals are set before each PSM/sUSDS interaction
@@ -421,14 +430,16 @@ contract SkySUSDSStrategy is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX C-06: Unpause requires timelock to prevent premature recovery after exploit
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 
     /**
      * @notice Recover stuck tokens (not USDC, USDS, or sUSDS)
      */
-    function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX C-06: Recovery requires timelock delay to prevent instant drain
+    function recoverToken(address token, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
         require(token != address(usdc), "Cannot recover USDC");
         require(token != address(usds), "Cannot recover USDS");
         require(token != address(sUsds), "Cannot recover sUSDS");
@@ -439,6 +450,6 @@ contract SkySUSDSStrategy is
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced by OZ)
-    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
