@@ -847,17 +847,31 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  require(borrowers.length > 0, "NO_BORROWERS");
 
  uint256 socializeAmount = amount > badDebt ? badDebt : amount;
+
+ // ── Pass 1: accrue interest for all unique borrowers ──────
+ // Accruing first ensures totalBorrows reflects post-accrual state
+ // before we snapshot the denominator. Without this, the denominator
+ // (pre-accrual) is smaller than the sum of post-accrual user totals,
+ // causing userReduction fractions to sum > socializeAmount (overshoot).
+ for (uint256 i = 0; i < borrowers.length; i++) {
+ bool isDuplicate = false;
+ for (uint256 j = 0; j < i; j++) {
+ if (borrowers[j] == borrowers[i]) {
+ isDuplicate = true;
+ break;
+ }
+ }
+ if (isDuplicate) continue;
+ _accrueInterest(borrowers[i]);
+ }
+
+ // Snapshot denominator AFTER accrual so numerators and denominator
+ // are on the same basis — prevents overshoot.
  uint256 totalBorrowsBefore = totalBorrows;
 
- // Deduplicate borrowers and proportionally reduce each user's debt.
- // badDebt is decremented AFTER the loop by totalReduced (actual applied
- // amount) — not by socializeAmount — to prevent accounting drift when
- // the caller-supplied borrower list is incomplete.
+ // ── Pass 2: proportionally reduce each user's debt ────────
  uint256 totalReduced = 0;
  for (uint256 i = 0; i < borrowers.length; i++) {
- // Skip duplicate entries — check if this address
- // appeared earlier in the array. O(n²) but borrowers array is small
- // (admin-supplied, bounded by active borrower count).
  bool isDuplicate = false;
  for (uint256 j = 0; j < i; j++) {
  if (borrowers[j] == borrowers[i]) {
@@ -867,7 +881,6 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  }
  if (isDuplicate) continue;
 
- _accrueInterest(borrowers[i]);
  DebtPosition storage pos = positions[borrowers[i]];
  uint256 userTotal = pos.principal + pos.accruedInterest;
  if (userTotal == 0) continue;
@@ -887,6 +900,10 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  totalReduced += userReduction;
  emit DebtAdjusted(borrowers[i], pos.principal + pos.accruedInterest, "BAD_DEBT_SOCIALIZED");
  }
+
+ // Cap totalReduced to prevent exceeding socializeAmount or badDebt
+ if (totalReduced > socializeAmount) totalReduced = socializeAmount;
+ if (totalReduced > badDebt) totalReduced = badDebt;
 
  // Decrement badDebt by actual amount applied, not requested amount.
  // This ensures badDebt stays in sync with real debt reductions.

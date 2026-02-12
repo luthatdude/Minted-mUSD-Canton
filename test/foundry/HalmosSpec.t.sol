@@ -78,9 +78,7 @@ contract HalmosSpec is Test {
 
         MUSD musd = new MUSD(type(uint128).max);
         musd.grantRole(musd.BRIDGE_ROLE(), address(this));
-        SMUSD smusd = new SMUSD(IERC20(address(musd)));
-
-        // Initial deposit to establish share price
+        SMUSD smusd = new SMUSD(IERC20(address(musd)), address(this));
         musd.mint(address(this), 1000e18 + depositAmount);
         musd.approve(address(smusd), type(uint256).max);
         smusd.deposit(1000e18, address(this));
@@ -102,7 +100,7 @@ contract HalmosSpec is Test {
 
         MUSD musd = new MUSD(type(uint128).max);
         musd.grantRole(musd.BRIDGE_ROLE(), address(this));
-        SMUSD smusd = new SMUSD(IERC20(address(musd)));
+        SMUSD smusd = new SMUSD(IERC20(address(musd)), address(this));
 
         // Deposit enough to withdraw from
         uint256 totalDeposit = 1000e18 + withdrawAmount;
@@ -134,7 +132,7 @@ contract HalmosSpec is Test {
         vm.assume(supply > 0 && supply <= type(uint128).max);
         vm.assume(borrows <= type(uint128).max);
 
-        InterestRateModel irm = new InterestRateModel(address(this));
+        InterestRateModel irm = new InterestRateModel(address(this), address(this));
         uint256 rate = irm.getBorrowRateAnnual(borrows, supply);
 
         assert(rate <= 10000); // Max 100% APR
@@ -145,7 +143,7 @@ contract HalmosSpec is Test {
         vm.assume(supply <= type(uint128).max);
         vm.assume(borrows <= type(uint128).max);
 
-        InterestRateModel irm = new InterestRateModel(address(this));
+        InterestRateModel irm = new InterestRateModel(address(this), address(this));
         uint256 util = irm.utilizationRate(borrows, supply);
 
         assert(util <= 10000);
@@ -156,7 +154,7 @@ contract HalmosSpec is Test {
         vm.assume(supply > 0 && supply <= type(uint128).max);
         vm.assume(borrows <= type(uint128).max);
 
-        InterestRateModel irm = new InterestRateModel(address(this));
+        InterestRateModel irm = new InterestRateModel(address(this), address(this));
         uint256 borrowRate = irm.getBorrowRateAnnual(borrows, supply);
         uint256 supplyRate = irm.getSupplyRateAnnual(borrows, supply);
 
@@ -177,12 +175,10 @@ contract HalmosSpec is Test {
 
         MockAggregatorV3 feed = new MockAggregatorV3(8, initialPrice);
 
-        PriceOracle oracle = new PriceOracle();
+        PriceOracle oracle = new PriceOracle(address(this));
 
-        // Set up feed with timelock
-        oracle.requestSetFeed(address(1), address(feed), 1 hours, 18);
-        vm.warp(block.timestamp + 48 hours + 1);
-        oracle.executeSetFeed();
+        // Set up feed — direct call gated by onlyTimelock (test contract is timelock)
+        oracle.setFeed(address(1), address(feed), 1 hours, 18);
 
         // Now change the price
         feed.setAnswer(newPrice);
@@ -208,33 +204,27 @@ contract HalmosSpec is Test {
     //         SPEC 5: TIMELOCK INTEGRITY
     // ============================================================
 
-    /// @notice PROVE: InterestRateModel executeSetParams reverts before 48h
+    /// @notice PROVE: InterestRateModel setParams reverts when called by non-timelock
     function check_timelockEnforced(uint256 waitTime) public {
         vm.assume(waitTime < 48 hours);
 
-        InterestRateModel irm = new InterestRateModel(address(this));
-        irm.grantRole(irm.RATE_ADMIN_ROLE(), address(this));
+        InterestRateModel irm = new InterestRateModel(address(this), address(this));
+        irm.grantRole(irm.RATE_ADMIN_ROLE(), address(0xBEEF));
 
-        irm.requestSetParams(300, 1200, 8000, 6000, 1500);
-
-        vm.warp(block.timestamp + waitTime);
-
-        vm.expectRevert("TIMELOCK_ACTIVE");
-        irm.executeSetParams();
+        // Non-timelock caller should be rejected
+        vm.prank(address(0xBEEF));
+        vm.expectRevert(abi.encodeWithSignature("OnlyTimelock()"));
+        irm.setParams(300, 1200, 8000, 6000, 1500);
     }
 
-    /// @notice PROVE: InterestRateModel executeSetParams succeeds after 48h
-    function check_timelockSucceedsAfterDelay(uint256 extraTime) public {
+    /// @notice PROVE: InterestRateModel setParams succeeds when called by timelock
+    function check_timelockSucceedsForTimelock(uint256 extraTime) public {
         vm.assume(extraTime <= 365 days); // Bound to prevent overflow
 
-        InterestRateModel irm = new InterestRateModel(address(this));
-        irm.grantRole(irm.RATE_ADMIN_ROLE(), address(this));
+        InterestRateModel irm = new InterestRateModel(address(this), address(this));
 
-        irm.requestSetParams(300, 1200, 8000, 6000, 1500);
-
-        vm.warp(block.timestamp + 48 hours + extraTime);
-
-        irm.executeSetParams();
+        // address(this) is the timelock, so this should succeed
+        irm.setParams(300, 1200, 8000, 6000, 1500);
 
         assert(irm.baseRateBps() == 300);
         assert(irm.multiplierBps() == 1200);

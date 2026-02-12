@@ -342,16 +342,14 @@ export class PointsServer {
     });
 
     r.get("/api/snapshot/proof/:address", (req, res) => {
-      const balances = this.getAllBalances();
       const latest = this.transparencyService.getLatest();
       if (!latest) {
         res.status(404).json({ error: "NO_SNAPSHOTS_YET" });
         return;
       }
-      const proof = this.transparencyService.generateProof(
+      const proof = this.transparencyService.generateProofFromDisk(
         latest.snapshotId,
         req.params.address,
-        balances,
       );
       if (!proof) {
         res.status(404).json({ error: "ADDRESS_NOT_IN_SNAPSHOT" });
