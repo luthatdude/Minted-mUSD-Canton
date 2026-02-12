@@ -360,7 +360,7 @@ class LiquidationBot {
           continue;
         }
         
-        logger.info(`Liquidatable position found: ${borrower} (HF: ${Number(healthFactor) / 10000})`);
+        logger.info(`Liquidatable position found: ${borrower} (HF: ${(Number(healthFactor) / 10000).toFixed(4)})`);
         
         // Check each collateral token
         for (const token of this.supportedTokens) {
@@ -376,7 +376,7 @@ class LiquidationBot {
           if (healthFactor < fullLiqThreshold) {
             maxRepay = totalDebt; // Full liquidation allowed
           } else {
-            maxRepay = (totalDebt * closeFactorBps) / 10000n;
+            maxRepay = (totalDebt * BigInt(closeFactorBps)) / 10000n;
           }
           
           // Estimate collateral to seize
@@ -385,10 +385,10 @@ class LiquidationBot {
           // Calculate profit
           const collateralPrice = await this.priceOracle.getPrice(token);
           const decimals = this.tokenDecimals.get(token) || 18;
-          const seizeValueUsd = (estimatedSeize * collateralPrice) / BigInt(10 ** decimals);
+          const seizeValueUsd = Number(estimatedSeize) * Number(collateralPrice) / (10 ** decimals);
           
           // Profit = seize value - debt repaid
-          const profitWei = seizeValueUsd - maxRepay;
+          const profitWei = seizeValueUsd - Number(maxRepay);
           const profitUsd = Number(ethers.formatEther(profitWei));
           
           // Estimate gas cost
