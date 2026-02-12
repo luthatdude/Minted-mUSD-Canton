@@ -317,7 +317,9 @@ export class OracleKeeper {
     symbol: string
   ): Promise<number | null> {
     const url = this.config.externalFeedUrl.replace("{symbol}", symbol.toLowerCase());
-    try {
+    // INFRA-H-06: Validate external feed URL uses HTTPS
+    if (!url.startsWith(\"https://\")) {
+      logger.warn(`${symbol} — external feed URL does not use HTTPS: ${url.substring(0, 50)}`);\n      if (process.env.NODE_ENV === \"production\") {\n        logger.error(`${symbol} — HTTPS required for external feeds in production`);\n        return null;\n      }\n    }\n    try {
       const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!resp.ok) return null;
       const data = await resp.json();
