@@ -16,12 +16,13 @@ import "./interfaces/IMUSD.sol";
 import "./interfaces/IInterestRateModel.sol";
 import "./interfaces/ISMUSD.sol";
 import "./interfaces/ITreasuryV2.sol";
+import "./TimelockGoverned.sol";
 
 /// @title BorrowModule
 /// @notice Manages debt positions for overcollateralized mUSD borrowing.
 /// Uses utilization-based dynamic interest rates (Compound-style).
 /// Interest accrues per-second and is routed to SMUSD stakers.
-contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
+contract BorrowModule is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
 
  bytes32 public constant LIQUIDATION_ROLE = keccak256("LIQUIDATION_ROLE");
@@ -93,36 +94,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  event BadDebtSocialized(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN TIMELOCK (48h propose → execute)
+ // ADMIN — all setters gated by MintedTimelockController
  // ═══════════════════════════════════════════════════════════════════════
-
- uint256 public constant ADMIN_DELAY = 48 hours;
-
- // Pending contract-reference changes
- address public pendingInterestRateModel;
- uint256 public pendingInterestRateModelTime;
- address public pendingSMUSD;
- uint256 public pendingSMUSDTime;
- address public pendingTreasury;
- uint256 public pendingTreasuryTime;
-
- // Pending parameter changes
- uint256 public pendingInterestRate;
- uint256 public pendingInterestRateTime;
- bool public pendingInterestRateSet; // distinguish 0-value from unset
- uint256 public pendingMinDebt;
- uint256 public pendingMinDebtTime;
-
- event InterestRateModelChangeRequested(address indexed model, uint256 readyAt);
- event InterestRateModelChangeCancelled(address indexed model);
- event SMUSDChangeRequested(address indexed smusd, uint256 readyAt);
- event SMUSDChangeCancelled(address indexed smusd);
- event TreasuryChangeRequested(address indexed treasury, uint256 readyAt);
- event TreasuryChangeCancelled(address indexed treasury);
- event InterestRateChangeRequested(uint256 rateBps, uint256 readyAt);
- event InterestRateChangeCancelled(uint256 rateBps);
- event MinDebtChangeRequested(uint256 minDebt, uint256 readyAt);
- event MinDebtChangeCancelled(uint256 minDebt);
  
  /// @notice Fallback fixed rate if model not set (legacy compatibility)
  uint256 public interestRateBps;
@@ -168,7 +141,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  address _oracle,
  address _musd,
  uint256 _interestRateBps,
- uint256 _minDebt
+ uint256 _minDebt,
+ address _timelock
  ) {
  require(_vault != address(0), "INVALID_VAULT");
  require(_oracle != address(0), "INVALID_ORACLE");
@@ -184,87 +158,40 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  interestRateBps = _interestRateBps;
  minDebt = _minDebt;
  lastGlobalAccrualTime = block.timestamp;
+ _setTimelock(_timelock);
 
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(BORROW_ADMIN_ROLE, msg.sender);
  }
 
  // ============================================================
- // INTEREST MODEL SETTERS
+ // ADMIN (TIMELOCKED VIA MintedTimelockController)
  // ============================================================
 
- // ── Timelocked contract-reference setters ──────────────────
+ // ── Contract-reference setters (called by timelock) ──────────────────
 
- /// @notice Propose new interest rate model (48h delay)
- function requestInterestRateModel(address _model) external onlyRole(BORROW_ADMIN_ROLE) {
+ /// @notice Set interest rate model (timelocked via MintedTimelockController)
+ function setInterestRateModel(address _model) external onlyTimelock {
  require(_model != address(0), "ZERO_ADDRESS");
- require(pendingInterestRateModel == address(0), "PROPOSAL_ALREADY_PENDING");
- pendingInterestRateModel = _model;
- pendingInterestRateModelTime = block.timestamp;
- emit InterestRateModelChangeRequested(_model, block.timestamp + ADMIN_DELAY);
- }
- function cancelInterestRateModel() external onlyRole(BORROW_ADMIN_ROLE) {
- address cancelled = pendingInterestRateModel;
- pendingInterestRateModel = address(0);
- pendingInterestRateModelTime = 0;
- emit InterestRateModelChangeCancelled(cancelled);
- }
- function executeInterestRateModel() external onlyRole(BORROW_ADMIN_ROLE) {
- require(pendingInterestRateModel != address(0), "NO_PENDING");
- require(block.timestamp >= pendingInterestRateModelTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  address old = address(interestRateModel);
- interestRateModel = IInterestRateModel(pendingInterestRateModel);
- pendingInterestRateModel = address(0);
- pendingInterestRateModelTime = 0;
- emit InterestRateModelUpdated(old, address(interestRateModel));
+ interestRateModel = IInterestRateModel(_model);
+ emit InterestRateModelUpdated(old, _model);
  }
 
- /// @notice Propose new SMUSD vault (48h delay)
- function requestSMUSD(address _smusd) external onlyRole(BORROW_ADMIN_ROLE) {
+ /// @notice Set SMUSD vault (timelocked via MintedTimelockController)
+ function setSMUSD(address _smusd) external onlyTimelock {
  require(_smusd != address(0), "ZERO_ADDRESS");
- require(pendingSMUSD == address(0), "PROPOSAL_ALREADY_PENDING");
- pendingSMUSD = _smusd;
- pendingSMUSDTime = block.timestamp;
- emit SMUSDChangeRequested(_smusd, block.timestamp + ADMIN_DELAY);
- }
- function cancelSMUSD() external onlyRole(BORROW_ADMIN_ROLE) {
- address cancelled = pendingSMUSD;
- pendingSMUSD = address(0);
- pendingSMUSDTime = 0;
- emit SMUSDChangeCancelled(cancelled);
- }
- function executeSMUSD() external onlyRole(BORROW_ADMIN_ROLE) {
- require(pendingSMUSD != address(0), "NO_PENDING");
- require(block.timestamp >= pendingSMUSDTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  address old = address(smusd);
- smusd = ISMUSD(pendingSMUSD);
- pendingSMUSD = address(0);
- pendingSMUSDTime = 0;
- emit SMUSDUpdated(old, address(smusd));
+ smusd = ISMUSD(_smusd);
+ emit SMUSDUpdated(old, _smusd);
  }
 
- /// @notice Propose new Treasury (48h delay)
- function requestTreasury(address _treasury) external onlyRole(BORROW_ADMIN_ROLE) {
+ /// @notice Set Treasury (timelocked via MintedTimelockController)
+ function setTreasury(address _treasury) external onlyTimelock {
  require(_treasury != address(0), "ZERO_ADDRESS");
- require(pendingTreasury == address(0), "PROPOSAL_ALREADY_PENDING");
- pendingTreasury = _treasury;
- pendingTreasuryTime = block.timestamp;
- emit TreasuryChangeRequested(_treasury, block.timestamp + ADMIN_DELAY);
- }
- function cancelTreasury() external onlyRole(BORROW_ADMIN_ROLE) {
- address cancelled = pendingTreasury;
- pendingTreasury = address(0);
- pendingTreasuryTime = 0;
- emit TreasuryChangeCancelled(cancelled);
- }
- function executeTreasury() external onlyRole(BORROW_ADMIN_ROLE) {
- require(pendingTreasury != address(0), "NO_PENDING");
- require(block.timestamp >= pendingTreasuryTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  address old = address(treasury);
- treasury = ITreasuryV2(pendingTreasury);
- pendingTreasury = address(0);
- pendingTreasuryTime = 0;
- emit TreasuryUpdated(old, address(treasury));
+ treasury = ITreasuryV2(_treasury);
+ emit TreasuryUpdated(old, _treasury);
  }
 
  /// @notice Drain unrouted interest to correct totalBorrows divergence.
@@ -877,17 +804,31 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  require(borrowers.length > 0, "NO_BORROWERS");
 
  uint256 socializeAmount = amount > badDebt ? badDebt : amount;
+
+ // ── Pass 1: accrue interest for all unique borrowers ──────
+ // Accruing first ensures totalBorrows reflects post-accrual state
+ // before we snapshot the denominator. Without this, the denominator
+ // (pre-accrual) is smaller than the sum of post-accrual user totals,
+ // causing userReduction fractions to sum > socializeAmount (overshoot).
+ for (uint256 i = 0; i < borrowers.length; i++) {
+ bool isDuplicate = false;
+ for (uint256 j = 0; j < i; j++) {
+ if (borrowers[j] == borrowers[i]) {
+ isDuplicate = true;
+ break;
+ }
+ }
+ if (isDuplicate) continue;
+ _accrueInterest(borrowers[i]);
+ }
+
+ // Snapshot denominator AFTER accrual so numerators and denominator
+ // are on the same basis — prevents overshoot.
  uint256 totalBorrowsBefore = totalBorrows;
 
- // Deduplicate borrowers and proportionally reduce each user's debt.
- // badDebt is decremented AFTER the loop by totalReduced (actual applied
- // amount) — not by socializeAmount — to prevent accounting drift when
- // the caller-supplied borrower list is incomplete.
+ // ── Pass 2: proportionally reduce each user's debt ────────
  uint256 totalReduced = 0;
  for (uint256 i = 0; i < borrowers.length; i++) {
- // Skip duplicate entries — check if this address
- // appeared earlier in the array. O(n²) but borrowers array is small
- // (admin-supplied, bounded by active borrower count).
  bool isDuplicate = false;
  for (uint256 j = 0; j < i; j++) {
  if (borrowers[j] == borrowers[i]) {
@@ -897,7 +838,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  }
  if (isDuplicate) continue;
 
- _accrueInterest(borrowers[i]);
  DebtPosition storage pos = positions[borrowers[i]];
  uint256 userTotal = pos.principal + pos.accruedInterest;
  if (userTotal == 0) continue;
@@ -917,6 +857,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  totalReduced += userReduction;
  emit DebtAdjusted(borrowers[i], pos.principal + pos.accruedInterest, "BAD_DEBT_SOCIALIZED");
  }
+
+ // Cap totalReduced to prevent exceeding socializeAmount or badDebt
+ if (totalReduced > socializeAmount) totalReduced = socializeAmount;
+ if (totalReduced > badDebt) totalReduced = badDebt;
 
  // Decrement badDebt by actual amount applied, not requested amount.
  // This ensures badDebt stays in sync with real debt reductions.
@@ -1062,61 +1006,22 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
  }
  }
 
- // ============================================================
- // ADMIN
- // ============================================================
+ // ── Parameter setters (called by timelock) ──────────────────────────
 
- // ── Timelocked parameter setters ──────────────────────────
-
- /// @notice Propose new interest rate (48h delay)
- function requestInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
+ /// @notice Set interest rate (timelocked via MintedTimelockController)
+ function setInterestRate(uint256 _rateBps) external onlyTimelock {
  require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
- require(!pendingInterestRateSet, "PROPOSAL_ALREADY_PENDING");
- pendingInterestRate = _rateBps;
- pendingInterestRateTime = block.timestamp;
- pendingInterestRateSet = true;
- emit InterestRateChangeRequested(_rateBps, block.timestamp + ADMIN_DELAY);
- }
- function cancelInterestRate() external onlyRole(BORROW_ADMIN_ROLE) {
- uint256 cancelled = pendingInterestRate;
- pendingInterestRate = 0;
- pendingInterestRateTime = 0;
- pendingInterestRateSet = false;
- emit InterestRateChangeCancelled(cancelled);
- }
- function executeInterestRate() external onlyRole(BORROW_ADMIN_ROLE) {
- require(pendingInterestRateSet, "NO_PENDING");
- require(block.timestamp >= pendingInterestRateTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  uint256 old = interestRateBps;
- interestRateBps = pendingInterestRate;
- pendingInterestRate = 0;
- pendingInterestRateTime = 0;
- pendingInterestRateSet = false;
- emit InterestRateUpdated(old, interestRateBps);
+ interestRateBps = _rateBps;
+ emit InterestRateUpdated(old, _rateBps);
  }
 
- /// @notice Propose new min debt threshold (48h delay)
- function requestMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+ /// @notice Set min debt threshold (timelocked via MintedTimelockController)
+ function setMinDebt(uint256 _minDebt) external onlyTimelock {
  require(_minDebt > 0, "MIN_DEBT_ZERO");
  require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
- require(pendingMinDebtTime == 0, "PROPOSAL_ALREADY_PENDING");
- pendingMinDebt = _minDebt;
- pendingMinDebtTime = block.timestamp;
- emit MinDebtChangeRequested(_minDebt, block.timestamp + ADMIN_DELAY);
- }
- function cancelMinDebt() external onlyRole(BORROW_ADMIN_ROLE) {
- uint256 cancelled = pendingMinDebt;
- pendingMinDebt = 0;
- pendingMinDebtTime = 0;
- emit MinDebtChangeCancelled(cancelled);
- }
- function executeMinDebt() external onlyRole(BORROW_ADMIN_ROLE) {
- require(pendingMinDebt > 0, "NO_PENDING");
- require(block.timestamp >= pendingMinDebtTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- emit MinDebtUpdated(minDebt, pendingMinDebt);
- minDebt = pendingMinDebt;
- pendingMinDebt = 0;
- pendingMinDebtTime = 0;
+ emit MinDebtUpdated(minDebt, _minDebt);
+ minDebt = _minDebt;
  }
 
  // ============================================================

@@ -54,16 +54,16 @@ contract InvariantTest is StdInvariant, Test {
         musd = new MUSD(100_000_000e18); // 100M supply cap
 
         // Deploy SMUSD
-        smusd = new SMUSD(IERC20(address(musd)));
+        smusd = new SMUSD(IERC20(address(musd)), address(this));
 
         // Deploy Oracle
-        oracle = new PriceOracle();
+        oracle = new PriceOracle(address(this));
 
         // Deploy InterestRateModel
-        irm = new InterestRateModel(address(this));
+        irm = new InterestRateModel(address(this), address(this));
 
         // Deploy CollateralVault
-        vault = new CollateralVault();
+        vault = new CollateralVault(address(this));
 
         // Deploy BorrowModule
         borrowModule = new BorrowModule(
@@ -71,7 +71,8 @@ contract InvariantTest is StdInvariant, Test {
             address(oracle),
             address(musd),
             500, // 5% interest rate
-            100e18 // min debt 100 mUSD
+            100e18, // min debt 100 mUSD
+            address(this)
         );
 
         // Deploy LiquidationEngine
@@ -80,23 +81,20 @@ contract InvariantTest is StdInvariant, Test {
             address(borrowModule),
             address(oracle),
             address(musd),
-            5000 // 50% close factor
+            5000, // 50% close factor
+            address(this)
         );
 
         // ── Configure oracle feed ───────────────────────────────────
-        oracle.requestSetFeed(address(weth), address(ethFeed), 1 hours, 18);
-        vm.warp(block.timestamp + 48 hours + 1);
-        oracle.executeSetFeed();
+        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18);
 
         // ── Configure collateral ────────────────────────────────────
-        vault.requestAddCollateral(
+        vault.addCollateral(
             address(weth),
             7500,  // 75% collateral factor
             8500,  // 85% liquidation threshold
             500    // 5% liquidation penalty
         );
-        vm.warp(block.timestamp + 48 hours + 1);
-        vault.executeAddCollateral();
 
         // ── Grant roles ─────────────────────────────────────────────
         // MUSD roles
@@ -112,9 +110,7 @@ contract InvariantTest is StdInvariant, Test {
         borrowModule.grantRole(borrowModule.LIQUIDATION_ROLE(), address(liquidation));
 
         // Set IRM on BorrowModule
-        borrowModule.requestInterestRateModel(address(irm));
-        vm.warp(block.timestamp + 48 hours + 1);
-        borrowModule.executeInterestRateModel();
+        borrowModule.setInterestRateModel(address(irm));
 
         // ── Deploy handler ──────────────────────────────────────────
         handler = new ProtocolHandler(

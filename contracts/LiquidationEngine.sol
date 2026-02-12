@@ -13,6 +13,7 @@ import "./interfaces/ICollateralVault.sol";
 import "./interfaces/IPriceOracle.sol";
 import "./interfaces/IBorrowModule.sol";
 import "./interfaces/IMUSD.sol";
+import "./TimelockGoverned.sol";
 
 // Token decimals interface for proper seizure calculation
 interface IERC20Decimals {
@@ -28,7 +29,7 @@ interface IERC20Decimals {
 /// so it can call musd.burn() during liquidations.
 /// 2. Grant LIQUIDATION_ROLE on CollateralVault to this contract's address
 /// so it can call vault.seize() to transfer collateral.
-contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
+contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
 
  bytes32 public constant ENGINE_ADMIN_ROLE = keccak256("ENGINE_ADMIN_ROLE");
@@ -68,27 +69,16 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
  event FullLiquidationThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN TIMELOCK (48h propose → execute)
+ // ADMIN — all setters gated by MintedTimelockController
  // ═══════════════════════════════════════════════════════════════════════
-
- uint256 public constant ADMIN_DELAY = 48 hours;
-
- uint256 public pendingCloseFactor;
- uint256 public pendingCloseFactorTime;
- uint256 public pendingFullLiqThreshold;
- uint256 public pendingFullLiqThresholdTime;
-
- event CloseFactorChangeRequested(uint256 bps, uint256 readyAt);
- event CloseFactorChangeCancelled(uint256 bps);
- event FullLiqThresholdChangeRequested(uint256 bps, uint256 readyAt);
- event FullLiqThresholdChangeCancelled(uint256 bps);
 
  constructor(
  address _vault,
  address _borrowModule,
  address _oracle,
  address _musd,
- uint256 _closeFactorBps
+ uint256 _closeFactorBps,
+ address _timelock
  ) {
  require(_vault != address(0), "INVALID_VAULT");
  require(_borrowModule != address(0), "INVALID_BORROW_MODULE");
@@ -102,6 +92,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
  musd = IMUSD(_musd);
  closeFactorBps = _closeFactorBps;
  fullLiquidationThreshold = 5000; // 0.5 health factor = allow full liquidation
+ _setTimelock(_timelock);
 
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(ENGINE_ADMIN_ROLE, msg.sender);
@@ -270,52 +261,22 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
  }
 
  // ============================================================
- // ADMIN (TIMELOCKED)
+ // ADMIN (TIMELOCKED VIA MintedTimelockController)
  // ============================================================
 
- function requestCloseFactor(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
+ /// @notice Set close factor (timelocked via MintedTimelockController)
+ function setCloseFactor(uint256 _bps) external onlyTimelock {
  require(_bps > 0 && _bps <= 10000, "INVALID_CLOSE_FACTOR");
- require(pendingCloseFactorTime == 0, "PROPOSAL_ALREADY_PENDING");
- pendingCloseFactor = _bps;
- pendingCloseFactorTime = block.timestamp;
- emit CloseFactorChangeRequested(_bps, block.timestamp + ADMIN_DELAY);
- }
- function cancelCloseFactor() external onlyRole(ENGINE_ADMIN_ROLE) {
- uint256 cancelled = pendingCloseFactor;
- pendingCloseFactor = 0;
- pendingCloseFactorTime = 0;
- emit CloseFactorChangeCancelled(cancelled);
- }
- function executeCloseFactor() external onlyRole(ENGINE_ADMIN_ROLE) {
- require(pendingCloseFactor > 0, "NO_PENDING");
- require(block.timestamp >= pendingCloseFactorTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  uint256 old = closeFactorBps;
- closeFactorBps = pendingCloseFactor;
- pendingCloseFactor = 0;
- pendingCloseFactorTime = 0;
- emit CloseFactorUpdated(old, closeFactorBps);
+ closeFactorBps = _bps;
+ emit CloseFactorUpdated(old, _bps);
  }
 
- function requestFullLiquidationThreshold(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
+ /// @notice Set full liquidation threshold (timelocked via MintedTimelockController)
+ function setFullLiquidationThreshold(uint256 _bps) external onlyTimelock {
  require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
- require(pendingFullLiqThresholdTime == 0, "PROPOSAL_ALREADY_PENDING");
- pendingFullLiqThreshold = _bps;
- pendingFullLiqThresholdTime = block.timestamp;
- emit FullLiqThresholdChangeRequested(_bps, block.timestamp + ADMIN_DELAY);
- }
- function cancelFullLiquidationThreshold() external onlyRole(ENGINE_ADMIN_ROLE) {
- uint256 cancelled = pendingFullLiqThreshold;
- pendingFullLiqThreshold = 0;
- pendingFullLiqThresholdTime = 0;
- emit FullLiqThresholdChangeCancelled(cancelled);
- }
- function executeFullLiquidationThreshold() external onlyRole(ENGINE_ADMIN_ROLE) {
- require(pendingFullLiqThreshold > 0, "NO_PENDING");
- require(block.timestamp >= pendingFullLiqThresholdTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, pendingFullLiqThreshold);
- fullLiquidationThreshold = pendingFullLiqThreshold;
- pendingFullLiqThreshold = 0;
- pendingFullLiqThresholdTime = 0;
+ emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
+ fullLiquidationThreshold = _bps;
  }
 
  // ============================================================

@@ -6,6 +6,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./interfaces/IPendleMarket.sol";
 import "./interfaces/IPendleOracle.sol";
 import "./interfaces/ISY.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title PendleMarketSelector
@@ -18,7 +19,7 @@ import "./interfaces/ISY.sol";
  * 3. Score: TVL weight (40%) + Implied APY weight (60%)
  * 4. Select: Highest scoring market
  */
-contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
+contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable, TimelockGoverned {
 
  // ═══════════════════════════════════════════════════════════════════════
  // ROLES 
@@ -119,10 +120,12 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
  // ═══════════════════════════════════════════════════════════════════════
 
  /// Added zero-address check for admin parameter
- function initialize(address _admin) external initializer {
+ function initialize(address _admin, address _timelock) external initializer {
  require(_admin != address(0), "ZERO_ADMIN");
  __AccessControl_init();
  __UUPSUpgradeable_init();
+
+ _setTimelock(_timelock);
 
  // Set up role hierarchy
  _grantRole(DEFAULT_ADMIN_ROLE, _admin);
@@ -497,48 +500,16 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
  }
 
  // ═══════════════════════════════════════════════════════════════════════
- // UPGRADEABILITY (TIMELOCKED)
+ // UPGRADEABILITY — gated by MintedTimelockController
  // ═══════════════════════════════════════════════════════════════════════
 
- /// @notice Pending implementation for timelocked upgrade
- address public pendingImplementation;
-
- /// @notice Timestamp of upgrade request
- uint256 public upgradeRequestTime;
-
- /// @notice 48-hour upgrade delay
- uint256 public constant UPGRADE_DELAY = 48 hours;
-
- event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
- event UpgradeCancelled(address indexed cancelledImplementation);
-
- /// @notice Request a timelocked upgrade
- /// @dev Prevent overwriting pending upgrade (bait-and-switch protection)
- function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @notice UUPS upgrade authorization — only callable by timelock
+ function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {
  require(newImplementation != address(0), "ZERO_ADDRESS");
- require(pendingImplementation == address(0), "UPGRADE_ALREADY_PENDING");
- pendingImplementation = newImplementation;
- upgradeRequestTime = block.timestamp;
- emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
- }
-
- /// @notice Cancel a pending upgrade
- function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingImplementation;
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
- emit UpgradeCancelled(cancelled);
- }
-
- /// @notice UUPS upgrade authorization with 48h timelock
- function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
- require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
  }
 
  /// @dev Storage gap for future upgrades
- /// Adjusted from 40 to 38 after adding pendingImplementation + upgradeRequestTime
- uint256[38] private __gap;
+ /// Removed pendingImplementation + upgradeRequestTime (2 vars), added timelock (1 var)
+ /// Net −1 slot: 38 + 1 = 39
+ uint256[39] private __gap;
 }

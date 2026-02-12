@@ -40,27 +40,23 @@ contract FuzzTest is Test {
         ethFeed = new MockAggregatorV3(8, 2000e8);
 
         musd = new MUSD(100_000_000e18);
-        smusd = new SMUSD(IERC20(address(musd)));
-        oracle = new PriceOracle();
-        irm = new InterestRateModel(address(this));
-        vault = new CollateralVault();
+        smusd = new SMUSD(IERC20(address(musd)), address(this));
+        oracle = new PriceOracle(address(this));
+        irm = new InterestRateModel(address(this), address(this));
+        vault = new CollateralVault(address(this));
         borrowModule = new BorrowModule(
-            address(vault), address(oracle), address(musd), 500, 100e18
+            address(vault), address(oracle), address(musd), 500, 100e18, address(this)
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),
-            address(musd), 5000
+            address(musd), 5000, address(this)
         );
 
-        // Oracle setup
-        oracle.requestSetFeed(address(weth), address(ethFeed), 1 hours, 18);
-        vm.warp(block.timestamp + 48 hours + 1);
-        oracle.executeSetFeed();
+        // Oracle setup — direct call gated by onlyTimelock (test contract is timelock)
+        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18);
 
         // Collateral setup
-        vault.requestAddCollateral(address(weth), 7500, 8500, 500);
-        vm.warp(block.timestamp + 48 hours + 1);
-        vault.executeAddCollateral();
+        vault.addCollateral(address(weth), 7500, 8500, 500);
 
         // Roles
         musd.grantRole(musd.BRIDGE_ROLE(), address(borrowModule));
@@ -70,9 +66,7 @@ contract FuzzTest is Test {
         vault.grantRole(vault.LIQUIDATION_ROLE(), address(liquidation));
         borrowModule.grantRole(borrowModule.LIQUIDATION_ROLE(), address(liquidation));
 
-        borrowModule.requestInterestRateModel(address(irm));
-        vm.warp(block.timestamp + 48 hours + 1);
-        borrowModule.executeInterestRateModel();
+        borrowModule.setInterestRateModel(address(irm));
 
         // Refresh mock feed timestamp so oracle doesn't see stale prices
         ethFeed.setAnswer(2000e8);
