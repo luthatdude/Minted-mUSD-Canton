@@ -11,6 +11,11 @@ pragma solidity 0.8.26;
  *      cancellation, overwrite-protection, and event emission are all handled
  *      by the OZ TimelockController — no hand-rolled state needed.
  *
+ * STORAGE SAFETY (CRIT-01 FIX):
+ *   Uses ERC-7201 namespaced storage to prevent slot collisions when
+ *   inherited by UUPS-upgradeable contracts alongside OZ upgradeable parents.
+ *   keccak256(abi.encode(uint256(keccak256("minted.storage.TimelockGoverned")) - 1)) & ~bytes32(uint256(0xff))
+ *
  * INTEGRATION PATTERN:
  *   1. Inherit TimelockGoverned
  *   2. Call `_setTimelock(addr)` in the constructor
@@ -19,8 +24,27 @@ pragma solidity 0.8.26;
  *      which calls the setter after the delay expires.
  */
 abstract contract TimelockGoverned {
+    // ─── ERC-7201 Namespaced Storage ───────────────────────────────────
+    /// @custom:storage-location erc7201:minted.storage.TimelockGoverned
+    struct TimelockGovernedStorage {
+        address timelock;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("minted.storage.TimelockGoverned")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant TIMELOCK_GOVERNED_STORAGE_SLOT =
+        0x96ec2584f13cbcbf2926bb7c7d24b036ddd15a8842ae5726c96f4a4a3e97cc00;
+
+    function _getTimelockGovernedStorage() private pure returns (TimelockGovernedStorage storage s) {
+        bytes32 slot = TIMELOCK_GOVERNED_STORAGE_SLOT;
+        assembly {
+            s.slot := slot
+        }
+    }
+
     /// @notice Address of the MintedTimelockController that gates admin ops
-    address public timelock;
+    function timelock() public view returns (address) {
+        return _getTimelockGovernedStorage().timelock;
+    }
 
     event TimelockUpdated(address indexed oldTimelock, address indexed newTimelock);
 
@@ -28,7 +52,7 @@ abstract contract TimelockGoverned {
     error ZeroTimelock();
 
     modifier onlyTimelock() {
-        if (msg.sender != timelock) revert OnlyTimelock();
+        if (msg.sender != _getTimelockGovernedStorage().timelock) revert OnlyTimelock();
         _;
     }
 
@@ -39,8 +63,9 @@ abstract contract TimelockGoverned {
      */
     function setTimelock(address _timelock) external onlyTimelock {
         if (_timelock == address(0)) revert ZeroTimelock();
-        emit TimelockUpdated(timelock, _timelock);
-        timelock = _timelock;
+        TimelockGovernedStorage storage s = _getTimelockGovernedStorage();
+        emit TimelockUpdated(s.timelock, _timelock);
+        s.timelock = _timelock;
     }
 
     /**
@@ -49,7 +74,8 @@ abstract contract TimelockGoverned {
      */
     function _setTimelock(address _timelock) internal {
         if (_timelock == address(0)) revert ZeroTimelock();
-        timelock = _timelock;
+        TimelockGovernedStorage storage s = _getTimelockGovernedStorage();
+        s.timelock = _timelock;
         emit TimelockUpdated(address(0), _timelock);
     }
 }

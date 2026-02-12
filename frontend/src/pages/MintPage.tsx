@@ -458,23 +458,6 @@ export function MintPage() {
           subValue={`Max: ${formatToken(stats.maxRedeem)} per tx`}
         />
       </div>
-
-      {/* How Minting Works Explainer */}
-      <div className="card">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500/20">
-            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h2 className="text-lg font-semibold text-white">How It Works</h2>
-        </div>
-        <p className="text-sm text-gray-400 leading-relaxed">
-          Mint mUSD 1:1 against selected collateral, validated in real time by attestations on the Canton Network, then stake to begin earning.
-          Every mUSD is fully backed by USDC held in the protocol treasury. Minting is instant and transparent — your collateral is verified
-          on-chain before any tokens are issued.
-        </p>
-      </div>
     </div>
   );
 }

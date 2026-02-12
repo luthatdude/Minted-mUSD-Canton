@@ -27,13 +27,10 @@ module CantonLending where
 import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
-import DA.List (sort, length, (!!))
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..))
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
-import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: COLLATERAL CONFIG
@@ -145,21 +142,14 @@ template CantonPriceFeed
         return priceUsd
 
     -- | Update price from Tradecraft/Temple DEX API
-    -- Governance-gated to prevent unilateral oracle manipulation
     choice PriceFeed_Update : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
         newSource   : Text
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
-        -- Minimum 10-second interval between updates to prevent rapid oscillation
+        -- FIX M-4: Minimum 10-second interval between updates to prevent rapid oscillation
         now <- getTime
         let timeSinceUpdate = subTime now lastUpdated
         assertMsg "UPDATE_TOO_FREQUENT" (timeSinceUpdate >= seconds 10)
@@ -174,19 +164,13 @@ template CantonPriceFeed
 
     -- | Emergency price override (bypasses movement cap)
     -- Only for circuit-breaker scenarios where price moved >50%
-    -- Minimum 5-minute cooldown between emergency updates
+    -- FIX M-6: Minimum 5-minute cooldown between emergency updates
     choice PriceFeed_EmergencyUpdate : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
         reason      : Text
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
         now <- getTime
@@ -196,139 +180,6 @@ template CantonPriceFeed
           priceUsd = newPriceUsd
           lastUpdated = now
           source = "emergency-override: " <> reason
-
--- ============================================================
---               SECTION 2b: MULTI-ORACLE FEED
--- ============================================================
-
--- | MultiOracleFeed — Aggregates multiple independent price feeds for an asset.
--- Instead of relying on a single oracle per asset, this template
--- reads from 2+ independent CantonPriceFeed sources and uses the median price.
--- This prevents any single oracle from manipulating prices.
---
--- The lending service reads from MultiOracleFeed instead of individual feeds.
--- Each individual feed is still independently updatable by its source.
-template MultiOracleFeed
-  with
-    operator       : Party
-    symbol         : Text                     -- e.g. "CTN", "sMUSD"
-    feedCids       : [ContractId CantonPriceFeed]  -- Individual oracle feed CIDs
-    minFeeds       : Int                      -- Minimum feeds that must agree (quorum)
-    maxDeviationBps : Int                     -- Max allowed deviation between feeds (e.g. 500 = 5%)
-    observers      : [Party]
-  where
-    signatory operator
-    observer observers
-
-    ensure minFeeds >= 2 && DA.List.length feedCids >= minFeeds && maxDeviationBps > 0
-
-    key (operator, "multi-" <> symbol) : (Party, Text)
-    maintainer key._1
-
-    -- | Get median price from multiple feeds with staleness check
-    -- Aggregates prices, checks deviation, returns median
-    nonconsuming choice MultiOracle_GetPrice : Money
-      with
-        requester    : Party
-        maxStaleness : RelTime
-      controller requester
-      do
-        -- Read all individual feed prices (with staleness check)
-        prices <- mapA (\cid -> exercise cid PriceFeed_GetPrice with requester; maxStaleness) feedCids
-        assertMsg "INSUFFICIENT_ORACLE_RESPONSES" (DA.List.length prices >= minFeeds)
-
-        -- Check deviation between feeds
-        let sorted = sort prices
-        let maxP = sorted !! (DA.List.length sorted - 1)
-        let minP = sorted !! 0
-        let deviation = if minP > 0.0
-              then ((maxP - minP) / minP) * 10000.0
-              else 0.0
-        assertMsg "ORACLE_PRICE_DEVIATION_TOO_LARGE" (deviation <= intToNumeric maxDeviationBps)
-
-        -- Return median
-        let mid = DA.List.length sorted / 2
-        return (sorted !! mid)
-
-    -- | Get median price WITHOUT staleness check (for liquidation path)
-    nonconsuming choice MultiOracle_GetPriceUnsafe : Money
-      with
-        requester : Party
-      controller requester
-      do
-        prices <- mapA (\cid -> exercise cid PriceFeed_GetPriceUnsafe with requester) feedCids
-        assertMsg "INSUFFICIENT_ORACLE_RESPONSES" (DA.List.length prices >= minFeeds)
-        let sorted = sort prices
-        -- For unsafe path: still check deviation but with wider tolerance (10%)
-        let maxP = sorted !! (DA.List.length sorted - 1)
-        let minP = sorted !! 0
-        let deviation = if minP > 0.0
-              then ((maxP - minP) / minP) * 10000.0
-              else 0.0
-        assertMsg "ORACLE_PRICE_DEVIATION_TOO_LARGE_UNSAFE" (deviation <= intToNumeric (maxDeviationBps * 2))
-        let mid = DA.List.length sorted / 2
-        return (sorted !! mid)
-
-    -- | Update feed list (admin)
-    choice MultiOracle_UpdateFeeds : ContractId MultiOracleFeed
-      with
-        newFeedCids : [ContractId CantonPriceFeed]
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
-        assertMsg "INSUFFICIENT_FEEDS" (DA.List.length newFeedCids >= minFeeds)
-        create this with feedCids = newFeedCids
-
--- ============================================================
---               SECTION 2c: KEEPER REGISTRY
--- ============================================================
-
--- | KeeperBond — On-ledger bond required for liquidation keepers.
--- Keepers must register and deposit a bond (in mUSD)
--- before they can execute liquidations. The bond is slashable if the
--- keeper submits a liquidation for a healthy position (disincentivizes
--- griefing attacks). This replaces the fully-open liquidation model.
-template KeeperBond
-  with
-    operator : Party
-    keeper   : Party
-    bondAmount : Money      -- mUSD bond deposited
-    registeredAt : Time     -- When keeper registered
-    slashCount : Int        -- Number of times keeper has been slashed
-    active : Bool           -- Whether keeper is currently active
-  where
-    signatory operator, keeper
-    ensure bondAmount > 0.0
-
-    key (operator, keeper) : (Party, Party)
-    maintainer key._1
-
-    -- | Deactivate keeper (admin)
-    choice KeeperBond_Deactivate : ContractId KeeperBond
-      controller operator
-      do create this with active = False
-
-    -- | Reactivate keeper (admin)
-    choice KeeperBond_Activate : ContractId KeeperBond
-      controller operator
-      do create this with active = True
-
-    -- | Slash bond (called by LendingService if keeper griefs)
-    choice KeeperBond_Slash : ContractId KeeperBond
-      with
-        slashAmount : Money
-        reason : Text
-      controller operator
-      do
-        assertMsg "SLASH_EXCEEDS_BOND" (slashAmount <= bondAmount)
-        create this with
-          bondAmount = bondAmount - slashAmount
-          slashCount = slashCount + 1
-          active = bondAmount - slashAmount > 0.0  -- Auto-deactivate if bond depleted
 
 -- ============================================================
 --                     SECTION 3: ESCROWED COLLATERAL POSITION
@@ -348,9 +199,6 @@ template EscrowedCollateral
     amount         : Money          -- Escrowed amount
     depositedAt    : Time           -- First deposit time
     lastUpdatedAt  : Time           -- Last deposit/withdrawal time
-    -- Track original token provenance for USDCx (restored on withdrawal)
-    originalSourceChain : Optional Text   -- Original USDCx sourceChain (None for non-USDCx)
-    originalCctpNonce   : Optional Int    -- Original USDCx cctpNonce (None for non-USDCx)
     privacyObservers : [Party]      -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory operator, owner
@@ -369,7 +217,7 @@ template EscrowedCollateral
       do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
-    -- Operator-controlled — called by LendingService after verifying token proof
+    -- FIX H-L3: Operator-controlled — called by LendingService after verifying token proof
     choice Escrow_AddCollateral : ContractId EscrowedCollateral
       with
         addAmount : Money
@@ -553,32 +401,29 @@ template CantonLendingService
     operator           : Party
     configs            : [CollateralConfig]     -- Per-asset configs
     totalBorrows       : Money                  -- Global total borrowed
-    -- Lending mUSD supply cap (prevents unbounded minting outside global cap)
-    lendingSupplyCap   : Money                  -- Max mUSD mintable via lending
     interestRateBps    : Bps                    -- Current global borrow rate
     reserveFactorBps   : Bps                    -- Protocol reserve cut (e.g. 1000 = 10%)
     protocolReserves   : Money                  -- Accumulated protocol reserves
     minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
     closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
     paused             : Bool
-    -- Keeper bond requirement for liquidations
-    minKeeperBond      : Money                  -- Minimum bond required to liquidate
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
-    -- Compliance integration for blacklist/freeze checks
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    serviceName        : Text                   -- FIX C-01: Unique service identifier for contract key
     observers          : [Party]
   where
     signatory operator
     observer observers
 
+    -- FIX C-01: Contract key for deduplication and lookup
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
+
     ensure totalBorrows >= 0.0
-        && lendingSupplyCap > 0.0
         && reserveFactorBps >= 0 && reserveFactorBps <= 5000
         && closeFactorBps > 0 && closeFactorBps <= 10000
         && minBorrow > 0.0
-        && minKeeperBond >= 0.0
         && DA.Text.length mpaHash == 64
         && DA.Text.length mpaUri > 0
 
@@ -594,21 +439,15 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- Compliance check before deposit
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
-        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
-        assertMsg "CTN_ISSUER_MISMATCH" (coin.issuer == operator)
         let cfg = getConfig CTN_Coin configs
         assertMsg "CTN_NOT_ENABLED" cfg.enabled
 
         -- Consume the actual token (escrow it)
         archive coinCid
 
-        -- Look up existing escrow by key; merge if found, create if not
+        -- FIX C-L2: Look up existing escrow by key; merge if found, create if not
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_Coin)
@@ -622,8 +461,6 @@ template CantonLendingService
             amount = coin.amount
             depositedAt = now
             lastUpdatedAt = now
-            originalSourceChain = None
-            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -637,20 +474,14 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- Compliance check before deposit
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
         usdc <- fetch usdcCid
         assertMsg "NOT_OWNER" (usdc.owner == user)
-        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
-        assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == operator)
         let cfg = getConfig CTN_USDC configs
         assertMsg "USDC_NOT_ENABLED" cfg.enabled
 
         archive usdcCid
 
-        -- Look up existing escrow by key; merge if found
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDC)
@@ -664,8 +495,6 @@ template CantonLendingService
             amount = usdc.amount
             depositedAt = now
             lastUpdatedAt = now
-            originalSourceChain = None
-            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -679,29 +508,20 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- Compliance check before deposit
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
         usdcx <- fetch usdcxCid
         assertMsg "NOT_OWNER" (usdcx.owner == user)
-        -- Explicit issuer validation. Note: in production, USDCx issuer may be
-        -- the xReserve protocol operator rather than the lending operator. If these differ,
-        -- add a configurable `expectedUsdcxIssuer` field to CantonLendingService.
-        assertMsg "USDCx_ISSUER_MISMATCH" (usdcx.issuer == operator)
         let cfg = getConfig CTN_USDCx configs
         assertMsg "USDCx_NOT_ENABLED" cfg.enabled
 
         archive usdcxCid
 
-        -- Look up existing escrow by key; merge if found
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDCx)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = usdcx.amount
-          -- Store original USDCx provenance for restoration on withdrawal
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -709,8 +529,6 @@ template CantonLendingService
             amount = usdcx.amount
             depositedAt = now
             lastUpdatedAt = now
-            originalSourceChain = Some usdcx.sourceChain
-            originalCctpNonce = Some usdcx.cctpNonce
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -724,20 +542,14 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- Compliance check before deposit
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
-        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
-        assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
         let cfg = getConfig CTN_SMUSD configs
         assertMsg "SMUSD_NOT_ENABLED" cfg.enabled
 
         archive smusdCid
 
-        -- Look up existing escrow by key; merge if found
+        -- FIX C-L2: Look up existing escrow by key; merge if found
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
         userObs <- lookupUserObservers operator user
@@ -752,8 +564,6 @@ template CantonLendingService
             amount = smusd.shares
             depositedAt = now
             lastUpdatedAt = now
-            originalSourceChain = None
-            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -774,16 +584,12 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- Compliance check before borrow
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = operator; receiver = user
-          None -> pure ()
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
-        -- Pass user as expectedOwner to verify all escrows belong to this user
+        -- FIX N-H3: Pass user as expectedOwner to verify all escrows belong to this user
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
 
         -- Look up existing debt, accrue interest, then increase principal
@@ -800,9 +606,6 @@ template CantonLendingService
         let totalDebtAfter = existingDebt + borrowAmount
         assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
 
-        -- Enforce lending supply cap (prevents unbounded mUSD minting)
-        assertMsg "EXCEEDS_LENDING_SUPPLY_CAP" (totalBorrows + borrowAmount <= lendingSupplyCap)
-
         -- Mint mUSD to borrower
         userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
@@ -813,7 +616,7 @@ template CantonLendingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- Increase existing debt principal (preserving accrued interest) or create new
+        -- FIX C-L1: Increase existing debt principal (preserving accrued interest) or create new
         now <- getTime
         debtCid <- case accruedDebtCid of
           Some existCid -> exercise existCid Debt_IncreasePrincipal with
@@ -837,7 +640,7 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Repay mUSD debt. Burns the mUSD token and reduces debt position.
-    -- Repayment is intentionally allowed even when service is paused.
+    -- FIX M-9: Repayment is intentionally allowed even when service is paused.
     -- Blocking repayment during pause would trap users in accruing-interest positions,
     -- which is harmful. Liquidation is also allowed during pause for the same reason.
     choice Lending_Repay : (ContractId CantonLendingService, ContractId CantonDebtPosition)
@@ -856,10 +659,6 @@ template CantonLendingService
         -- Accrue interest first
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = user
 
-        -- Atomically couple BurnRateLimiter with CantonMUSD_Burn.
-        -- Both execute in same DAML transaction — if rate limit exceeded, burn rolls back.
-        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
-          burnAmount = musd.amount
         -- Burn the mUSD (repayment)
         exercise musdCid CantonMUSD_Burn
 
@@ -897,16 +696,16 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
-        -- Validate withdraw amount does not exceed escrowed balance
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- Check health AFTER withdrawal
-        -- Accrue interest on-ledger for consistent state
+        -- FIX N-H2: Accrue interest on-ledger for consistent state
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- Filter out escrowCid from otherEscrowCids to prevent double-counting
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids to prevent double-counting
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
-          -- Pass user as expectedOwner
+          -- FIX N-H3: Pass user as expectedOwner
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           -- Add value of remaining portion of this escrow (if partial withdrawal)
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -939,7 +738,7 @@ template CantonLendingService
         return (newService, coinCid)
 
     -- ──────────────────────────────────────────────────────
-    --  WITHDRAW USDC / USDCx / sMUSD COLLATERAL
+    --  FIX H-L4: WITHDRAW USDC / USDCx / sMUSD COLLATERAL
     -- ──────────────────────────────────────────────────────
 
     -- | Withdraw USDC collateral. Must pass health check after withdrawal.
@@ -956,13 +755,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
-        -- Validate withdraw amount does not exceed escrowed balance
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- Accrue interest on-ledger
+        -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- Filter out escrowCid from otherEscrowCids
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1005,13 +804,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
-        -- Validate withdraw amount does not exceed escrowed balance
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- Accrue interest on-ledger
+        -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- Filter out escrowCid from otherEscrowCids
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1030,17 +829,13 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
-        -- Restore original USDCx provenance from escrowed metadata.
-        -- Note: issuer must remain `operator` due to DAML signatory constraints —
-        -- the lending service cannot create contracts signed by the original xReserve issuer.
-        -- sourceChain and cctpNonce ARE restored to preserve provenance trail.
         userObs <- lookupUserObservers operator user
         usdcxCid <- create USDCx with
           issuer = operator
           owner = user
           amount = withdrawAmount
-          sourceChain = fromOptional "canton-lending-withdrawal" escrow.originalSourceChain
-          cctpNonce = fromOptional 0 escrow.originalCctpNonce
+          sourceChain = "canton-lending-withdrawal"
+          cctpNonce = 0
           privacyObservers = userObs
 
         newService <- create this with {}
@@ -1060,13 +855,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
-        -- Validate withdraw amount does not exceed escrowed balance
+        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- Accrue interest on-ledger
+        -- FIX N-H2: Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- Filter out escrowCid from otherEscrowCids
+          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1085,7 +880,7 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
-        -- Preserve original escrow deposit timestamp; use escrow depositedAt
+        -- FIX M-5: Preserve original escrow deposit timestamp; use escrow depositedAt
         -- rather than resetting to now (which would unfairly restart cooldown timers)
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
@@ -1106,7 +901,6 @@ template CantonLendingService
     -- | Liquidate an undercollateralized position.
     -- Liquidator repays part of the borrower's debt and receives
     -- seized collateral at a discount (penalty).
-    -- Requires keeper bond registration and revalidates health factor on-ledger.
     -- Uses unsafe price (no staleness check) — liquidations must always proceed.
     choice Lending_Liquidate : (ContractId CantonLendingService, ContractId CantonLiquidationReceipt)
       with
@@ -1118,18 +912,10 @@ template CantonLendingService
         musdCid          : ContractId CantonMUSD           -- Liquidator's mUSD for repayment
         escrowCids       : [ContractId EscrowedCollateral] -- All borrower's collateral
         priceFeedCids    : [ContractId CantonPriceFeed]
-        keeperBondCid    : ContractId KeeperBond           -- Keeper's bond proof
       controller liquidator
       do
-        -- Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
+        -- FIX H-L1: Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
-
-        -- Verify keeper is registered with sufficient bond
-        keeperBond <- fetch keeperBondCid
-        assertMsg "KEEPER_BOND_OWNER_MISMATCH" (keeperBond.keeper == liquidator)
-        assertMsg "KEEPER_BOND_OPERATOR_MISMATCH" (keeperBond.operator == operator)
-        assertMsg "KEEPER_NOT_ACTIVE" keeperBond.active
-        assertMsg "KEEPER_BOND_INSUFFICIENT" (keeperBond.bondAmount >= minKeeperBond)
 
         -- Verify liquidator owns the repayment mUSD
         musd <- fetch musdCid
@@ -1141,9 +927,8 @@ template CantonLendingService
         assertMsg "DEBT_OWNER_MISMATCH" (debt.borrower == borrower)
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = liquidator
 
-        -- On-ledger health factor revalidation using fresh price reads
-        -- This ensures the position is ACTUALLY undercollateralized at execution time,
-        -- not just when the liquidator submitted the transaction.
+        -- Check position is actually undercollateralized (UNSAFE price — no staleness check)
+        -- FIX N-H3: Pass borrower as expectedOwner to verify all escrows belong to this borrower
         totalRawValue <- computeRawCollateralValue operator borrower configs escrowCids priceFeedCids False
         accruedDebt <- fetch accruedDebtCid
         let totalDebt = accruedDebt.principalDebt + accruedDebt.accruedInterest
@@ -1151,9 +936,6 @@ template CantonLendingService
         -- Health factor: rawValue weighted by liquidationThreshold / totalDebt
         totalLiqValue <- computeLiquidationThresholdValue operator borrower configs escrowCids priceFeedCids False
         let healthFactor = if totalDebt > 0.0 then totalLiqValue / totalDebt else 999.0
-
-        -- Revalidate health factor ON-LEDGER at execution time
-        -- Position must be genuinely undercollateralized (health factor < 1.0)
         assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
 
         -- Close factor limits
@@ -1177,10 +959,7 @@ template CantonLendingService
         newDebtCid <- exercise accruedDebtCid Debt_ReduceForLiquidation with
           reductionAmount = actualRepay
 
-        -- Atomically couple BurnRateLimiter with CantonMUSD_Burn
-        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
-          burnAmount = actualRepay
-        -- Split mUSD if liquidator provided more than actualRepay, refund change
+        -- FIX C-L3: Split mUSD if liquidator provided more than actualRepay, refund change
         if musd.amount > actualRepay then do
           (burnCid, changeCid) <- exercise musdCid CantonMUSD_Split with
             splitAmount = actualRepay
@@ -1190,7 +969,7 @@ template CantonLendingService
         else
           exercise musdCid CantonMUSD_Burn
 
-        -- Transfer seized collateral to liquidator as the appropriate token type
+        -- FIX H-L2: Transfer seized collateral to liquidator as the appropriate token type
         -- (Seized amount is now minted as a new token for the liquidator)
         userObs <- lookupUserObservers operator liquidator
         case targetEscrow.collateralType of
@@ -1209,14 +988,12 @@ template CantonLendingService
               privacyObservers = userObs
             pure ()
           CTN_USDCx -> do
-            -- Restore original USDCx provenance from escrowed metadata.
-            -- issuer remains operator due to DAML signatory constraints.
             create USDCx with
               issuer = operator
               owner = liquidator
               amount = actualSeize
-              sourceChain = fromOptional "canton-lending-seizure" targetEscrow.originalSourceChain
-              cctpNonce = fromOptional 0 targetEscrow.originalCctpNonce
+              sourceChain = "canton-lending-seizure"
+              cctpNonce = 0
               privacyObservers = userObs
             pure ()
           CTN_SMUSD -> do
@@ -1263,19 +1040,12 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Update collateral config
-    -- Validate config bounds to prevent operator misconfiguration
-    -- Governance-gated
+    -- FIX M-2: Validate config bounds to prevent operator misconfiguration
     choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
         assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
@@ -1285,97 +1055,53 @@ template CantonLendingService
         create this with configs = updatedConfigs
 
     -- | Update interest rate (synced from InterestRateService)
-    -- Governance-gated
     choice Lending_UpdateRate : ContractId CantonLendingService
       with
         newRateBps : Bps
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
         create this with interestRateBps = newRateBps
 
     -- | Pause / unpause
-    -- Governance-gated
     choice Lending_SetPaused : ContractId CantonLendingService
       with
         newPaused : Bool
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
-      do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
-        create this with paused = newPaused
+      do create this with paused = newPaused
 
-    -- Admin choices for operational parameters
-    -- Governance-gated
+    -- FIX M-3: Admin choices for operational parameters
     choice Lending_UpdateMinBorrow : ContractId CantonLendingService
       with
         newMinBorrow : Money
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
         create this with minBorrow = newMinBorrow
 
-    -- Governance-gated
     choice Lending_UpdateReserveFactor : ContractId CantonLendingService
       with
         newReserveFactorBps : Bps
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
         create this with reserveFactorBps = newReserveFactorBps
 
-    -- Governance-gated
     choice Lending_UpdateCloseFactor : ContractId CantonLendingService
       with
         newCloseFactorBps : Bps
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
         create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
-    -- Governance-gated
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        -- Use TreasuryWithdrawal (not ParameterUpdate) for reserve withdrawals
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator
@@ -1423,7 +1149,7 @@ getConfig ct [] = error ("CONFIG_NOT_FOUND: " <> show ct)
 getConfig ct (c :: cs) = if c.collateralType == ct then c else getConfig ct cs
 
 -- | Get existing debt for a user (returns 0 if no position)
--- Accrue interest before reading so health checks use current values
+-- FIX H-L5: Accrue interest before reading so health checks use current values
 getExistingDebt : Party -> Party -> Update Money
 getExistingDebt operator user = do
   debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
@@ -1438,7 +1164,7 @@ getExistingDebt operator user = do
       let newInterest = debt.principalDebt * intToNumeric debt.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
       return (debt.principalDebt + debt.accruedInterest + newInterest)
 
--- | Get existing debt AND persist the accrual on-ledger.
+-- | FIX N-H2: Get existing debt AND persist the accrual on-ledger.
 -- Used by withdrawal paths to keep on-ledger state consistent.
 getExistingDebtAndAccrue : Party -> Party -> Update Money
 getExistingDebtAndAccrue operator user = do
@@ -1472,14 +1198,14 @@ getCtxPriceByType operator CTN_USDCx feeds safe = getCtxPrice operator "USDCx" f
 getCtxPriceByType operator CTN_SMUSD feeds safe = getCtxPrice operator "sMUSD" feeds safe
 
 -- | Compute total collateral value weighted by collateralFactorBps
--- Added expectedOwner param — each escrow is verified to belong to the expected user
+-- FIX N-H3: Added expectedOwner param — each escrow is verified to belong to the expected user
 computeWeightedCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeWeightedCollateralValue _ _ _ [] _ _ = return 0.0
 computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
-  -- Disabled collateral types contribute 0 value to weighted collateral
+  -- FIX M-10: Disabled collateral types contribute 0 value to weighted collateral
   -- This prevents borrowing against collateral that has been disabled by the operator
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
   let value = if cfg.enabled
@@ -1489,7 +1215,7 @@ computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds
   return (value + rest)
 
 -- | Compute total raw collateral value (no LTV weighting)
--- Added expectedOwner param
+-- FIX N-H3: Added expectedOwner param
 computeRawCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeRawCollateralValue _ _ _ [] _ _ = return 0.0
 computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
@@ -1501,7 +1227,7 @@ computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe
   return (value + rest)
 
 -- | Compute total collateral value weighted by liquidationThresholdBps
--- Added expectedOwner param
+-- FIX N-H3: Added expectedOwner param
 computeLiquidationThresholdValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeLiquidationThresholdValue _ _ _ [] _ _ = return 0.0
 computeLiquidationThresholdValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do

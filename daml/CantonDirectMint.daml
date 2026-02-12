@@ -20,8 +20,7 @@ import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
-import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -140,10 +139,6 @@ template USDCx
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
 
-    -- AUDIT NOTE DAML-H05: Burn is controller issuer only, but this is safe because:
-    -- 1. Both issuer AND owner are signatories on USDCx — owner consented at creation
-    -- 2. Protocol services (DirectMint_MintWithUSDCx) exercise burns internally
-    -- 3. Making dual-consent would break protocol burns
     choice USDCx_Burn : ()
       controller issuer
       do return ()
@@ -194,24 +189,18 @@ template CantonMUSD
       controller owner
       do create this with privacyObservers = newObservers
 
-    -- NOTE: agreement declaration removed (deprecated in Daml 3.x)
-    -- By holding or transferring this Canton mUSD token, the owner acknowledges
-    -- they are bound by the Master Participation Agreement.
-    -- Agreement hash and URI are stored in the agreementHash / agreementUri fields.
+    agreement
+      "By holding or transferring this Canton mUSD token, the owner acknowledges "
+      <> "they are bound by the Master Participation Agreement. "
+      <> "Agreement hash: " <> agreementHash
+      <> " | URI: " <> agreementUri
 
-    -- Use proposal pattern for safe dual-signatory transfers
-    -- Added compliance check for transfers (anti-blacklist/freeze)
-    -- complianceRegistryCid is now REQUIRED (not Optional) to prevent bypass
+    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- Compliance check is mandatory — caller must provide valid CID
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = owner
-          receiver = newOwner
         create CantonMUSDTransferProposal with
           musd = this
           newOwner
@@ -238,18 +227,12 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
-    -- Changed from `controller issuer` to `controller [issuer, owner]`.
-    -- Previously, the operator (issuer) could unilaterally burn any user's mUSD.
-    -- Now both parties must authorize. This is safe because ALL protocol burn paths
-    -- (DirectMint_Redeem, Lending_Repay, Lending_Liquidate, Stake, UnwindRequest_Execute)
-    -- have both operator (signatory) and user (controller) authority available.
-    -- BurnRateLimiter (DAML-R05) remains as an additional defence-in-depth backstop.
     choice CantonMUSD_Burn : ()
-      controller [issuer, owner]
+      controller issuer
       do
         return ()
 
--- | Transfer proposal for CantonMUSD (dual-signatory safe)
+-- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonMUSDTransferProposal
   with
@@ -270,92 +253,6 @@ template CantonMUSDTransferProposal
     choice CantonMUSDTransferProposal_Cancel : ContractId CantonMUSD
       controller musd.owner
       do create musd
-
--- ============================================================
---                     SECTION 2b: BURN RATE LIMITER
--- ============================================================
-
--- | BurnRateLimiter — Per-epoch burn rate limiting for all mUSD burn paths.
--- CantonMUSD_Burn has no rate guards on its own (it's controller issuer).
--- This template provides centralized, on-ledger burn tracking across ALL protocol
--- paths (staking unstake, lending repay, direct mint redeem) to prevent mass-burn
--- attacks even if the operator key is compromised.
---
--- Usage:
---   Before burning mUSD, protocol services call BurnLimit_RecordBurn to verify
---   the burn doesn't exceed the per-epoch limit. If it does, the transaction aborts.
---   This is a defence-in-depth measure — DirectMint_Redeem already has its own
---   daily rate limit, but this covers ALL burn paths uniformly.
-template BurnRateLimiter
-  with
-    operator            : Party
-    epochBurnLimit      : Money   -- Max total burns per epoch (e.g. 1,000,000 mUSD / 24h)
-    currentEpochBurns   : Money   -- Cumulative burns in current epoch
-    epochStart          : Time    -- Start of current epoch window
-    epochDurationSeconds : Int    -- Epoch length in seconds (e.g. 86400 = 24h)
-    paused              : Bool    -- Emergency halt on burns
-  where
-    signatory operator
-    key operator : Party
-    maintainer key
-
-    ensure epochBurnLimit > 0.0
-        && epochDurationSeconds > 0
-        && currentEpochBurns >= 0.0
-
-    -- | Record a burn and enforce rate limit.
-    -- Must be called by protocol services BEFORE exercising CantonMUSD_Burn.
-    -- Rolls epoch window automatically when expired.
-    choice BurnLimit_RecordBurn : ContractId BurnRateLimiter
-      with
-        burnAmount : Money
-      controller operator
-      do
-        assertMsg "BURNS_PAUSED" (not paused)
-        assertMsg "BURN_AMOUNT_POSITIVE" (burnAmount > 0.0)
-        now <- getTime
-        let elapsed = subTime now epochStart
-        let epochDuration = seconds epochDurationSeconds
-        -- Auto-reset epoch if window has passed
-        let (newStart, newBurns) = if elapsed >= epochDuration
-              then (now, 0.0)
-              else (epochStart, currentEpochBurns)
-        assertMsg "EPOCH_BURN_LIMIT_EXCEEDED" (newBurns + burnAmount <= epochBurnLimit)
-        create this with
-          currentEpochBurns = newBurns + burnAmount
-          epochStart = newStart
-
-    -- | Query current burn usage (nonconsuming)
-    nonconsuming choice BurnLimit_GetUsage : (Money, Money, Time)
-      controller operator
-      do return (currentEpochBurns, epochBurnLimit, epochStart)
-
-    -- | Admin: update epoch burn limit (governance-gated)
-    choice BurnLimit_UpdateLimit : ContractId BurnRateLimiter
-      with
-        newLimit : Money
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
-        create this with epochBurnLimit = newLimit
-
-    -- | Admin: pause/unpause all burns
-    choice BurnLimit_SetPaused : ContractId BurnRateLimiter
-      with
-        newPaused : Bool
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        create this with paused = newPaused
 
 -- ============================================================
 --                     SECTION 3: BRIDGE OUT REQUEST
@@ -396,27 +293,6 @@ template BridgeOutRequest
         assertMsg "MUST_BE_PENDING" (status == "pending")
         create this with status = "failed"
 
-    -- Retry failed bridge
-    choice BridgeOut_Retry : ContractId BridgeOutRequest
-      controller operator
-      do
-        assertMsg "MUST_BE_FAILED" (status == "failed")
-        now <- getTime
-        create this with status = "pending", createdAt = now
-
-    -- Refund user for permanently failed bridge
-    choice BridgeOut_RefundUser : ContractId CantonUSDC
-      with
-        usdcIssuer : Party
-      controller operator
-      do
-        assertMsg "MUST_BE_FAILED" (status == "failed")
-        create CantonUSDC with
-          issuer = usdcIssuer
-          owner = user
-          amount = amount
-          privacyObservers = []
-
 -- ============================================================
 --                     SECTION 4: RESERVE TRACKER
 -- ============================================================
@@ -428,8 +304,7 @@ template BridgeOutRequest
 template ReserveTracker
   with
     operator : Party
-    -- Governance party provides oversight of all reserve tracking mutations
-    governance : Party
+    governance : Party           -- FIX HIGH-18: Governance co-signer for reserve mutations
     totalDeposited : Money      -- Total USDC ever deposited via Canton mint
     totalRedeemed : Money       -- Total USDC ever redeemed back
     totalBridgedOut : Money     -- Total successfully bridged to Ethereum
@@ -437,9 +312,7 @@ template ReserveTracker
     cantonMUSDSupply : Money    -- Current outstanding Canton mUSD
     lastUpdated : Time
   where
-    signatory operator
-    -- Governance observer ensures all reserve changes are visible for audit
-    observer governance
+    signatory operator, governance  -- FIX HIGH-18: Both must sign
 
     ensure totalDeposited >= 0.0
         && totalRedeemed >= 0.0
@@ -448,12 +321,12 @@ template ReserveTracker
         && cantonMUSDSupply >= 0.0
 
     -- Record a new deposit (mint)
+    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordDeposit : ContractId ReserveTracker
       with
         depositAmount : Money
-      controller operator
+      controller operator, governance
       do
-        assertMsg "DEPOSIT_AMOUNT_MUST_BE_POSITIVE" (depositAmount > 0.0)
         now <- getTime
         create this with
           totalDeposited = totalDeposited + depositAmount
@@ -461,12 +334,12 @@ template ReserveTracker
           lastUpdated = now
 
     -- Record a redemption (burn)
+    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordRedemption : ContractId ReserveTracker
       with
         redeemAmount : Money
-      controller operator
+      controller operator, governance
       do
-        assertMsg "REDEEM_AMOUNT_MUST_BE_POSITIVE" (redeemAmount > 0.0)
         assertMsg "INSUFFICIENT_SUPPLY" (cantonMUSDSupply >= redeemAmount)
         now <- getTime
         create this with
@@ -475,70 +348,27 @@ template ReserveTracker
           lastUpdated = now
 
     -- Record successful bridge-out to Ethereum
+    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordBridgeOut : ContractId ReserveTracker
       with
         bridgeAmount : Money
-      controller operator
+      controller operator, governance
       do
-        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)
         now <- getTime
         create this with
           totalBridgedOut = totalBridgedOut + bridgeAmount
           lastUpdated = now
 
     -- Record bridge-in from Ethereum (for redemptions)
+    -- FIX HIGH-18: Governance co-controls reserve mutations
     choice Reserve_RecordBridgeIn : ContractId ReserveTracker
       with
         bridgeAmount : Money
-      controller operator
+      controller operator, governance
       do
-        assertMsg "BRIDGE_AMOUNT_MUST_BE_POSITIVE" (bridgeAmount > 0.0)
         now <- getTime
         create this with
           totalBridgedIn = totalBridgedIn + bridgeAmount
-          lastUpdated = now
-
-    -- Allow services to cross-check supply
-    -- NOTE: ReserveTracker.cantonMUSDSupply and CantonDirectMintService.currentSupply
-    -- are intentionally dual-tracked. ReserveTracker is the authoritative accounting ledger;
-    -- currentSupply is a cached value for fast access. Use this choice to cross-check.
-    nonconsuming choice Reserve_GetSupply : Money
-      with
-        requester : Party
-      controller requester
-      do return cantonMUSDSupply
-
-    -- | Governance-gated emergency reset for the ReserveTracker.
-    -- Allows admin to reset all accounting counters in case of discrepancies
-    -- between Canton and Ethereum state. Requires GovernanceActionLog proof.
-    -- Normal accounting choices (RecordDeposit, RecordRedemption, etc.) remain
-    -- operator-only as they are operational, not governance, actions.
-    choice Reserve_AdminReset : ContractId ReserveTracker
-      with
-        newTotalDeposited : Money
-        newTotalRedeemed : Money
-        newTotalBridgedOut : Money
-        newTotalBridgedIn : Money
-        newCantonMUSDSupply : Money
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        assertMsg "DEPOSITED_NON_NEGATIVE" (newTotalDeposited >= 0.0)
-        assertMsg "REDEEMED_NON_NEGATIVE" (newTotalRedeemed >= 0.0)
-        assertMsg "BRIDGED_OUT_NON_NEGATIVE" (newTotalBridgedOut >= 0.0)
-        assertMsg "BRIDGED_IN_NON_NEGATIVE" (newTotalBridgedIn >= 0.0)
-        assertMsg "SUPPLY_NON_NEGATIVE" (newCantonMUSDSupply >= 0.0)
-        now <- getTime
-        create this with
-          totalDeposited = newTotalDeposited
-          totalRedeemed = newTotalRedeemed
-          totalBridgedOut = newTotalBridgedOut
-          totalBridgedIn = newTotalBridgedIn
-          cantonMUSDSupply = newCantonMUSDSupply
           lastUpdated = now
 
 -- ============================================================
@@ -579,14 +409,9 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
-    -- Revoked minters retain redemption visibility via separate observer list.
-    -- When a minter is revoked from authorizedMinters, add them to redemptionObservers
-    -- so they can still see this service contract and exercise DirectMint_Redeem.
-    redemptionObservers : [Party]
   where
     signatory operator
-    -- redemptionObservers included so revoked minters retain redemption visibility
-    observer usdcIssuer, authorizedMinters, redemptionObservers
+    observer usdcIssuer, authorizedMinters
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -597,7 +422,6 @@ template CantonDirectMintService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertMsg "NOT_AUTHORIZED_MINTER" (user `elem` authorizedMinters)
 
         -- Compliance check: verify minter is not blacklisted
         whenSome complianceRegistryCid $ \cid ->
@@ -627,7 +451,7 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        -- CantonUSDC_Transfer returns proposal; accept it
+        -- FIX: CantonUSDC_Transfer now returns proposal; accept it
         usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
@@ -651,7 +475,7 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         -- Without this, old instances remain active with stale state,
         -- allowing users to bypass supply cap and rate limits
         archive self
@@ -668,7 +492,7 @@ template CantonDirectMintService
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
-    -- USDCx must be bridged to Ethereum Treasury so it can earn yield via
+    -- FIX: USDCx must be bridged to Ethereum Treasury so it can earn yield via
     -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
     -- and deposits into TreasuryV2.
     choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
@@ -678,7 +502,6 @@ template CantonDirectMintService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertMsg "NOT_AUTHORIZED_MINTER" (user `elem` authorizedMinters)
         assertMsg "USDCX_MINTING_DISABLED" (isSome usdcxIssuer)
 
         -- Compliance check: verify minter is not blacklisted
@@ -723,7 +546,7 @@ template CantonDirectMintService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
+        -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
         -- The relay will:
         --   1. Redeem USDCx via xReserve → receive USDC on Ethereum
         --   2. Deposit USDC into TreasuryV2 for yield generation
@@ -738,7 +561,7 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         -- Update service state including rate limit tracking
@@ -777,12 +600,6 @@ template CantonDirectMintService
         let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
         let netAmount = musd.amount - feeAmount
 
-        -- Atomic coupling of BurnRateLimiter + CantonMUSD_Burn.
-        -- Both operations execute in the SAME DAML transaction (same `do` block),
-        -- guaranteeing atomicity: if the burn fails, rate-limit state rolls back,
-        -- and if the rate limit is exceeded, the burn never executes.
-        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
-          burnAmount = musd.amount
         -- Burn the mUSD
         exercise musdCid CantonMUSD_Burn
 
@@ -796,9 +613,6 @@ template CantonDirectMintService
           feeAmount = feeAmount
           createdAt = now
           fulfilled = False
-          expiresAt = addRelTime now (hours 72)  -- 72-hour timeout for refund
-          agreementHash = musd.agreementHash  -- Preserve MPA for refund
-          agreementUri = musd.agreementUri    -- Preserve MPA for refund
 
         -- Track burn in rate limit window (burns offset mints)
         let windowElapsed = subTime now lastRateLimitReset
@@ -808,7 +622,7 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         newService <- create this with
@@ -821,111 +635,55 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
-    -- Added rate limiting - cap changes limited to 20% per update
-    -- Requires governance proof for supply cap changes
+    -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Verify governance approval
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
-        -- Limit cap changes to max 20% increase per update
+        -- FIX D-M02: Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with supplyCap = newCap
 
-    -- Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
 
-    -- Governance-gated (was previously operator-only bypass)
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with dailyMintLimit = newLimit
 
-    -- Compliance registry changes require governance proof
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
         newRegistryCid : Optional (ContractId ComplianceRegistry)
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Verify governance approval for compliance changes
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
-    -- Governance-gated fee withdrawal (was previously operator-only bypass)
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
-      with
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume governance proof (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        -- Archive old service before creating new one
+        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with accumulatedFees = 0.0
-
-    -- Add revoked minter to redemption observers for continued visibility
-    choice DirectMint_AddRedemptionObserver : ContractId CantonDirectMintService
-      with
-        party : Party
-      controller operator
-      do
-        archive self
-        create this with redemptionObservers = party :: redemptionObservers
-
-    -- Remove party from redemption observers after all redemptions fulfilled
-    choice DirectMint_RemoveRedemptionObserver : ContractId CantonDirectMintService
-      with
-        party : Party
-      controller operator
-      do
-        archive self
-        create this with redemptionObservers = filter (/= party) redemptionObservers
 
 -- ============================================================
 --                     SECTION 6: REDEMPTION REQUEST
@@ -941,27 +699,8 @@ template RedemptionRequest
     feeAmount : Money         -- Fee deducted
     createdAt : Time
     fulfilled : Bool
-    expiresAt : Time          -- Timeout for refund eligibility
-    agreementHash : Text      -- Preserve MPA hash for refund compliance
-    agreementUri : Text       -- Preserve MPA URI for refund compliance
   where
     signatory operator, user  -- User is signatory since they initiated redemption
-
-    -- Refund user if redemption not fulfilled before timeout
-    choice Redemption_Refund : ContractId CantonMUSD
-      controller user
-      do
-        assertMsg "ALREADY_FULFILLED" (not fulfilled)
-        now <- getTime
-        assertMsg "NOT_YET_EXPIRED" (now > expiresAt)
-        -- Use stored agreement fields to satisfy CantonMUSD ensure clause
-        create CantonMUSD with
-          issuer = operator
-          owner = user
-          amount = musdBurned
-          agreementHash = agreementHash
-          agreementUri = agreementUri
-          privacyObservers = []
 
     -- Operator fulfills after bridge-in from Ethereum delivers USDC
     choice Redemption_Fulfill : (ContractId RedemptionRequest, ContractId CantonUSDC)

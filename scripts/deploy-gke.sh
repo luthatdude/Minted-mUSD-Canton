@@ -100,10 +100,16 @@ deploy_postgres() {
     helm repo add bitnami https://charts.bitnami.com/bitnami 2>/dev/null || true
     helm repo update
     
-    # Generate random password
+    # FIX HIGH-TMPFILE: Generate password in memory with restrictive umask
+    # Password never touches disk in world-readable form
+    local OLD_UMASK=$(umask)
+    umask 077
+    PG_SECRETS_DIR=$(mktemp -d)
+    trap 'rm -rf "$PG_SECRETS_DIR"' EXIT
+    
     PG_PASSWORD=$(openssl rand -base64 32 | tr -d '=+/' | head -c 24)
     
-    # Deploy PostgreSQL
+    # Deploy PostgreSQL — pass password directly via --set, never write to file
     helm upgrade --install postgres bitnami/postgresql \
         --namespace musd-canton \
         --set auth.postgresPassword="$PG_PASSWORD" \
@@ -113,9 +119,15 @@ deploy_postgres() {
         --set primary.resources.requests.cpu=500m \
         --wait
     
+    # FIX HIGH-TMPFILE: Store password in K8s secret directly, not in /tmp
+    kubectl create secret generic canton-pg-credentials \
+        --namespace=musd-canton \
+        --from-literal=password="$PG_PASSWORD" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    
+    umask $OLD_UMASK
     echo "   ✅ PostgreSQL deployed"
-    echo "   Password saved to: /tmp/canton-pg-password.txt"
-    echo "$PG_PASSWORD" > /tmp/canton-pg-password.txt
+    echo "   Password stored in K8s secret: canton-pg-credentials"
 }
 
 # =============================================================================
@@ -125,7 +137,8 @@ create_secrets() {
     echo ""
     echo "🔐 Step 4: Creating Kubernetes Secrets..."
     
-    PG_PASSWORD=$(cat /tmp/canton-pg-password.txt)
+    # FIX HIGH-TMPFILE: Read password from K8s secret instead of /tmp file
+    PG_PASSWORD=$(kubectl get secret canton-pg-credentials -n musd-canton -o jsonpath='{.data.password}' | base64 -d)
     
     # Create Canton secrets
     kubectl create secret generic canton-secrets \
@@ -147,8 +160,14 @@ generate_tls() {
     echo ""
     echo "🔒 Step 5: Generating TLS Certificates..."
     
-    mkdir -p /tmp/canton-tls
-    cd /tmp/canton-tls
+    # FIX HIGH-TMPFILE: Use restrictive umask and secure tmpdir
+    local OLD_UMASK=$(umask)
+    umask 077
+    local TLS_DIR=$(mktemp -d)
+    # FIX HIGH-TMPFILE: Ensure TLS keys are cleaned up on exit
+    trap 'rm -rf "$TLS_DIR"' EXIT
+    
+    cd "$TLS_DIR"
     
     # Generate CA
     openssl genrsa -out ca.key 4096
@@ -165,7 +184,7 @@ generate_tls() {
     cp ca.crt admin-ca.crt
     openssl req -new -x509 -days 365 -key tls.key -out admin-client.crt -subj "/CN=admin-client"
     
-    # Create secret
+    # Create secret — keys go directly to K8s, then tmpdir is wiped
     kubectl create secret generic canton-tls \
         --namespace=musd-canton \
         --from-file=tls.crt \
@@ -178,7 +197,10 @@ generate_tls() {
         --dry-run=client -o yaml | kubectl apply -f -
     
     cd -
-    echo "   ✅ TLS certificates generated and stored"
+    # FIX HIGH-TMPFILE: Immediately wipe TLS keys after upload to K8s
+    rm -rf "$TLS_DIR"
+    umask $OLD_UMASK
+    echo "   ✅ TLS certificates generated and stored (local copies wiped)"
 }
 
 # =============================================================================
@@ -207,6 +229,11 @@ create_loadbalancer() {
     
     STATIC_IP=$(gcloud compute addresses describe canton-devnet-ip --region=$REGION --project=$PROJECT_ID --format="get(address)")
     
+    # FIX HIGH-WAF: Canton LB now restricted to Canton DevNet IPs only
+    # and protected by Cloud Armor security policy.
+    # IMPORTANT: Replace CANTON_DEVNET_CIDR with the actual Canton Network IP range.
+    CANTON_DEVNET_CIDR="${CANTON_DEVNET_CIDR:-35.186.0.0/16}"
+
     cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Service
@@ -215,9 +242,13 @@ metadata:
   namespace: musd-canton
   annotations:
     cloud.google.com/load-balancer-type: "External"
+    cloud.google.com/backend-config: '{"default": "canton-lb-backend"}'
 spec:
   type: LoadBalancer
   loadBalancerIP: $STATIC_IP
+  # FIX HIGH-WAF: Restrict source IPs to Canton DevNet range only
+  loadBalancerSourceRanges:
+    - "$CANTON_DEVNET_CIDR"
   ports:
     - name: ledger-api
       port: 5011
@@ -229,6 +260,18 @@ spec:
       protocol: TCP
   selector:
     app.kubernetes.io/name: canton-participant
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: canton-lb-backend
+  namespace: musd-canton
+spec:
+  securityPolicy:
+    name: minted-waf-policy
+  logging:
+    enable: true
+    sampleRate: 1.0
 EOF
 
     echo "   ✅ LoadBalancer created with IP: $STATIC_IP"

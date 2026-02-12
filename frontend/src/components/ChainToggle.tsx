@@ -19,7 +19,7 @@ export function ChainToggle({ chain, onToggle }: ChainToggleProps) {
         className={`absolute inset-0 rounded-xl opacity-0 transition-opacity duration-300 group-hover:opacity-100 ${
           isEthereum
             ? "bg-[radial-gradient(ellipse_at_center,_rgba(51,139,255,0.15)_0%,_transparent_70%)]"
-            : "bg-[radial-gradient(ellipse_at_center,_rgba(245,158,11,0.15)_0%,_transparent_70%)]"
+            : "bg-[radial-gradient(ellipse_at_center,_rgba(16,185,129,0.15)_0%,_transparent_70%)]"
         }`}
       />
 
@@ -31,19 +31,19 @@ export function ChainToggle({ chain, onToggle }: ChainToggleProps) {
         >
           <span
             className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${
-              isEthereum ? "bg-brand-400" : "bg-amber-400"
+              isEthereum ? "bg-brand-400" : "bg-emerald-400"
             }`}
             style={{ animationDuration: "2s" }}
           />
           <span
             className={`relative inline-flex h-2 w-2 rounded-full ${
-              isEthereum ? "bg-brand-400" : "bg-amber-400"
+              isEthereum ? "bg-brand-400" : "bg-emerald-400"
             }`}
           />
         </span>
 
         {/* Chain name */}
-        <span className={isEthereum ? "text-brand-400" : "text-amber-400"}>
+        <span className={isEthereum ? "text-brand-400" : "text-emerald-400"}>
           {isEthereum ? "Ethereum" : "Canton"}
         </span>
       </div>

@@ -18,10 +18,10 @@ import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-// Removed unused crypto import
-// Use static import instead of dynamic require
+// FIX M-17: Removed unused crypto import
+// FIX M-20: Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
-// Use shared readSecret utility
+// FIX T-M01: Use shared readSecret utility
 import { readSecret } from "./utils";
 import * as fs from "fs";
 
@@ -55,9 +55,9 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
-  // Added explicit radix 10 to all parseInt calls
+  // FIX H-7: Added explicit radix 10 to all parseInt calls
   cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865", 10),
-  // Read sensitive values from Docker secrets, fallback to env vars
+  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
   cantonLedgerToken: readSecret("canton_token", "CANTON_LEDGER_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -141,7 +141,7 @@ class CantonAssetClient {
    * Fetch current snapshot of all tokenized assets from Canton Network
    */
   async getAssetSnapshot(): Promise<CantonAssetSnapshot> {
-    // Add request timeout to prevent indefinite hangs
+    // FIX 5C-M03: Add request timeout to prevent indefinite hangs
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -182,7 +182,7 @@ class CantonAssetClient {
    * Fetch specific assets by ID
    */
   async getAssetsByIds(assetIds: string[]): Promise<CantonAsset[]> {
-    // Add request timeout
+    // FIX 5C-M03: Add request timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -218,7 +218,7 @@ class CantonAssetClient {
    * Verify a state hash matches Canton's current state
    */
   async verifyStateHash(stateHash: string): Promise<boolean> {
-    // Add request timeout
+    // FIX 5C-M03: Add request timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -254,15 +254,22 @@ class ValidatorNode {
   private ledger: Ledger;
   private cantonClient: CantonAssetClient;
   private kmsClient: KMSClient;
-  // Bounded cache with eviction (was unbounded — memory leak)
+  // FIX C-6: Bounded cache with eviction (was unbounded — memory leak)
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
 
+  // FIX HIGH-SIGNER: Rate-limiting & anomaly detection for single-signer risk mitigation
+  private signingTimestamps: number[] = [];
+  private readonly MAX_SIGNS_PER_WINDOW = parseInt(process.env.MAX_SIGNS_PER_WINDOW || "50", 10);
+  private readonly SIGNING_WINDOW_MS = parseInt(process.env.SIGNING_WINDOW_MS || "3600000", 10); // 1 hour
+  private lastSignedTotalValue: bigint = 0n;
+  private readonly MAX_VALUE_JUMP_BPS = parseInt(process.env.MAX_VALUE_JUMP_BPS || "2000", 10); // 20%
+
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -293,7 +300,7 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        // Write heartbeat file for Docker healthcheck
+        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
         try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
@@ -308,16 +315,11 @@ class ValidatorNode {
   }
 
   private async pollForAttestations(): Promise<void> {
-    // Add 30s timeout to Canton query (v1 has this, v2 was missing it)
-    const QUERY_TIMEOUT_MS = 30_000;
-    const queryPromise = (this.ledger.query as any)(
+    // Query AttestationRequest contracts
+    const attestations = await (this.ledger.query as any)(
       "MintedProtocolV3:AttestationRequest",
       {}
-    );
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Canton query timed out after 30s")), QUERY_TIMEOUT_MS)
-    );
-    const attestations = await Promise.race([queryPromise, timeoutPromise]) as CreateEvent<AttestationRequest>[];
+    ) as CreateEvent<AttestationRequest>[];
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -348,8 +350,33 @@ class ValidatorNode {
         continue;
       }
 
+      // FIX HIGH-SIGNER: Rate-limit signing to mitigate single-signer key compromise
+      const now = Date.now();
+      this.signingTimestamps = this.signingTimestamps.filter(t => now - t < this.SIGNING_WINDOW_MS);
+      if (this.signingTimestamps.length >= this.MAX_SIGNS_PER_WINDOW) {
+        console.error(`[Validator] ⚠️ RATE LIMIT: ${this.signingTimestamps.length} signatures in window. ` +
+          `Max=${this.MAX_SIGNS_PER_WINDOW}. Pausing to prevent key abuse.`);
+        continue;
+      }
+
+      // FIX HIGH-SIGNER: Anomaly detection — reject attestations with sudden large value jumps
+      const attestedTotalValue = ethers.parseUnits(payload.totalCantonValue, 18);
+      if (this.lastSignedTotalValue > 0n) {
+        const diff = attestedTotalValue > this.lastSignedTotalValue
+          ? attestedTotalValue - this.lastSignedTotalValue
+          : this.lastSignedTotalValue - attestedTotalValue;
+        const jumpBps = (diff * 10000n) / this.lastSignedTotalValue;
+        if (jumpBps > BigInt(this.MAX_VALUE_JUMP_BPS)) {
+          console.error(`[Validator] ⚠️ ANOMALY: Total value jumped ${jumpBps} bps ` +
+            `(${this.lastSignedTotalValue} → ${attestedTotalValue}). Max=${this.MAX_VALUE_JUMP_BPS} bps. Skipping.`);
+          continue;
+        }
+      }
+
       // Sign it
       console.log(`[Validator] Signing attestation ${attestationId}...`);
+      this.signingTimestamps.push(now);
+      this.lastSignedTotalValue = attestedTotalValue;
       await this.signAttestation(attestation.contractId, payload, verification.stateHash);
     }
   }
@@ -381,10 +408,10 @@ class ValidatorNode {
           };
         }
 
-        // Use ethers.parseUnits for financial precision
+        // FIX H-13: Use ethers.parseUnits for financial precision
         const attestedValue = ethers.parseUnits(attestedAsset.assetValue, 18);
 
-        // Add absolute tolerance cap to prevent percentage tolerance from being too large
+        // FIX B-H06: Add absolute tolerance cap to prevent percentage tolerance from being too large
         // 0.1% of $500M = $500K which is too high; cap at $100K absolute
         const MAX_ABSOLUTE_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
         const percentTolerance = cantonAsset.currentValue / 1000n; // 0.1%
@@ -405,7 +432,7 @@ class ValidatorNode {
 
       // 4. Verify total matches
       const attestedTotal = ethers.parseUnits(payload.totalCantonValue, 18);
-      // Cap tolerance at $100K absolute to prevent exploitation on large TVL
+      // FIX B-H06: Cap tolerance at $100K absolute to prevent exploitation on large TVL
       const MAX_TOTAL_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
       const percentTolerance = snapshot.totalValue / 1000n;
       const tolerance = percentTolerance < MAX_TOTAL_TOLERANCE ? percentTolerance : MAX_TOTAL_TOLERANCE;
@@ -415,7 +442,7 @@ class ValidatorNode {
         : snapshot.totalValue - attestedTotal;
 
       // Only verify against assets included in attestation
-      // Use ethers.parseUnits
+      // FIX H-13: Use ethers.parseUnits
       const includedAssetsValue = payload.cantonAssets.reduce((sum, a) => {
         return sum + ethers.parseUnits(a.assetValue, 18);
       }, 0n);
@@ -441,7 +468,7 @@ class ValidatorNode {
         };
       }
 
-      // Verify the snapshot state hash is valid with Canton
+      // FIX M-16: Verify the snapshot state hash is valid with Canton
       const stateValid = await this.cantonClient.verifyStateHash(snapshot.stateHash);
       if (!stateValid) {
         return {
@@ -474,7 +501,7 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
-    // Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    // FIX C-6: Mark as signing BEFORE async KMS call to prevent TOCTOU race
     this.signedAttestations.add(attestationId);
 
     try {
@@ -499,7 +526,7 @@ class ValidatorNode {
       this.signedAttestations.add(attestationId);
       console.log(`[Validator] ✓ Signed attestation ${attestationId}`);
 
-      // Evict oldest entries if cache exceeds limit
+      // FIX C-6: Evict oldest entries if cache exceeds limit
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
         const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
         let evicted = 0;
@@ -513,7 +540,7 @@ class ValidatorNode {
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // Remove from set on failure so it can be retried
+      // FIX C-6: Remove from set on failure so it can be retried
       // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED") ||
           error.message?.includes("already signed")) {
@@ -526,7 +553,7 @@ class ValidatorNode {
 
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    // Validate timestamp to prevent negative values
+    // FIX B-M01: Validate timestamp to prevent negative values
     const timestamp = Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600);
 
     return ethers.solidityPackedKeccak256(
@@ -559,7 +586,7 @@ class ValidatorNode {
       throw new Error("KMS returned empty signature");
     }
 
-    // Uses static import declared at top of file
+    // FIX M-20: Uses static import declared at top of file
     return formatKMSSignature(
       Buffer.from(response.Signature),
       ethSignedHash,
@@ -611,7 +638,7 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiKey) {
     throw new Error("CANTON_ASSET_API_KEY not set");
   }
-  // Validate Canton Asset API URL uses HTTPS in production
+  // FIX T-H01: Validate Canton Asset API URL uses HTTPS in production
   if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
   }
@@ -630,7 +657,7 @@ async function main(): Promise<void> {
   await validator.start();
 }
 
-// Handle unhandled promise rejections to prevent silent failures
+// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
   process.exit(1);

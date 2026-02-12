@@ -12,13 +12,12 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              // FIX FE-01: Remove 'unsafe-inline' in production for script-src
+              // Production: Remove 'unsafe-eval' - Next.js 13+ supports strict CSP
               process.env.NODE_ENV === 'production'
-                ? "script-src 'self' 'strict-dynamic'"
+                ? "script-src 'self' 'unsafe-inline'"
                 : "script-src 'self' 'unsafe-eval' 'unsafe-inline'", // Dev only
               "style-src 'self' 'unsafe-inline'", // Required for Tailwind
-              // FIX FE-01: Expand connect-src for WalletConnect, Canton API, points API (HTTPS only)
-              "connect-src 'self' https://*.infura.io wss://*.infura.io https://*.alchemy.com wss://*.alchemy.com https://*.walletconnect.com wss://*.walletconnect.com https://*.canton.network https://api.coingecko.com",
+              "connect-src 'self' https://*.infura.io wss://*.infura.io https://*.alchemy.com wss://*.alchemy.com",
               "img-src 'self' data: https:",
               "font-src 'self' data:",
               "frame-ancestors 'none'",

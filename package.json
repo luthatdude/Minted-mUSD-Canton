@@ -22,7 +22,6 @@
     "ethers": "^6.0.0"
   },
   "overrides": {
-    "fast-xml-parser": "^5.3.4",
-    "axios": "^1.13.5"
+    "fast-xml-parser": "^5.3.4"
   }
 }
