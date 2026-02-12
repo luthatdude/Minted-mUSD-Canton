@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
+import "../TimelockGoverned.sol";
 
 /**
  * @title PendleStrategyV2
@@ -200,7 +201,8 @@ contract PendleStrategyV2 is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -227,8 +229,7 @@ contract PendleStrategyV2 is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-    /// @notice FIX CRIT-06: Timelock role for upgrade authorization
-    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+    // TIMELOCK_ROLE replaced by TimelockGoverned — upgrades go through MintedTimelockController
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -325,16 +326,19 @@ contract PendleStrategyV2 is
         address _marketSelector,
         address _treasury,
         address _admin,
-        string calldata _category
+        string calldata _category,
+        address _timelock
     ) external initializer {
         if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0)) {
             revert ZeroAddress();
         }
+        require(_timelock != address(0), "ZERO_TIMELOCK");
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         marketSelector = IPendleMarketSelector(_marketSelector);
@@ -351,7 +355,7 @@ contract PendleStrategyV2 is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
-        _grantRole(TIMELOCK_ROLE, _admin);
+        // TimelockGoverned replaces TIMELOCK_ROLE — upgrades go through MintedTimelockController
 
         // FIX HIGH-07: Removed infinite USDC approval from initialize().
         // Per-operation approvals are set in deposit() and _selectNewMarket()
@@ -841,6 +845,6 @@ contract PendleStrategyV2 is
     // UUPS UPGRADE
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades
-    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

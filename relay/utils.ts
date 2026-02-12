@@ -110,6 +110,9 @@ export function isValidSecp256k1PrivateKey(privateKey: string): boolean {
 /**
  * Read and validate a private key from Docker secret or env var.
  * Throws if the key is not in the valid secp256k1 range.
+ *
+ * FIX H-07: After validation, attempts to zero out the env var source
+ * to reduce the window where the key is readable in memory.
  */
 export function readAndValidatePrivateKey(secretName: string, envVar: string): string {
   const key = readSecret(secretName, envVar);
@@ -123,6 +126,13 @@ export function readAndValidatePrivateKey(secretName: string, envVar: string): s
       `SECURITY: ${envVar} is not a valid secp256k1 private key. ` +
       `Key must be 32 bytes (64 hex chars) in range [1, curve order-1]`
     );
+  }
+
+  // FIX H-07: Clear the env var after reading to reduce memory exposure window.
+  // The key is still held by the caller's variable, but at least the env source
+  // is scrubbed. For full protection, use AWS KMS (see kms-ethereum-signer.ts).
+  if (process.env[envVar] && process.env.NODE_ENV !== "test") {
+    process.env[envVar] = "0".repeat(64);
   }
   
   return key;

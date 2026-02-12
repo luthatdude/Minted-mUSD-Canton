@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
+import "../TimelockGoverned.sol";
 
 /**
  * @title MorphoLoopStrategy
@@ -131,7 +132,8 @@ contract MorphoLoopStrategy is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -234,12 +236,15 @@ contract MorphoLoopStrategy is
         address _morpho,
         bytes32 _marketId,
         address _treasury,
-        address _admin
+        address _admin,
+        address _timelock
     ) external initializer {
+        require(_timelock != address(0), "ZERO_TIMELOCK");
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         morpho = IMorphoBlue(_morpho);
@@ -801,5 +806,6 @@ contract MorphoLoopStrategy is
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {}
 }

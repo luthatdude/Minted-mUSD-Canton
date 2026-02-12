@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IStrategy.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title TreasuryV2
@@ -30,7 +31,8 @@ contract TreasuryV2 is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -51,8 +53,7 @@ contract TreasuryV2 is
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
-    /// @notice FIX HIGH-03: Timelock role for upgrade authorization — prevents instant upgrades
-    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+    // TIMELOCK_ROLE replaced by TimelockGoverned — all admin ops go through MintedTimelockController
 
     // ═══════════════════════════════════════════════════════════════════════
     // STRUCTS
@@ -163,16 +164,19 @@ contract TreasuryV2 is
         address _asset,
         address _vault,
         address _admin,
-        address _feeRecipient
+        address _feeRecipient,
+        address _timelock
     ) external initializer {
         if (_asset == address(0) || _vault == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
+        require(_timelock != address(0), "ZERO_TIMELOCK");
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         asset = IERC20(_asset);
         vault = _vault;
@@ -196,8 +200,7 @@ contract TreasuryV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
         _grantRole(VAULT_ROLE, _vault);
-        /// @notice FIX HIGH-03: Grant TIMELOCK_ROLE to admin (should be a timelock controller)
-        _grantRole(TIMELOCK_ROLE, _admin);
+        // TimelockGoverned replaces TIMELOCK_ROLE — admin ops go through MintedTimelockController
 
         lastFeeAccrual = block.timestamp;
     }
@@ -920,10 +923,11 @@ contract TreasuryV2 is
      */
     event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
 
+    /// @notice FIX H-04: Fee config changes require timelock delay via TimelockGoverned
     function setFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyTimelock {
         require(_performanceFeeBps <= 5000, "Fee too high"); // Max 50%
         require(_feeRecipient != address(0), "Invalid recipient");
 
@@ -940,7 +944,7 @@ contract TreasuryV2 is
     /**
      * @notice Update reserve percentage
      */
-    function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setReserveBps(uint256 _reserveBps) external onlyTimelock {
         require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
         uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
@@ -952,7 +956,7 @@ contract TreasuryV2 is
     /**
      * @notice Update minimum auto-allocate amount
      */
-    function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setMinAutoAllocate(uint256 _minAmount) external onlyTimelock {
         require(_minAmount > 0, "ZERO_MIN_AMOUNT");
         uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
@@ -962,7 +966,8 @@ contract TreasuryV2 is
     /**
      * @notice Update vault address
      */
-    function setVault(address _vault) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX H-04: Vault address changes require timelock delay via TimelockGoverned
+    function setVault(address _vault) external onlyTimelock {
         if (_vault == address(0)) revert ZeroAddress();
 
         _revokeRole(VAULT_ROLE, vault);
@@ -973,7 +978,8 @@ contract TreasuryV2 is
     /**
      * @notice Emergency token recovery (not the primary asset)
      */
-    function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX H-04: Token recovery requires timelock delay via TimelockGoverned
+    function recoverToken(address token, uint256 amount) external onlyTimelock {
         require(token != address(asset), "CANNOT_RECOVER_ASSET");
         IERC20(token).safeTransfer(msg.sender, amount);
     }
@@ -981,6 +987,6 @@ contract TreasuryV2 is
     /**
      * @notice UUPS upgrade authorization
      */
-    /// @notice FIX HIGH-03: Only MintedTimelockController can authorize upgrades (48h delay enforced by OZ)
-    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
+    /// @notice FIX HIGH-03: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

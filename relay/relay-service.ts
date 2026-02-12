@@ -22,6 +22,10 @@ import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
+// FIX H-07: KMS-based Ethereum transaction signer (key never enters Node.js memory)
+import { createEthereumSigner } from "./kms-ethereum-signer";
+// FIX C-05: Cryptographic entropy for attestation ID unpredictability
+import * as crypto from "crypto";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
@@ -41,7 +45,10 @@ interface RelayConfig {
   ethereumRpcUrl: string;
   bridgeContractAddress: string;
   treasuryAddress: string;     // Treasury for auto-deploy trigger
-  relayerPrivateKey: string;   // Hot wallet for gas
+  relayerPrivateKey: string;   // Hot wallet for gas (deprecated: use KMS)
+  // FIX H-07: KMS key for Ethereum transaction signing (key never in memory)
+  relayerKmsKeyId: string;     // AWS KMS key ARN for relay signing
+  awsRegion: string;           // AWS region for KMS
 
   // FIX CRITICAL: Mapping from DAML Party ID to Ethereum address
   // Without this, signature validation ALWAYS fails because we compared
@@ -53,6 +60,8 @@ interface RelayConfig {
   maxRetries: number;
   confirmations: number;
   triggerAutoDeploy: boolean;  // Whether to trigger auto-deploy after bridge
+  // FIX INFRA-04: Fallback RPC URLs for relay redundancy
+  fallbackRpcUrls: string[];
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -77,6 +86,9 @@ const DEFAULT_CONFIG: RelayConfig = {
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   // FIX B-H07: Validate private key is in valid secp256k1 range
   relayerPrivateKey: readAndValidatePrivateKey("relayer_private_key", "RELAYER_PRIVATE_KEY"),
+  // FIX H-07: KMS key for Ethereum transaction signing
+  relayerKmsKeyId: readSecret("relayer_kms_key_id", "RELAYER_KMS_KEY_ID"),
+  awsRegion: process.env.AWS_REGION || "us-east-1",
 
   // FIX CRITICAL: Map DAML Party → Ethereum address
   // Load from JSON config file or environment
@@ -95,6 +107,11 @@ const DEFAULT_CONFIG: RelayConfig = {
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
   confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
   triggerAutoDeploy: process.env.TRIGGER_AUTO_DEPLOY !== "false",  // Default enabled
+  // FIX INFRA-04: Fallback RPC URLs for relay redundancy
+  fallbackRpcUrls: (process.env.FALLBACK_RPC_URLS || "")
+    .split(",")
+    .filter(Boolean)
+    .map(url => url.trim()),
 };
 
 // ============================================================
@@ -111,6 +128,7 @@ interface AttestationPayload {
   nonce: string;
   chainId: string;
   expiresAt: string;  // ISO timestamp
+  entropy: string;    // FIX C-05: Hex-encoded entropy from aggregator
 }
 
 interface AttestationRequest {
@@ -141,7 +159,9 @@ const BRIDGE_ABI = [
           { "name": "id", "type": "bytes32" },
           { "name": "cantonAssets", "type": "uint256" },
           { "name": "nonce", "type": "uint256" },
-          { "name": "timestamp", "type": "uint256" }
+          { "name": "timestamp", "type": "uint256" },
+          { "name": "entropy", "type": "bytes32" },
+          { "name": "cantonStateHash", "type": "bytes32" }
         ],
         "name": "att",
         "type": "tuple"
@@ -195,12 +215,18 @@ class RelayService {
   private config: RelayConfig;
   private ledger: Ledger;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
-  private bridgeContract: ethers.Contract;
+  private wallet!: ethers.Signer;  // FIX H-07: Abstract signer (KMS or raw)
+  private bridgeContract!: ethers.Contract;
   // FIX M-18: Bounded cache with eviction
   private processedAttestations: Set<string> = new Set();
   private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
+
+  // FIX INFRA-04: Fallback RPC providers for relay redundancy
+  private fallbackProviders: ethers.JsonRpcProvider[] = [];
+  private activeProviderIndex: number = 0;
+  private consecutiveFailures: number = 0;
+  private readonly MAX_CONSECUTIVE_FAILURES = 3;
 
   constructor(config: RelayConfig) {
     this.config = config;
@@ -223,18 +249,42 @@ class RelayService {
 
     // Initialize Ethereum connection
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.relayerPrivateKey, this.provider);
-    this.bridgeContract = new ethers.Contract(
-      config.bridgeContractAddress,
-      BRIDGE_ABI,
-      this.wallet
-    );
+    // FIX INFRA-04: Initialize fallback RPC providers
+    if (config.fallbackRpcUrls && config.fallbackRpcUrls.length > 0) {
+      for (const url of config.fallbackRpcUrls) {
+        this.fallbackProviders.push(new ethers.JsonRpcProvider(url));
+      }
+      console.log(`[Relay] ${this.fallbackProviders.length} fallback RPC providers configured`);
+    }
+    // FIX H-07: Wallet initialized asynchronously via initSigner()
+    // to support KMS-based signing (key never enters Node.js memory)
 
     console.log(`[Relay] Initialized`);
     console.log(`[Relay] Canton: ${config.cantonHost}:${config.cantonPort}`);
     console.log(`[Relay] Ethereum: ${config.ethereumRpcUrl}`);
     console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
-    console.log(`[Relay] Relayer: ${this.wallet.address}`);
+  }
+
+  /**
+   * FIX H-07: Initialize Ethereum signer (KMS or raw key)
+   * Must be called before start()
+   */
+  async initSigner(): Promise<void> {
+    this.wallet = await createEthereumSigner(
+      {
+        kmsKeyId: this.config.relayerKmsKeyId,
+        awsRegion: this.config.awsRegion,
+        privateKey: this.config.relayerPrivateKey,
+      },
+      this.provider
+    );
+    this.bridgeContract = new ethers.Contract(
+      this.config.bridgeContractAddress,
+      BRIDGE_ABI,
+      this.wallet
+    );
+    const address = await this.wallet.getAddress();
+    console.log(`[Relay] Relayer: ${address}`);
   }
 
   /**
@@ -242,6 +292,9 @@ class RelayService {
    */
   async start(): Promise<void> {
     console.log("[Relay] Starting...");
+
+    // FIX H-07: Initialize signer (KMS or raw key)
+    await this.initSigner();
     
     // FIX B-C03: Validate validator addresses against on-chain roles before starting
     await this.validateValidatorAddresses();
@@ -461,8 +514,25 @@ class RelayService {
         throw new Error(`CHAIN_ID_MISMATCH: expected ${expectedChainId}, got ${payloadChainId}`);
       }
 
-      // Convert attestation ID to bytes32
-      const idBytes32 = ethers.id(attestationId);
+      // FIX C-05: Compute entropy and derive attestation ID first (needed for on-chain checks)
+      const entropy = payload.entropy
+        ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
+        : ethers.hexlify(new Uint8Array(crypto.randomBytes(32)));
+      const cantonAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
+      const nonce = BigInt(payload.nonce);
+      const expiresAtMs = new Date(payload.expiresAt).getTime();
+      if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
+        throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
+      }
+      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
+      if (timestampSec <= 0) {
+        throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
+      }
+      const chainId = expectedChainId;
+      const idBytes32 = ethers.solidityPackedKeccak256(
+        ["uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
+        [nonce, cantonAssets, BigInt(timestampSec), entropy, chainId, this.config.bridgeContractAddress]
+      );
 
       // Check if already used on-chain
       const isUsed = await this.bridgeContract.usedAttestationIds(idBytes32);
@@ -479,21 +549,13 @@ class RelayService {
       // Sort signatures by signer address (required by BLEBridgeV9)
       const sortedSigs = sortSignaturesBySignerAddress(formattedSigs, messageHash);
 
-      // Build attestation struct
-      // FIX B-M01: Validate timestamp to prevent negative values from expiresAt - 3600
-      const expiresAtMs = new Date(payload.expiresAt).getTime();
-      if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
-        throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
-      }
-      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
-      if (timestampSec <= 0) {
-        throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
-      }
+      // Build attestation struct (entropy and ID already computed above)
       const attestation = {
         id: idBytes32,
-        cantonAssets: ethers.parseUnits(payload.globalCantonAssets, 18),
-        nonce: BigInt(payload.nonce),
+        cantonAssets: cantonAssets,
+        nonce: nonce,
         timestamp: BigInt(timestampSec),
+        entropy: entropy,
       };
 
       // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
@@ -571,19 +633,26 @@ class RelayService {
 
   /**
    * Build the message hash that validators signed
+   * FIX C-05: Includes entropy in hash to match BLEBridgeV9 verification
    */
   private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
     // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
 
+    // FIX C-05: Read entropy from payload for inclusion in hash
+    const entropy = payload.entropy
+      ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
+      : ethers.ZeroHash;
+
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
         // FIX B-M01: Use validated timestamp calculation consistent with bridgeAttestation
         BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
+        entropy,
         chainId,
         this.config.bridgeContractAddress,
       ]
@@ -808,12 +877,17 @@ async function main(): Promise<void> {
   if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
   }
-  if (!DEFAULT_CONFIG.relayerPrivateKey) {
-    throw new Error("RELAYER_PRIVATE_KEY not set");
+  if (!DEFAULT_CONFIG.relayerPrivateKey && !DEFAULT_CONFIG.relayerKmsKeyId) {
+    throw new Error("Either RELAYER_PRIVATE_KEY or RELAYER_KMS_KEY_ID must be set");
   }
-  // FIX H-9: Validate private key format before wallet creation
-  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
-    throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+  // FIX H-07: Prefer KMS in production
+  if (DEFAULT_CONFIG.relayerKmsKeyId) {
+    console.log("[Main] Using AWS KMS for Ethereum signing (H-07: key never in memory)");
+  } else {
+    // FIX H-9: Validate private key format before wallet creation
+    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
+      throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+    }
   }
   if (!DEFAULT_CONFIG.cantonParty) {
     throw new Error("CANTON_PARTY not set");
