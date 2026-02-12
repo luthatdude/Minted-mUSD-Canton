@@ -58,7 +58,7 @@ test_UnauthorizedMint = do
 
   -- Attacker tries to mint via SupplyService_VaultMint
   -- This should fail because attacker is not the operator
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd supplyServiceCid SupplyService_VaultMint with
       borrower = attacker
       borrowAmount = 1000.0
@@ -85,7 +85,7 @@ test_UnauthorizedLargeMintApproval = do
       observers = []
 
   -- Attacker tries to approve a large mint for themselves
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd supplyServiceCid SupplyService_ApproveLargeMint with
       borrower = attacker
       maxAmount = 500000.0
@@ -111,7 +111,7 @@ test_UnauthorizedTransfer = do
       observers = []
 
   -- Attacker tries to initiate transfer (not the owner)
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = attacker
 
@@ -322,7 +322,7 @@ test_NonGovernorCannotApprove = do
       observers = []
 
   -- Attacker (not a governor) tries to approve
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd proposalCid Gov.Proposal_Approve with
       approver = attacker
 
@@ -359,7 +359,7 @@ test_UnauthorizedUpgradeApproval = do
       status = Proposed
 
   -- Attacker (not in governance) tries to approve
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd proposalCid UpgradeProposal_Approve with
       approver = attacker
 

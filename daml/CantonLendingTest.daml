@@ -585,7 +585,7 @@ testLiquidationHealthyPositionFails = do
       active = True
 
   -- Liquidation should fail — position is healthy
-  submitMustFail setup.liquidator do
+  submitMultiMustFail [setup.liquidator] [setup.operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = setup.liquidator
       borrower = setup.user
@@ -910,7 +910,7 @@ testUnauthorizedDeposit = do
       privacyObservers = []
 
   -- Attacker tries to deposit user's coin
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = attacker
       coinCid
