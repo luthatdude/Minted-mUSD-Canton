@@ -10,20 +10,16 @@
 --
 --   When Ethereum Treasury generates yield:
 --     1. YieldSyncService calculates global share price on Ethereum
---     2. Multiple attestors independently submit attestations via SharePriceAttestation
---     3. SyncGlobalSharePrice requires quorum of matching attestations
---     4. All smUSD holders on both chains benefit equally
---     5. Users unstake at global share price → same yield rate everywhere
+--     2. Global share price is synced to Canton via SyncGlobalSharePrice
+--     3. All smUSD holders on both chains benefit equally
+--     4. Users unstake at global share price → same yield rate everywhere
 
 module CantonSMUSD where
 
 import DA.Time
-import DA.List (length, dedup, sort, (!!))
-import DA.Foldable (forA_)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
-import Compliance (ComplianceRegistry, ValidateTransfer(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -32,14 +28,14 @@ import Compliance (ComplianceRegistry, ValidateTransfer(..))
 -- | Individual smUSD position.
 -- Represents a user's share in the yield vault.
 -- Amount is in "shares" — redeemable for mUSD at current share price.
--- Added stakedAt timestamp for cooldown enforcement
+-- FIX D-M01: Added stakedAt timestamp for cooldown enforcement
 template CantonSMUSD
   with
     issuer : Party
     owner : Party
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
-    stakedAt : Time         -- Timestamp when staked (for cooldown)
+    stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
     privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -54,19 +50,12 @@ template CantonSMUSD
       controller owner
       do create this with privacyObservers = newObservers
 
-    -- Use proposal pattern for safe dual-signatory transfers
-    -- Added compliance check (was missing — unlike CantonMUSD_Transfer)
+    -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- Compliance check is mandatory — validates sender/receiver
-        -- against blacklist and freeze list, matching CantonMUSD_Transfer pattern
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = owner
-          receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
@@ -91,15 +80,9 @@ template CantonSMUSD
         assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
         assertMsg "OWNER_MISMATCH" (other.owner == owner)
         archive otherCid
-        -- Use the MORE RECENT stakedAt to prevent cooldown bypass.
-        -- Without this, a user could merge recently-staked shares into an older position
-        -- to inherit the older stakedAt and bypass the cooldown period.
-        let mergedStakedAt = if other.stakedAt > stakedAt then other.stakedAt else stakedAt
-        create this with
-          shares = shares + other.shares
-          stakedAt = mergedStakedAt
+        create this with shares = shares + other.shares
 
--- | Transfer proposal for CantonSMUSD (dual-signatory safe)
+-- | FIX DL-C2: Transfer proposal for CantonSMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonSMUSDTransferProposal
   with
@@ -122,53 +105,11 @@ template CantonSMUSDTransferProposal
       do create smusd
 
 -- ============================================================
---                     SECTION 1b: SHARE PRICE ATTESTATION
--- ============================================================
-
--- | SharePriceAttestation — Independent attestation of cross-chain share price.
--- Instead of trusting a single relay operator to sync share prices,
--- we require multiple independent attestors (validators) to submit matching
--- attestations before the price is accepted. This eliminates the single-relay
--- trust boundary.
---
--- Flow:
---   1. Each attestor independently reads TreasuryV2.totalValue() from Ethereum
---   2. Each submits a SharePriceAttestation on Canton
---   3. SyncGlobalSharePrice collects attestation CIDs and requires:
---      a) At least `minAttestors` unique attestations
---      b) All attested prices within `maxAttestationDeviationBps` of each other
---      c) Governance proof (existing requirement)
---   4. The median price from attestations is used as the synced value
-template SharePriceAttestation
-  with
-    attestor    : Party        -- The validator/relay submitting this attestation
-    operator    : Party        -- Protocol operator (observer)
-    epochNumber : Int          -- Which sync epoch this attests to
-    attestedSharePrice   : Money   -- Share price this attestor observed
-    attestedTotalAssets  : Money   -- Total assets this attestor observed
-    attestedTotalShares  : Money   -- Total shares this attestor observed
-    attestedAt  : Time         -- When attestation was created
-  where
-    signatory attestor
-    observer operator
-
-    ensure attestedSharePrice > 0.0
-        && attestedTotalAssets >= 0.0
-        && attestedTotalShares >= 0.0
-        && epochNumber > 0
-
-    -- | Operator consumes attestation after using it in sync
-    choice ConsumeAttestation : SharePriceAttestation
-      controller operator
-      do return this
-
--- ============================================================
 --                     SECTION 2: STAKING SERVICE
 -- ============================================================
 
 -- | Canton smUSD staking service with UNIFIED cross-chain yield.
 -- Uses global share price synced from Ethereum for equal yield distribution.
--- Requires multi-attestor quorum for share price syncs.
 template CantonStakingService
   with
     operator : Party
@@ -181,29 +122,17 @@ template CantonStakingService
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
     paused : Bool
-    -- Track mUSD minted during unstake for supply cap enforcement
-    unstakeMintedTotal : Money    -- Cumulative mUSD minted via unstake
-    unstakeMintCap : Money        -- Maximum mUSD mintable via unstake before governance reset
-    -- Multi-attestor configuration
-    authorizedAttestors : [Party]         -- Parties allowed to submit attestations
-    minAttestors : Int                    -- Minimum attestations required for sync (quorum)
-    maxAttestationDeviationBps : Int      -- Max allowed deviation between attestors (e.g. 100 = 1%)
-    -- Compliance integration
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    -- DAML-H-04: Mandatory compliance — all stakers must pass blacklist/freeze checks
+    complianceRegistryCid : ContractId ComplianceRegistry
     -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
     mpaHash : Text
     mpaUri : Text
     observers : [Party]         -- Users who can exercise Stake/Unstake
   where
     signatory operator
-    observer observers ++ authorizedAttestors
+    observer observers
 
     ensure totalShares >= 0.0 && globalSharePrice > 0.0
-        && unstakeMintedTotal >= 0.0
-        && unstakeMintCap > 0.0     
-        && minAttestors > 0
-        && DA.List.length authorizedAttestors >= minAttestors
-        && maxAttestationDeviationBps > 0
 
     -- | Current share price: uses GLOBAL share price for unified yield
     nonconsuming choice GetSharePrice : Money
@@ -221,10 +150,8 @@ template CantonStakingService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
-        -- Compliance check before staking
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
+        -- DAML-H-04: Mandatory compliance check — staker must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
@@ -238,7 +165,7 @@ template CantonStakingService
         exercise musdCid CantonMUSD_Burn
 
         -- Issue smUSD shares
-        -- Record staked timestamp for cooldown enforcement
+        -- FIX D-M01: Record staked timestamp for cooldown enforcement
         now <- getTime
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
@@ -249,6 +176,9 @@ template CantonStakingService
           stakedAt = now
           privacyObservers = userObs
 
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
+
         -- Update pool state (local shares only - global sync happens via bridge)
         newService <- create this with
           totalShares = totalShares + newShares
@@ -257,7 +187,7 @@ template CantonStakingService
 
     -- | Unstake: smUSD shares → mUSD at GLOBAL share price
     -- User redeems shares at the unified global share price (includes all yield)
-    -- Enforce cooldown period symmetry with Solidity's 24h unstake cooldown
+    -- FIX D-M01: Enforce cooldown period symmetry with Solidity's 24h unstake cooldown
     choice Unstake : (ContractId CantonStakingService, ContractId CantonMUSD)
       with
         user : Party
@@ -266,15 +196,13 @@ template CantonStakingService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
-        -- Compliance check before unstaking
-        case complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = operator; receiver = user
-          None -> pure ()
+        -- DAML-H-04: Mandatory compliance check — unstaker must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
 
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
 
-        -- Enforce cooldown period before allowing unstake
+        -- FIX D-M01: Enforce cooldown period before allowing unstake
         now <- getTime
         let cooldownRel = seconds cooldownSeconds
         let elapsed = subTime now smusd.stakedAt
@@ -282,12 +210,6 @@ template CantonStakingService
 
         -- Calculate mUSD value using GLOBAL share price
         let musdAmount = smusd.shares * globalSharePrice
-
-        -- Enforce unstake mint supply cap to prevent unbounded mUSD minting.
-        -- Tracks cumulative mUSD minted via unstake and caps it.
-        -- The cap can be reset by governance via Staking_ResetUnstakeMintCounter.
-        assertMsg "UNSTAKE_SHARES_EXCEED_TOTAL" (smusd.shares <= totalShares)
-        assertMsg "UNSTAKE_MINT_CAP_EXCEEDED" (unstakeMintedTotal + musdAmount <= unstakeMintCap)
 
         -- Burn smUSD shares
         archive smusdCid
@@ -302,141 +224,66 @@ template CantonStakingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
+
         -- Update pool state
-        -- Track cumulative mUSD minted via unstake for supply cap enforcement
         newService <- create this with
           totalShares = totalShares - smusd.shares
-          unstakeMintedTotal = unstakeMintedTotal + musdAmount
 
         return (newService, musdCid)
 
     -- | Sync global share price from Ethereum (replaces old SyncYield)
-    -- Called by operator after multiple attestors independently submit share price attestations.
-    -- Governance-gated admin choice
-    -- Converted to consuming (was nonconsuming+archive-self)
-    -- Requires quorum of independent attestations with price agreement
+    -- Called by operator after YieldSyncService calculates global share price
     choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
-        attestationCids : [ContractId SharePriceAttestation]  -- attestation proofs
+        newGlobalSharePrice : Money   -- Global share price from Ethereum
+        newGlobalTotalAssets : Money  -- Total assets across both chains
+        newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
-
-        -- Require minimum number of attestations (quorum)
-        let numAttestations = DA.List.length attestationCids
-        assertMsg "INSUFFICIENT_ATTESTATIONS" (numAttestations >= minAttestors)
-
-        -- Consume all attestations, verify each one
-        attestations <- mapA (\cid -> exercise cid ConsumeAttestation) attestationCids
-
-        -- Verify all attestations are for this epoch
-        forA_ attestations $ \a ->
-          assertMsg "ATTESTATION_EPOCH_MISMATCH" (a.epochNumber == epochNumber)
-
-        -- Verify all attestors are authorized and unique
-        let attestorParties = map (\a -> a.attestor) attestations
-        let uniqueAttestors = dedup attestorParties
-        assertMsg "DUPLICATE_ATTESTORS" (DA.List.length uniqueAttestors == numAttestations)
-        forA_ uniqueAttestors $ \p ->
-          assertMsg "UNAUTHORIZED_ATTESTOR" (p `elem` authorizedAttestors)
-
-        -- Verify all attested prices are within deviation tolerance
-        let prices = map (\a -> a.attestedSharePrice) attestations
-        let maxPrice = foldl max 0.0 prices
-        let minPrice = foldl min maxPrice prices
-        let deviationBps = if minPrice > 0.0
-              then ((maxPrice - minPrice) / minPrice) * 10000.0
-              else 0.0
-        assertMsg "ATTESTATION_PRICE_DEVIATION_TOO_LARGE" (deviationBps <= intToNumeric maxAttestationDeviationBps)
-
-        -- Use median price from attestations (not operator-supplied)
-        let sortedPrices = sort prices
-        -- Use lower-median for conservative bias on even attestor counts
-        let mid = (DA.List.length sortedPrices - 1) / 2
-        let medianPrice = sortedPrices !! mid
-
-        -- Allow share price decrease for slashing/loss events, but cap at 10% max decrease
+        assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
+        -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
-        assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (medianPrice >= minAllowedPrice)
-        assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (medianPrice > 0.0)
+        assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
 
-        -- Use median values from attestations for total assets/shares
-        let sortedAssets = sort (map (\a -> a.attestedTotalAssets) attestations)
-        let medianAssets = sortedAssets !! mid
-        let sortedShares = sort (map (\a -> a.attestedTotalShares) attestations)
-        let medianShares = sortedShares !! mid
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
 
         create this with
-          globalSharePrice = medianPrice
-          globalTotalAssets = medianAssets
-          globalTotalShares = medianShares
+          globalSharePrice = newGlobalSharePrice
+          globalTotalAssets = newGlobalTotalAssets
+          globalTotalShares = newGlobalTotalShares
           lastSyncEpoch = epochNumber
 
-    -- ⚠️ DEPRECATED: Use SyncGlobalSharePrice instead.
-    -- This choice exists only for backwards compatibility with existing relay code.
-    -- It will be removed in the next major version.
-    -- Governance-gated admin choice
-    -- Converted to consuming (was nonconsuming+archive-self)
-    -- Added same guards as SyncGlobalSharePrice (10% decrease cap, positivity)
+    -- | Legacy SyncYield for backwards compatibility (deprecated)
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
         yieldAccrued : Money
         epochNumber : Int
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Fully deprecate — this choice bypasses attestation quorum
-        assertMsg "DEPRECATED_USE_SyncGlobalSharePrice" False
-        -- Unreachable: kept for type-checker only
-        create this
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
+        -- Convert to global share price model
+        let newSharePrice = if globalTotalShares > 0.0
+              then newTotalTreasuryAssets / globalTotalShares
+              else globalSharePrice
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
+        create this with
+          globalSharePrice = newSharePrice
+          globalTotalAssets = newTotalTreasuryAssets
+          lastSyncEpoch = epochNumber
 
     -- | Admin: Pause/unpause
-    -- Governance-gated admin choice
-    -- Converted to consuming (was nonconsuming+archive-self)
     choice Staking_SetPaused : ContractId CantonStakingService
       with
         newPaused : Bool
-        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
+        -- FIX CRITICAL: Archive old service before creating new one
+        archive self
         create this with paused = newPaused
-
-    -- Governance-gated reset of unstake mint counter
-    -- Allows governance to reset the cumulative unstake mint counter when needed
-    choice Staking_ResetUnstakeMintCounter : ContractId CantonStakingService
-      with
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
-        create this with unstakeMintedTotal = 0.0
-
-    -- Governance-gated update of unstake mint cap
-    choice Staking_UpdateUnstakeMintCap : ContractId CantonStakingService
-      with
-        newCap : Money
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonSMUSD")
-        assertMsg "CAP_MUST_BE_POSITIVE" (newCap > 0.0)
-        create this with unstakeMintCap = newCap

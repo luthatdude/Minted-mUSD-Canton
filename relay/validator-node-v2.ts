@@ -19,8 +19,11 @@ import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
 import { formatKMSSignature } from "./signer";
-import { readSecret } from "./utils";
+import { readSecret, enforceTLSSecurity, requireHTTPS } from "./utils";
 import * as fs from "fs";
+
+// INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION

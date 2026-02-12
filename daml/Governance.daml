@@ -258,6 +258,8 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         create this with
           minters = (newMinter, quota) :: minters
@@ -272,6 +274,8 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         create this with
           minters = filter (\(p, _) -> p /= minterToRemove) minters
@@ -306,6 +310,8 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         let updateQuota (p, q) = if p == minter then (p, q + additionalQuota) else (p, q)
         create this with
@@ -383,6 +389,8 @@ template EmergencyPauseState
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         assertMsg "NOT_PAUSED" isPaused
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         now <- getTime
         
         create this with
