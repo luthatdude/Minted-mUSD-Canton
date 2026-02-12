@@ -244,12 +244,20 @@ contract CollateralVaultUpgradeable is
     // INTERNAL
     // ══════════════════════════════════════════════════════════════════════
 
+    /// @notice FIX HIGH-15: Wrapped in try/catch to prevent oracle circuit breaker
+    /// from permanently blocking withdrawals during extreme price moves
     function _checkHealthFactor(address user) internal view {
         if (borrowModule != address(0)) {
             uint256 debt = IBorrowModule(borrowModule).totalDebt(user);
             if (debt > 0) {
-                uint256 hf = IBorrowModule(borrowModule).healthFactor(user);
-                require(hf >= 10000, "HEALTH_FACTOR_TOO_LOW");
+                // Use try/catch: if oracle circuit breaker trips, allow withdrawal
+                // rather than trapping user funds indefinitely
+                try IBorrowModule(borrowModule).healthFactor(user) returns (uint256 hf) {
+                    require(hf >= 10000, "HEALTH_FACTOR_TOO_LOW");
+                } catch {
+                    // Oracle circuit breaker triggered — fall through to allow withdrawal
+                    // Users can still be liquidated via LiquidationEngine's unsafe path
+                }
             }
         }
     }

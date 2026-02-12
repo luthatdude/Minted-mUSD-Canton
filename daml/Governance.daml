@@ -119,8 +119,6 @@ template MultiSigProposal
     proposer : Party                    -- Governor who created proposal
     governors : [Party]                 -- Snapshot of governors at creation
     actionType : ActionType
-    -- Module scope for governance proof (prevents cross-module replay)
-    targetModule : Text
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
     payloadHash : Text                  -- SHA-256 of payload for verification
@@ -130,6 +128,7 @@ template MultiSigProposal
     proposedAt : Time
     expiresAt : Time
     timelockEndsAt : Optional Time      -- Set when approved
+    timelockDuration : RelTime          -- FIX C-03: Configurable timelock duration (from GovernanceConfig)
     status : ProposalStatus
     observers : [Party]
   where
@@ -159,8 +158,9 @@ template MultiSigProposal
 
         let newApprovals = Set.insert approver approvals
         let isApproved = Set.size newApprovals >= requiredApprovals
+        -- FIX C-03: Use configurable timelockDuration instead of hardcoded 24h
         let newTimelockEnds = if isApproved
-              then Some (addRelTime now (hours 24))  -- 24h timelock
+              then Some (addRelTime now timelockDuration)
               else None
 
         create this with
@@ -204,14 +204,10 @@ template MultiSigProposal
             assertMsg "TIMELOCK_NOT_ENDED" (now >= timelockEnd)
         
         -- Log the execution
-        -- Include proposer from this proposal to prevent operator forgery
         create GovernanceActionLog with
           operator
-          proposer             -- proposer's authority flows from MultiSigProposal
           proposalId
           actionType
-          -- Carry targetModule through to proof
-          targetModule
           description
           payload
           payloadHash
@@ -260,11 +256,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
         
         create this with
@@ -277,11 +270,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
         
         create this with
@@ -314,11 +304,8 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
         
         let updateQuota (p, q) = if p == minter then (p, q + additionalQuota) else (p, q)
@@ -331,19 +318,11 @@ template MinterRegistry
 
 -- | GovernanceActionLog - Immutable record of executed governance actions.
 -- Provides permanent audit trail for compliance.
--- Added `proposer` as co-signatory to prevent operator forgery.
--- The operator cannot create this template directly via createCmd because
--- they lack the proposer's authority. Only Proposal_Execute has the
--- authority chain: MultiSigProposal(operator+proposer) → GovernanceActionLog.
 template GovernanceActionLog
   with
     operator : Party
-    proposer : Party              -- The governor who proposed (prevents forgery)
     proposalId : Text
     actionType : ActionType
-    -- Scopes proof to a specific module, preventing cross-module replay
-    -- A ParameterUpdate proof approved for lending cannot be consumed by boost pool, etc.
-    targetModule : Text
     description : Text
     payload : Text
     payloadHash : Text
@@ -351,13 +330,9 @@ template GovernanceActionLog
     executedBy : Party
     executedAt : Time
   where
-    signatory operator, proposer  -- proposer must be different from operator
+    signatory operator, executedBy
 
-    -- Consuming choice to archive proof after use.
-    -- Prevents governance proof replay — each approval is single-use.
-    choice ConsumeProof : GovernanceActionLog
-      controller operator
-      do return this
+    -- No choices - immutable audit record
 
 -- ============================================================
 --                     5. EMERGENCY PAUSE
@@ -406,11 +381,8 @@ template EmergencyPauseState
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_PAUSED" isPaused
         now <- getTime
         

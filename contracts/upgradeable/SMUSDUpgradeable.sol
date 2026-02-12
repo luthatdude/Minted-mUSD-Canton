@@ -75,12 +75,12 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  /// @dev Prevents a single compromised strategy from inflating totalValue() unboundedly
  uint256 public constant MAX_GLOBAL_ASSETS_GROWTH_BPS = 500;
 
- // Events
- event YieldDistributed(address indexed from, uint256 amount);
- event CooldownUpdated(address indexed account, uint256 timestamp);
- event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
- event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
- event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
+    /// @notice FIX CRIT-02: Minimum interval between refreshGlobalAssets() calls
+    /// @dev Prevents rapid-fire ratcheting of the cache baseline
+    uint256 public constant MIN_REFRESH_INTERVAL = 1 hours;
+
+    /// @notice FIX CRIT-02: Timestamp of last refreshGlobalAssets() call
+    uint256 public lastRefreshTime;
  event GlobalAssetsRefreshed(uint256 newGlobalAssets, uint256 usdcValue);
 
  /// @custom:oz-upgrades-unsafe-allow constructor
@@ -124,11 +124,12 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  // shares, the fallback to local totalAssets() would dilute existing holders.
  function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
  if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
- // Force-populate the cache before first deposit when Canton shares exist
- uint256 usdcValue = ITreasuryV2(treasury).totalValue();
- lastKnownGlobalAssets = usdcValue * 1e12;
- }
- lastDeposit[receiver] = block.timestamp;
+  // FIX H-S01: Wrap in try/catch to prevent deposit revert-lock when treasury is down
+  try ITreasuryV2(treasury).totalValue() returns (uint256 usdcValue) {
+  lastKnownGlobalAssets = usdcValue * 1e12;
+  } catch {
+  // Treasury unreachable — proceed with local totalAssets fallback
+  }
  emit CooldownUpdated(receiver, block.timestamp);
  return super.deposit(assets, receiver);
  }
@@ -139,10 +140,12 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  // Same globalTotalAssets cache guard as deposit()
  function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
  if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
- uint256 usdcValue = ITreasuryV2(treasury).totalValue();
- lastKnownGlobalAssets = usdcValue * 1e12;
- }
- lastDeposit[receiver] = block.timestamp;
+  // FIX H-S01: Wrap in try/catch to prevent mint revert-lock when treasury is down
+  try ITreasuryV2(treasury).totalValue() returns (uint256 usdcValue) {
+  lastKnownGlobalAssets = usdcValue * 1e12;
+  } catch {
+  // Treasury unreachable — proceed with local totalAssets fallback
+  }
  emit CooldownUpdated(receiver, block.timestamp);
  return super.mint(shares, receiver);
  }
@@ -348,23 +351,24 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  function refreshGlobalAssets() external onlyRole(YIELD_MANAGER_ROLE) {
  require(treasury != address(0), "NO_TREASURY");
  require(globalTotalShares() > 0, "NO_SHARES_EXIST");
- uint256 usdcValue = ITreasuryV2(treasury).totalValue();
- uint256 newGlobalAssets = usdcValue * 1e12;
+    // FIX CRIT-02: Enforce minimum interval between refreshes to prevent ratcheting
+    require(block.timestamp >= lastRefreshTime + MIN_REFRESH_INTERVAL, "REFRESH_TOO_FREQUENT");
 
- // Apply same growth cap as globalTotalAssets() to prevent
- // a compromised strategy from inflating the cache baseline.
- uint256 cached = lastKnownGlobalAssets;
- if (cached > 0) {
- uint256 maxAllowed = cached + (cached * MAX_GLOBAL_ASSETS_GROWTH_BPS) / 10000;
- if (newGlobalAssets > maxAllowed) {
- newGlobalAssets = maxAllowed;
- }
- }
+    uint256 usdcValue = ITreasuryV2(treasury).totalValue();
+    uint256 newGlobalAssets = usdcValue * 1e12;
 
- lastKnownGlobalAssets = newGlobalAssets;
- emit GlobalAssetsRefreshed(newGlobalAssets, usdcValue);
- }
+    // Apply same growth cap as globalTotalAssets() to prevent
+    // a compromised strategy from inflating the cache baseline.
+    uint256 cached = lastKnownGlobalAssets;
+    if (cached > 0) {
+    uint256 maxAllowed = cached + (cached * MAX_GLOBAL_ASSETS_GROWTH_BPS) / 10000;
+    if (newGlobalAssets > maxAllowed) {
+    newGlobalAssets = maxAllowed;
+    }
+    }
 
+    lastKnownGlobalAssets = newGlobalAssets;
+    lastRefreshTime = block.timestamp;
  /// @notice Global share price used for both chains
  /// @dev sharePrice = globalTotalAssets / globalTotalShares
  /// @return Share price in asset decimals (6 for USDC)

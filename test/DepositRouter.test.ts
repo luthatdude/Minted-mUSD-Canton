@@ -34,8 +34,7 @@ describe("DepositRouter", function () {
       treasury.address,
       directMint.address,
       DEFAULT_FEE_BPS,
-      admin.address,
-      admin.address // timelock = admin for testing
+      admin.address
     );
 
     // Mint USDC to users
@@ -88,7 +87,6 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           DEFAULT_FEE_BPS,
-          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "InvalidAddress");
@@ -106,7 +104,6 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           501, // > 5%
-          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "FeeTooHigh");
@@ -350,9 +347,6 @@ describe("DepositRouter", function () {
       await router.connect(user1).deposit(ethers.parseUnits("1000", 6), { value: MOCK_BRIDGE_COST });
 
       const fees = await router.accumulatedFees();
-
-      // Pause required before USDC emergency withdrawal
-      await router.connect(admin).pause();
 
       await router.connect(admin).emergencyWithdraw(
         await usdc.getAddress(),

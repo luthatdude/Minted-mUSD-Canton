@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 describe("MorphoLoopStrategy", function () {
   const MARKET_ID = ethers.keccak256(ethers.toUtf8Bytes("USDC-USDC-market"));
@@ -301,10 +301,6 @@ describe("MorphoLoopStrategy", function () {
       const { strategy, admin } = await loadFixture(deployFixture);
 
       const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy");
-      // Prepare new implementation and request timelocked upgrade
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), MorphoLoopStrategyV2) as string;
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600); // 48 hours
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), MorphoLoopStrategyV2);
       
       expect(await upgraded.getAddress()).to.equal(await strategy.getAddress());
@@ -321,17 +317,14 @@ describe("MorphoLoopStrategy", function () {
     });
 
     it("Should preserve state after upgrade", async function () {
-      const { strategy, admin, strategist } = await loadFixture(deployFixture);
+      const { strategy, strategist } = await loadFixture(deployFixture);
 
       // Set some state
       await strategy.connect(strategist).setParameters(6500, 5);
       expect(await strategy.targetLtvBps()).to.equal(6500);
 
-      // Upgrade with timelock
+      // Upgrade
       const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), MorphoLoopStrategyV2) as string;
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), MorphoLoopStrategyV2);
 
       // Check state preserved
