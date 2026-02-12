@@ -7,6 +7,8 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
+import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockSetFees, timelockSetFeeRecipient } from "./helpers/timelock";
 
 describe("DirectMintV2", function () {
   let directMint: DirectMintV2;
@@ -96,7 +98,7 @@ describe("DirectMintV2", function () {
   describe("Minting", function () {
     it("Should mint mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedMusd = ethers.parseUnits("1000", MUSD_DECIMALS); // 1000 mUSD
@@ -110,7 +112,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply mint fee correctly", async function () {
       // Set 1% mint fee
-      await directMint.setFees(100, 0); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 100, 0); // 100 bps = 1%
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedFee = ethers.parseUnits("10", USDC_DECIMALS); // 10 USDC fee
@@ -174,7 +176,7 @@ describe("DirectMintV2", function () {
 
     it("Should redeem mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default mint fee is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const expectedUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -193,7 +195,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply redeem fee correctly", async function () {
       // Set 1% redeem fee
-      await directMint.setFees(0, 100); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 0, 100); // 100 bps = 1%
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const grossUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -222,7 +224,9 @@ describe("DirectMintV2", function () {
 
   describe("Fee Management", function () {
     it("Should allow fee manager to update fees", async function () {
-      await expect(directMint.setFees(50, 75)) // 0.5% mint, 0.75% redeem
+      await directMint.requestFees(50, 75); // 0.5% mint, 0.75% redeem
+      await time.increase(48 * 3600);
+      await expect(directMint.executeFees())
         .to.emit(directMint, "FeesUpdated")
         .withArgs(50, 75);
 
@@ -231,13 +235,13 @@ describe("DirectMintV2", function () {
     });
 
     it("Should reject fees above maximum", async function () {
-      await expect(directMint.setFees(600, 0)) // 6% > 5% max
+      await expect(directMint.requestFees(600, 0)) // 6% > 5% max
         .to.be.revertedWith("MINT_FEE_TOO_HIGH");
     });
 
     it("Should allow fee withdrawal", async function () {
       // Set fees and mint
-      await directMint.setFees(100, 0); // 1% mint fee
+      await timelockSetFees(directMint, deployer, 100, 0); // 1% mint fee
       const usdcAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await directMint.connect(user).mint(usdcAmount);
 
@@ -256,7 +260,9 @@ describe("DirectMintV2", function () {
     it("Should update fee recipient", async function () {
       const newRecipient = user.address;
 
-      await expect(directMint.setFeeRecipient(newRecipient))
+      await directMint.requestFeeRecipient(newRecipient);
+      await time.increase(48 * 3600);
+      await expect(directMint.executeFeeRecipient())
         .to.emit(directMint, "FeeRecipientUpdated")
         .withArgs(feeRecipient.address, newRecipient);
 
@@ -292,7 +298,7 @@ describe("DirectMintV2", function () {
     });
 
     it("Should reject fee changes from non-fee-manager", async function () {
-      await expect(directMint.connect(user).setFees(100, 100))
+      await expect(directMint.connect(user).requestFees(100, 100))
         .to.be.reverted;
     });
 

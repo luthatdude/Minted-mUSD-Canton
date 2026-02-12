@@ -8,6 +8,7 @@ import {
   MockAggregatorV3,
 } from '../typechain-types';
 import { HardhatEthersSigner } from '@nomicfoundation/hardhat-ethers/signers';
+import { timelockSetFeed, timelockAddCollateral, refreshFeeds } from './helpers/timelock';
 
 describe('LeverageVault', function () {
   let leverageVault: LeverageVault;
@@ -42,7 +43,8 @@ describe('LeverageVault', function () {
     priceOracle = await PriceOracle.deploy();
 
     // Configure price oracle (token, feed, stalePeriod, tokenDecimals)
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, owner,
       await weth.getAddress(),
       await wethPriceFeed.getAddress(),
       3600, // 1 hour stale period
@@ -54,12 +56,15 @@ describe('LeverageVault', function () {
     collateralVault = await CollateralVault.deploy();
 
     // Add WETH as collateral (75% LTV, 80% liquidation threshold, 5% penalty)
-    await collateralVault.addCollateral(
+    await timelockAddCollateral(
+      collateralVault, owner,
       await weth.getAddress(),
       7500, // 75% collateral factor
       8000, // 80% liquidation threshold
       500   // 5% liquidation penalty
     );
+
+    await refreshFeeds(wethPriceFeed);
 
     // Deploy mUSD contract (with mint/burn roles)
     const MUSD = await ethers.getContractFactory('MUSD');

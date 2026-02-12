@@ -13,6 +13,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockSetFeed, timelockAddCollateral, refreshFeeds } from "./helpers/timelock";
 
 // ============================================================
 //  DEPLOYMENT FIXTURE
@@ -34,17 +35,20 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
 
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     // Deploy CollateralVault
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
-    await collateralVault.addCollateral(
+    await timelockAddCollateral(
+      collateralVault, owner,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       500   // 5% penalty
     );
+
+    await refreshFeeds(ethFeed);
 
     // Deploy BorrowModule
     const BorrowModule = await ethers.getContractFactory("BorrowModule");

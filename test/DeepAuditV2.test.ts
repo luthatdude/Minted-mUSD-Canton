@@ -23,6 +23,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   // ── actors ──
@@ -161,13 +162,13 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
     await vault.grantRole(BORROW_MODULE_ROLE, await borrowModule.getAddress());
     await vault.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await vault.grantRole(PAUSER_ROLE, pauser.address);
-    await vault.setBorrowModule(await borrowModule.getAddress());
+    await timelockSetBorrowModule(vault, admin, await borrowModule.getAddress());
 
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await borrowModule.grantRole(BORROW_ADMIN_ROLE, admin.address);
-    await borrowModule.setInterestRateModel(await interestRateModel.getAddress());
-    await borrowModule.setSMUSD(await smusd.getAddress());
-    await borrowModule.setTreasury(await treasury.getAddress());
+    await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
+    await timelockSetSMUSD(borrowModule, admin, await smusd.getAddress());
+    await timelockSetTreasury(borrowModule, admin, await treasury.getAddress());
 
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
     await treasury.grantRole(STRATEGIST_ROLE, admin.address);
@@ -177,12 +178,15 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
     await smusd.grantRole(INTEREST_ROUTER_ROLE, await borrowModule.getAddress());
 
     // ── Setup Price Feeds ──
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, WETH_DECIMALS);
-    await priceOracle.setFeed(await wbtc.getAddress(), await btcFeed.getAddress(), 3600, WBTC_DECIMALS);
+    await timelockSetFeed(priceOracle, admin, await weth.getAddress(), await ethFeed.getAddress(), 3600, WETH_DECIMALS);
+    await timelockSetFeed(priceOracle, admin, await wbtc.getAddress(), await btcFeed.getAddress(), 3600, WBTC_DECIMALS);
 
     // ── Setup Collateral ──
-    await vault.addCollateral(await weth.getAddress(), 7500, 8000, 500);
-    await vault.addCollateral(await wbtc.getAddress(), 7000, 7500, 500);
+    await timelockAddCollateral(vault, admin, await weth.getAddress(), 7500, 8000, 500);
+    await timelockAddCollateral(vault, admin, await wbtc.getAddress(), 7000, 7500, 500);
+
+    // ── Refresh price feeds after timelock advances ──
+    await refreshFeeds(ethFeed, btcFeed);
 
     // ── Mint test tokens ──
     await usdc.mint(user1.address, ethers.parseUnits("1000000", USDC_DECIMALS));
@@ -295,8 +299,8 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   describe("2. P0: Treasury Strategy DoS Resistance", function () {
     it("should return correct totalValue when a strategy reverts", async function () {
       // Add two strategies
-      await treasury.addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true);
-      await treasury.addStrategy(await mockStrategy2.getAddress(), 3000, 1000, 5000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 5000, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy2.getAddress(), 3000, 1000, 5000, true);
 
       // Deposit USDC to treasury
       const depositAmount = ethers.parseUnits("10000", USDC_DECIMALS);
@@ -319,7 +323,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
     });
 
     it("should allow deposits and withdrawals when strategies are healthy", async function () {
-      await treasury.addStrategy(await mockStrategy.getAddress(), 8000, 2000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 8000, 2000, 10000, true);
 
       const depositAmount = ethers.parseUnits("5000", USDC_DECIMALS);
       await usdc.mint(admin.address, depositAmount);
@@ -340,7 +344,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   // ================================================================
   describe("3. P0: Strategy Force Removal", function () {
     it("should force-remove a strategy even when withdrawAll fails", async function () {
-      await treasury.addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 5000, 2000, 8000, true);
 
       // Deposit
       const depositAmount = ethers.parseUnits("10000", USDC_DECIMALS);
@@ -353,13 +357,11 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       await mockStrategy.setWithdrawShouldFail(true);
 
       // removeStrategy should NOT revert — should force-deactivate
-      await expect(
-        treasury.removeStrategy(await mockStrategy.getAddress())
-      ).to.emit(treasury, "StrategyForceDeactivated");
+      await timelockRemoveStrategy(treasury, admin, await mockStrategy.getAddress());
     });
 
     it("should still remove strategy normally when withdrawAll succeeds", async function () {
-      await treasury.addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 5000, 2000, 8000, true);
 
       const depositAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await usdc.mint(admin.address, depositAmount);
@@ -368,9 +370,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       await treasury.depositFromVault(depositAmount);
 
       // Remove normally — should succeed
-      await expect(
-        treasury.removeStrategy(await mockStrategy.getAddress())
-      ).to.emit(treasury, "StrategyRemoved");
+      await timelockRemoveStrategy(treasury, admin, await mockStrategy.getAddress());
     });
   });
 
@@ -570,13 +570,13 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
       for (let i = 0; i < 48; i++) {
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 5000, 6000, 300);
+        await timelockAddCollateral(vault, admin, await token.getAddress(), 5000, 6000, 300);
       }
 
       // 50th should fail
       const extraToken = await MockERC20F.deploy("Extra", "EXTRA", 18);
       await expect(
-        vault.addCollateral(await extraToken.getAddress(), 5000, 6000, 300)
+        vault.requestAddCollateral(await extraToken.getAddress(), 5000, 6000, 300)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
 
@@ -591,18 +591,18 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
       for (let i = 0; i < 47; i++) {
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 5000, 6000, 300);
+        await timelockAddCollateral(vault, admin, await token.getAddress(), 5000, 6000, 300);
       }
 
       // Now at 49 tokens. Add one more to reach 50.
       const token49 = await MockERC20F.deploy("Token49", "TK49", 18);
-      await vault.addCollateral(await token49.getAddress(), 5000, 6000, 300);
+      await timelockAddCollateral(vault, admin, await token49.getAddress(), 5000, 6000, 300);
       // Now at 50 — disable one (stays in array per H-01 fix)
       await vault.disableCollateral(await token49.getAddress());
       // Array still has 50 entries — adding 51st should fail
       const token50 = await MockERC20F.deploy("Token50", "TK50", 18);
       await expect(
-        vault.addCollateral(await token50.getAddress(), 5000, 6000, 300)
+        vault.requestAddCollateral(await token50.getAddress(), 5000, 6000, 300)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
       // Re-enabling token49 should succeed (no push needed, already in array)
       await vault.enableCollateral(await token49.getAddress());
@@ -866,12 +866,12 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
     it("should reject interest rate above 50% APR", async function () {
       await expect(
-        borrowModule.setInterestRate(5001)
+        borrowModule.requestInterestRate(5001)
       ).to.be.revertedWith("RATE_TOO_HIGH");
     });
 
     it("should allow interest rate up to 50% APR", async function () {
-      await borrowModule.setInterestRate(5000);
+      await timelockSetInterestRate(borrowModule, admin, 5000);
       expect(await borrowModule.interestRateBps()).to.equal(5000);
     });
   });
@@ -881,7 +881,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   // ================================================================
   describe("14. Treasury Fee Accrual Edge Cases", function () {
     it("should enforce minimum accrual interval", async function () {
-      await treasury.addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 5000, 2000, 8000, true);
 
       const depositAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await usdc.mint(admin.address, depositAmount);
@@ -904,7 +904,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
     });
 
     it("should correctly separate yield from deposits", async function () {
-      await treasury.addStrategy(await mockStrategy.getAddress(), 8000, 2000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 8000, 2000, 10000, true);
 
       const depositAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await usdc.mint(admin.address, depositAmount);
@@ -1095,11 +1095,11 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   describe("17. Access Control Exhaustive", function () {
     it("should reject unauthorized strategy operations on Treasury", async function () {
       await expect(
-        treasury.connect(user1).addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true)
+        treasury.connect(user1).requestAddStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true)
       ).to.be.reverted;
 
       await expect(
-        treasury.connect(user1).removeStrategy(await mockStrategy.getAddress())
+        treasury.connect(user1).requestRemoveStrategy(await mockStrategy.getAddress())
       ).to.be.reverted;
     });
 
@@ -1114,7 +1114,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       const newToken = await MockERC20F.deploy("NewToken", "NEW", 18);
 
       await expect(
-        vault.connect(user1).addCollateral(await newToken.getAddress(), 5000, 6000, 300)
+        vault.connect(user1).requestAddCollateral(await newToken.getAddress(), 5000, 6000, 300)
       ).to.be.reverted;
 
       await expect(
@@ -1127,7 +1127,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       const newFeed = await MockAggF.deploy(8, 1000n * 10n ** 8n);
 
       await expect(
-        priceOracle.connect(user1).setFeed(
+        priceOracle.connect(user1).requestSetFeed(
           await weth.getAddress(),
           await newFeed.getAddress(),
           3600,
@@ -1138,7 +1138,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
     it("should reject unauthorized interest rate changes", async function () {
       await expect(
-        borrowModule.connect(user1).setInterestRate(1000)
+        borrowModule.connect(user1).requestInterestRate(1000)
       ).to.be.reverted;
     });
 

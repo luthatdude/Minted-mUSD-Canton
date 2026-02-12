@@ -20,6 +20,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { timelockSetFeed, timelockAddCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockAddStrategy, timelockRemoveStrategy, refreshFeeds } from "./helpers/timelock";
 
 describe("DEEP AUDIT – Full Protocol Integration", function () {
   // ── actors ──
@@ -160,7 +161,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await vault.grantRole(BORROW_MODULE_ROLE, await borrowModule.getAddress());
     await vault.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await vault.grantRole(PAUSER_ROLE, pauser.address);
-    await vault.setBorrowModule(await borrowModule.getAddress());
+    await timelockSetBorrowModule(vault, admin, await borrowModule.getAddress());
 
     // BorrowModule: LIQUIDATION_ROLE for LiquidationEngine
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
@@ -168,7 +169,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     // BorrowModule: set InterestRateModel
     const BM_BORROW_ADMIN = ethers.keccak256(ethers.toUtf8Bytes("BORROW_ADMIN_ROLE"));
     await borrowModule.grantRole(BM_BORROW_ADMIN, admin.address);
-    await borrowModule.setInterestRateModel(await interestRateModel.getAddress());
+    await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
 
     // Treasury roles — grant VAULT_ROLE to DirectMint
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
@@ -177,13 +178,15 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await directMint.grantRole(MINTER_ROLE, minter.address);
 
     // ── Setup Price Feeds ──
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await weth.getAddress(),
       await ethFeed.getAddress(),
       3600,
       WETH_DECIMALS
     );
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await wbtc.getAddress(),
       await btcFeed.getAddress(),
       3600,
@@ -191,18 +194,23 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     );
 
     // ── Setup Collateral ──
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       500   // 5% penalty
     );
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await wbtc.getAddress(),
       7000, // 70% LTV
       7500, // 75% liquidation threshold
       500   // 5% penalty
     );
+
+    // Refresh mock Chainlink feeds after timelock calls advanced block time
+    await refreshFeeds(ethFeed, btcFeed);
 
     // ── Mint test tokens ──
     await usdc.mint(user1.address, ethers.parseUnits("1000000", USDC_DECIMALS));
@@ -351,13 +359,13 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       for (let i = 0; i < 48; i++) {
         const MockERC20F = await ethers.getContractFactory("MockERC20");
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 7000, 7500, 500);
+        await timelockAddCollateral(vault, admin, await token.getAddress(), 7000, 7500, 500);
       }
 
       const MockERC20F = await ethers.getContractFactory("MockERC20");
       const extraToken = await MockERC20F.deploy("Extra", "EXT", 18);
       await expect(
-        vault.addCollateral(await extraToken.getAddress(), 7000, 7500, 500)
+        vault.requestAddCollateral(await extraToken.getAddress(), 7000, 7500, 500)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
   });
@@ -692,7 +700,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -708,7 +717,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should keep reserve buffer in treasury", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -729,7 +739,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -757,8 +768,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const MSF2 = await ethers.getContractFactory("MockStrategy");
       const strategy2 = await MSF2.deploy(await usdc.getAddress(), await treasury.getAddress());
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 4500, 2000, 8000, true);
-      await treasury.addStrategy(await strategy2.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await strategy2.getAddress(), 4500, 2000, 8000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -780,7 +791,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should handle strategy removal with full withdrawal", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 9000, 5000, 10000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -789,7 +800,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const stratValBefore = await mockStrategy.totalValue();
       expect(stratValBefore).to.be.gt(0n);
 
-      await treasury.removeStrategy(await mockStrategy.getAddress());
+      await timelockRemoveStrategy(treasury, admin, await mockStrategy.getAddress());
 
       const stratValAfter = await mockStrategy.totalValue();
       expect(stratValAfter).to.equal(0n);

@@ -19,6 +19,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 1: PriceOracle — Circuit Breaker Coverage
@@ -38,7 +39,9 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
 
     const WETH = "0x0000000000000000000000000000000000000001";
-    await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(oracle, admin, WETH, await ethFeed.getAddress(), 3600, 18);
+
+    await refreshFeeds(ethFeed);
 
     return { oracle, ethFeed, deployer, admin, user, WETH, ORACLE_ADMIN_ROLE };
   }
@@ -139,7 +142,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject for disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).removeFeed(WETH);
+      await timelockRemoveFeed(oracle, admin, WETH);
       await expect(oracle.connect(admin).resetLastKnownPrice(WETH))
         .to.be.revertedWith("FEED_NOT_ENABLED");
     });
@@ -182,7 +185,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject for disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).removeFeed(WETH);
+      await timelockRemoveFeed(oracle, admin, WETH);
       await expect(oracle.connect(admin).updatePrice(WETH))
         .to.be.revertedWith("FEED_NOT_ENABLED");
     });
@@ -319,7 +322,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).removeFeed(WETH);
+      await timelockRemoveFeed(oracle, admin, WETH);
       await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("FEED_NOT_ENABLED");
     });
   });
@@ -345,7 +348,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const btcFeed = await MockFeed.deploy(8, 5000000000000n); // $50000
 
       const WBTC = "0x0000000000000000000000000000000000000002";
-      await oracle.connect(admin).setFeed(WBTC, await btcFeed.getAddress(), 3600, 8);
+      await timelockSetFeed(oracle, admin, WBTC, await btcFeed.getAddress(), 3600, 8);
+      await refreshFeeds(btcFeed);
 
       const oneBTC = 100000000n; // 1 BTC in 8 decimals
       const value = await oracle.getValueUsdUnsafe(WBTC, oneBTC);
@@ -378,7 +382,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const MockFeed = await ethers.getContractFactory("MockAggregatorV3");
       const newFeed = await MockFeed.deploy(8, 300000000000n); // $3000
 
-      await oracle.connect(admin).setFeed(WETH, await newFeed.getAddress(), 3600, 18);
+      await timelockSetFeed(oracle, admin, WETH, await newFeed.getAddress(), 3600, 18);
       expect(await oracle.lastKnownPrice(WETH)).to.equal(ethers.parseEther("3000"));
     });
   });
@@ -403,11 +407,13 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
-    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
+    await timelockAddCollateral(collateralVault, owner, await weth.getAddress(), 7500, 8000, 1000);
+
+    await refreshFeeds(ethFeed);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     const borrowModule = await BorrowModule.deploy(
@@ -482,25 +488,27 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setInterestRateModel", function () {
     it("should set the interest rate model", async function () {
       const { borrowModule, interestRateModel, owner } = await loadFixture(deployFullBorrowFixture);
-      await borrowModule.connect(owner).setInterestRateModel(await interestRateModel.getAddress());
+      await timelockSetInterestRateModel(borrowModule, owner, await interestRateModel.getAddress());
       expect(await borrowModule.interestRateModel()).to.equal(await interestRateModel.getAddress());
     });
 
     it("should emit InterestRateModelUpdated event", async function () {
       const { borrowModule, interestRateModel, owner } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setInterestRateModel(await interestRateModel.getAddress()))
+      await borrowModule.connect(owner).requestInterestRateModel(await interestRateModel.getAddress());
+      await time.increase(48 * 3600);
+      await expect(borrowModule.connect(owner).executeInterestRateModel())
         .to.emit(borrowModule, "InterestRateModelUpdated");
     });
 
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setInterestRateModel(ethers.ZeroAddress))
+      await expect(borrowModule.connect(owner).requestInterestRateModel(ethers.ZeroAddress))
         .to.be.revertedWith("ZERO_ADDRESS");
     });
 
     it("should reject non-admin caller", async function () {
       const { borrowModule, interestRateModel, user1 } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(user1).setInterestRateModel(await interestRateModel.getAddress()))
+      await expect(borrowModule.connect(user1).requestInterestRateModel(await interestRateModel.getAddress()))
         .to.be.reverted;
     });
   });
@@ -512,25 +520,27 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setSMUSD", function () {
     it("should set the SMUSD address", async function () {
       const { borrowModule, smusd, owner } = await loadFixture(deployFullBorrowFixture);
-      await borrowModule.connect(owner).setSMUSD(await smusd.getAddress());
+      await timelockSetSMUSD(borrowModule, owner, await smusd.getAddress());
       expect(await borrowModule.smusd()).to.equal(await smusd.getAddress());
     });
 
     it("should emit SMUSDUpdated event", async function () {
       const { borrowModule, smusd, owner } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setSMUSD(await smusd.getAddress()))
+      await borrowModule.connect(owner).requestSMUSD(await smusd.getAddress());
+      await time.increase(48 * 3600);
+      await expect(borrowModule.connect(owner).executeSMUSD())
         .to.emit(borrowModule, "SMUSDUpdated");
     });
 
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setSMUSD(ethers.ZeroAddress))
+      await expect(borrowModule.connect(owner).requestSMUSD(ethers.ZeroAddress))
         .to.be.revertedWith("ZERO_ADDRESS");
     });
 
     it("should reject non-admin caller", async function () {
       const { borrowModule, smusd, user1 } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(user1).setSMUSD(await smusd.getAddress()))
+      await expect(borrowModule.connect(user1).requestSMUSD(await smusd.getAddress()))
         .to.be.reverted;
     });
   });
@@ -543,25 +553,27 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should set the treasury address", async function () {
       const { borrowModule, owner, user2 } = await loadFixture(deployFullBorrowFixture);
       // Using a random address as treasury stand-in
-      await borrowModule.connect(owner).setTreasury(user2.address);
+      await timelockSetTreasury(borrowModule, owner, user2.address);
       expect(await borrowModule.treasury()).to.equal(user2.address);
     });
 
     it("should emit TreasuryUpdated event", async function () {
       const { borrowModule, owner, user2 } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setTreasury(user2.address))
+      await borrowModule.connect(owner).requestTreasury(user2.address);
+      await time.increase(48 * 3600);
+      await expect(borrowModule.connect(owner).executeTreasury())
         .to.emit(borrowModule, "TreasuryUpdated");
     });
 
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(owner).setTreasury(ethers.ZeroAddress))
+      await expect(borrowModule.connect(owner).requestTreasury(ethers.ZeroAddress))
         .to.be.revertedWith("ZERO_ADDRESS");
     });
 
     it("should reject non-admin caller", async function () {
       const { borrowModule, user1, user2 } = await loadFixture(deployFullBorrowFixture);
-      await expect(borrowModule.connect(user1).setTreasury(user2.address))
+      await expect(borrowModule.connect(user1).requestTreasury(user2.address))
         .to.be.reverted;
     });
   });
@@ -828,7 +840,8 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getUtilizationRate — should use interestRateModel when set", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
+      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
+      await refreshFeeds(f.ethFeed);
       await depositAndBorrow(f, f.user1, "10", "5000");
 
       const rate = await f.borrowModule.getUtilizationRate();
@@ -843,7 +856,8 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getCurrentBorrowRate — should return dynamic rate with model", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
+      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
+      await refreshFeeds(f.ethFeed);
       await depositAndBorrow(f, f.user1, "10", "5000");
 
       const rate = await f.borrowModule.getCurrentBorrowRate();
@@ -859,7 +873,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getCurrentSupplyRate — should use model when set", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
+      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
 
       const rate = await f.borrowModule.getCurrentSupplyRate();
       expect(rate).to.be.gte(0);
@@ -990,8 +1004,10 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       const f = await loadFixture(deployFullBorrowFixture);
 
       // Setup full pipeline
-      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
-      await f.borrowModule.connect(f.owner).setSMUSD(await f.smusd.getAddress());
+      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
+      await timelockSetSMUSD(f.borrowModule, f.owner, await f.smusd.getAddress());
+
+      await refreshFeeds(f.ethFeed);
 
       // Deposit mUSD into SMUSD to have shares
       await f.musd.connect(f.owner).mint(f.owner.address, ethers.parseEther("10000"));
@@ -1068,27 +1084,29 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setMinDebt boundaries", function () {
     it("should reject zero min debt", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await expect(f.borrowModule.connect(f.owner).setMinDebt(0))
+      await expect(f.borrowModule.connect(f.owner).requestMinDebt(0))
         .to.be.revertedWith("MIN_DEBT_ZERO");
     });
 
     it("should reject min debt too high (>1e24)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       const tooHigh = ethers.parseEther("1000001"); // > 1e24 in wei? Let me use 1e24+1
-      await expect(f.borrowModule.connect(f.owner).setMinDebt(10n ** 24n + 1n))
+      await expect(f.borrowModule.connect(f.owner).requestMinDebt(10n ** 24n + 1n))
         .to.be.revertedWith("MIN_DEBT_TOO_HIGH");
     });
 
     it("should accept boundary value (1e24)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setMinDebt(10n ** 24n);
+      await timelockSetMinDebt(f.borrowModule, f.owner, 10n ** 24n);
       expect(await f.borrowModule.minDebt()).to.equal(10n ** 24n);
     });
 
     it("should emit MinDebtUpdated event", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       const newMin = ethers.parseEther("200");
-      await expect(f.borrowModule.connect(f.owner).setMinDebt(newMin))
+      await f.borrowModule.connect(f.owner).requestMinDebt(newMin);
+      await time.increase(48 * 3600);
+      await expect(f.borrowModule.connect(f.owner).executeMinDebt())
         .to.emit(f.borrowModule, "MinDebtUpdated")
         .withArgs(ethers.parseEther("100"), newMin);
     });
@@ -1101,19 +1119,19 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setInterestRate boundaries", function () {
     it("should accept zero rate", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setInterestRate(0);
+      await timelockSetInterestRate(f.borrowModule, f.owner, 0);
       expect(await f.borrowModule.interestRateBps()).to.equal(0);
     });
 
     it("should accept max rate (5000 bps = 50%)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await f.borrowModule.connect(f.owner).setInterestRate(5000);
+      await timelockSetInterestRate(f.borrowModule, f.owner, 5000);
       expect(await f.borrowModule.interestRateBps()).to.equal(5000);
     });
 
     it("should reject rate above 5000", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await expect(f.borrowModule.connect(f.owner).setInterestRate(5001))
+      await expect(f.borrowModule.connect(f.owner).requestInterestRate(5001))
         .to.be.revertedWith("RATE_TOO_HIGH");
     });
   });
@@ -1371,7 +1389,7 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const vault = await CollateralVault.deploy();
 
-    await vault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
+    await timelockAddCollateral(vault, deployer, await weth.getAddress(), 7500, 8000, 1000);
 
     const BORROW_MODULE_ROLE = await vault.BORROW_MODULE_ROLE();
     await vault.grantRole(BORROW_MODULE_ROLE, borrowModule.address);
@@ -1384,20 +1402,20 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
   describe("Collateral configuration", function () {
     it("should add multiple collateral types", async function () {
       const { vault, wbtc, deployer } = await loadFixture(deployVaultFixture);
-      await vault.addCollateral(await wbtc.getAddress(), 6500, 7000, 1500);
+      await timelockAddCollateral(vault, deployer, await wbtc.getAddress(), 6500, 7000, 1500);
       const tokens = await vault.getSupportedTokens();
       expect(tokens.length).to.equal(2);
     });
 
     it("should reject duplicate collateral", async function () {
       const { vault, weth } = await loadFixture(deployVaultFixture);
-      await expect(vault.addCollateral(await weth.getAddress(), 7500, 8000, 1000))
+      await expect(vault.requestAddCollateral(await weth.getAddress(), 7500, 8000, 1000))
         .to.be.reverted;
     });
 
     it("should update collateral config", async function () {
       const { vault, weth, deployer } = await loadFixture(deployVaultFixture);
-      await vault.updateCollateral(await weth.getAddress(), 6000, 7000, 1500);
+      await timelockUpdateCollateral(vault, deployer, await weth.getAddress(), 6000, 7000, 1500);
       const [enabled, cf, lt, lp] = await vault.getConfig(await weth.getAddress());
       expect(enabled).to.be.true;
       expect(cf).to.equal(6000);
@@ -1452,11 +1470,13 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, deployer, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
-    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
+    await timelockAddCollateral(collateralVault, deployer, await weth.getAddress(), 7500, 8000, 1000);
+
+    await refreshFeeds(ethFeed);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     const borrowModule = await BorrowModule.deploy(
@@ -1603,10 +1623,10 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
 
   describe("Minimum fee enforcement (FIX S-M08)", function () {
     it("should charge minimum 1 wei USDC fee even on tiny redemptions", async function () {
-      const { directMint, musd, usdc, user1 } = await loadFixture(deployMintFixture);
+      const { directMint, musd, usdc, deployer, user1 } = await loadFixture(deployMintFixture);
 
       // Set fees (mintFee=0, redeemFee=100 bps = 1%)
-      await directMint.setFees(0, 100);
+      await timelockSetFees(directMint, deployer, 0, 100);
 
       // Mint first
       const mintAmt = 1000n * 10n ** 6n; // 1000 USDC
@@ -1628,10 +1648,10 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
 
   describe("Fee tracking", function () {
     it("should track accumulated mint fees", async function () {
-      const { directMint, usdc, user1 } = await loadFixture(deployMintFixture);
+      const { directMint, usdc, deployer, user1 } = await loadFixture(deployMintFixture);
 
       // Set mint fee 0.5%
-      await directMint.setFees(50, 0);
+      await timelockSetFees(directMint, deployer, 50, 0);
 
       const mintAmt = 10000n * 10n ** 6n; // 10,000 USDC
       await usdc.connect(user1).approve(await directMint.getAddress(), mintAmt);

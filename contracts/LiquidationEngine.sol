@@ -99,6 +99,22 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     event CloseFactorUpdated(uint256 oldFactor, uint256 newFactor);
     event FullLiquidationThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    uint256 public constant ADMIN_DELAY = 48 hours;
+
+    uint256 public pendingCloseFactor;
+    uint256 public pendingCloseFactorTime;
+    uint256 public pendingFullLiqThreshold;
+    uint256 public pendingFullLiqThresholdTime;
+
+    event CloseFactorChangeRequested(uint256 bps, uint256 readyAt);
+    event CloseFactorChangeCancelled(uint256 bps);
+    event FullLiqThresholdChangeRequested(uint256 bps, uint256 readyAt);
+    event FullLiqThresholdChangeCancelled(uint256 bps);
+
     constructor(
         address _vault,
         address _borrowModule,
@@ -281,20 +297,50 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //                  ADMIN
+    //                  ADMIN (TIMELOCKED — FIX H-01)
     // ============================================================
 
-    function setCloseFactor(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
+    function requestCloseFactor(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
         require(_bps > 0 && _bps <= 10000, "INVALID_CLOSE_FACTOR");
+        pendingCloseFactor = _bps;
+        pendingCloseFactorTime = block.timestamp;
+        emit CloseFactorChangeRequested(_bps, block.timestamp + ADMIN_DELAY);
+    }
+    function cancelCloseFactor() external onlyRole(ENGINE_ADMIN_ROLE) {
+        uint256 cancelled = pendingCloseFactor;
+        pendingCloseFactor = 0;
+        pendingCloseFactorTime = 0;
+        emit CloseFactorChangeCancelled(cancelled);
+    }
+    function executeCloseFactor() external onlyRole(ENGINE_ADMIN_ROLE) {
+        require(pendingCloseFactor > 0, "NO_PENDING");
+        require(block.timestamp >= pendingCloseFactorTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
         uint256 old = closeFactorBps;
-        closeFactorBps = _bps;
-        emit CloseFactorUpdated(old, _bps);
+        closeFactorBps = pendingCloseFactor;
+        pendingCloseFactor = 0;
+        pendingCloseFactorTime = 0;
+        emit CloseFactorUpdated(old, closeFactorBps);
     }
 
-    function setFullLiquidationThreshold(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
+    function requestFullLiquidationThreshold(uint256 _bps) external onlyRole(ENGINE_ADMIN_ROLE) {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
-        emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
-        fullLiquidationThreshold = _bps;
+        pendingFullLiqThreshold = _bps;
+        pendingFullLiqThresholdTime = block.timestamp;
+        emit FullLiqThresholdChangeRequested(_bps, block.timestamp + ADMIN_DELAY);
+    }
+    function cancelFullLiquidationThreshold() external onlyRole(ENGINE_ADMIN_ROLE) {
+        uint256 cancelled = pendingFullLiqThreshold;
+        pendingFullLiqThreshold = 0;
+        pendingFullLiqThresholdTime = 0;
+        emit FullLiqThresholdChangeCancelled(cancelled);
+    }
+    function executeFullLiquidationThreshold() external onlyRole(ENGINE_ADMIN_ROLE) {
+        require(pendingFullLiqThreshold > 0, "NO_PENDING");
+        require(block.timestamp >= pendingFullLiqThresholdTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, pendingFullLiqThreshold);
+        fullLiquidationThreshold = pendingFullLiqThreshold;
+        pendingFullLiqThreshold = 0;
+        pendingFullLiqThresholdTime = 0;
     }
 
     // ============================================================

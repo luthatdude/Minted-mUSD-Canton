@@ -8,6 +8,8 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { TreasuryV2, MockERC20, MockStrategy } from "../typechain-types";
+import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps } from "./helpers/timelock";
 
 describe("TreasuryV2", function () {
   let treasury: TreasuryV2;
@@ -99,7 +101,7 @@ describe("TreasuryV2", function () {
   describe("Strategy Management", function () {
     it("Should add a strategy", async function () {
       const addr = await strategyA.getAddress();
-      await treasury.addStrategy(addr, 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, addr, 4000, 2000, 5000, true);
 
       expect(await treasury.isStrategy(addr)).to.be.true;
       expect(await treasury.strategyCount()).to.equal(1);
@@ -113,26 +115,29 @@ describe("TreasuryV2", function () {
 
     it("Should add multiple strategies with correct allocation", async function () {
       // 40% + 30% + 20% + 10% reserve = 100%
-      await treasury.addStrategy(await strategyA.getAddress(), 4000, 2000, 5000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 3000, 1000, 4000, true);
-      await treasury.addStrategy(await strategyC.getAddress(), 2000, 500, 3000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 1000, 4000, true);
+      await timelockAddStrategy(treasury, admin, await strategyC.getAddress(), 2000, 500, 3000, true);
 
       expect(await treasury.strategyCount()).to.equal(3);
     });
 
     it("Should reject duplicate strategy", async function () {
       const addr = await strategyA.getAddress();
-      await treasury.addStrategy(addr, 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, addr, 4000, 2000, 5000, true);
 
       await expect(
-        treasury.addStrategy(addr, 3000, 1000, 4000, true)
+        treasury.requestAddStrategy(addr, 3000, 1000, 4000, true)
       ).to.be.revertedWithCustomError(treasury, "StrategyExists");
     });
 
     it("Should reject allocation exceeding 100%", async function () {
       // reserveBps = 1000 (10%), try adding 9500 (95%) → 105% total
+      // Request goes through, but execute validates total allocation
+      await treasury.requestAddStrategy(await strategyA.getAddress(), 9500, 1000, 10000, true);
+      await time.increase(48 * 3600);
       await expect(
-        treasury.addStrategy(await strategyA.getAddress(), 9500, 1000, 10000, true)
+        treasury.executeAddStrategy()
       ).to.be.revertedWithCustomError(treasury, "TotalAllocationInvalid");
     });
 
@@ -141,24 +146,24 @@ describe("TreasuryV2", function () {
       for (let i = 0; i < 10; i++) {
         const strat = await Factory.deploy(await usdc.getAddress(), await treasury.getAddress());
         await strat.waitForDeployment();
-        await treasury.addStrategy(await strat.getAddress(), 100, 0, 500, true); // 1% each
+        await timelockAddStrategy(treasury, admin, await strat.getAddress(), 100, 0, 500, true); // 1% each
       }
 
       const extraStrat = await Factory.deploy(await usdc.getAddress(), await treasury.getAddress());
       await extraStrat.waitForDeployment();
       await expect(
-        treasury.addStrategy(await extraStrat.getAddress(), 100, 0, 500, true)
+        treasury.requestAddStrategy(await extraStrat.getAddress(), 100, 0, 500, true)
       ).to.be.revertedWithCustomError(treasury, "MaxStrategiesReached");
     });
 
     it("Should remove a strategy and withdraw funds", async function () {
       const addr = await strategyA.getAddress();
-      await treasury.addStrategy(addr, 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, addr, 4000, 2000, 5000, true);
 
       // Deposit some USDC to the strategy directly (simulating allocation)
       await usdc.mint(addr, 100_000n * ONE_USDC);
 
-      await treasury.removeStrategy(addr);
+      await timelockRemoveStrategy(treasury, admin, addr);
       expect(await treasury.isStrategy(addr)).to.be.false;
 
       const config = await treasury.strategies(0);
@@ -168,7 +173,7 @@ describe("TreasuryV2", function () {
 
     it("Should update strategy allocation", async function () {
       const addr = await strategyA.getAddress();
-      await treasury.addStrategy(addr, 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, addr, 4000, 2000, 5000, true);
 
       await treasury.updateStrategy(addr, 5000, 3000, 6000, false);
 
@@ -185,9 +190,9 @@ describe("TreasuryV2", function () {
   describe("Auto-Allocation", function () {
     beforeEach(async function () {
       // Setup: 40% stratA, 30% stratB, 20% stratC, 10% reserve
-      await treasury.addStrategy(await strategyA.getAddress(), 4000, 2000, 5000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 3000, 1000, 4000, true);
-      await treasury.addStrategy(await strategyC.getAddress(), 2000, 500, 3000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 1000, 4000, true);
+      await timelockAddStrategy(treasury, admin, await strategyC.getAddress(), 2000, 500, 3000, true);
     });
 
     it("Should auto-allocate deposit across strategies", async function () {
@@ -259,8 +264,8 @@ describe("TreasuryV2", function () {
 
   describe("Withdrawal", function () {
     beforeEach(async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4000, 2000, 5000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 3000, 1000, 4000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 1000, 4000, true);
 
       // Deposit 100K
       const depositAmount = 100_000n * ONE_USDC;
@@ -299,8 +304,8 @@ describe("TreasuryV2", function () {
 
   describe("Vault Interface", function () {
     beforeEach(async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
     });
 
     it("Should depositFromVault with auto-allocation", async function () {
@@ -345,7 +350,7 @@ describe("TreasuryV2", function () {
 
   describe("Fee Accrual", function () {
     it("Should accrue fees on yield", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
 
       // Deposit 100K
       const depositAmount = 100_000n * ONE_USDC;
@@ -366,7 +371,7 @@ describe("TreasuryV2", function () {
     });
 
     it("Should claim fees to recipient", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
 
       // Deposit
       const depositAmount = 100_000n * ONE_USDC;
@@ -396,8 +401,8 @@ describe("TreasuryV2", function () {
   describe("Rebalancing", function () {
     it("Should rebalance from over-allocated to under-allocated", async function () {
       // Setup 50/50 split
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
 
       // Deposit
       const depositAmount = 100_000n * ONE_USDC;
@@ -428,8 +433,8 @@ describe("TreasuryV2", function () {
 
   describe("Emergency", function () {
     it("Should emergency withdraw all from strategies", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
 
       // Deposit
       const depositAmount = 100_000n * ONE_USDC;
@@ -473,25 +478,25 @@ describe("TreasuryV2", function () {
 
   describe("Admin", function () {
     it("Should update fee config", async function () {
-      await treasury.setFeeConfig(1000, feeRecipient.address);
+      await timelockSetFeeConfig(treasury, admin, 1000, feeRecipient.address);
       const fees = await treasury.fees();
       expect(fees.performanceFeeBps).to.equal(1000);
     });
 
     it("Should reject fee too high", async function () {
       await expect(
-        treasury.setFeeConfig(6000, feeRecipient.address) // 60% > 50% max
+        treasury.requestFeeConfig(6000, feeRecipient.address) // 60% > 50% max
       ).to.be.revertedWith("Fee too high");
     });
 
     it("Should update reserve bps", async function () {
-      await treasury.setReserveBps(2000);
+      await timelockSetReserveBps(treasury, admin, 2000);
       expect(await treasury.reserveBps()).to.equal(2000);
     });
 
     it("Should reject reserve too high", async function () {
       await expect(
-        treasury.setReserveBps(4000) // 40% > 30% max
+        treasury.requestReserveBps(4000) // 40% > 30% max
       ).to.be.revertedWith("Reserve too high");
     });
 
@@ -534,7 +539,7 @@ describe("TreasuryV2", function () {
 
   describe("View Functions", function () {
     it("Should report correct totalValue", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
 
       const depositAmount = 50_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
@@ -545,7 +550,7 @@ describe("TreasuryV2", function () {
     });
 
     it("Should report totalValueNet minus fees", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
 
       const depositAmount = 100_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
@@ -563,8 +568,8 @@ describe("TreasuryV2", function () {
     });
 
     it("Should return correct current allocations", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
 
       const depositAmount = 100_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
@@ -578,8 +583,8 @@ describe("TreasuryV2", function () {
     });
 
     it("Should report strategies via getAllStrategies", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4000, 2000, 5000, true);
-      await treasury.addStrategy(await strategyB.getAddress(), 3000, 1000, 4000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 1000, 4000, true);
 
       const all = await treasury.getAllStrategies();
       expect(all.length).to.equal(2);
@@ -595,7 +600,7 @@ describe("TreasuryV2", function () {
   describe("Strategy Rollover", function () {
     it("Should remove a funded strategy (funds returned) and add a replacement", async function () {
       // Setup: add strategyA at 45%, deposit & allocate
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
 
       const depositAmount = 100_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
@@ -609,7 +614,7 @@ describe("TreasuryV2", function () {
       // Remove strategyA — should withdrawAll back to treasury
       const treasuryAddr = await treasury.getAddress();
       const treasuryBalBefore = await usdc.balanceOf(treasuryAddr);
-      await treasury.removeStrategy(await strategyA.getAddress());
+      await timelockRemoveStrategy(treasury, admin, await strategyA.getAddress());
       const treasuryBalAfter = await usdc.balanceOf(treasuryAddr);
 
       // Funds should have been returned to treasury
@@ -619,7 +624,7 @@ describe("TreasuryV2", function () {
       expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.false;
 
       // Add strategyB as replacement at the same allocation
-      await treasury.addStrategy(await strategyB.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
 
       // Rebalance to push funds to the new strategy
       await treasury.rebalance();
@@ -634,7 +639,7 @@ describe("TreasuryV2", function () {
     });
 
     it("Should handle rollover when old strategy withdraw fails", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
 
       const depositAmount = 50_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
@@ -645,7 +650,9 @@ describe("TreasuryV2", function () {
       await strategyA.setWithdrawShouldFail(true);
 
       // Remove should still succeed (strategy is force-deactivated)
-      await expect(treasury.removeStrategy(await strategyA.getAddress()))
+      await treasury.requestRemoveStrategy(await strategyA.getAddress());
+      await time.increase(48 * 3600);
+      await expect(treasury.executeRemoveStrategy())
         .to.emit(treasury, "StrategyForceDeactivated");
 
       // Strategy should be deactivated despite withdraw failure
@@ -653,15 +660,15 @@ describe("TreasuryV2", function () {
     });
 
     it("Should remove an empty strategy cleanly", async function () {
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
 
       // Don't deposit anything — strategy has 0 value
-      await treasury.removeStrategy(await strategyA.getAddress());
+      await timelockRemoveStrategy(treasury, admin, await strategyA.getAddress());
 
       expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.false;
 
       // Can re-add the same strategy address
-      await treasury.addStrategy(await strategyA.getAddress(), 4500, 2000, 6000, true);
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
       expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.true;
     });
   });
