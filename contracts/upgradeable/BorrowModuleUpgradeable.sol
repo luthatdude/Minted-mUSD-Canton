@@ -893,12 +893,10 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  uint256 socializeAmount = amount > badDebt ? badDebt : amount;
  uint256 totalBorrowsBefore = totalBorrows;
 
- badDebt -= socializeAmount;
- badDebtCovered += socializeAmount;
-
- // Deduplicate borrowers to prevent over-forgiveness.
- // Track which addresses have already been processed in this call.
- // Each borrower's reduction = socializeAmount * (userDebt / totalBorrows)
+ // Deduplicate borrowers and proportionally reduce each user's debt.
+ // badDebt is decremented AFTER the loop by totalReduced (actual applied
+ // amount) — not by socializeAmount — to prevent accounting drift when
+ // the caller-supplied borrower list is incomplete.
  uint256 totalReduced = 0;
  for (uint256 i = 0; i < borrowers.length; i++) {
  // Skip duplicate entries — check if this address
@@ -934,6 +932,11 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  emit DebtAdjusted(borrowers[i], pos.principal + pos.accruedInterest, "BAD_DEBT_SOCIALIZED");
  }
 
+ // Decrement badDebt by actual amount applied, not requested amount.
+ // This ensures badDebt stays in sync with real debt reductions.
+ badDebt = badDebt > totalReduced ? badDebt - totalReduced : 0;
+ badDebtCovered += totalReduced;
+
  // Reduce totalBorrows by the actual amount reduced across users
  if (totalBorrows >= totalReduced) {
  totalBorrows -= totalReduced;
@@ -941,8 +944,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  totalBorrows = 0;
  }
 
- emit BadDebtSocialized(socializeAmount, totalBorrowsBefore, totalBorrows);
- emit BadDebtCovered(socializeAmount, badDebt, "SOCIALIZED");
+ emit BadDebtSocialized(totalReduced, totalBorrowsBefore, totalBorrows);
+ emit BadDebtCovered(totalReduced, badDebt, "SOCIALIZED");
  }
 
  // ============================================================

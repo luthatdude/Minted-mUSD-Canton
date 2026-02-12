@@ -9,7 +9,7 @@
  * The root can be posted on-chain or published via API for anyone to verify.
  */
 
-import { keccak256 as ethersKeccak256, toUtf8Bytes } from "ethers";
+import { keccak256 as ethersKeccak256, toUtf8Bytes, solidityPackedKeccak256, concat } from "ethers";
 import fs from "fs";
 import path from "path";
 
@@ -51,29 +51,33 @@ export interface MerkleProof {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Keccak-256 hash (matches Solidity's keccak256).
- * Uses ethers.keccak256 for Solidity-compatible hashing, ensuring
- * roots match on-chain keccak256(abi.encodePacked(...)).
+ * Keccak-256 hash of raw bytes (matches Solidity's keccak256).
  */
-function keccak256(data: string): string {
-  return ethersKeccak256(toUtf8Bytes(data));
+function keccak256(data: string | Uint8Array): string {
+  return ethersKeccak256(data);
 }
 
 /**
  * Create a leaf hash for a user's point balance.
- * Mirrors: keccak256(abi.encodePacked(address, totalPoints, snapshotId))
+ * Mirrors Solidity: keccak256(abi.encodePacked(address, uint256, uint256))
+ * Uses solidityPackedKeccak256 for exact binary-level compatibility
+ * with on-chain verifiers.
  */
 function createLeaf(address: string, totalPoints: number, snapshotId: number): string {
-  const packed = `${address.toLowerCase()}:${totalPoints}:${snapshotId}`;
-  return keccak256(packed);
+  return solidityPackedKeccak256(
+    ["address", "uint256", "uint256"],
+    [address.toLowerCase(), totalPoints, snapshotId]
+  );
 }
 
 /**
  * Combine two hashes (sorted for deterministic ordering).
+ * Concatenates raw 32-byte hashes, matching Solidity:
+ * keccak256(abi.encodePacked(left, right))
  */
 function hashPair(a: string, b: string): string {
   const [left, right] = a < b ? [a, b] : [b, a];
-  return keccak256(left + right);
+  return keccak256(concat([left, right]));
 }
 
 /**
