@@ -325,6 +325,18 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         // Clear before external calls (CEI)
         delete failedMints[vaaHash];
 
+        // FIX TR-H-01: Remove from failedMintIds array (swap-and-pop).
+        // Without this cleanup, the array grows forever. After 100 cumulative
+        // failures (even if all retried), MAX_FAILED_MINTS blocks new fallbacks,
+        // permanently bricking bridge inflow.
+        for (uint256 i = 0; i < failedMintIds.length; i++) {
+            if (failedMintIds[i] == vaaHash) {
+                failedMintIds[i] = failedMintIds[failedMintIds.length - 1];
+                failedMintIds.pop();
+                break;
+            }
+        }
+
         // FIX CR-06: Use treasury.withdraw() instead of safeTransferFrom.
         // safeTransferFrom requires treasury to have approved this contract (it doesn't).
         // withdraw() is the proper TreasuryV2 interface for pulling USDC.
