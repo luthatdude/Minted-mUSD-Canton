@@ -55,8 +55,7 @@ interface IDirectMint {
  * @title TreasuryReceiver
  * @notice Receives bridged USDC from L2 DepositRouters and forwards to DirectMint
  * @dev Deploy this on Ethereum mainnet to receive cross-chain deposits
- * @dev FIX H-02: Migrated from Ownable to AccessControl for role-based access
- * @dev FIX H-02: Added Pausable for emergency controls
+ * @dev Uses AccessControl for role-based access and Pausable for emergency controls
  */
 contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
     using SafeERC20 for IERC20;
@@ -107,7 +106,6 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     event RouterRevoked(uint16 chainId);
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
-    // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
 
@@ -141,7 +139,6 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
         directMint = _directMint;
         treasury = _treasury;
         
-        // FIX H-02: Grant roles
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(BRIDGE_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
@@ -155,11 +152,10 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     /**
      * @notice Complete a cross-chain deposit and mint mUSD
      * @param encodedVAA Wormhole VAA from the source chain
-     * @dev FIX H-02: Added whenNotPaused for emergency controls
+     * @dev Paused during emergencies
      */
     function receiveAndMint(bytes calldata encodedVAA) external nonReentrant whenNotPaused {
         // Parse and verify the VAA
-        // FIX: Suppress unused 'reason' compiler warning
         (IWormhole.VM memory vm, bool valid, ) = wormhole.parseAndVerifyVM(encodedVAA);
         if (!valid) revert InvalidVAA();
         
@@ -178,7 +174,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
         tokenBridge.completeTransfer(encodedVAA);
         uint256 received = usdc.balanceOf(address(this)) - balanceBefore;
         
-        // FIX C-07: Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
+        // Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
         // Layout: payloadID(1) + amount(32) + tokenAddress(32) + tokenChain(2) +
         //         to(32) + toChain(2) + fromAddress(32) + userPayload(variable)
         // Total fixed header = 133 bytes. User payload starts at offset 133.
@@ -192,8 +188,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
         }
         address recipient = abi.decode(userPayload, (address));
         
-        // FIX H-07: Actually mint mUSD for the recipient via DirectMint
-        // Previously forwarded USDC to treasury but never minted mUSD
+        // Mint mUSD for the recipient via DirectMint
         usdc.forceApprove(directMint, received);
         try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
             // Mark processed only after successful mint
@@ -232,7 +227,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      * @notice Authorize a DepositRouter on a source chain
      * @param chainId Wormhole chain ID
      * @param routerAddress Address of the DepositRouter (as bytes32)
-     * @dev FIX H-02: Changed from onlyOwner to role-based access
+     * @dev Requires BRIDGE_ADMIN_ROLE
      */
     function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyRole(BRIDGE_ADMIN_ROLE) {
         authorizedRouters[chainId] = routerAddress;
@@ -242,7 +237,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     /**
      * @notice Revoke authorization for a source chain
      * @param chainId Wormhole chain ID
-     * @dev FIX H-02: Changed from onlyOwner to role-based access
+     * @dev Requires BRIDGE_ADMIN_ROLE
      */
     function revokeRouter(uint16 chainId) external onlyRole(BRIDGE_ADMIN_ROLE) {
         delete authorizedRouters[chainId];
@@ -278,14 +273,14 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      * @param token Token to withdraw
      * @param to Recipient
      * @param amount Amount to withdraw
-     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
+     * @dev Requires DEFAULT_ADMIN_ROLE
      */
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }
 
-    // ============ Emergency Controls (FIX H-02) ============
+    // ============ Emergency Controls ============
     
     /// @notice Pause all receiving and minting
     function pause() external onlyRole(PAUSER_ROLE) {

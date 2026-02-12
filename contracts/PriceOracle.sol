@@ -272,7 +272,7 @@ contract PriceOracle is AccessControl {
         valueUsd = (amount * priceNormalized) / (10 ** config.tokenDecimals);
     }
 
-    /// @notice M-01 FIX: Keeperless price refresh after circuit breaker cooldown.
+    /// @notice Keeperless price refresh after circuit breaker cooldown.
     /// @dev    Anyone can call this once the cooldown has elapsed for a tripped token.
     ///         Reads the current Chainlink answer, validates freshness, and resets the
     ///         circuit breaker — no KEEPER_ROLE required. This ensures the oracle
