@@ -73,12 +73,15 @@ template CollateralDepositProof
     signatory verifier
     observer depositor
 
+    -- DAML-H-01: Allow both used and unused proofs on-ledger (used proofs serve as
+    -- immutable audit trail). Consumption is enforced by the choice assertion.
     ensure amount > 0.0
         && T.length ethTxHash == 66  -- "0x" + 64 hex chars
         && blockNumber > 0
-        && not used
 
     -- | Consume this proof in a pool swap (one-time use)
+    -- DAML-H-01: Assertion-based guard prevents logical replay.
+    -- The consumed proof remains on-ledger as an immutable audit record.
     choice CollateralProof_Consume : ContractId CollateralDepositProof
       with
         consumer : Party
@@ -628,6 +631,7 @@ template Vault
         return (vaultCid, finalSvcCid)
 
     -- | Repay debt
+    -- DAML-H-05: Added token verification (blacklist check + issuer match)
     choice Vault_Repay : ContractId Vault
       with
         repayAmount : Money
@@ -638,6 +642,7 @@ template Vault
         assertMsg "REPAY_MUSD_OWNER_MISMATCH" (musd.owner == owner)
         assertMsg "REPAY_MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "REPAY_MUSD_INSUFFICIENT" (musd.amount >= repayAmount)
+        assertMsg "REPAY_TOKEN_BLACKLISTED" (not musd.blacklisted)
         -- Archive (consume) the mUSD token as payment
         archive musdCid
         -- Return change if mUSD amount exceeds repayAmount
@@ -1272,9 +1277,11 @@ template TicketTransferProposal
 -- ============================================================
 
 -- | BridgeService - Coordinates all bridge operations.
+-- DAML-CRIT-03: Added governance co-signatory for admin choices
 template BridgeService
   with
     operator : Party
+    governance : Party
     validators : [Party]
     requiredSignatures : Int
     totalBridgedIn : Money
@@ -1283,7 +1290,7 @@ template BridgeService
     paused : Bool
     observers : [Party]
   where
-    signatory operator
+    signatory operator, governance
     observer validators, observers
 
     ensure requiredSignatures > 0
@@ -1351,22 +1358,22 @@ template BridgeService
       do
         create this with totalBridgedOut = totalBridgedOut + amount
 
-    -- | Pause bridge
+    -- | Pause bridge (requires governance approval)
     choice Bridge_Pause : ContractId BridgeService
-      controller operator
+      controller operator, governance
       do create this with paused = True
 
-    -- | Unpause bridge
+    -- | Unpause bridge (requires governance approval)
     choice Bridge_Unpause : ContractId BridgeService
-      controller operator
+      controller operator, governance
       do create this with paused = False
 
-    -- | Update validators
+    -- | Update validators (requires governance approval)
     choice Bridge_UpdateValidators : ContractId BridgeService
       with
         newValidators : [Party]
         newRequiredSigs : Int
-      controller operator
+      controller operator, governance
       do
         assertMsg "INVALID_REQUIRED_SIGS" (newRequiredSigs > 0 && newRequiredSigs <= length newValidators)
         create this with 

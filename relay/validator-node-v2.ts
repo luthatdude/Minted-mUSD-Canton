@@ -450,6 +450,17 @@ class ValidatorNode {
         };
       }
 
+      // INFRA-CRIT-02: Verify target bridge address matches our configured bridge contract
+      // Prevents signing attestations that route funds to unauthorized contracts
+      if (payload.targetBridgeAddress &&
+          payload.targetBridgeAddress.toLowerCase() !== this.config.bridgeContractAddress.toLowerCase()) {
+        return {
+          valid: false,
+          reason: `Bridge address mismatch: payload=${payload.targetBridgeAddress}, expected=${this.config.bridgeContractAddress}`,
+          stateHash: snapshot.stateHash,
+        };
+      }
+
       const stateValid = await this.cantonClient.verifyStateHash(snapshot.stateHash);
       if (!stateValid) {
         return {

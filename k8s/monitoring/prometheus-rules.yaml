@@ -1,327 +1,262 @@
-# Minted mUSD Protocol — Prometheus Alerting Rules
-# Monitoring and alerting rules
-
+# Minted Protocol - Prometheus Alerting Rules
+# INFRA-H-03: Security alerting for rate limits, auth failures, TLS errors,
+# bridge anomalies, and service availability.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: musd-protocol-alerts
-  namespace: musd-canton
+  name: minted-security-alerts
+  namespace: canton
   labels:
-    app: musd-relay
-    release: prometheus
+    app: minted
+    component: monitoring
+    prometheus: kube-prometheus
 spec:
   groups:
-    # ══════════════════════════════════════════════════════════
-    #  BRIDGE & RELAY HEALTH
-    # ══════════════════════════════════════════════════════════
-    - name: musd-bridge-health
+    # ──────────────────────────────────────────────────
+    #  1. NGINX / API Gateway Alerts
+    # ──────────────────────────────────────────────────
+    - name: nginx-security
       rules:
-        - alert: RelayServiceDown
-          expr: up{job="musd-relay"} == 0
-          for: 2m
-          labels:
-            severity: critical
-            team: protocol
-          annotations:
-            summary: "Relay service is down"
-            description: "The mUSD relay service has been unreachable for >2 minutes. Bridge operations are halted."
-            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#relay-service-down"
-
-        - alert: ValidatorServiceDown
-          expr: up{job="musd-validator"} == 0
-          for: 2m
-          labels:
-            severity: critical
-            team: protocol
-          annotations:
-            summary: "Validator {{ $labels.instance }} is down"
-            description: "A bridge validator has been unreachable for >2 minutes. If 2+ validators are down, bridge attestations will fail."
-
-        - alert: BridgeAttestationBacklog
-          expr: musd_pending_attestations > 10
+        - alert: HighRateLimitHits
+          expr: |
+            sum(rate(nginx_http_requests_total{status="429"}[5m])) > 10
           for: 5m
           labels:
             severity: warning
-            team: protocol
+            team: security
           annotations:
-            summary: "Bridge attestation backlog growing"
-            description: "{{ $value }} pending attestations — possible validator quorum issue."
+            summary: "High rate of 429 responses — possible DDoS or abuse"
+            description: "More than 10 rate-limited requests/sec sustained for 5 minutes."
 
-        - alert: BridgeAttestationStale
-          expr: time() - musd_last_attestation_timestamp > 3600
-          for: 5m
+        - alert: TLSHandshakeFailures
+          expr: |
+            sum(rate(nginx_ssl_handshakes_failed[5m])) > 5
+          for: 3m
           labels:
             severity: warning
-            team: protocol
+            team: security
           annotations:
-            summary: "No bridge attestations in >1 hour"
-            description: "Last attestation was {{ $value | humanizeDuration }} ago."
+            summary: "Elevated TLS handshake failures"
+            description: "Possible TLS downgrade attack or misconfigured clients."
 
-    # ══════════════════════════════════════════════════════════
-    #  SUPPLY & RESERVE INTEGRITY
-    # ══════════════════════════════════════════════════════════
-    - name: musd-supply-integrity
-      rules:
-        - alert: SupplyCapApproaching
-          expr: musd_total_supply / musd_supply_cap > 0.90
-          for: 5m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "mUSD supply at {{ $value | humanizePercentage }} of cap"
-            description: "Supply is approaching the global supply cap. New mints may be blocked soon."
-
-        - alert: SupplyCapBreached
-          expr: musd_total_supply > musd_supply_cap
-          for: 1m
-          labels:
-            severity: critical
-            team: protocol
-          annotations:
-            summary: "mUSD supply EXCEEDS cap"
-            description: "Total supply {{ $value }} exceeds the supply cap. This should never happen."
-
-        - alert: ReserveRatioBelowThreshold
-          expr: musd_usdc_reserves / musd_total_supply < 0.99
-          for: 10m
-          labels:
-            severity: critical
-            team: protocol
-          annotations:
-            summary: "USDC reserve ratio below 99%"
-            description: "Reserve ratio is {{ $value | humanizePercentage }}. mUSD may be undercollateralized."
-
-    # ══════════════════════════════════════════════════════════
-    #  LENDING & LIQUIDATION
-    # ══════════════════════════════════════════════════════════
-    - name: musd-lending-health
-      rules:
-        - alert: LendingUtilizationHigh
-          expr: musd_lending_total_borrows / musd_lending_supply_cap > 0.85
-          for: 10m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "Lending utilization at {{ $value | humanizePercentage }}"
-            description: "High lending utilization may indicate interest rate model needs adjustment."
-
-        - alert: LiquidationSurge
-          expr: rate(musd_liquidation_count[5m]) > 5
-          for: 5m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "Liquidation surge detected"
-            description: "{{ $value }} liquidations/min — possible market crash or oracle issue."
-
-        - alert: OraclePriceStale
-          expr: time() - musd_oracle_last_update_timestamp > 600
-          for: 5m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "Oracle price feed stale for {{ $labels.asset }}"
-            description: "Price feed for {{ $labels.asset }} not updated in {{ $value | humanizeDuration }}. Borrows/withdrawals will be blocked."
-
-    # ══════════════════════════════════════════════════════════
-    #  STAKING (smUSD)
-    # ══════════════════════════════════════════════════════════
-    - name: musd-staking-health
-      rules:
-        - alert: SharePriceDecreaseAnomaly
-          expr: delta(musd_smusd_share_price[1h]) / musd_smusd_share_price < -0.05
+        - alert: HTTP5xxSpike
+          expr: |
+            sum(rate(nginx_http_requests_total{status=~"5.."}[5m]))
+              / sum(rate(nginx_http_requests_total[5m])) > 0.05
           for: 5m
           labels:
             severity: critical
-            team: protocol
+            team: platform
           annotations:
-            summary: "smUSD share price dropped >5% in 1 hour"
-            description: "Share price decrease from {{ $value }}. Possible strategy loss or oracle manipulation."
+            summary: "More than 5% of requests returning 5xx errors"
+            description: "Backend error rate exceeds 5% — investigate Canton participant or JSON API."
 
-        - alert: YieldSyncStale
-          expr: time() - musd_last_yield_sync_timestamp > 86400
-          for: 30m
+        - alert: UnauthorizedAccessAttempts
+          expr: |
+            sum(rate(nginx_http_requests_total{status="401"}[5m])) > 5
+          for: 5m
           labels:
             severity: warning
-            team: protocol
+            team: security
           annotations:
-            summary: "Yield sync not executed in >24 hours"
-            description: "Canton share price is stale. Cross-chain yield distribution is lagging."
+            summary: "Sustained 401 Unauthorized responses"
+            description: "Possible credential brute-force or expired JWT tokens."
 
-    # ══════════════════════════════════════════════════════════
-    #  INFRASTRUCTURE
-    # ══════════════════════════════════════════════════════════
-    - name: musd-infrastructure
+        - alert: ForbiddenAccessAttempts
+          expr: |
+            sum(rate(nginx_http_requests_total{status="403"}[5m])) > 10
+          for: 3m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Elevated 403 Forbidden responses — admin endpoint probing"
+            description: "Clients attempting to access restricted admin or party endpoints."
+
+    # ──────────────────────────────────────────────────
+    #  2. Canton Participant Alerts
+    # ──────────────────────────────────────────────────
+    - name: canton-participant
       rules:
         - alert: CantonParticipantDown
           expr: up{job="canton-participant"} == 0
           for: 2m
           labels:
             severity: critical
-            team: infra
+            team: platform
           annotations:
-            summary: "Canton participant node is down"
-            description: "The Canton participant has been unreachable for >2 minutes. All Canton operations are halted."
+            summary: "Canton participant is down"
+            description: "Canton participant pod has been unreachable for 2 minutes."
 
-        - alert: PostgresDown
-          expr: up{job="postgres"} == 0
-          for: 2m
-          labels:
-            severity: critical
-            team: infra
-          annotations:
-            summary: "PostgreSQL database is down"
-            description: "Canton ledger database is unreachable."
-
-        - alert: HighMemoryUsage
-          expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.85
+        - alert: CantonHighLatency
+          expr: |
+            histogram_quantile(0.99, rate(canton_ledger_api_request_duration_seconds_bucket[5m])) > 5
           for: 5m
           labels:
             severity: warning
-            team: infra
+            team: platform
           annotations:
-            summary: "Container {{ $labels.container }} memory at {{ $value | humanizePercentage }}"
-            description: "Container approaching memory limit. May be OOM-killed."
+            summary: "Canton Ledger API P99 latency > 5s"
+            description: "Possible contention or participant overload."
 
-        - alert: HighCPUUsage
-          expr: rate(container_cpu_usage_seconds_total[5m]) / container_spec_cpu_quota * container_spec_cpu_period > 0.85
-          for: 10m
+        - alert: CantonDBConnectionPoolExhausted
+          expr: |
+            canton_db_pool_active_connections / canton_db_pool_max_connections > 0.9
+          for: 3m
           labels:
             severity: warning
-            team: infra
+            team: platform
           annotations:
-            summary: "Container {{ $labels.container }} CPU at {{ $value | humanizePercentage }}"
+            summary: "Canton DB connection pool > 90% utilized"
+            description: "Database connection exhaustion imminent."
 
-        - alert: PodRestartLoop
-          expr: rate(kube_pod_container_status_restarts_total{namespace="musd-canton"}[15m]) > 0.1
-          for: 5m
-          labels:
-            severity: warning
-            team: infra
-          annotations:
-            summary: "Pod {{ $labels.pod }} is restart-looping"
-            description: "{{ $value }} restarts/min. Check logs for crash cause."
-
-        - alert: PVCNearlyFull
-          expr: kubelet_volume_stats_used_bytes{namespace="musd-canton"} / kubelet_volume_stats_capacity_bytes > 0.85
-          for: 10m
-          labels:
-            severity: warning
-            team: infra
-          annotations:
-            summary: "PVC {{ $labels.persistentvolumeclaim }} at {{ $value | humanizePercentage }} capacity"
-
-        - alert: CertificateExpiringSoon
-          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 604800
-          for: 1h
-          labels:
-            severity: warning
-            team: infra
-          annotations:
-            summary: "TLS certificate expiring in < 7 days"
-            description: "Certificate {{ $labels.name }} expires in {{ $value | humanizeDuration }}."
-
-    # ══════════════════════════════════════════════════════════
-    #  BOT SERVICE HEALTH
-    # ══════════════════════════════════════════════════════════
-    - name: musd-bot-health
+    # ──────────────────────────────────────────────────
+    #  3. Bridge / Relay Security Alerts
+    # ──────────────────────────────────────────────────
+    - name: bridge-security
       rules:
-        - alert: LiquidationBotDown
-          expr: up{job="musd-liquidation-bot"} == 0
+        - alert: BridgeRelayDown
+          expr: up{job="bridge-relay"} == 0
           for: 3m
           labels:
             severity: critical
-            team: protocol
+            team: bridge
           annotations:
-            summary: "Liquidation bot is down"
-            description: "The liquidation bot has been unreachable for >3 minutes. Under-collateralized positions will not be liquidated."
-            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#liquidation-surge"
+            summary: "Bridge relay service is down"
+            description: "Bridge attestations are not being processed."
 
-        - alert: OracleKeeperDown
-          expr: up{job="musd-oracle-keeper"} == 0
-          for: 5m
-          labels:
-            severity: high
-            team: protocol
-          annotations:
-            summary: "Oracle keeper bot is down"
-            description: "The PriceOracle circuit-breaker keeper has been unreachable for >5 minutes. Tripped circuit breakers will not auto-reset."
-
-        - alert: PendleSniperDown
-          expr: up{job="musd-pendle-sniper"} == 0
-          for: 5m
+        - alert: HighBridgeVolume
+          expr: |
+            sum(rate(bridge_requests_total[1h])) > 100
+          for: 15m
           labels:
             severity: warning
-            team: protocol
+            team: security
           annotations:
-            summary: "Pendle sniper bot is down"
-            description: "The Pendle pool sniper has been unreachable for >5 minutes. New Pendle opportunities will be missed."
+            summary: "Abnormally high bridge request volume"
+            description: "Possible bridge exploitation or unusually high mint/redeem activity."
 
-        - alert: PoolAlertBotDown
-          expr: up{job="musd-pool-alerts"} == 0
-          for: 5m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "Pool alert bot is down"
-            description: "The DeFi pool alert service has been unreachable for >5 minutes. New pool notifications are not being sent."
-
-        - alert: BotHighRestartRate
-          expr: rate(kube_pod_container_status_restarts_total{namespace="musd-canton", container=~"liquidation-bot|oracle-keeper|pendle-sniper|pool-alerts"}[30m]) > 0.1
-          for: 5m
-          labels:
-            severity: warning
-            team: protocol
-          annotations:
-            summary: "Bot {{ $labels.container }} is restart-looping"
-            description: "{{ $value }} restarts/min. Check logs and RPC connectivity."
-
-    # ══════════════════════════════════════════════════════════
-    #  RPC ENDPOINT HEALTH
-    # ══════════════════════════════════════════════════════════
-    - name: musd-rpc-health
-      rules:
-        - alert: RpcEndpointDown
-          expr: probe_success{job="musd-rpc-probe"} == 0
-          for: 2m
+        - alert: BridgeValidationFailures
+          expr: |
+            sum(rate(bridge_validation_failures_total[5m])) > 0
+          for: 1m
           labels:
             severity: critical
-            team: infra
+            team: security
           annotations:
-            summary: "RPC endpoint {{ $labels.instance }} is unreachable"
-            description: "The Ethereum RPC endpoint has been down for >2 minutes. All on-chain operations are blocked."
+            summary: "Bridge validation failures detected"
+            description: "Attestations failing validation — possible forgery attempt."
 
-        - alert: RpcHighLatency
-          expr: probe_duration_seconds{job="musd-rpc-probe"} > 5
+        - alert: ValidatorSigningRateLimitHit
+          expr: |
+            sum(rate(validator_signing_rate_limit_hits_total[5m])) > 0
+          for: 1m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Validator signing rate limit triggered"
+            description: "A validator node hit its per-hour signing limit (50/hr)."
+
+    # ──────────────────────────────────────────────────
+    #  4. Price Oracle Alerts
+    # ──────────────────────────────────────────────────
+    - name: price-oracle
+      rules:
+        - alert: PriceOracleCircuitBreakerOpen
+          expr: |
+            price_oracle_circuit_breaker_open == 1
+          for: 1m
+          labels:
+            severity: critical
+            team: oracle
+          annotations:
+            summary: "Price oracle circuit breaker is OPEN"
+            description: "All price sources have failed — oracle is paused. New borrows will be blocked by feed staleness."
+
+        - alert: PriceSourceDivergence
+          expr: |
+            abs(tradecraft_price - temple_price) / tradecraft_price > 0.05
           for: 5m
           labels:
             severity: warning
-            team: infra
+            team: oracle
           annotations:
-            summary: "RPC latency >5s on {{ $labels.instance }}"
-            description: "Current latency: {{ $value }}s. May cause transaction timeouts and bot failures."
+            summary: "Tradecraft vs Temple price divergence > 5%"
+            description: "Price sources are diverging — possible manipulation or stale feed."
 
-        - alert: RpcHighErrorRate
-          expr: rate(musd_rpc_errors_total[5m]) / rate(musd_rpc_requests_total[5m]) > 0.05
+        - alert: PriceFeedStale
+          expr: |
+            time() - price_feed_last_update_timestamp > 3600
           for: 5m
           labels:
             severity: warning
-            team: infra
+            team: oracle
           annotations:
-            summary: "RPC error rate >5% on {{ $labels.instance }}"
-            description: "{{ $value | humanizePercentage }} of RPC requests are failing. Check provider status."
+            summary: "Price feed has not been updated in > 1 hour"
+            description: "Stale price feed will block new borrows (by design). Investigate oracle service."
 
-        - alert: WebSocketDisconnectFrequent
-          expr: rate(musd_ws_disconnect_total[15m]) > 0.2
+    # ──────────────────────────────────────────────────
+    #  5. Database & Storage Alerts
+    # ──────────────────────────────────────────────────
+    - name: postgres-alerts
+      rules:
+        - alert: PostgresDown
+          expr: up{job="postgres"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "PostgreSQL database is down"
+            description: "Canton participant will lose ledger persistence."
+
+        - alert: PostgresHighConnections
+          expr: |
+            pg_stat_activity_count > 80
           for: 5m
           labels:
             severity: warning
-            team: infra
+            team: platform
           annotations:
-            summary: "Frequent WebSocket disconnects on {{ $labels.instance }}"
-            description: "{{ $value }} disconnects/min. May indicate unstable RPC provider or network issues."
+            summary: "PostgreSQL active connections > 80"
+            description: "Approaching max_connections limit. Consider connection pooling."
+
+        - alert: PostgresDiskUsageHigh
+          expr: |
+            (node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"} - node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql"})
+              / node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"} > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PostgreSQL disk usage > 85%"
+            description: "Disk filling up — schedule backup rotation or volume expansion."
+
+    # ──────────────────────────────────────────────────
+    #  6. Pod Security Alerts
+    # ──────────────────────────────────────────────────
+    - name: pod-security
+      rules:
+        - alert: PodRestartLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="canton"}[1h]) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod in canton namespace is restart-looping"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has restarted > 5 times in 1 hour."
+
+        - alert: PodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{namespace="canton", reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod OOM-killed in canton namespace"
+            description: "Container {{ $labels.container }} was OOM-killed. Increase resource limits."
