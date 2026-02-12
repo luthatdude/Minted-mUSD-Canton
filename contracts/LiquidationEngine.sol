@@ -35,6 +35,8 @@ interface IBorrowModule {
     // FIX C-01: Unsafe variant bypasses circuit breaker for liquidation path
     function healthFactorUnsafe(address user) external view returns (uint256);
     function reduceDebt(address user, uint256 amount) external;
+    // FIX C-02: Record bad debt when liquidation exhausts all collateral
+    function recordBadDebt(address user) external;
 }
 
 interface IPriceOracleLiq {
@@ -84,6 +86,13 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         address indexed liquidator,
         address indexed borrower,
         address indexed collateralToken,
+        uint256 debtRepaid,
+        uint256 collateralSeized
+    );
+    /// @notice FIX C-02: Emitted when liquidation creates bad debt (residual debt with no collateral)
+    event BadDebtDetected(
+        address indexed borrower,
+        uint256 residualDebt,
         uint256 debtRepaid,
         uint256 collateralSeized
     );
@@ -203,6 +212,34 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         borrowModule.reduceDebt(borrower, actualRepay);
 
         emit Liquidation(msg.sender, borrower, collateralToken, actualRepay, seizeAmount);
+
+        // FIX C-02: Detect and record bad debt after liquidation
+        if (seizeAmount == available) {
+            _checkAndRecordBadDebt(borrower, actualRepay, seizeAmount);
+        }
+    }
+
+    /// @dev FIX C-02: Check if borrower has residual debt with zero collateral (bad debt)
+    ///      Extracted to private function to avoid stack-too-deep in liquidate()
+    function _checkAndRecordBadDebt(
+        address borrower,
+        uint256 debtRepaid,
+        uint256 collateralSeized
+    ) private {
+        uint256 residualDebt = borrowModule.totalDebt(borrower);
+        if (residualDebt == 0) return;
+
+        // Check all collateral tokens for remaining deposits
+        address[] memory tokens = vault.getSupportedTokens();
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (vault.deposits(borrower, tokens[i]) > 0) {
+                return; // Still has collateral — not bad debt yet
+            }
+        }
+
+        // No collateral left but debt remains — this is bad debt
+        emit BadDebtDetected(borrower, residualDebt, debtRepaid, collateralSeized);
+        borrowModule.recordBadDebt(borrower);
     }
 
     // ============================================================
