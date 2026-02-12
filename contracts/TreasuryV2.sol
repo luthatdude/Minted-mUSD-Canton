@@ -121,8 +121,44 @@ contract TreasuryV2 is
     /// @notice FIX T-H01b: Timestamp when vault change was requested
     uint256 public vaultChangeRequestTime;
 
-    /// @dev Storage gap for future upgrades (40 - 4 new vars = 36)
-    uint256[36] private __gap;
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX H-01: Additional timelocked admin operations
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Pending strategy addition
+    struct PendingStrategy {
+        address strategy;
+        uint256 targetBps;
+        uint256 minBps;
+        uint256 maxBps;
+        bool autoAllocate;
+        uint256 requestTime;
+    }
+    PendingStrategy public pendingAddStrategy;
+    address public pendingRemoveStrategy;
+    uint256 public pendingRemoveStrategyTime;
+
+    /// @notice Pending fee config
+    uint256 public pendingFeeConfigBps;
+    address public pendingFeeConfigRecipient;
+    uint256 public pendingFeeConfigTime;
+
+    /// @notice Pending reserve BPS
+    uint256 public pendingReserveBps;
+    uint256 public pendingReserveBpsTime;
+    bool    public pendingReserveBpsSet;
+
+    event StrategyAddRequested(address indexed strategy, uint256 targetBps, uint256 readyAt);
+    event StrategyAddCancelled(address indexed strategy);
+    event StrategyRemoveRequested(address indexed strategy, uint256 readyAt);
+    event StrategyRemoveCancelled(address indexed strategy);
+    event FeeConfigChangeRequested(uint256 feeBps, address recipient, uint256 readyAt);
+    event FeeConfigChangeCancelled();
+    event ReserveBpsChangeRequested(uint256 bps, uint256 readyAt);
+    event ReserveBpsChangeCancelled(uint256 bps);
+
+    /// @dev Storage gap for future upgrades (40 - 4 old vars - 10 new vars = 26)
+    uint256[26] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -151,6 +187,10 @@ contract TreasuryV2 is
     event VaultChangeRequested(address indexed newVault, uint256 readyAt);
     event VaultChangeCancelled(address indexed cancelledVault);
     event VaultChanged(address indexed oldVault, address indexed newVault);
+    /// @dev Emitted when strategy force-deactivated due to failed withdrawal
+    event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
+    /// FIX S-M09: Added event for fee config changes
+    event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -718,9 +758,9 @@ contract TreasuryV2 is
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Add a new strategy
+     * @notice FIX H-01: Request adding a new strategy (48h timelock)
      */
-    function addStrategy(
+    function requestAddStrategy(
         address strategy,
         uint256 targetBps,
         uint256 minBps,
@@ -732,8 +772,33 @@ contract TreasuryV2 is
         if (strategies.length >= MAX_STRATEGIES) revert MaxStrategiesReached();
         if (targetBps > maxBps || minBps > targetBps) revert AllocationExceedsLimit();
 
+        pendingAddStrategy = PendingStrategy({
+            strategy: strategy,
+            targetBps: targetBps,
+            minBps: minBps,
+            maxBps: maxBps,
+            autoAllocate: autoAllocate,
+            requestTime: block.timestamp
+        });
+        emit StrategyAddRequested(strategy, targetBps, block.timestamp + UPGRADE_DELAY);
+    }
+
+    function cancelAddStrategy() external onlyRole(STRATEGIST_ROLE) {
+        address cancelled = pendingAddStrategy.strategy;
+        delete pendingAddStrategy;
+        emit StrategyAddCancelled(cancelled);
+    }
+
+    function executeAddStrategy() external onlyRole(STRATEGIST_ROLE) {
+        PendingStrategy memory p = pendingAddStrategy;
+        require(p.strategy != address(0), "NO_PENDING");
+        require(block.timestamp >= p.requestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
+        // Re-validate
+        if (isStrategy[p.strategy]) revert StrategyExists();
+        if (strategies.length >= MAX_STRATEGIES) revert MaxStrategiesReached();
+
         // Validate total allocation
-        uint256 totalTarget = targetBps + reserveBps;
+        uint256 totalTarget = p.targetBps + reserveBps;
         for (uint256 i = 0; i < strategies.length; i++) {
             if (strategies[i].active) {
                 totalTarget += strategies[i].targetBps;
@@ -742,38 +807,50 @@ contract TreasuryV2 is
         if (totalTarget > BPS) revert TotalAllocationInvalid();
 
         strategies.push(StrategyConfig({
-            strategy: strategy,
-            targetBps: targetBps,
-            minBps: minBps,
-            maxBps: maxBps,
+            strategy: p.strategy,
+            targetBps: p.targetBps,
+            minBps: p.minBps,
+            maxBps: p.maxBps,
             active: true,
-            autoAllocate: autoAllocate
+            autoAllocate: p.autoAllocate
         }));
 
-        strategyIndex[strategy] = strategies.length - 1;
-        isStrategy[strategy] = true;
+        strategyIndex[p.strategy] = strategies.length - 1;
+        isStrategy[p.strategy] = true;
 
-        // FIX H-03: Do NOT grant unlimited approval at add-time.
-        // Approvals are granted per-operation in _autoAllocate and rebalance.
-
-        emit StrategyAdded(strategy, targetBps);
+        delete pendingAddStrategy;
+        emit StrategyAdded(p.strategy, p.targetBps);
     }
 
     /**
-     * @notice Remove a strategy (withdraws all funds first)
-     * FIX H-3: Revert on withdrawal failure to prevent fund loss
-     * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
+     * @notice FIX H-01: Request removing a strategy (48h timelock)
      */
-    /// @dev Emitted when strategy force-deactivated due to failed withdrawal
-    event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
-
-    function removeStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
+    function requestRemoveStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
         if (!isStrategy[strategy]) revert StrategyNotFound();
+        pendingRemoveStrategy = strategy;
+        pendingRemoveStrategyTime = block.timestamp;
+        emit StrategyRemoveRequested(strategy, block.timestamp + UPGRADE_DELAY);
+    }
+
+    function cancelRemoveStrategy() external onlyRole(STRATEGIST_ROLE) {
+        address cancelled = pendingRemoveStrategy;
+        pendingRemoveStrategy = address(0);
+        pendingRemoveStrategyTime = 0;
+        emit StrategyRemoveCancelled(cancelled);
+    }
+
+    function executeRemoveStrategy() external onlyRole(STRATEGIST_ROLE) {
+        address strategy = pendingRemoveStrategy;
+        require(strategy != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingRemoveStrategyTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+
+        pendingRemoveStrategy = address(0);
+        pendingRemoveStrategyTime = 0;
 
         uint256 idx = strategyIndex[strategy];
 
         // Try to withdraw, but don't let failure permanently block removal.
-        // If withdrawAll() fails, force-deactivate to prevent permanent DoS.
         if (strategies[idx].active) {
             uint256 stratValue;
             try IStrategy(strategy).totalValue() returns (uint256 val) {
@@ -784,31 +861,23 @@ contract TreasuryV2 is
 
             if (stratValue > 0) {
                 try IStrategy(strategy).withdrawAll() returns (uint256 withdrawn) {
-                    // Verify at least 95% withdrawn (slippage tolerance)
                     uint256 minWithdrawn = (stratValue * 95) / 100;
                     if (withdrawn >= minWithdrawn) {
                         emit StrategyWithdrawn(strategy, withdrawn);
                     } else {
-                        // Partial withdrawal — still deactivate but warn
                         emit StrategyForceDeactivated(strategy, stratValue - withdrawn, "");
                     }
                 } catch (bytes memory reason) {
-                    // Force-deactivate instead of reverting.
-                    // Funds remain in the strategy — admin must recover via
-                    // emergencyWithdrawAll() or direct strategy interaction later.
                     emit StrategyForceDeactivated(strategy, stratValue, reason);
                 }
             }
         }
 
-        // Deactivate (don't delete to preserve indices)
         strategies[idx].active = false;
         strategies[idx].targetBps = 0;
         isStrategy[strategy] = false;
-        // FIX M-09: Clean up stale strategyIndex mapping
         delete strategyIndex[strategy];
 
-        // Revoke approval
         asset.forceApprove(strategy, 0);
 
         emit StrategyRemoved(strategy);
@@ -969,37 +1038,73 @@ contract TreasuryV2 is
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Update fee configuration
+     * @notice FIX H-01: Request fee config change (48h timelock)
      */
-    /// FIX S-M09: Added event for fee config changes
-    event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
-
-    function setFeeConfig(
+    function requestFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_performanceFeeBps <= 5000, "Fee too high"); // Max 50%
+        require(_performanceFeeBps <= 5000, "Fee too high");
         require(_feeRecipient != address(0), "Invalid recipient");
+        pendingFeeConfigBps = _performanceFeeBps;
+        pendingFeeConfigRecipient = _feeRecipient;
+        pendingFeeConfigTime = block.timestamp;
+        emit FeeConfigChangeRequested(_performanceFeeBps, _feeRecipient, block.timestamp + UPGRADE_DELAY);
+    }
+
+    function cancelFeeConfig() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        pendingFeeConfigBps = 0;
+        pendingFeeConfigRecipient = address(0);
+        pendingFeeConfigTime = 0;
+        emit FeeConfigChangeCancelled();
+    }
+
+    function executeFeeConfig() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingFeeConfigRecipient != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingFeeConfigTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
 
         _accrueFees(); // Accrue with old rate first
 
-        fees.performanceFeeBps = _performanceFeeBps;
-        fees.feeRecipient = _feeRecipient;
+        fees.performanceFeeBps = pendingFeeConfigBps;
+        fees.feeRecipient = pendingFeeConfigRecipient;
 
-        emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
+        emit FeeConfigUpdated(pendingFeeConfigBps, pendingFeeConfigRecipient);
+        pendingFeeConfigBps = 0;
+        pendingFeeConfigRecipient = address(0);
+        pendingFeeConfigTime = 0;
     }
 
     /// FIX S-M10: Added event for reserve BPS changes
     event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
 
     /**
-     * @notice Update reserve percentage
+     * @notice FIX H-01: Request reserve BPS change (48h timelock)
      */
-    function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+    function requestReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_reserveBps <= 3000, "Reserve too high");
+        pendingReserveBps = _reserveBps;
+        pendingReserveBpsTime = block.timestamp;
+        pendingReserveBpsSet = true;
+        emit ReserveBpsChangeRequested(_reserveBps, block.timestamp + UPGRADE_DELAY);
+    }
+
+    function cancelReserveBps() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        uint256 cancelled = pendingReserveBps;
+        pendingReserveBps = 0;
+        pendingReserveBpsTime = 0;
+        pendingReserveBpsSet = false;
+        emit ReserveBpsChangeCancelled(cancelled);
+    }
+
+    function executeReserveBps() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingReserveBpsSet, "NO_PENDING");
+        require(block.timestamp >= pendingReserveBpsTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
         uint256 oldBps = reserveBps;
-        reserveBps = _reserveBps;
-        emit ReserveBpsUpdated(oldBps, _reserveBps);
+        reserveBps = pendingReserveBps;
+        pendingReserveBps = 0;
+        pendingReserveBpsTime = 0;
+        pendingReserveBpsSet = false;
+        emit ReserveBpsUpdated(oldBps, reserveBps);
     }
 
     /// FIX S-M11: Added event and validation for min auto-allocate changes

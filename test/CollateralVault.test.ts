@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { CollateralVault, MockERC20 } from "../typechain-types";
+import { timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule } from "./helpers/timelock";
 
 describe("CollateralVault", function () {
   let vault: CollateralVault;
@@ -42,7 +43,8 @@ describe("CollateralVault", function () {
     await vault.grantRole(await vault.LEVERAGE_VAULT_ROLE(), leverageVault.address);
 
     // Add WETH as collateral
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, deployer,
       await weth.getAddress(),
       WETH_FACTOR,
       WETH_LIQ_THRESHOLD,
@@ -73,31 +75,31 @@ describe("CollateralVault", function () {
 
     it("should reject duplicate collateral add", async function () {
       await expect(
-        vault.addCollateral(await weth.getAddress(), WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
+        vault.requestAddCollateral(await weth.getAddress(), WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
       ).to.be.revertedWith("ALREADY_ADDED");
     });
 
     it("should reject zero address collateral", async function () {
       await expect(
-        vault.addCollateral(ethers.ZeroAddress, WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
+        vault.requestAddCollateral(ethers.ZeroAddress, WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
       ).to.be.revertedWith("INVALID_TOKEN");
     });
 
     it("should reject factor >= threshold", async function () {
       await expect(
-        vault.addCollateral(await wbtc.getAddress(), 8000n, 8000n, 500n)
+        vault.requestAddCollateral(await wbtc.getAddress(), 8000n, 8000n, 500n)
       ).to.be.revertedWith("INVALID_FACTOR");
     });
 
     it("should reject threshold > 95%", async function () {
       await expect(
-        vault.addCollateral(await wbtc.getAddress(), 9000n, 9600n, 500n)
+        vault.requestAddCollateral(await wbtc.getAddress(), 9000n, 9600n, 500n)
       ).to.be.revertedWith("THRESHOLD_TOO_HIGH");
     });
 
     it("should reject penalty > 20%", async function () {
       await expect(
-        vault.addCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
+        vault.requestAddCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
       ).to.be.revertedWith("PENALTY_TOO_HIGH");
     });
 
@@ -106,11 +108,11 @@ describe("CollateralVault", function () {
       // Already have 1, add 49 more
       for (let i = 0; i < 49; i++) {
         const token = await MockERC20Factory.deploy(`Token${i}`, `T${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 5000n, 6000n, 500n);
+        await timelockAddCollateral(vault, deployer, await token.getAddress(), 5000n, 6000n, 500n);
       }
       const oneMore = await MockERC20Factory.deploy("TooMany", "TM", 18);
       await expect(
-        vault.addCollateral(await oneMore.getAddress(), 5000n, 6000n, 500n)
+        vault.requestAddCollateral(await oneMore.getAddress(), 5000n, 6000n, 500n)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
 
@@ -134,7 +136,7 @@ describe("CollateralVault", function () {
 
     it("should reject unauthorized config changes", async function () {
       await expect(
-        vault.connect(user1).addCollateral(await wbtc.getAddress(), 7500n, 8000n, 500n)
+        vault.connect(user1).requestAddCollateral(await wbtc.getAddress(), 7500n, 8000n, 500n)
       ).to.be.reverted;
     });
   });

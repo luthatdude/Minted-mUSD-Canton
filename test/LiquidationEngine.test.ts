@@ -9,6 +9,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 describe("LiquidationEngine", function () {
   async function deployLiquidationFixture() {
@@ -31,19 +32,21 @@ describe("LiquidationEngine", function () {
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // 8 decimals, $2000
 
     // Configure oracle feed (token, feed, stalePeriod, tokenDecimals)
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
 
     // Add collateral with 80% liquidation threshold and 10% penalty
-    await collateralVault.addCollateral(
+    await timelockAddCollateral(collateralVault, owner,
       await weth.getAddress(),
       7500, // 75% LTV (collateral factor)
       8000, // 80% liquidation threshold
       1000  // 10% liquidation penalty
     );
+
+    await refreshFeeds(ethFeed);
 
     // Deploy BorrowModule (vault, oracle, musd, interestRateBps, minDebt)
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
@@ -399,7 +402,7 @@ describe("LiquidationEngine", function () {
     it("Should allow admin to update close factor", async function () {
       const { liquidationEngine, owner } = await loadFixture(deployLiquidationFixture);
 
-      await liquidationEngine.connect(owner).setCloseFactor(6000); // 60%
+      await timelockSetCloseFactor(liquidationEngine, owner, 6000); // 60%
       expect(await liquidationEngine.closeFactorBps()).to.equal(6000);
     });
 
@@ -407,21 +410,21 @@ describe("LiquidationEngine", function () {
       const { liquidationEngine, owner } = await loadFixture(deployLiquidationFixture);
 
       // 0% and > 100% should be rejected
-      await expect(liquidationEngine.connect(owner).setCloseFactor(0)).to.be.reverted;
-      await expect(liquidationEngine.connect(owner).setCloseFactor(10001)).to.be.reverted;
+      await expect(liquidationEngine.connect(owner).requestCloseFactor(0)).to.be.reverted;
+      await expect(liquidationEngine.connect(owner).requestCloseFactor(10001)).to.be.reverted;
     });
 
     it("Should allow admin to update full liquidation threshold", async function () {
       const { liquidationEngine, owner } = await loadFixture(deployLiquidationFixture);
 
-      await liquidationEngine.connect(owner).setFullLiquidationThreshold(4000); // 40%
+      await timelockSetFullLiquidationThreshold(liquidationEngine, owner, 4000); // 40%
       expect(await liquidationEngine.fullLiquidationThreshold()).to.equal(4000);
     });
 
     it("Should reject non-admin setting close factor", async function () {
       const { liquidationEngine, user1 } = await loadFixture(deployLiquidationFixture);
 
-      await expect(liquidationEngine.connect(user1).setCloseFactor(6000)).to.be.reverted;
+      await expect(liquidationEngine.connect(user1).requestCloseFactor(6000)).to.be.reverted;
     });
   });
 

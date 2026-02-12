@@ -55,6 +55,28 @@ contract PriceOracle is AccessControl {
     event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
     event CircuitBreakerToggled(bool enabled);
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    uint256 public constant ADMIN_DELAY = 48 hours;
+
+    struct PendingFeed {
+        address token;
+        address feed;
+        uint256 stalePeriod;
+        uint8 tokenDecimals;
+        uint256 requestTime;
+    }
+    PendingFeed public pendingSetFeed;
+    address public pendingRemoveFeedToken;
+    uint256 public pendingRemoveFeedTime;
+
+    event FeedChangeRequested(address indexed token, address feed, uint256 readyAt);
+    event FeedChangeCancelled(address indexed token);
+    event FeedRemoveRequested(address indexed token, uint256 readyAt);
+    event FeedRemoveCancelled(address indexed token);
+
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
@@ -86,12 +108,8 @@ contract PriceOracle is AccessControl {
         lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
     }
 
-    /// @notice Register or update a Chainlink price feed for a collateral token
-    /// @param token The collateral token address
-    /// @param feed The Chainlink aggregator address
-    /// @param stalePeriod Maximum acceptable age of price data in seconds
-    /// @param tokenDecimals The number of decimals the collateral token uses
-    function setFeed(
+    /// @notice FIX H-01: Request registering/updating a Chainlink price feed (48h delay)
+    function requestSetFeed(
         address token,
         address feed,
         uint256 stalePeriod,
@@ -100,48 +118,80 @@ contract PriceOracle is AccessControl {
         require(token != address(0), "INVALID_TOKEN");
         require(feed != address(0), "INVALID_FEED");
         require(stalePeriod > 0, "INVALID_STALE_PERIOD");
-        // FIX H-03: Enforce upper bound on staleness to prevent accepting arbitrarily old prices
         require(stalePeriod <= MAX_STALE_PERIOD, "STALE_PERIOD_TOO_HIGH");
-        // FIX H-1: Validate tokenDecimals at config time to prevent precision issues
         require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
-
-        feeds[token] = FeedConfig({
-            feed: IAggregatorV3(feed),
-            stalePeriod: stalePeriod,
-            tokenDecimals: tokenDecimals,
-            enabled: true
-        });
-
-        // FIX M-03 (Final Audit): Validate feedDecimals <= 18 to prevent underflow
-        // in getPrice() where we compute 10 ** (18 - feedDecimals).
-        // A feed with > 18 decimals would revert at query time, not at config time.
         {
             uint8 fd = IAggregatorV3(feed).decimals();
             require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
         }
 
-        // FIX S-M07: Auto-initialize lastKnownPrice from the feed to prevent stale fallback gaps
-        try IAggregatorV3(feed).latestRoundData() returns (
+        pendingSetFeed = PendingFeed({
+            token: token,
+            feed: feed,
+            stalePeriod: stalePeriod,
+            tokenDecimals: tokenDecimals,
+            requestTime: block.timestamp
+        });
+        emit FeedChangeRequested(token, feed, block.timestamp + ADMIN_DELAY);
+    }
+
+    function cancelSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+        address cancelled = pendingSetFeed.token;
+        delete pendingSetFeed;
+        emit FeedChangeCancelled(cancelled);
+    }
+
+    function executeSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+        PendingFeed memory p = pendingSetFeed;
+        require(p.token != address(0), "NO_PENDING");
+        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+
+        feeds[p.token] = FeedConfig({
+            feed: IAggregatorV3(p.feed),
+            stalePeriod: p.stalePeriod,
+            tokenDecimals: p.tokenDecimals,
+            enabled: true
+        });
+
+        // Auto-initialize lastKnownPrice from the feed
+        try IAggregatorV3(p.feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256, uint80
         ) {
             if (answer > 0) {
-                uint256 feedDecimals = IAggregatorV3(feed).decimals();
-                lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
+                uint256 feedDecimals = IAggregatorV3(p.feed).decimals();
+                lastKnownPrice[p.token] = uint256(answer) * (10 ** (18 - feedDecimals));
             }
-        } catch {
-            // Feed not yet reporting — lastKnownPrice stays 0 until first getPrice() call
-        }
+        } catch {}
 
-        emit FeedUpdated(token, feed, stalePeriod, tokenDecimals);
+        delete pendingSetFeed;
+        emit FeedUpdated(p.token, p.feed, p.stalePeriod, p.tokenDecimals);
     }
 
-    /// @notice Remove a price feed
-    /// @dev FIX M-06: Also clears lastKnownPrice to prevent stale circuit-breaker
-    ///      state if the same token is later re-added with a new feed.
-    function removeFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @notice FIX H-01: Request removing a price feed (48h delay)
+    function requestRemoveFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         require(feeds[token].enabled, "FEED_NOT_FOUND");
+        pendingRemoveFeedToken = token;
+        pendingRemoveFeedTime = block.timestamp;
+        emit FeedRemoveRequested(token, block.timestamp + ADMIN_DELAY);
+    }
+
+    function cancelRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+        address cancelled = pendingRemoveFeedToken;
+        pendingRemoveFeedToken = address(0);
+        pendingRemoveFeedTime = 0;
+        emit FeedRemoveCancelled(cancelled);
+    }
+
+    function executeRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
+        address token = pendingRemoveFeedToken;
+        require(token != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingRemoveFeedTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        require(feeds[token].enabled, "FEED_NOT_FOUND");
+
         delete feeds[token];
         delete lastKnownPrice[token];
+        pendingRemoveFeedToken = address(0);
+        pendingRemoveFeedTime = 0;
         emit FeedRemoved(token);
     }
 

@@ -8,6 +8,7 @@ import { ethers } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { PriceOracle, MockAggregatorV3 } from "../typechain-types";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 describe("PriceOracle", function () {
   let oracle: PriceOracle;
@@ -42,8 +43,10 @@ describe("PriceOracle", function () {
     await oracle.grantRole(await oracle.ORACLE_ADMIN_ROLE(), admin.address);
 
     // Configure feeds
-    await oracle.connect(admin).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18);
-    await oracle.connect(admin).setFeed(WBTC_ADDR, await btcFeed.getAddress(), STALE_PERIOD, 8);
+    await timelockSetFeed(oracle, admin, WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18);
+    await timelockSetFeed(oracle, admin, WBTC_ADDR, await btcFeed.getAddress(), STALE_PERIOD, 8);
+
+    await refreshFeeds(ethFeed, btcFeed);
   });
 
   // ============================================================
@@ -60,42 +63,42 @@ describe("PriceOracle", function () {
 
     it("should reject zero token address", async function () {
       await expect(
-        oracle.connect(admin).setFeed(ethers.ZeroAddress, await ethFeed.getAddress(), STALE_PERIOD, 18)
+        oracle.connect(admin).requestSetFeed(ethers.ZeroAddress, await ethFeed.getAddress(), STALE_PERIOD, 18)
       ).to.be.revertedWith("INVALID_TOKEN");
     });
 
     it("should reject zero feed address", async function () {
       await expect(
-        oracle.connect(admin).setFeed(WETH_ADDR, ethers.ZeroAddress, STALE_PERIOD, 18)
+        oracle.connect(admin).requestSetFeed(WETH_ADDR, ethers.ZeroAddress, STALE_PERIOD, 18)
       ).to.be.revertedWith("INVALID_FEED");
     });
 
     it("should reject zero stale period", async function () {
       await expect(
-        oracle.connect(admin).setFeed(WETH_ADDR, await ethFeed.getAddress(), 0, 18)
+        oracle.connect(admin).requestSetFeed(WETH_ADDR, await ethFeed.getAddress(), 0, 18)
       ).to.be.revertedWith("INVALID_STALE_PERIOD");
     });
 
     it("should reject tokenDecimals > 18", async function () {
       await expect(
-        oracle.connect(admin).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 19)
+        oracle.connect(admin).requestSetFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 19)
       ).to.be.revertedWith("TOKEN_DECIMALS_TOO_HIGH");
     });
 
     it("should remove a feed", async function () {
-      await oracle.connect(admin).removeFeed(WETH_ADDR);
+      await timelockRemoveFeed(oracle, admin, WETH_ADDR);
       const [, , , enabled] = await oracle.feeds(WETH_ADDR);
       expect(enabled).to.be.false;
     });
 
     it("should reject remove of non-existent feed", async function () {
       const randomAddr = "0x0000000000000000000000000000000000000099";
-      await expect(oracle.connect(admin).removeFeed(randomAddr)).to.be.revertedWith("FEED_NOT_FOUND");
+      await expect(oracle.connect(admin).requestRemoveFeed(randomAddr)).to.be.revertedWith("FEED_NOT_FOUND");
     });
 
     it("should reject unauthorized feed changes", async function () {
       await expect(
-        oracle.connect(user).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18)
+        oracle.connect(user).requestSetFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18)
       ).to.be.reverted;
     });
   });
@@ -117,7 +120,7 @@ describe("PriceOracle", function () {
     });
 
     it("should reject query for disabled feed", async function () {
-      await oracle.connect(admin).removeFeed(WETH_ADDR);
+      await timelockRemoveFeed(oracle, admin, WETH_ADDR);
       await expect(oracle.getPrice(WETH_ADDR)).to.be.revertedWith("FEED_NOT_ENABLED");
     });
 
@@ -183,7 +186,7 @@ describe("PriceOracle", function () {
     });
 
     it("should return false for disabled feed", async function () {
-      await oracle.connect(admin).removeFeed(WETH_ADDR);
+      await timelockRemoveFeed(oracle, admin, WETH_ADDR);
       expect(await oracle.isFeedHealthy(WETH_ADDR)).to.be.false;
     });
 

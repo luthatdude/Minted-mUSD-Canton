@@ -9,6 +9,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { refreshFeeds, timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient } from "./helpers/timelock";
 
 describe("BorrowModule", function () {
   async function deployBorrowModuleFixture() {
@@ -31,19 +32,23 @@ describe("BorrowModule", function () {
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // 8 decimals, $2000
 
     // Configure oracle feed (token, feed, stalePeriod, tokenDecimals)
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
 
     // Add collateral (token, collateralFactorBps, liquidationThresholdBps, liquidationPenaltyBps)
-    await collateralVault.addCollateral(
+    await timelockAddCollateral(
+      collateralVault, owner,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       1000  // 10% liquidation penalty
     );
+
+    // Refresh mock feeds after timelock calls advanced block time
+    await refreshFeeds(ethFeed);
 
     // Deploy BorrowModule (vault, oracle, musd, interestRateBps, minDebt)
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
@@ -362,7 +367,7 @@ describe("BorrowModule", function () {
     it("Should allow admin to set interest rate", async function () {
       const { borrowModule, owner } = await loadFixture(deployBorrowModuleFixture);
 
-      await borrowModule.connect(owner).setInterestRate(800); // 8%
+      await timelockSetInterestRate(borrowModule, owner, 800); // 8%
       expect(await borrowModule.interestRateBps()).to.equal(800);
     });
 
@@ -370,20 +375,20 @@ describe("BorrowModule", function () {
       const { borrowModule, owner } = await loadFixture(deployBorrowModuleFixture);
 
       // Max is 5000 bps (50%)
-      await expect(borrowModule.connect(owner).setInterestRate(6000)).to.be.reverted;
+      await expect(borrowModule.connect(owner).requestInterestRate(6000)).to.be.reverted;
     });
 
     it("Should reject non-admin setting interest rate", async function () {
       const { borrowModule, user1 } = await loadFixture(deployBorrowModuleFixture);
 
-      await expect(borrowModule.connect(user1).setInterestRate(800)).to.be.reverted;
+      await expect(borrowModule.connect(user1).requestInterestRate(800)).to.be.reverted;
     });
 
     it("Should allow admin to set minimum debt", async function () {
       const { borrowModule, owner } = await loadFixture(deployBorrowModuleFixture);
 
       const newMinDebt = ethers.parseEther("500");
-      await borrowModule.connect(owner).setMinDebt(newMinDebt);
+      await timelockSetMinDebt(borrowModule, owner, newMinDebt);
       expect(await borrowModule.minDebt()).to.equal(newMinDebt);
     });
   });
