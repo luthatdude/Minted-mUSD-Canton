@@ -5,6 +5,7 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./TimelockGoverned.sol";
 
 /// @title InterestRateModel
 /// @notice Calculates dynamic interest rates based on utilization
@@ -18,7 +19,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 /// BorrowRate = baseRateBps + (kink * multiplierBps / 10000) 
 /// + ((utilization - kink) * jumpMultiplierBps / 10000)
 /// SupplyRate = BorrowRate * utilization * (1 - reserveFactorBps/10000) / 10000
-contract InterestRateModel is AccessControl {
+contract InterestRateModel is AccessControl, TimelockGoverned {
  bytes32 public constant RATE_ADMIN_ROLE = keccak256("RATE_ADMIN_ROLE");
 
  // ============================================================
@@ -82,21 +83,8 @@ contract InterestRateModel is AccessControl {
  error MultiplierZero();
 
  // ============================================================
- // ADMIN TIMELOCK (48h)
+ // ADMIN — gated by MintedTimelockController
  // ============================================================
-
- uint256 public constant ADMIN_DELAY = 48 hours;
-
- struct PendingParams {
- uint256 baseRateBps;
- uint256 multiplierBps;
- uint256 kinkBps;
- uint256 jumpMultiplierBps;
- uint256 reserveFactorBps;
- uint256 requestTime;
- bool pending;
- }
- PendingParams public pendingParams;
 
  // ============================================================
  // CONSTRUCTOR
@@ -104,7 +92,7 @@ contract InterestRateModel is AccessControl {
 
  /// @notice Initialize with default parameters
  /// @param _admin The admin address for rate updates
- constructor(address _admin) {
+ constructor(address _admin, address _timelock) {
  require(_admin != address(0), "INVALID_ADMIN");
  // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
  // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
@@ -113,6 +101,7 @@ contract InterestRateModel is AccessControl {
  kinkBps = 8000; // 80% utilization kink point
  jumpMultiplierBps = 5000; // 50% additional above kink
  reserveFactorBps = 1000; // 10% to protocol reserves
+ _setTimelock(_timelock);
 
  _grantRole(DEFAULT_ADMIN_ROLE, _admin);
  _grantRole(RATE_ADMIN_ROLE, _admin);
@@ -271,20 +260,17 @@ contract InterestRateModel is AccessControl {
  }
 
  // ============================================================
- // ADMIN FUNCTIONS (48h TIMELOCKED)
+ // ADMIN FUNCTIONS (TIMELOCKED VIA MintedTimelockController)
  // ============================================================
 
- /// @notice Propose new rate parameters (48h delay)
- /// @dev Validates parameters at request time so invalid proposals fail fast.
- function requestSetParams(
+ /// @notice Set rate parameters (timelocked via MintedTimelockController)
+ function setParams(
  uint256 _baseRateBps,
  uint256 _multiplierBps,
  uint256 _kinkBps,
  uint256 _jumpMultiplierBps,
  uint256 _reserveFactorBps
- ) external onlyRole(RATE_ADMIN_ROLE) {
- require(!pendingParams.pending, "PROPOSAL_ALREADY_PENDING");
- // Validate parameters
+ ) external onlyTimelock {
  if (_baseRateBps > 2000) revert BaseRateTooHigh();
  if (_kinkBps > BPS) revert KinkTooHigh();
  if (_kinkBps < 1000) revert KinkTooLow();
@@ -296,47 +282,15 @@ contract InterestRateModel is AccessControl {
  + ((BPS - _kinkBps) * _jumpMultiplierBps) / BPS;
  if (maxRate > 10000) revert InvalidParameter();
 
- pendingParams = PendingParams({
- baseRateBps: _baseRateBps,
- multiplierBps: _multiplierBps,
- kinkBps: _kinkBps,
- jumpMultiplierBps: _jumpMultiplierBps,
- reserveFactorBps: _reserveFactorBps,
- requestTime: block.timestamp,
- pending: true
- });
-
- emit RateParamsChangeRequested(
- _baseRateBps, _multiplierBps, _kinkBps,
- _jumpMultiplierBps, _reserveFactorBps,
- block.timestamp + ADMIN_DELAY
- );
- }
-
- /// @notice Cancel pending rate parameter change
- function cancelSetParams() external onlyRole(RATE_ADMIN_ROLE) {
- require(pendingParams.pending, "NO_PENDING");
- delete pendingParams;
- emit RateParamsChangeCancelled();
- }
-
- /// @notice Execute pending rate parameter change after 48h delay
- function executeSetParams() external onlyRole(RATE_ADMIN_ROLE) {
- PendingParams memory p = pendingParams;
- require(p.pending, "NO_PENDING");
- require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
-
- baseRateBps = p.baseRateBps;
- multiplierBps = p.multiplierBps;
- kinkBps = p.kinkBps;
- jumpMultiplierBps = p.jumpMultiplierBps;
- reserveFactorBps = p.reserveFactorBps;
-
- delete pendingParams;
+ baseRateBps = _baseRateBps;
+ multiplierBps = _multiplierBps;
+ kinkBps = _kinkBps;
+ jumpMultiplierBps = _jumpMultiplierBps;
+ reserveFactorBps = _reserveFactorBps;
 
  emit RateParamsUpdated(
- p.baseRateBps, p.multiplierBps, p.kinkBps,
- p.jumpMultiplierBps, p.reserveFactorBps
+ _baseRateBps, _multiplierBps, _kinkBps,
+ _jumpMultiplierBps, _reserveFactorBps
  );
  }
 }

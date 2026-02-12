@@ -8,13 +8,14 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./interfaces/IMUSD.sol";
 import "./interfaces/ITreasuryV2.sol";
+import "./TimelockGoverned.sol";
 
 /// @title DirectMintV2
 /// @notice Allows users to mint mUSD by depositing USDC 1:1 (minus fees)
 /// and redeem mUSD for USDC. Integrates with TreasuryV2 auto-allocation.
 /// @dev When USDC is deposited, TreasuryV2 automatically deploys it to yield
 /// strategies. On redemption, TreasuryV2 pulls from reserve or strategies.
-contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
+contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
 
  bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -50,41 +51,15 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
  event LimitsUpdated(uint256 minMint, uint256 maxMint, uint256 minRedeem, uint256 maxRedeem);
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN TIMELOCK (48h propose → execute)
+ // ADMIN — all setters gated by MintedTimelockController
  // ═══════════════════════════════════════════════════════════════════════
-
- uint256 public constant ADMIN_DELAY = 48 hours;
-
- uint256 public pendingMintFeeBps;
- uint256 public pendingRedeemFeeBps;
- uint256 public pendingFeesTime;
- bool public pendingFeesSet;
- address public pendingFeeRecipient;
- uint256 public pendingFeeRecipientTime;
-
- event FeesChangeRequested(uint256 mintBps, uint256 redeemBps, uint256 readyAt);
- event FeesChangeCancelled();
- event FeeRecipientChangeRequested(address indexed recipient, uint256 readyAt);
- event FeeRecipientChangeCancelled(address indexed recipient);
- event LimitsChangeRequested(uint256 minMint, uint256 maxMint, uint256 minRedeem, uint256 maxRedeem, uint256 readyAt);
- event LimitsChangeCancelled();
-
- // ── Timelocked limits ───────────────────────────────
- struct PendingLimits {
- uint256 minMint;
- uint256 maxMint;
- uint256 minRedeem;
- uint256 maxRedeem;
- uint256 requestTime;
- bool pending;
- }
- PendingLimits public pendingLimits;
 
  constructor(
  address _usdc,
  address _musd,
  address _treasury,
- address _feeRecipient
+ address _feeRecipient,
+ address _timelock
  ) {
  require(_usdc != address(0), "INVALID_USDC");
  require(_musd != address(0), "INVALID_MUSD");
@@ -95,6 +70,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
  musd = IMUSD(_musd);
  treasury = ITreasuryV2(_treasury);
  feeRecipient = _feeRecipient;
+ _setTimelock(_timelock);
 
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(PAUSER_ROLE, msg.sender);
@@ -279,95 +255,39 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
  // ADMIN FUNCTIONS
  // ============================================================
 
- /// @notice Propose new per-transaction limits (48h delay)
- function requestLimits(
+ /// @notice Set per-transaction limits (timelocked via MintedTimelockController)
+ function setLimits(
  uint256 _minMint,
  uint256 _maxMint,
  uint256 _minRedeem,
  uint256 _maxRedeem
- ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ ) external onlyTimelock {
  require(_minMint <= _maxMint, "INVALID_MINT_LIMITS");
  require(_minRedeem <= _maxRedeem, "INVALID_REDEEM_LIMITS");
- require(!pendingLimits.pending, "PROPOSAL_ALREADY_PENDING");
- pendingLimits = PendingLimits({
- minMint: _minMint,
- maxMint: _maxMint,
- minRedeem: _minRedeem,
- maxRedeem: _maxRedeem,
- requestTime: block.timestamp,
- pending: true
- });
- emit LimitsChangeRequested(_minMint, _maxMint, _minRedeem, _maxRedeem, block.timestamp + ADMIN_DELAY);
- }
- function cancelLimits() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingLimits.pending, "NO_PENDING");
- delete pendingLimits;
- emit LimitsChangeCancelled();
- }
- function executeLimits() external onlyRole(DEFAULT_ADMIN_ROLE) {
- PendingLimits memory p = pendingLimits;
- require(p.pending, "NO_PENDING");
- require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- minMintAmount = p.minMint;
- maxMintAmount = p.maxMint;
- minRedeemAmount = p.minRedeem;
- maxRedeemAmount = p.maxRedeem;
- delete pendingLimits;
- emit LimitsUpdated(p.minMint, p.maxMint, p.minRedeem, p.maxRedeem);
+ minMintAmount = _minMint;
+ maxMintAmount = _maxMint;
+ minRedeemAmount = _minRedeem;
+ maxRedeemAmount = _maxRedeem;
+ emit LimitsUpdated(_minMint, _maxMint, _minRedeem, _maxRedeem);
  }
 
- // ── Timelocked fee & recipient setters ──────────────────
+ // ── Fee & recipient setters (called by timelock) ──────────────────
 
- function requestFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(FEE_MANAGER_ROLE) {
+ /// @notice Set fees (timelocked via MintedTimelockController)
+ function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyTimelock {
  require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
  require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
- require(!pendingFeesSet, "PROPOSAL_ALREADY_PENDING");
- pendingMintFeeBps = _mintFeeBps;
- pendingRedeemFeeBps = _redeemFeeBps;
- pendingFeesTime = block.timestamp;
- pendingFeesSet = true;
- emit FeesChangeRequested(_mintFeeBps, _redeemFeeBps, block.timestamp + ADMIN_DELAY);
- }
- function cancelFees() external onlyRole(FEE_MANAGER_ROLE) {
- pendingMintFeeBps = 0;
- pendingRedeemFeeBps = 0;
- pendingFeesTime = 0;
- pendingFeesSet = false;
- emit FeesChangeCancelled();
- }
- function executeFees() external onlyRole(FEE_MANAGER_ROLE) {
- require(pendingFeesSet, "NO_PENDING");
- require(block.timestamp >= pendingFeesTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- mintFeeBps = pendingMintFeeBps;
- redeemFeeBps = pendingRedeemFeeBps;
- pendingMintFeeBps = 0;
- pendingRedeemFeeBps = 0;
- pendingFeesTime = 0;
- pendingFeesSet = false;
- emit FeesUpdated(mintFeeBps, redeemFeeBps);
+ mintFeeBps = _mintFeeBps;
+ redeemFeeBps = _redeemFeeBps;
+ emit FeesUpdated(_mintFeeBps, _redeemFeeBps);
  }
 
- function requestFeeRecipient(address _recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @notice Set fee recipient (timelocked via MintedTimelockController)
+ function setFeeRecipient(address _recipient) external onlyTimelock {
  require(_recipient != address(0), "INVALID_RECIPIENT");
- require(pendingFeeRecipient == address(0), "PROPOSAL_ALREADY_PENDING");
- pendingFeeRecipient = _recipient;
- pendingFeeRecipientTime = block.timestamp;
- emit FeeRecipientChangeRequested(_recipient, block.timestamp + ADMIN_DELAY);
- }
- function cancelFeeRecipient() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingFeeRecipient;
- pendingFeeRecipient = address(0);
- pendingFeeRecipientTime = 0;
- emit FeeRecipientChangeCancelled(cancelled);
- }
- function executeFeeRecipient() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingFeeRecipient != address(0), "NO_PENDING");
- require(block.timestamp >= pendingFeeRecipientTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
  address old = feeRecipient;
- feeRecipient = pendingFeeRecipient;
- pendingFeeRecipient = address(0);
- pendingFeeRecipientTime = 0;
- emit FeeRecipientUpdated(old, feeRecipient);
+ feeRecipient = _recipient;
+ emit FeeRecipientUpdated(old, _recipient);
  }
 
  /// @notice Withdraw accumulated mint fees (held in this contract)

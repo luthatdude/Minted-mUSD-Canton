@@ -6,11 +6,12 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "./interfaces/IAggregatorV3.sol";
+import "./TimelockGoverned.sol";
 
 /// @title PriceOracle
 /// @notice Aggregates Chainlink price feeds for collateral assets (ETH, BTC, etc.)
 /// @dev All prices are normalized to 18 decimals (USD value per 1 full token unit)
-contract PriceOracle is AccessControl {
+contract PriceOracle is AccessControl, TimelockGoverned {
  bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
 
  struct FeedConfig {
@@ -45,94 +46,28 @@ contract PriceOracle is AccessControl {
  event PriceRefreshed(address indexed token, uint256 oldPrice, uint256 newPrice);
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN TIMELOCK (48h propose → execute)
+ // ADMIN — all setters gated by MintedTimelockController
  // ═══════════════════════════════════════════════════════════════════════
 
- uint256 public constant ADMIN_DELAY = 48 hours;
-
- struct PendingFeed {
- address token;
- address feed;
- uint256 stalePeriod;
- uint8 tokenDecimals;
- uint256 requestTime;
- }
- PendingFeed public pendingSetFeed;
- address public pendingRemoveFeedToken;
- uint256 public pendingRemoveFeedTime;
-
- event FeedChangeRequested(address indexed token, address feed, uint256 readyAt);
- event FeedChangeCancelled(address indexed token);
- event FeedRemoveRequested(address indexed token, uint256 readyAt);
- event FeedRemoveCancelled(address indexed token);
- event MaxDeviationChangeRequested(uint256 newBps, uint256 readyAt);
- event MaxDeviationChangeCancelled(uint256 cancelledBps);
- event CircuitBreakerToggleRequested(bool enabled, uint256 readyAt);
- event CircuitBreakerToggleCancelled();
-
- // ── Timelocked deviation & circuit breaker ──────────
- uint256 public pendingMaxDeviationBps;
- uint256 public pendingMaxDeviationTime;
- bool public pendingMaxDeviationSet;
- bool public pendingCircuitBreakerValue;
- uint256 public pendingCircuitBreakerTime;
- bool public pendingCircuitBreakerSet;
-
- constructor() {
+ constructor(address _timelock) {
+ _setTimelock(_timelock);
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
  }
 
- /// @notice Propose max deviation change (48h delay)
- function requestSetMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
+ /// @notice Set max deviation (timelocked via MintedTimelockController)
+ function setMaxDeviation(uint256 _maxDeviationBps) external onlyTimelock {
  require(_maxDeviationBps >= 100 && _maxDeviationBps <= 5000, "DEVIATION_OUT_OF_RANGE");
- require(!pendingMaxDeviationSet, "PROPOSAL_ALREADY_PENDING");
- pendingMaxDeviationBps = _maxDeviationBps;
- pendingMaxDeviationTime = block.timestamp;
- pendingMaxDeviationSet = true;
- emit MaxDeviationChangeRequested(_maxDeviationBps, block.timestamp + ADMIN_DELAY);
- }
- function cancelSetMaxDeviation() external onlyRole(ORACLE_ADMIN_ROLE) {
- uint256 cancelled = pendingMaxDeviationBps;
- pendingMaxDeviationBps = 0;
- pendingMaxDeviationTime = 0;
- pendingMaxDeviationSet = false;
- emit MaxDeviationChangeCancelled(cancelled);
- }
- function executeSetMaxDeviation() external onlyRole(ORACLE_ADMIN_ROLE) {
- require(pendingMaxDeviationSet, "NO_PENDING");
- require(block.timestamp >= pendingMaxDeviationTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- emit MaxDeviationUpdated(maxDeviationBps, pendingMaxDeviationBps);
- maxDeviationBps = pendingMaxDeviationBps;
- pendingMaxDeviationBps = 0;
- pendingMaxDeviationTime = 0;
- pendingMaxDeviationSet = false;
+ emit MaxDeviationUpdated(maxDeviationBps, _maxDeviationBps);
+ maxDeviationBps = _maxDeviationBps;
  }
 
- /// @notice Propose circuit breaker toggle (48h delay)
- function requestSetCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
+ /// @notice Set circuit breaker enabled/disabled (timelocked via MintedTimelockController)
+ function setCircuitBreakerEnabled(bool _enabled) external onlyTimelock {
  require(block.timestamp >= lastCircuitBreakerToggle + CIRCUIT_BREAKER_COOLDOWN, "CIRCUIT_BREAKER_COOLDOWN_ACTIVE");
- require(!pendingCircuitBreakerSet, "PROPOSAL_ALREADY_PENDING");
- pendingCircuitBreakerValue = _enabled;
- pendingCircuitBreakerTime = block.timestamp;
- pendingCircuitBreakerSet = true;
- emit CircuitBreakerToggleRequested(_enabled, block.timestamp + ADMIN_DELAY);
- }
- function cancelSetCircuitBreakerEnabled() external onlyRole(ORACLE_ADMIN_ROLE) {
- pendingCircuitBreakerValue = false;
- pendingCircuitBreakerTime = 0;
- pendingCircuitBreakerSet = false;
- emit CircuitBreakerToggleCancelled();
- }
- function executeSetCircuitBreakerEnabled() external onlyRole(ORACLE_ADMIN_ROLE) {
- require(pendingCircuitBreakerSet, "NO_PENDING");
- require(block.timestamp >= pendingCircuitBreakerTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- circuitBreakerEnabled = pendingCircuitBreakerValue;
+ circuitBreakerEnabled = _enabled;
  lastCircuitBreakerToggle = block.timestamp;
- pendingCircuitBreakerValue = false;
- pendingCircuitBreakerTime = 0;
- pendingCircuitBreakerSet = false;
- emit CircuitBreakerToggled(circuitBreakerEnabled);
+ emit CircuitBreakerToggled(_enabled);
  }
 
  /// @dev Manually update last known price (for recovery after circuit breaker trip)
@@ -148,15 +83,14 @@ contract PriceOracle is AccessControl {
  lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
  }
 
- /// @notice Request registering/updating a Chainlink price feed (48h delay)
- function requestSetFeed(
+ /// @notice Register or update a Chainlink price feed (timelocked via MintedTimelockController)
+ function setFeed(
  address token,
  address feed,
  uint256 stalePeriod,
  uint8 tokenDecimals
- ) external onlyRole(ORACLE_ADMIN_ROLE) {
+ ) external onlyTimelock {
  require(token != address(0), "INVALID_TOKEN");
- require(pendingSetFeed.requestTime == 0, "PROPOSAL_ALREADY_PENDING");
  require(feed != address(0), "INVALID_FEED");
  require(stalePeriod > 0, "INVALID_STALE_PERIOD");
  require(stalePeriod <= MAX_STALE_PERIOD, "STALE_PERIOD_TOO_HIGH");
@@ -166,74 +100,31 @@ contract PriceOracle is AccessControl {
  require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
  }
 
- pendingSetFeed = PendingFeed({
- token: token,
- feed: feed,
+ feeds[token] = FeedConfig({
+ feed: IAggregatorV3(feed),
  stalePeriod: stalePeriod,
  tokenDecimals: tokenDecimals,
- requestTime: block.timestamp
- });
- emit FeedChangeRequested(token, feed, block.timestamp + ADMIN_DELAY);
- }
-
- function cancelSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
- address cancelled = pendingSetFeed.token;
- delete pendingSetFeed;
- emit FeedChangeCancelled(cancelled);
- }
-
- function executeSetFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
- PendingFeed memory p = pendingSetFeed;
- require(p.token != address(0), "NO_PENDING");
- require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
-
- feeds[p.token] = FeedConfig({
- feed: IAggregatorV3(p.feed),
- stalePeriod: p.stalePeriod,
- tokenDecimals: p.tokenDecimals,
  enabled: true
  });
 
  // Auto-initialize lastKnownPrice from the feed
- try IAggregatorV3(p.feed).latestRoundData() returns (
+ try IAggregatorV3(feed).latestRoundData() returns (
  uint80, int256 answer, uint256, uint256, uint80
  ) {
  if (answer > 0) {
- uint256 feedDecimals = IAggregatorV3(p.feed).decimals();
- lastKnownPrice[p.token] = uint256(answer) * (10 ** (18 - feedDecimals));
+ uint256 feedDecimals = IAggregatorV3(feed).decimals();
+ lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
  }
  } catch {}
 
- delete pendingSetFeed;
- emit FeedUpdated(p.token, p.feed, p.stalePeriod, p.tokenDecimals);
+ emit FeedUpdated(token, feed, stalePeriod, tokenDecimals);
  }
 
- /// @notice Request removing a price feed (48h delay)
- function requestRemoveFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+ /// @notice Remove a price feed (timelocked via MintedTimelockController)
+ function removeFeed(address token) external onlyTimelock {
  require(feeds[token].enabled, "FEED_NOT_FOUND");
- require(pendingRemoveFeedToken == address(0), "PROPOSAL_ALREADY_PENDING");
- pendingRemoveFeedToken = token;
- pendingRemoveFeedTime = block.timestamp;
- emit FeedRemoveRequested(token, block.timestamp + ADMIN_DELAY);
- }
-
- function cancelRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
- address cancelled = pendingRemoveFeedToken;
- pendingRemoveFeedToken = address(0);
- pendingRemoveFeedTime = 0;
- emit FeedRemoveCancelled(cancelled);
- }
-
- function executeRemoveFeed() external onlyRole(ORACLE_ADMIN_ROLE) {
- address token = pendingRemoveFeedToken;
- require(token != address(0), "NO_PENDING");
- require(block.timestamp >= pendingRemoveFeedTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
- require(feeds[token].enabled, "FEED_NOT_FOUND");
-
  delete feeds[token];
  delete lastKnownPrice[token];
- pendingRemoveFeedToken = address(0);
- pendingRemoveFeedTime = 0;
  emit FeedRemoved(token);
  }
 

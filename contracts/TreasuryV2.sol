@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IStrategy.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title TreasuryV2
@@ -30,7 +31,8 @@ contract TreasuryV2 is
  AccessControlUpgradeable,
  ReentrancyGuardUpgradeable,
  PausableUpgradeable,
- UUPSUpgradeable
+ UUPSUpgradeable,
+ TimelockGoverned
 {
  using SafeERC20 for IERC20;
 
@@ -110,75 +112,6 @@ contract TreasuryV2 is
  /// @notice Minimum deposit to trigger auto-allocation
  uint256 public minAutoAllocateAmount;
 
- /// @notice Pending upgrade implementation (timelock)
- address public pendingImplementation;
-
- /// @notice Timestamp when upgrade was requested
- uint256 public upgradeRequestTime;
-
- /// @notice Timelock delay for upgrades (48 hours)
- uint256 public constant UPGRADE_DELAY = 48 hours;
-
- /// @notice Pending vault address (timelock)
- address public pendingVault;
-
- /// @notice Timestamp when vault change was requested
- uint256 public vaultChangeRequestTime;
-
- // ═══════════════════════════════════════════════════════════════════════
- // Additional timelocked admin operations
- // ═══════════════════════════════════════════════════════════════════════
-
- /// @notice Pending strategy addition
- struct PendingStrategy {
- address strategy;
- uint256 targetBps;
- uint256 minBps;
- uint256 maxBps;
- bool autoAllocate;
- uint256 requestTime;
- }
- PendingStrategy public pendingAddStrategy;
- address public pendingRemoveStrategy;
- uint256 public pendingRemoveStrategyTime;
-
- /// @notice Pending fee config
- uint256 public pendingFeeConfigBps;
- address public pendingFeeConfigRecipient;
- uint256 public pendingFeeConfigTime;
-
- /// @notice Pending reserve BPS
- uint256 public pendingReserveBps;
- uint256 public pendingReserveBpsTime;
- bool public pendingReserveBpsSet;
-
- event StrategyAddRequested(address indexed strategy, uint256 targetBps, uint256 readyAt);
- event StrategyAddCancelled(address indexed strategy);
- event StrategyRemoveRequested(address indexed strategy, uint256 readyAt);
- event StrategyRemoveCancelled(address indexed strategy);
- event FeeConfigChangeRequested(uint256 feeBps, address recipient, uint256 readyAt);
- event FeeConfigChangeCancelled();
- event ReserveBpsChangeRequested(uint256 bps, uint256 readyAt);
- event ReserveBpsChangeCancelled(uint256 bps);
-
- // ═══════════════════════════════════════════════════════════════════════
- // Timelocked strategy update
- // ═══════════════════════════════════════════════════════════════════════
-
- /// @notice Pending strategy parameter update (timelocked)
- struct PendingStrategyUpdate {
- address strategy; // slot +0 (packed with bool below? no, bool in +5)
- uint256 targetBps; // slot +1
- uint256 minBps; // slot +2
- uint256 maxBps; // slot +3
- bool autoAllocate; // slot +4 (packs into 1 slot)
- uint256 requestTime; // slot +5
- }
- PendingStrategyUpdate public pendingStrategyUpdate; // 6 slots
-
- event StrategyUpdateRequested(address indexed strategy, uint256 targetBps, uint256 readyAt);
- event StrategyUpdateCancelled(address indexed strategy);
-
  // ═══════════════════════════════════════════════════════════════════════
  // STORAGE GAP — fully documented slot layout
  // Slot occupancy before __gap:
@@ -192,22 +125,9 @@ contract TreasuryV2 is
  // 10: lastRecordedValue
  // 11: lastFeeAccrual
  // 12: minAutoAllocateAmount
- // 13: pendingImplementation
- // 14: upgradeRequestTime
- // 15: pendingVault
- // 16: vaultChangeRequestTime
- // 17-22: pendingAddStrategy (PendingStrategy — 6 slots)
- // 23: pendingRemoveStrategy
- // 24: pendingRemoveStrategyTime
- // 25: pendingFeeConfigBps
- // 26: pendingFeeConfigRecipient
- // 27: pendingFeeConfigTime
- // 28: pendingReserveBps
- // 29: pendingReserveBpsTime
- // 30: pendingReserveBpsSet
- // 31-36: pendingStrategyUpdate (PendingStrategyUpdate — 6 slots)
- // 37: peakRecordedValue
- // 38-56: __gap[19]
+ // 13: peakRecordedValue
+ // 14: timelock (inherited from TimelockGoverned)
+ // 15-56: __gap[42]
  // Total: 56 slots reserved
  // ═══════════════════════════════════════════════════════════════════════
 
@@ -216,7 +136,7 @@ contract TreasuryV2 is
  /// below peakRecordedValue, it's principal recovery, not yield.
  uint256 public peakRecordedValue;
 
- uint256[19] private __gap;
+ uint256[42] private __gap;
 
  // ═══════════════════════════════════════════════════════════════════════
  // EVENTS
@@ -238,12 +158,7 @@ contract TreasuryV2 is
  /// Events for rebalance failures
  event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
  event RebalanceDepositFailed(address indexed strategy, uint256 amount);
- /// Upgrade timelock events
- event UpgradeRequested(address indexed newImplementation, uint256 readyAt);
- event UpgradeCancelled(address indexed cancelledImplementation);
- /// Vault change timelock events
- event VaultChangeRequested(address indexed newVault, uint256 readyAt);
- event VaultChangeCancelled(address indexed cancelledVault);
+ /// Vault change event
  event VaultChanged(address indexed oldVault, address indexed newVault);
  /// @dev Emitted when strategy force-deactivated due to failed withdrawal
  event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
@@ -284,7 +199,8 @@ contract TreasuryV2 is
  address _asset,
  address _vault,
  address _admin,
- address _feeRecipient
+ address _feeRecipient,
+ address _timelock
  ) external initializer {
  if (_asset == address(0) || _vault == address(0) || _admin == address(0) || _feeRecipient == address(0)) {
  revert ZeroAddress();
@@ -294,6 +210,7 @@ contract TreasuryV2 is
  __ReentrancyGuard_init();
  __Pausable_init();
  __UUPSUpgradeable_init();
+ _setTimelock(_timelock);
 
  asset = IERC20(_asset);
  vault = _vault;
@@ -878,24 +795,21 @@ contract TreasuryV2 is
  }
 
  // ═══════════════════════════════════════════════════════════════════════
- // STRATEGY MANAGEMENT
+ // STRATEGY MANAGEMENT (timelocked via MintedTimelockController)
  // ═══════════════════════════════════════════════════════════════════════
 
  /**
- * @notice Request adding a new strategy (48h timelock)
+ * @notice Add a new strategy (timelocked via MintedTimelockController)
  */
- function requestAddStrategy(
+ function addStrategy(
  address strategy,
  uint256 targetBps,
  uint256 minBps,
  uint256 maxBps,
  bool autoAllocate
- ) external onlyRole(STRATEGIST_ROLE) {
+ ) external onlyTimelock {
  if (strategy == address(0)) revert ZeroAddress();
  if (isStrategy[strategy]) revert StrategyExists();
- // Prevent overwriting pending request (bait-and-switch)
- require(pendingAddStrategy.strategy == address(0), "ADD_ALREADY_PENDING");
- // Count active strategies so removed ones don't permanently consume slots
  uint256 activeCount = 0;
  for (uint256 i = 0; i < strategies.length; i++) {
  if (strategies[i].active) activeCount++;
@@ -903,38 +817,8 @@ contract TreasuryV2 is
  if (activeCount >= MAX_STRATEGIES) revert MaxStrategiesReached();
  if (targetBps > maxBps || minBps > targetBps) revert AllocationExceedsLimit();
 
- pendingAddStrategy = PendingStrategy({
- strategy: strategy,
- targetBps: targetBps,
- minBps: minBps,
- maxBps: maxBps,
- autoAllocate: autoAllocate,
- requestTime: block.timestamp
- });
- emit StrategyAddRequested(strategy, targetBps, block.timestamp + UPGRADE_DELAY);
- }
-
- function cancelAddStrategy() external onlyRole(STRATEGIST_ROLE) {
- address cancelled = pendingAddStrategy.strategy;
- delete pendingAddStrategy;
- emit StrategyAddCancelled(cancelled);
- }
-
- function executeAddStrategy() external onlyRole(STRATEGIST_ROLE) {
- PendingStrategy memory p = pendingAddStrategy;
- require(p.strategy != address(0), "NO_PENDING");
- require(block.timestamp >= p.requestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
- // Re-validate
- if (isStrategy[p.strategy]) revert StrategyExists();
- // Count active strategies so removed ones don't permanently consume slots
- uint256 activeCount = 0;
- for (uint256 j = 0; j < strategies.length; j++) {
- if (strategies[j].active) activeCount++;
- }
- if (activeCount >= MAX_STRATEGIES) revert MaxStrategiesReached();
-
  // Validate total allocation
- uint256 totalTarget = p.targetBps + reserveBps;
+ uint256 totalTarget = targetBps + reserveBps;
  for (uint256 i = 0; i < strategies.length; i++) {
  if (strategies[i].active) {
  totalTarget += strategies[i].targetBps;
@@ -943,48 +827,25 @@ contract TreasuryV2 is
  if (totalTarget > BPS) revert TotalAllocationInvalid();
 
  strategies.push(StrategyConfig({
- strategy: p.strategy,
- targetBps: p.targetBps,
- minBps: p.minBps,
- maxBps: p.maxBps,
+ strategy: strategy,
+ targetBps: targetBps,
+ minBps: minBps,
+ maxBps: maxBps,
  active: true,
- autoAllocate: p.autoAllocate
+ autoAllocate: autoAllocate
  }));
 
- strategyIndex[p.strategy] = strategies.length - 1;
- isStrategy[p.strategy] = true;
+ strategyIndex[strategy] = strategies.length - 1;
+ isStrategy[strategy] = true;
 
- delete pendingAddStrategy;
- emit StrategyAdded(p.strategy, p.targetBps);
+ emit StrategyAdded(strategy, targetBps);
  }
 
  /**
- * @notice Request removing a strategy (48h timelock)
+ * @notice Remove a strategy (timelocked via MintedTimelockController)
  */
- function requestRemoveStrategy(address strategy) external onlyRole(STRATEGIST_ROLE) {
+ function removeStrategy(address strategy) external onlyTimelock {
  if (!isStrategy[strategy]) revert StrategyNotFound();
- // Prevent overwriting pending request
- require(pendingRemoveStrategy == address(0), "REMOVE_ALREADY_PENDING");
- pendingRemoveStrategy = strategy;
- pendingRemoveStrategyTime = block.timestamp;
- emit StrategyRemoveRequested(strategy, block.timestamp + UPGRADE_DELAY);
- }
-
- function cancelRemoveStrategy() external onlyRole(STRATEGIST_ROLE) {
- address cancelled = pendingRemoveStrategy;
- pendingRemoveStrategy = address(0);
- pendingRemoveStrategyTime = 0;
- emit StrategyRemoveCancelled(cancelled);
- }
-
- function executeRemoveStrategy() external onlyRole(STRATEGIST_ROLE) {
- address strategy = pendingRemoveStrategy;
- require(strategy != address(0), "NO_PENDING");
- require(block.timestamp >= pendingRemoveStrategyTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
- if (!isStrategy[strategy]) revert StrategyNotFound();
-
- pendingRemoveStrategy = address(0);
- pendingRemoveStrategyTime = 0;
 
  uint256 idx = strategyIndex[strategy];
 
@@ -1022,66 +883,7 @@ contract TreasuryV2 is
  }
 
  /**
- * @notice Request strategy allocation update (timelocked)
- * @dev Prevents ALLOCATOR_ROLE from instantly redirecting funds to malicious strategy
- */
-
- function requestUpdateStrategy(
- address strategy,
- uint256 targetBps,
- uint256 minBps,
- uint256 maxBps,
- bool autoAllocate
- ) external onlyRole(ALLOCATOR_ROLE) {
- if (!isStrategy[strategy]) revert StrategyNotFound();
- require(pendingStrategyUpdate.strategy == address(0), "UPDATE_ALREADY_PENDING");
- pendingStrategyUpdate = PendingStrategyUpdate({
- strategy: strategy,
- targetBps: targetBps,
- minBps: minBps,
- maxBps: maxBps,
- autoAllocate: autoAllocate,
- requestTime: block.timestamp
- });
- emit StrategyUpdateRequested(strategy, targetBps, block.timestamp + UPGRADE_DELAY);
- }
-
- function cancelUpdateStrategy() external onlyRole(ALLOCATOR_ROLE) {
- address strategy = pendingStrategyUpdate.strategy;
- delete pendingStrategyUpdate;
- emit StrategyUpdateCancelled(strategy);
- }
-
- function executeUpdateStrategy() external onlyRole(ALLOCATOR_ROLE) {
- PendingStrategyUpdate memory pending = pendingStrategyUpdate;
- require(pending.strategy != address(0), "NO_PENDING");
- require(block.timestamp >= pending.requestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
- if (!isStrategy[pending.strategy]) revert StrategyNotFound();
-
- uint256 idx = strategyIndex[pending.strategy];
-
- // Validate new allocation
- uint256 totalTarget = pending.targetBps + reserveBps;
- for (uint256 i = 0; i < strategies.length; i++) {
- if (i != idx && strategies[i].active) {
- totalTarget += strategies[i].targetBps;
- }
- }
- if (totalTarget > BPS) revert TotalAllocationInvalid();
-
- strategies[idx].targetBps = pending.targetBps;
- strategies[idx].minBps = pending.minBps;
- strategies[idx].maxBps = pending.maxBps;
- strategies[idx].autoAllocate = pending.autoAllocate;
-
- delete pendingStrategyUpdate;
- emit StrategyUpdated(pending.strategy, pending.targetBps);
- }
-
- /**
- * @notice Update strategy allocation
- * @dev Restricted to DEFAULT_ADMIN_ROLE for emergency use only.
- * Normal updates should use requestUpdateStrategy/executeUpdateStrategy.
+ * @notice Update strategy allocation (timelocked via MintedTimelockController)
  */
  function updateStrategy(
  address strategy,
@@ -1089,7 +891,7 @@ contract TreasuryV2 is
  uint256 minBps,
  uint256 maxBps,
  bool autoAllocate
- ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ ) external onlyTimelock {
  if (!isStrategy[strategy]) revert StrategyNotFound();
 
  uint256 idx = strategyIndex[strategy];
@@ -1231,77 +1033,38 @@ contract TreasuryV2 is
  }
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN
+ // ADMIN (timelocked via MintedTimelockController)
  // ═══════════════════════════════════════════════════════════════════════
 
  /**
- * @notice Request fee config change (48h timelock)
+ * @notice Set fee configuration (timelocked via MintedTimelockController)
  */
- function requestFeeConfig(
+ function setFeeConfig(
  uint256 _performanceFeeBps,
  address _feeRecipient
- ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ ) external onlyTimelock {
  require(_performanceFeeBps <= 5000, "Fee too high");
  require(_feeRecipient != address(0), "Invalid recipient");
- pendingFeeConfigBps = _performanceFeeBps;
- pendingFeeConfigRecipient = _feeRecipient;
- pendingFeeConfigTime = block.timestamp;
- emit FeeConfigChangeRequested(_performanceFeeBps, _feeRecipient, block.timestamp + UPGRADE_DELAY);
- }
-
- function cancelFeeConfig() external onlyRole(DEFAULT_ADMIN_ROLE) {
- pendingFeeConfigBps = 0;
- pendingFeeConfigRecipient = address(0);
- pendingFeeConfigTime = 0;
- emit FeeConfigChangeCancelled();
- }
-
- function executeFeeConfig() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingFeeConfigRecipient != address(0), "NO_PENDING");
- require(block.timestamp >= pendingFeeConfigTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
 
  _accrueFees(); // Accrue with old rate first
 
- fees.performanceFeeBps = pendingFeeConfigBps;
- fees.feeRecipient = pendingFeeConfigRecipient;
+ fees.performanceFeeBps = _performanceFeeBps;
+ fees.feeRecipient = _feeRecipient;
 
- emit FeeConfigUpdated(pendingFeeConfigBps, pendingFeeConfigRecipient);
- pendingFeeConfigBps = 0;
- pendingFeeConfigRecipient = address(0);
- pendingFeeConfigTime = 0;
+ emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
  }
 
  /// Added event for reserve BPS changes
  event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
 
  /**
- * @notice Request reserve BPS change (48h timelock)
+ * @notice Set reserve BPS (timelocked via MintedTimelockController)
  */
- function requestReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setReserveBps(uint256 _reserveBps) external onlyTimelock {
  require(_reserveBps <= 3000, "Reserve too high");
- pendingReserveBps = _reserveBps;
- pendingReserveBpsTime = block.timestamp;
- pendingReserveBpsSet = true;
- emit ReserveBpsChangeRequested(_reserveBps, block.timestamp + UPGRADE_DELAY);
- }
-
- function cancelReserveBps() external onlyRole(DEFAULT_ADMIN_ROLE) {
- uint256 cancelled = pendingReserveBps;
- pendingReserveBps = 0;
- pendingReserveBpsTime = 0;
- pendingReserveBpsSet = false;
- emit ReserveBpsChangeCancelled(cancelled);
- }
-
- function executeReserveBps() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingReserveBpsSet, "NO_PENDING");
- require(block.timestamp >= pendingReserveBpsTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
  uint256 oldBps = reserveBps;
- reserveBps = pendingReserveBps;
- pendingReserveBps = 0;
- pendingReserveBpsTime = 0;
- pendingReserveBpsSet = false;
- emit ReserveBpsUpdated(oldBps, reserveBps);
+ reserveBps = _reserveBps;
+ emit ReserveBpsUpdated(oldBps, _reserveBps);
  }
 
  /// Added event and validation for min auto-allocate changes
@@ -1318,47 +1081,20 @@ contract TreasuryV2 is
  }
 
  /**
- * @notice Request a timelocked vault change
- * @param _vault Address of the new vault
- */
- function requestVaultChange(address _vault) external onlyRole(DEFAULT_ADMIN_ROLE) {
- if (_vault == address(0)) revert ZeroAddress();
- pendingVault = _vault;
- vaultChangeRequestTime = block.timestamp;
- emit VaultChangeRequested(_vault, block.timestamp + UPGRADE_DELAY);
- }
-
- /**
- * @notice Cancel a pending vault change
- */
- function cancelVaultChange() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingVault;
- pendingVault = address(0);
- vaultChangeRequestTime = 0;
- emit VaultChangeCancelled(cancelled);
- }
-
- /**
- * @notice Execute vault change after timelock expires
+ * @notice Set vault address (timelocked via MintedTimelockController)
  * @dev VAULT_ROLE controls deposit/withdraw, so changes must be timelocked
  */
- function executeVaultChange() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingVault != address(0), "NO_PENDING_VAULT");
- require(block.timestamp >= vaultChangeRequestTime + UPGRADE_DELAY, "VAULT_TIMELOCK_ACTIVE");
+ function setVault(address _vault) external onlyTimelock {
+ if (_vault == address(0)) revert ZeroAddress();
 
  address oldVault = vault;
- address newVault = pendingVault;
-
- // Clear pending state
- pendingVault = address(0);
- vaultChangeRequestTime = 0;
 
  // Execute role swap
  _revokeRole(VAULT_ROLE, oldVault);
- vault = newVault;
- _grantRole(VAULT_ROLE, newVault);
+ vault = _vault;
+ _grantRole(VAULT_ROLE, _vault);
 
- emit VaultChanged(oldVault, newVault);
+ emit VaultChanged(oldVault, _vault);
  }
 
  /**
@@ -1369,39 +1105,12 @@ contract TreasuryV2 is
  IERC20(token).safeTransfer(msg.sender, amount);
  }
 
- /**
- * @notice Request a timelocked upgrade
- * @param newImplementation Address of the new implementation contract
- */
- /// @dev Prevent overwriting a pending upgrade to block bait-and-switch attacks.
- /// Admin must cancelUpgrade() first before requesting a new one.
- function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ // ═══════════════════════════════════════════════════════════════════════
+ // UPGRADEABILITY — gated by MintedTimelockController
+ // ═══════════════════════════════════════════════════════════════════════
+
+ /// @notice UUPS upgrade authorization — only callable by timelock
+ function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {
  require(newImplementation != address(0), "ZERO_ADDRESS");
- require(pendingImplementation == address(0), "UPGRADE_ALREADY_PENDING");
- pendingImplementation = newImplementation;
- upgradeRequestTime = block.timestamp;
- emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
- }
-
- /**
- * @notice Cancel a pending upgrade
- */
- function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingImplementation;
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
- emit UpgradeCancelled(cancelled);
- }
-
- /**
- * @notice UUPS upgrade authorization with timelock
- * @dev Requires requestUpgrade() to be called first, then UPGRADE_DELAY must pass
- */
- function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
- require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
- // Clear pending state
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
  }
 }

@@ -13,8 +13,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/ITreasuryV2.sol";
+import "./TimelockGoverned.sol";
 
-contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
+contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
  using Math for uint256;
 
@@ -81,7 +82,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
  event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
  event GlobalAssetsRefreshed(uint256 newGlobalAssets, uint256 usdcValue);
 
- constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+ constructor(IERC20 _musd, address _timelock) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+ _setTimelock(_timelock);
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(PAUSER_ROLE, msg.sender);
  }
@@ -224,41 +226,13 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
  // UNIFIED CROSS-CHAIN YIELD: Global share price calculation
  // ═══════════════════════════════════════════════════════════════════════
 
- /// @notice Pending treasury address for timelocked change
- address public pendingTreasury;
- uint256 public pendingTreasuryTime;
- uint256 public constant TREASURY_CHANGE_DELAY = 48 hours;
-
- event TreasuryChangeRequested(address indexed newTreasury, uint256 readyAt);
- event TreasuryChangeCancelled(address indexed cancelledTreasury);
-
- /// @notice Request treasury change (48h timelock)
+ /// @notice Set the treasury address (timelocked via MintedTimelockController)
  /// @dev Prevents instant share price manipulation by compromised admin
- function requestSetTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setTreasuryTimelocked(address _treasury) external onlyTimelock {
  require(_treasury != address(0), "ZERO_ADDRESS");
- require(pendingTreasury == address(0), "CHANGE_ALREADY_PENDING");
- pendingTreasury = _treasury;
- pendingTreasuryTime = block.timestamp;
- emit TreasuryChangeRequested(_treasury, block.timestamp + TREASURY_CHANGE_DELAY);
- }
-
- /// @notice Cancel pending treasury change
- function cancelSetTreasury() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingTreasury;
- pendingTreasury = address(0);
- pendingTreasuryTime = 0;
- emit TreasuryChangeCancelled(cancelled);
- }
-
- /// @notice Execute treasury change after timelock
- function executeSetTreasury() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingTreasury != address(0), "NO_PENDING");
- require(block.timestamp >= pendingTreasuryTime + TREASURY_CHANGE_DELAY, "TIMELOCK_ACTIVE");
  address oldTreasury = treasury;
- treasury = pendingTreasury;
- pendingTreasury = address(0);
- pendingTreasuryTime = 0;
- emit TreasuryUpdated(oldTreasury, treasury);
+ treasury = _treasury;
+ emit TreasuryUpdated(oldTreasury, _treasury);
  }
 
  /// @notice Set the treasury address for global asset calculation

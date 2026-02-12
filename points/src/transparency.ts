@@ -178,7 +178,7 @@ export class TransparencyService {
     const csvContent = this.generateCSV(balances, snapshotId, blockNumber);
     fs.writeFileSync(csvPath, csvContent);
 
-    const csvHash = keccak256(csvContent);
+    const csvHash = ethersKeccak256(toUtf8Bytes(csvContent));
 
     // ─── 2. Build Merkle tree ─────────────────────────────────
     const sortedBalances = [...balances].sort((a, b) =>
@@ -270,6 +270,45 @@ export class TransparencyService {
       leaf: leaves[index],
       proof,
       index,
+      root,
+    };
+  }
+
+  /**
+   * Generate a Merkle proof from persisted snapshot data on disk.
+   * Unlike generateProof(), this does NOT recompute from live balances —
+   * it loads the leaves saved at snapshot time, guaranteeing the proof
+   * matches the published root even if balances changed since the snapshot.
+   */
+  generateProofFromDisk(
+    snapshotId: number,
+    address: string
+  ): MerkleProof | null {
+    const snapshotDir = path.join(this.outputDir, `snapshot-${snapshotId}`);
+    const leavesPath = path.join(snapshotDir, `leaves-${snapshotId}.json`);
+
+    if (!fs.existsSync(leavesPath)) {
+      return null;
+    }
+
+    const storedLeaves: { index: number; address: string; totalPoints: number; leaf: string }[] =
+      JSON.parse(fs.readFileSync(leavesPath, "utf-8"));
+
+    const entry = storedLeaves.find(
+      (e) => e.address.toLowerCase() === address.toLowerCase()
+    );
+
+    if (!entry) return null;
+
+    const leaves = storedLeaves.map((e) => e.leaf);
+    const tree = buildMerkleTree(leaves);
+    const proof = getMerkleProof(tree, entry.index);
+    const root = tree[tree.length - 1][0];
+
+    return {
+      leaf: entry.leaf,
+      proof,
+      index: entry.index,
       root,
     };
   }

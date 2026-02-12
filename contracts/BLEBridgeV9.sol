@@ -28,8 +28,9 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import "./interfaces/IMUSD.sol";
+import "./TimelockGoverned.sol";
 
-contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
+contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable, TimelockGoverned {
  using ECDSA for bytes32;
  using MessageHashUtils for bytes32;
 
@@ -107,7 +108,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  uint256 _minSigs,
  address _musdToken,
  uint256 _collateralRatioBps,
- uint256 _dailyCapIncreaseLimit
+ uint256 _dailyCapIncreaseLimit,
+ address _timelock
  ) public initializer {
  __AccessControl_init();
  __UUPSUpgradeable_init();
@@ -120,6 +122,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
  require(_dailyCapIncreaseLimit > 0, "INVALID_DAILY_LIMIT");
 
+ _setTimelock(_timelock);
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(EMERGENCY_ROLE, msg.sender);
 
@@ -134,45 +137,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  // ADMIN FUNCTIONS
  // ============================================================
 
- /// @notice Pending mUSD token address for timelocked change
- address public pendingMUSDToken;
- /// @notice Timestamp of mUSD token change request
- uint256 public musdTokenChangeRequestTime;
-
- event MUSDTokenChangeRequested(address indexed newToken, uint256 executeAfter);
- event MUSDTokenChangeCancelled(address indexed cancelledToken);
-
- /// @notice Request mUSD token change (48h timelock)
- /// @dev Previously instant — admin key compromise could swap to malicious token in 1 tx
- function requestSetMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @notice Set mUSD token (timelocked via MintedTimelockController)
+ function setMUSDToken(address _musdToken) external onlyTimelock {
  require(_musdToken != address(0), "INVALID_ADDRESS");
- require(pendingMUSDToken == address(0), "CHANGE_ALREADY_PENDING");
- pendingMUSDToken = _musdToken;
- musdTokenChangeRequestTime = block.timestamp;
- emit MUSDTokenChangeRequested(_musdToken, block.timestamp + UPGRADE_DELAY);
- }
-
- /// @notice Cancel a pending mUSD token change
- function cancelSetMUSDToken() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingMUSDToken;
- pendingMUSDToken = address(0);
- musdTokenChangeRequestTime = 0;
- emit MUSDTokenChangeCancelled(cancelled);
- }
-
- /// @notice Execute mUSD token change after 48h timelock
- function executeSetMUSDToken() external onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingMUSDToken != address(0), "NO_PENDING_CHANGE");
- require(block.timestamp >= musdTokenChangeRequestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
-
  address oldToken = address(musdToken);
- address newToken = pendingMUSDToken;
-
- pendingMUSDToken = address(0);
- musdTokenChangeRequestTime = 0;
-
- musdToken = IMUSD(newToken);
- emit MUSDTokenUpdated(oldToken, newToken);
+ musdToken = IMUSD(_musdToken);
+ emit MUSDTokenUpdated(oldToken, _musdToken);
  }
 
  // Emit event for admin parameter change
@@ -506,49 +476,16 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  }
 
  // ============================================================
- // UPGRADEABILITY
+ // UPGRADEABILITY — gated by MintedTimelockController
  // ============================================================
 
- /// @notice Pending implementation for timelocked upgrade
- address public pendingImplementation;
-
- /// @notice Timestamp of upgrade request
- uint256 public upgradeRequestTime;
-
- /// @notice 48-hour upgrade delay
- uint256 public constant UPGRADE_DELAY = 48 hours;
-
- event UpgradeRequested(address indexed newImplementation, uint256 executeAfter);
- event UpgradeCancelled(address indexed cancelledImplementation);
-
- /// @notice Request a timelocked upgrade
- /// @dev Prevent overwriting a pending upgrade to block bait-and-switch attacks.
- /// Admin must cancelUpgrade() first before requesting a new one.
- function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @notice UUPS upgrade authorization — only callable by timelock
+ function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {
  require(newImplementation != address(0), "ZERO_ADDRESS");
- require(pendingImplementation == address(0), "UPGRADE_ALREADY_PENDING");
- pendingImplementation = newImplementation;
- upgradeRequestTime = block.timestamp;
- emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);
  }
 
- /// @notice Cancel a pending upgrade
- function cancelUpgrade() external onlyRole(DEFAULT_ADMIN_ROLE) {
- address cancelled = pendingImplementation;
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
- emit UpgradeCancelled(cancelled);
- }
-
- /// @notice UUPS upgrade authorization with 48h timelock
- function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {
- require(pendingImplementation == newImplementation, "UPGRADE_NOT_REQUESTED");
- require(block.timestamp >= upgradeRequestTime + UPGRADE_DELAY, "UPGRADE_TIMELOCK_ACTIVE");
- pendingImplementation = address(0);
- upgradeRequestTime = 0;
- }
-
- // Storage gap for future upgrades — 17 state variables → 50 - 17 = 33
- // Adjusted from 35 to 33 after adding pendingMUSDToken + musdTokenChangeRequestTime
- uint256[33] private __gap;
+ // Storage gap for future upgrades — 15 state variables + timelock → 50 - 16 = 34
+ // Increased from 33 after removing pendingMUSDToken + musdTokenChangeRequestTime
+ // + pendingImplementation + upgradeRequestTime (4 removed, 1 timelock added = net -3)
+ uint256[34] private __gap;
 }
