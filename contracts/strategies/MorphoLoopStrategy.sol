@@ -210,6 +210,9 @@ contract MorphoLoopStrategy is
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event LoopingSkipped(uint256 borrowRate, uint256 maxAllowed, string reason);
     event ProfitabilityParamsUpdated(uint256 maxBorrowRate, uint256 minSupplyRate);
+    // FIX STRAT-M-02: Events for critical state changes
+    event StrategyActiveUpdated(bool active);
+    event SafetyBufferUpdated(uint256 newBufferBps);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -239,6 +242,12 @@ contract MorphoLoopStrategy is
         address _treasury,
         address _admin
     ) external initializer {
+        // FIX STRAT-M-01: Validate all addresses to prevent bricked proxy
+        require(_usdc != address(0), "Zero USDC");
+        require(_morpho != address(0), "Zero Morpho");
+        require(_treasury != address(0), "Zero treasury");
+        require(_admin != address(0), "Zero admin");
+
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -351,7 +360,7 @@ contract MorphoLoopStrategy is
         returns (uint256 withdrawn) 
     {
         // Full deleverage
-        withdrawn = _fullDeleverage();
+        _fullDeleverage();
         totalPrincipal = 0;
 
         // Transfer all USDC back to Treasury
@@ -360,8 +369,9 @@ contract MorphoLoopStrategy is
             usdc.safeTransfer(msg.sender, balance);
         }
 
-        emit Withdrawn(type(uint256).max, withdrawn);
-        return balance;
+        // FIX STRAT-M-03: Return and emit actual transferred amount, not deleverage return
+        withdrawn = balance;
+        emit Withdrawn(type(uint256).max, balance);
     }
 
     /**
@@ -749,6 +759,7 @@ contract MorphoLoopStrategy is
     function setSafetyBuffer(uint256 _safetyBufferBps) external onlyRole(STRATEGIST_ROLE) {
         require(_safetyBufferBps >= 200 && _safetyBufferBps <= 2000, "Invalid buffer");
         safetyBufferBps = _safetyBufferBps;
+        emit SafetyBufferUpdated(_safetyBufferBps);
     }
 
     /**
@@ -791,6 +802,7 @@ contract MorphoLoopStrategy is
      */
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
+        emit StrategyActiveUpdated(_active);
     }
 
     /**
@@ -800,6 +812,10 @@ contract MorphoLoopStrategy is
         uint256 healthBefore = this.getHealthFactor();
         _fullDeleverage();
         uint256 healthAfter = this.getHealthFactor();
+
+        // FIX STRAT-M-04: Deactivate and pause to prevent next deposit from re-leveraging
+        active = false;
+        _pause();
         
         emit EmergencyDeleverage(healthBefore, healthAfter);
     }

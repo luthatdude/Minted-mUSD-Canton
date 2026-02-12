@@ -343,12 +343,16 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @param to Recipient address
      * @param amount Amount to withdraw
      */
+    event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
+
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         // FIX SOL-H-06: Block USDC withdrawal unless contract is paused (true emergency).
         // Prevents admin from draining in-flight user deposits during normal operation.
         if (token == address(usdc)) {
             require(paused(), "USDC_WITHDRAW_ONLY_WHEN_PAUSED");
+            // FIX BRIDGE-M-09: Reset accumulated fees to prevent desync after emergency USDC withdrawal
+            accumulatedFees = 0;
         }
         if (token == address(0)) {
             (bool success, ) = to.call{value: amount}("");
@@ -356,6 +360,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
+        // FIX BRIDGE-M-01: Emit event for monitoring/audit trail
+        emit EmergencyWithdrawal(token, to, amount);
     }
 
     // ============ Internal Functions ============

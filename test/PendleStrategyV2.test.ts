@@ -593,19 +593,20 @@ describe("PendleStrategyV2", function () {
   // ================================================================
 
   describe("Rollover Threshold Edge Cases", function () {
-    it("Should allow zero rollover threshold", async function () {
+    it("Should reject zero rollover threshold", async function () {
       const { strategy, strategist } = await loadFixture(deployFixture);
 
-      await strategy.connect(strategist).setRolloverThreshold(0);
-      expect(await strategy.rolloverThreshold()).to.equal(0);
+      await expect(
+        strategy.connect(strategist).setRolloverThreshold(0)
+      ).to.be.revertedWith("INVALID_THRESHOLD");
     });
 
-    it("Should allow very large rollover threshold", async function () {
+    it("Should allow max rollover threshold (30 days)", async function () {
       const { strategy, strategist } = await loadFixture(deployFixture);
 
-      const largeThreshold = 365 * 24 * 60 * 60; // 1 year
-      await strategy.connect(strategist).setRolloverThreshold(largeThreshold);
-      expect(await strategy.rolloverThreshold()).to.equal(largeThreshold);
+      const maxThreshold = 30 * 24 * 60 * 60; // 30 days
+      await strategy.connect(strategist).setRolloverThreshold(maxThreshold);
+      expect(await strategy.rolloverThreshold()).to.equal(maxThreshold);
     });
 
     it("Should emit RolloverThresholdUpdated event", async function () {

@@ -60,6 +60,11 @@ contract MUSD is ERC20, AccessControl, Pausable {
 
     function setBlacklist(address account, bool status) external onlyRole(COMPLIANCE_ROLE) {
         require(account != address(0), "INVALID_ADDRESS");
+        // FIX CORE-M-06: Prevent blacklisting protocol-critical addresses
+        if (status) {
+            require(!hasRole(BRIDGE_ROLE, account), "CANNOT_BLACKLIST_BRIDGE");
+            require(!hasRole(LIQUIDATOR_ROLE, account), "CANNOT_BLACKLIST_LIQUIDATOR");
+        }
         isBlacklisted[account] = status;
         emit BlacklistUpdated(account, status);
     }

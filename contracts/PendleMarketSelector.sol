@@ -135,7 +135,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     event MarketWhitelisted(address indexed market, string category);
     event MarketRemoved(address indexed market);
     event BestMarketSelected(address indexed market, uint256 tvl, uint256 impliedAPY, uint256 score);
-    event ParamsUpdated(uint256 minTimeToExpiry, uint256 minTvlUsd, uint256 tvlWeight, uint256 apyWeight);
+    event ParamsUpdated(uint256 minTimeToExpiry, uint256 minTvlUsd, uint256 minApyBps, uint256 tvlWeight, uint256 apyWeight);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS
@@ -330,8 +330,11 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         // PT trades at discount, so we use oracle rate
         // slither-disable-next-line calls-loop
         uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);
-        uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;
-        uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));
+        // FIX BRIDGE-M-07: Safe int128→uint128 cast — clamp negatives to 0
+        uint256 ptValueInSy = (
+            (totalPt >= 0 ? uint256(uint128(totalPt)) : 0) * ptToSyRate
+        ) / 1e18;
+        uint256 tvlSy = ptValueInSy + (totalSy >= 0 ? uint256(uint128(totalSy)) : 0);
 
         // Convert lnImpliedRate to APY
         // lnImpliedRate is stored as ln(1 + rate) scaled by 1e18
@@ -345,8 +348,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
             pt: pt,
             expiry: expiry,
             timeToExpiry: timeToExpiry,
-            totalPt: uint256(uint128(totalPt)),
-            totalSy: uint256(uint128(totalSy)),
+            totalPt: totalPt >= 0 ? uint256(uint128(totalPt)) : 0,
+            totalSy: totalSy >= 0 ? uint256(uint128(totalSy)) : 0,
             tvlSy: tvlSy,
             impliedRate: uint256(lastLnImpliedRate),
             impliedAPY: impliedAPY,
@@ -453,6 +456,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         require(markets.length <= 50, "BATCH_TOO_LARGE");
 
         for (uint256 i = 0; i < markets.length; i++) {
+            // FIX BRIDGE-M-04: Validate non-zero address in batch path (matches single whitelist)
+            require(markets[i] != address(0), "ZERO_ADDRESS");
             if (!isWhitelisted[markets[i]]) {
                 // FIX S-M15: Enforce maximum markets cap
                 require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
@@ -505,7 +510,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         tvlWeight = _tvlWeight;
         apyWeight = _apyWeight;
 
-        emit ParamsUpdated(_minTimeToExpiry, _minTvlUsd, _tvlWeight, _apyWeight);
+        emit ParamsUpdated(_minTimeToExpiry, _minTvlUsd, _minApyBps, _tvlWeight, _apyWeight);
     }
 
     /**

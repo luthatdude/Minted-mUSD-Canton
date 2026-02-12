@@ -193,6 +193,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         uint256 balanceBefore = usdc.balanceOf(address(this));
         tokenBridge.completeTransfer(encodedVAA);
         uint256 received = usdc.balanceOf(address(this)) - balanceBefore;
+        // FIX BRIDGE-M-08: Reject zero-amount transfers to prevent wasted failedMintIds slots
+        require(received > 0, "ZERO_AMOUNT_RECEIVED");
         
         // FIX C-07: Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
         // Layout: payloadID(1) + amount(32) + tokenAddress(32) + tokenChain(2) +
@@ -260,6 +262,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      * @dev FIX H-02: Changed from onlyOwner to role-based access
      */
     function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyRole(BRIDGE_ADMIN_ROLE) {
+        // FIX BRIDGE-M-03: Reject zero-address router to prevent misleading state
+        require(routerAddress != bytes32(0), "ZERO_ROUTER_ADDRESS");
         authorizedRouters[chainId] = routerAddress;
         emit RouterAuthorized(chainId, routerAddress);
     }
@@ -305,17 +309,22 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      * @param amount Amount to withdraw
      * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
      */
+    event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
+
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
         // FIX TR-M01: Block USDC withdrawal unless contract is paused (true emergency).
         // When paused, admin needs full access to recover all tokens.
         require(token != address(usdc) || paused(), "USDC_WITHDRAW_ONLY_WHEN_PAUSED");
         IERC20(token).safeTransfer(to, amount);
+        // FIX BRIDGE-M-02: Emit event for monitoring/audit trail
+        emit EmergencyWithdrawal(token, to, amount);
     }
 
     /// @notice FIX TR-H01: Retry a failed mint by pulling USDC from treasury
     /// @param vaaHash The VAA hash of the failed mint to retry
-    function retryFailedMint(bytes32 vaaHash) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // FIX BRIDGE-M-06: Added nonReentrant to prevent cross-function reentrancy
+    function retryFailedMint(bytes32 vaaHash) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         FailedMint storage fm = failedMints[vaaHash];
         require(fm.amount > 0, "NO_FAILED_MINT");
 
