@@ -1,7 +1,6 @@
 // Minted mUSD Protocol - Position Monitor
 // View-only monitoring without liquidation execution
 //
-// FIX H-08: This is a READ-ONLY monitor — no private key needed.
 // Never load .env files. All config comes from env vars.
 
 import { ethers } from "ethers";

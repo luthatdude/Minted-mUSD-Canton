@@ -41,7 +41,6 @@ contract TreasuryV2 is
     uint256 public constant BPS = 10000;
     uint256 public constant MAX_STRATEGIES = 10;
     
-    // FIX H-2: Minimum time between fee accruals to prevent flash loan manipulation
     uint256 public constant MIN_ACCRUAL_INTERVAL = 1 hours;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -118,15 +117,13 @@ contract TreasuryV2 is
     event StrategyAdded(address indexed strategy, uint256 targetBps);
     event StrategyRemoved(address indexed strategy);
     event StrategyUpdated(address indexed strategy, uint256 newTargetBps);
-    event StrategyWithdrawn(address indexed strategy, uint256 amount); // FIX H-3: Event for withdrawal tracking
+    event StrategyWithdrawn(address indexed strategy, uint256 amount);
     event FeesAccrued(uint256 yield_, uint256 protocolFee);
     event FeesClaimed(address indexed recipient, uint256 amount);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
-    /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
-    /// FIX CRITICAL: Events for rebalance failures
     event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
     event RebalanceDepositFailed(address indexed strategy, uint256 amount);
 
@@ -292,7 +289,6 @@ contract TreasuryV2 is
 
             if (total > 0 && strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                // FIX M-02 (Final Audit): Wrap in try/catch so a reverting strategy
                 // doesn't DoS this view function. Defaults to 0 bps on failure.
                 try IStrategy(strategies[i].strategy).totalValue() returns (uint256 stratValue) {
                     currentBps[i] = (stratValue * BPS) / total;
@@ -355,7 +351,6 @@ contract TreasuryV2 is
             allocations = new uint256[](strategies.length);
         }
 
-        // FIX H-04: Update lastRecordedValue AFTER deposit
         lastRecordedValue = totalValue();
 
         emit Deposited(msg.sender, amount, allocations);
@@ -394,7 +389,6 @@ contract TreasuryV2 is
             actualAmount = reserve + withdrawn;
             if (actualAmount > amount) actualAmount = amount;
 
-            // FIX H-01: Revert if we can't fulfill the full requested amount
             // Silent partial withdrawals can leave protocol in inconsistent state
             if (actualAmount < amount) {
                 revert("INSUFFICIENT_LIQUIDITY");
@@ -431,7 +425,6 @@ contract TreasuryV2 is
      * @notice Deposit USDC from DirectMint (legacy interface)
      * @param from Address to pull USDC from
      * @param amount Amount of USDC to deposit
-     * @dev FIX CRIT-03: Enforce from == msg.sender to prevent arbitrary token pulls.
      *      Even though VAULT_ROLE is required, a compromised vault could drain
      *      any address that has approved this contract.
      */
@@ -448,7 +441,6 @@ contract TreasuryV2 is
             _autoAllocate(amount);
         }
 
-        // FIX H-04: Update lastRecordedValue AFTER deposit so the new deposit
         // is not mistaken for yield on the next _accrueFees() call.
         lastRecordedValue = totalValue();
 
@@ -506,7 +498,6 @@ contract TreasuryV2 is
 
         if (totalTargetBps == 0) return allocations;
 
-        // FIX C-01: Track shares approved (not deposited) for remainder calculation.
         // This prevents the last strategy from receiving an incorrect amount when
         // prior strategies deposit less than approved due to slippage.
         uint256 sharesApproved = 0;
@@ -541,10 +532,8 @@ contract TreasuryV2 is
                 // slither-disable-next-line calls-loop
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
-                    // FIX H-04: Clear approval after successful deposit to prevent dangling approvals
                     asset.forceApprove(strat, 0);
                 } catch (bytes memory reason) {
-                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
                     allocations[i] = 0;
                     asset.forceApprove(strat, 0);
                     emit StrategyDepositFailed(strat, share, reason);
@@ -579,7 +568,6 @@ contract TreasuryV2 is
 
         if (totalStratValue == 0) return 0;
 
-        // FIX M-07: Withdraw proportionally, give last strategy the remainder
         // to avoid rounding dust leaving funds stranded across strategies.
         for (uint256 i = 0; i < strategies.length && remaining > 0; i++) {
             if (!strategies[i].active) continue;
@@ -612,7 +600,6 @@ contract TreasuryV2 is
                     totalWithdrawn += withdrawn;
                     remaining = remaining > withdrawn ? remaining - withdrawn : 0;
                 } catch (bytes memory reason) {
-                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
                     emit StrategyWithdrawFailed(strat, toWithdraw, reason);
                 }
             }
@@ -627,11 +614,9 @@ contract TreasuryV2 is
 
     /**
      * @notice Accrue protocol fees on yield
-     * FIX H-2: Added minimum time interval between accruals to prevent flash loan manipulation.
      * Attacker cannot inflate totalValue() temporarily and immediately accrue fees.
      */
     function _accrueFees() internal {
-        // FIX H-2: Skip fee accrual if called too soon (prevents flash loan manipulation)
         if (block.timestamp < lastFeeAccrual + MIN_ACCRUAL_INTERVAL) {
             return;
         }
@@ -668,7 +653,6 @@ contract TreasuryV2 is
         // slither-disable-next-line incorrect-equality
         if (toClaim == 0) return;
 
-        // FIX I-05: Only deduct what is actually sent, not the full claim amount.
         // This prevents loss if reserve + strategies can't cover the full amount.
 
         // Withdraw from strategies if needed
@@ -731,7 +715,6 @@ contract TreasuryV2 is
         strategyIndex[strategy] = strategies.length - 1;
         isStrategy[strategy] = true;
 
-        // FIX H-03: Do NOT grant unlimited approval at add-time.
         // Approvals are granted per-operation in _autoAllocate and rebalance.
 
         emit StrategyAdded(strategy, targetBps);
@@ -739,8 +722,6 @@ contract TreasuryV2 is
 
     /**
      * @notice Remove a strategy (withdraws all funds first)
-     * FIX H-3: Revert on withdrawal failure to prevent fund loss
-     * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
      */
     /// @dev Emitted when strategy force-deactivated due to failed withdrawal
     event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
@@ -783,7 +764,6 @@ contract TreasuryV2 is
         strategies[idx].active = false;
         strategies[idx].targetBps = 0;
         isStrategy[strategy] = false;
-        // FIX M-09: Clean up stale strategyIndex mapping
         delete strategyIndex[strategy];
 
         // Revoke approval
@@ -849,14 +829,12 @@ contract TreasuryV2 is
             if (currentValue > targetValue) {
                 uint256 excess = currentValue - targetValue;
                 // slither-disable-next-line calls-loop
-                // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).withdraw(excess) {} catch {
                     emit RebalanceWithdrawFailed(strat, excess);
                 }
             }
         }
 
-        // FIX TV-M01 (Final Audit): Re-read totalValue() after withdrawals.
         // Pass 1 withdrawals change strategy values, so using the stale `total`
         // for pass 2 would systematically over-allocate to under-funded strategies.
         total = totalValue();
@@ -880,7 +858,6 @@ contract TreasuryV2 is
 
                 asset.forceApprove(strat, toDeposit);
                 // slither-disable-next-line calls-loop
-                // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
                 } catch {
@@ -901,7 +878,6 @@ contract TreasuryV2 is
     /**
      * @notice Emergency withdraw all from all strategies
      * @dev Loops over bounded, admin-controlled strategies array
-     *      FIX H-01: Emits StrategyWithdrawFailed on failures instead of silent catch
      */
     function emergencyWithdrawAll() external onlyRole(GUARDIAN_ROLE) {
         for (uint256 i = 0; i < strategies.length; i++) {
@@ -910,13 +886,11 @@ contract TreasuryV2 is
                 // slither-disable-next-line calls-loop
                 try IStrategy(strategyAddr).withdrawAll() {} 
                 catch (bytes memory reason) {
-                    // FIX H-01: Emit failure event instead of silent catch
                     emit StrategyWithdrawFailed(strategyAddr, 0, reason);
                 }
             }
         }
 
-        // FIX HIGH-04: Update lastRecordedValue to prevent phantom yield
         // on next _accrueFees() call after emergency withdrawal
         lastRecordedValue = totalValue();
 
@@ -938,7 +912,6 @@ contract TreasuryV2 is
     /**
      * @notice Update fee configuration
      */
-    /// FIX S-M09: Added event for fee config changes
     event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
 
     function setFeeConfig(
@@ -956,7 +929,6 @@ contract TreasuryV2 is
         emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
     }
 
-    /// FIX S-M10: Added event for reserve BPS changes
     event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
 
     /**
@@ -969,7 +941,6 @@ contract TreasuryV2 is
         emit ReserveBpsUpdated(oldBps, _reserveBps);
     }
 
-    /// FIX S-M11: Added event and validation for min auto-allocate changes
     event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     /**

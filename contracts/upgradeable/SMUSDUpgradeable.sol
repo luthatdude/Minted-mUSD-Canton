@@ -75,11 +75,9 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  /// @dev Prevents a single compromised strategy from inflating totalValue() unboundedly
  uint256 public constant MAX_GLOBAL_ASSETS_GROWTH_BPS = 500;
 
-    /// @notice FIX CRIT-02: Minimum interval between refreshGlobalAssets() calls
     /// @dev Prevents rapid-fire ratcheting of the cache baseline
     uint256 public constant MIN_REFRESH_INTERVAL = 1 hours;
 
-    /// @notice FIX CRIT-02: Timestamp of last refreshGlobalAssets() call
     uint256 public lastRefreshTime;
  event GlobalAssetsRefreshed(uint256 newGlobalAssets, uint256 usdcValue);
 
@@ -124,13 +122,11 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  // shares, the fallback to local totalAssets() would dilute existing holders.
  function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
  if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
-  // FIX H-S01: Wrap in try/catch to prevent deposit revert-lock when treasury is down
   try ITreasuryV2(treasury).totalValue() returns (uint256 usdcValue) {
   lastKnownGlobalAssets = usdcValue * 1e12;
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
- // FIX CRITICAL C-01: Write lastDeposit to enforce 24h withdrawal cooldown
  lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.deposit(assets, receiver);
@@ -142,13 +138,11 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  // Same globalTotalAssets cache guard as deposit()
  function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
  if (treasury != address(0) && lastKnownGlobalAssets == 0 && cantonTotalShares > 0) {
-  // FIX H-S01: Wrap in try/catch to prevent mint revert-lock when treasury is down
   try ITreasuryV2(treasury).totalValue() returns (uint256 usdcValue) {
   lastKnownGlobalAssets = usdcValue * 1e12;
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
- // FIX CRITICAL C-01: Write lastDeposit to enforce 24h withdrawal cooldown
  lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.mint(shares, receiver);
@@ -355,7 +349,6 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  function refreshGlobalAssets() external onlyRole(YIELD_MANAGER_ROLE) {
  require(treasury != address(0), "NO_TREASURY");
  require(globalTotalShares() > 0, "NO_SHARES_EXIST");
-    // FIX CRIT-02: Enforce minimum interval between refreshes to prevent ratcheting
     require(block.timestamp >= lastRefreshTime + MIN_REFRESH_INTERVAL, "REFRESH_TOO_FREQUENT");
 
     uint256 usdcValue = ITreasuryV2(treasury).totalValue();

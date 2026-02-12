@@ -42,7 +42,6 @@ interface IWormholeTokenBridge {
     ) external payable returns (uint64 sequence);
 
     /// @notice Transfer tokens with an arbitrary payload (for recipient data)
-    /// @dev FIX P0: Required to pass recipient address to TreasuryReceiver
     function transferTokensWithPayload(
         address token,
         uint256 amount,
@@ -59,7 +58,6 @@ interface IWormholeTokenBridge {
  * @title DepositRouter
  * @notice Routes USDC deposits from L2 chains to Ethereum Treasury via Wormhole
  * @dev Deploy this on Base, Arbitrum, and other L2s to accept deposits
- * @dev FIX SC-H01: Migrated from Ownable to AccessControl for role separation
  */
 contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -175,7 +173,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         directMintAddress = _directMintAddress;
         feeBps = _feeBps;
         
-        // FIX SC-H01: Set up role hierarchy
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(ROUTER_ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _admin);
@@ -247,11 +244,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     /**
      * @notice Mark a deposit as completed after cross-chain confirmation
      * @param sequence Wormhole sequence number of the completed deposit
-     * @dev FIX M-01: The completed flag was never set. This admin function
      *      allows marking deposits as completed after TreasuryReceiver processes them.
      */
     function markDepositComplete(uint64 sequence) external onlyRole(ROUTER_ADMIN_ROLE) {
-        // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
         PendingDeposit storage pendingDep = pendingDeposits[sequence];
         require(pendingDep.depositor != address(0), "DEPOSIT_NOT_FOUND");
         require(!pendingDep.completed, "ALREADY_COMPLETED");
@@ -265,7 +260,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function markDepositsComplete(uint64[] calldata sequences) external onlyRole(ROUTER_ADMIN_ROLE) {
         for (uint256 i = 0; i < sequences.length; i++) {
-            // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
             PendingDeposit storage pendingDep = pendingDeposits[sequences[i]];
             if (pendingDep.depositor != address(0) && !pendingDep.completed) {
                 pendingDep.completed = true;
@@ -322,14 +316,14 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Pause deposits (FIX SC-H01: Requires PAUSER_ROLE)
+     * @notice Pause deposits
      */
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
     
     /**
-     * @notice Unpause deposits (FIX SC-H01: Requires DEFAULT_ADMIN_ROLE for separation of duties)
+     * @notice Unpause deposits
      */
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
@@ -373,7 +367,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         // Accumulate fees
         accumulatedFees += fee;
         
-        // FIX H-7: Use forceApprove for USDT-safe approval
         usdc.forceApprove(address(tokenBridge), netAmount);
         
         // Increment nonce
@@ -382,7 +375,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         // Convert treasury address to bytes32 (receiver contract)
         bytes32 treasuryReceiverBytes = bytes32(uint256(uint160(treasuryAddress)));
         
-        // FIX P0: Encode the actual depositor as payload so TreasuryReceiver
         // knows who to mint mUSD for. Without this, TreasuryReceiver's
         // abi.decode(vm.payload, (address)) would fail on empty payload.
         bytes memory recipientPayload = abi.encode(depositor);
@@ -410,7 +402,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         emit DepositInitiated(depositor, netAmount, fee, sequence, block.timestamp);
         
         // Refund excess native token
-        // FIX HIGH-16: Use success check without revert to prevent smart contract
         // depositors from being blocked if they can't receive native token refunds
         if (msg.value > bridgeCost) {
             (bool success, ) = msg.sender.call{value: msg.value - bridgeCost}("");

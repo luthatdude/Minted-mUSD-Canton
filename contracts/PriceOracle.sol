@@ -25,7 +25,6 @@ interface IAggregatorV3 {
 /// @dev All prices are normalized to 18 decimals (USD value per 1 full token unit)
 contract PriceOracle is AccessControl {
     bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
-    /// @dev FIX HIGH-CB: Keeper role for non-admin circuit breaker recovery
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
 
     struct FeedConfig {
@@ -38,22 +37,18 @@ contract PriceOracle is AccessControl {
     // collateral token address => feed config
     mapping(address => FeedConfig) public feeds;
     
-    /// @dev FIX S-H01: Circuit breaker - track last known prices and max deviation
     mapping(address => uint256) public lastKnownPrice;
     uint256 public maxDeviationBps = 2000; // 20% max price change per update
     bool public circuitBreakerEnabled = true;
 
-    /// @dev FIX HIGH-CB: Auto-recovery cooldown for circuit breaker
     mapping(address => uint256) public circuitBreakerTrippedAt;
     uint256 public circuitBreakerCooldown = 1 hours;
 
     event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
     event FeedRemoved(address indexed token);
-    /// @dev FIX S-H01: Event for circuit breaker triggers
     event CircuitBreakerTriggered(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 deviationBps);
     event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
     event CircuitBreakerToggled(bool enabled);
-    /// @dev FIX HIGH-CB: Events for auto-recovery
     event CircuitBreakerAutoRecovered(address indexed token, uint256 newPrice);
     event CircuitBreakerCooldownUpdated(uint256 oldCooldown, uint256 newCooldown);
     event KeeperRecovery(address indexed token, address indexed keeper, uint256 newPrice);
@@ -61,18 +56,15 @@ contract PriceOracle is AccessControl {
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
-        /// @dev FIX HIGH-CB: Grant KEEPER_ROLE to deployer; assign to keeper bots later
         _grantRole(KEEPER_ROLE, msg.sender);
     }
 
-    /// @dev FIX HIGH-CB: Allow admin to set circuit breaker cooldown period
     function setCircuitBreakerCooldown(uint256 _cooldown) external onlyRole(ORACLE_ADMIN_ROLE) {
         require(_cooldown >= 15 minutes && _cooldown <= 24 hours, "COOLDOWN_OUT_OF_RANGE");
         emit CircuitBreakerCooldownUpdated(circuitBreakerCooldown, _cooldown);
         circuitBreakerCooldown = _cooldown;
     }
 
-    /// @dev FIX HIGH-CB: Keeper-callable recovery — verifies price has stabilized
     ///      before allowing circuit breaker reset (less privilege than ORACLE_ADMIN)
     function keeperResetPrice(address token) external onlyRole(KEEPER_ROLE) {
         require(circuitBreakerTrippedAt[token] > 0, "CB_NOT_TRIPPED");
@@ -92,20 +84,17 @@ contract PriceOracle is AccessControl {
         emit KeeperRecovery(token, msg.sender, newPrice);
     }
 
-    /// @dev FIX S-H01: Set max deviation for circuit breaker (in basis points)
     function setMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
         require(_maxDeviationBps >= 100 && _maxDeviationBps <= 5000, "DEVIATION_OUT_OF_RANGE"); // 1% to 50%
         emit MaxDeviationUpdated(maxDeviationBps, _maxDeviationBps);
         maxDeviationBps = _maxDeviationBps;
     }
 
-    /// @dev FIX S-H01: Toggle circuit breaker on/off
     function setCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
         circuitBreakerEnabled = _enabled;
         emit CircuitBreakerToggled(_enabled);
     }
 
-    /// @dev FIX S-H01: Manually update last known price (for recovery after circuit breaker trip)
     function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
@@ -129,9 +118,7 @@ contract PriceOracle is AccessControl {
         require(token != address(0), "INVALID_TOKEN");
         require(feed != address(0), "INVALID_FEED");
         require(stalePeriod > 0, "INVALID_STALE_PERIOD");
-        // FIX CRIT-04: Cap stalePeriod to prevent misconfiguration allowing arbitrarily old prices
         require(stalePeriod <= 48 hours, "STALE_PERIOD_TOO_LONG");
-        // FIX H-1: Validate tokenDecimals at config time to prevent precision issues
         require(tokenDecimals <= 18, "TOKEN_DECIMALS_TOO_HIGH");
 
         feeds[token] = FeedConfig({
@@ -141,7 +128,6 @@ contract PriceOracle is AccessControl {
             enabled: true
         });
 
-        // FIX M-03 (Final Audit): Validate feedDecimals <= 18 to prevent underflow
         // in getPrice() where we compute 10 ** (18 - feedDecimals).
         // A feed with > 18 decimals would revert at query time, not at config time.
         {
@@ -149,7 +135,6 @@ contract PriceOracle is AccessControl {
             require(fd <= 18, "FEED_DECIMALS_TOO_HIGH");
         }
 
-        // FIX S-M07: Auto-initialize lastKnownPrice from the feed to prevent stale fallback gaps
         try IAggregatorV3(feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256, uint80
         ) {
@@ -165,7 +150,6 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Remove a price feed
-    /// @dev FIX M-06: Also clears lastKnownPrice to prevent stale circuit-breaker
     ///      state if the same token is later re-added with a new feed.
     function removeFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         require(feeds[token].enabled, "FEED_NOT_FOUND");
@@ -181,7 +165,6 @@ contract PriceOracle is AccessControl {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
 
-        // FIX M-23: Capture roundId and answeredInRound for staleness check
         (
             uint80 roundId,
             int256 answer,
@@ -192,7 +175,6 @@ contract PriceOracle is AccessControl {
 
         require(answer > 0, "INVALID_PRICE");
         require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
-        // FIX M-23: Ensure the round was fully answered (not incomplete)
         require(answeredInRound >= roundId, "STALE_ROUND");
 
         uint8 feedDecimals = config.feed.decimals();
@@ -202,14 +184,12 @@ contract PriceOracle is AccessControl {
         // Normalize to 18 decimals
         price = uint256(answer) * (10 ** (18 - feedDecimals));
 
-        // FIX S-H01 + HIGH-CB: Circuit breaker with auto-recovery after cooldown
         if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
             uint256 oldPrice = lastKnownPrice[token];
             uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
             uint256 deviationBps = (diff * 10000) / oldPrice;
             
             if (deviationBps > maxDeviationBps) {
-                // FIX HIGH-CB: Check if cooldown has elapsed — auto-recover if so
                 if (circuitBreakerTrippedAt[token] > 0 &&
                     block.timestamp >= circuitBreakerTrippedAt[token] + circuitBreakerCooldown) {
                     // Auto-recovery: cooldown elapsed, accept the new price level
@@ -223,7 +203,6 @@ contract PriceOracle is AccessControl {
         // Note: lastKnownPrice is updated via updatePrice(), keeperResetPrice(), or admin resetLastKnownPrice()
     }
 
-    /// @notice FIX S-H01: Update cached price (call before getPrice if circuit breaker trips)
     /// @dev This allows keepers to update the price after verifying the deviation is legitimate
     function updatePrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
         FeedConfig storage config = feeds[token];
@@ -241,14 +220,12 @@ contract PriceOracle is AccessControl {
             uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
             uint256 deviationBps = (diff * 10000) / oldPrice;
             emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
-            // FIX HIGH-CB: Record when CB trips so cooldown timer starts
             if (deviationBps > maxDeviationBps && circuitBreakerTrippedAt[token] == 0) {
                 circuitBreakerTrippedAt[token] = block.timestamp;
             }
         }
         
         lastKnownPrice[token] = newPrice;
-        // FIX HIGH-CB: Clear tripped state when admin explicitly updates price
         circuitBreakerTrippedAt[token] = 0;
     }
 
@@ -256,14 +233,12 @@ contract PriceOracle is AccessControl {
     /// @param token The collateral token address
     /// @param amount The amount of collateral (in token's native decimals)
     /// @return valueUsd USD value scaled to 18 decimals
-    /// FIX C-05: Now calls getPrice() internally so circuit breaker is enforced.
     /// Previously read the feed directly, bypassing the circuit breaker check.
     function getValueUsd(address token, uint256 amount) external view returns (uint256 valueUsd) {
         uint256 priceNormalized = this.getPrice(token);
         valueUsd = (amount * priceNormalized) / (10 ** feeds[token].tokenDecimals);
     }
 
-    /// @notice FIX P1-H4: Get price WITHOUT circuit breaker check, for liquidation paths
     /// @dev During market crashes (>20% move), the circuit breaker blocks getPrice(),
     ///      which prevents liquidations. This function allows liquidation to proceed
     ///      using the raw Chainlink price, ensuring bad debt doesn't accumulate.
@@ -282,7 +257,6 @@ contract PriceOracle is AccessControl {
         // No circuit breaker check — raw Chainlink price
     }
 
-    /// @notice FIX P1-H4: Get USD value WITHOUT circuit breaker, for liquidation paths
     function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256 valueUsd) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
