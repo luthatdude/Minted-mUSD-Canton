@@ -27,6 +27,7 @@ module CantonLending where
 import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
+import DA.List (dedup)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, CantonDirectMintService(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
@@ -53,6 +54,7 @@ data CollateralConfig = CollateralConfig with
     liquidationThresholdBps : Bps   -- Liquidation triggers here. e.g. 7500 = 75%
     liquidationPenaltyBps  : Bps    -- Penalty on seized collateral. e.g. 500 = 5%
     liquidationBonusBps    : Bps    -- Keeper bonus from penalty. e.g. 250 = 2.5%
+    maxStalenessSecs       : Int    -- DAML-M-03: Per-asset max price staleness in seconds
   deriving (Eq, Show)
 
 -- | Default configs for each collateral type
@@ -64,6 +66,7 @@ defaultCTNConfig = CollateralConfig with
     liquidationThresholdBps = 7500   -- 75% — liquidation trigger
     liquidationPenaltyBps = 1000     -- 10% penalty
     liquidationBonusBps = 500        -- 5% keeper bonus
+    maxStalenessSecs = 300           -- DAML-M-03: 5 min — volatile asset needs fresh prices
 
 defaultUSDCConfig : CollateralConfig
 defaultUSDCConfig = CollateralConfig with
@@ -73,6 +76,7 @@ defaultUSDCConfig = CollateralConfig with
     liquidationThresholdBps = 9700   -- 97% — tight spread
     liquidationPenaltyBps = 300      -- 3% penalty
     liquidationBonusBps = 150        -- 1.5% keeper bonus
+    maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
 
 defaultUSDCxConfig : CollateralConfig
 defaultUSDCxConfig = CollateralConfig with
@@ -82,6 +86,7 @@ defaultUSDCxConfig = CollateralConfig with
     liquidationThresholdBps = 9700
     liquidationPenaltyBps = 300
     liquidationBonusBps = 150
+    maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
 
 defaultSMUSDConfig : CollateralConfig
 defaultSMUSDConfig = CollateralConfig with
@@ -91,6 +96,7 @@ defaultSMUSDConfig = CollateralConfig with
     liquidationThresholdBps = 9300   -- 93%
     liquidationPenaltyBps = 400      -- 4% penalty
     liquidationBonusBps = 200        -- 2% keeper bonus
+    maxStalenessSecs = 1800          -- DAML-M-03: 30 min — yield-bearing, moderate refresh
 
 -- ============================================================
 --                     SECTION 2: CANTON PRICE FEED
@@ -744,6 +750,9 @@ template CantonLendingService
         -- DAML-H-04: Mandatory compliance check — borrower must not be blacklisted
         exercise complianceRegistryCid ValidateMint with minter = user
 
+        -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+        assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
+
         -- Calculate total collateral value (weighted by collateralFactorBps)
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
 
@@ -858,14 +867,16 @@ template CantonLendingService
         -- Check health AFTER withdrawal
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           -- Add value of remaining portion of this escrow (if partial withdrawal)
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_Coin configs
-            -- Get CTN price
-            ctnPrice <- getCtxPrice operator "CTN" priceFeedCids True
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            ctnPrice <- getCtxPrice operator "CTN" priceFeedCids True (seconds cfg.maxStalenessSecs)
             return (remainingThisEscrow * ctnPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
           else return 0.0
           assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
@@ -924,12 +935,15 @@ template CantonLendingService
 
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_USDC configs
-            usdcPrice <- getCtxPrice operator "USDC" priceFeedCids True
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            usdcPrice <- getCtxPrice operator "USDC" priceFeedCids True (seconds cfg.maxStalenessSecs)
             return (remainingThisEscrow * usdcPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
           else return 0.0
           assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
@@ -983,12 +997,15 @@ template CantonLendingService
 
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_USDCx configs
-            usdcxPrice <- getCtxPrice operator "USDCx" priceFeedCids True
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            usdcxPrice <- getCtxPrice operator "USDCx" priceFeedCids True (seconds cfg.maxStalenessSecs)
             return (remainingThisEscrow * usdcxPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
           else return 0.0
           assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
@@ -1044,12 +1061,15 @@ template CantonLendingService
 
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
           remainingThisValue <- if remainingThisEscrow > 0.0 then do
             let cfg = getConfig CTN_SMUSD configs
-            smusdPrice <- getCtxPrice operator "sMUSD" priceFeedCids True
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            smusdPrice <- getCtxPrice operator "sMUSD" priceFeedCids True (seconds cfg.maxStalenessSecs)
             return (remainingThisEscrow * smusdPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
           else return 0.0
           assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
@@ -1109,6 +1129,15 @@ template CantonLendingService
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
 
+        -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+        assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
+
+        -- DAML-M-06: Verify canonical debt CID via lookupByKey
+        canonicalDebtOpt <- lookupByKey @CantonDebtPosition (operator, borrower)
+        case canonicalDebtOpt of
+          None -> abort "NO_DEBT_POSITION_FOUND"
+          Some canonicalCid -> assertMsg "DEBT_CID_NOT_CANONICAL" (canonicalCid == debtCid)
+
         -- Verify liquidator owns the repayment mUSD
         musd <- fetch musdCid
         assertMsg "NOT_MUSD_OWNER" (musd.owner == liquidator)
@@ -1136,7 +1165,7 @@ template CantonLendingService
         -- Seize collateral with penalty
         targetEscrow <- fetch targetEscrowCid
         let cfg = getConfig targetEscrow.collateralType configs
-        colPrice <- getCtxPriceByType operator targetEscrow.collateralType priceFeedCids False
+        colPrice <- getCtxPriceByType operator targetEscrow.collateralType configs priceFeedCids False
 
         let seizeValueUsd = actualRepay * (10000.0 + intToNumeric cfg.liquidationPenaltyBps) / 10000.0
         let seizeAmount = seizeValueUsd / colPrice
@@ -1369,25 +1398,31 @@ getExistingDebtAndAccrue operator user = do
       return (debt.principalDebt + debt.accruedInterest)
 
 -- | Get price from feed list by symbol (with staleness check option)
-getCtxPrice : Party -> Text -> [ContractId CantonPriceFeed] -> Bool -> Update Money
-getCtxPrice _ symbol [] _ = error ("PRICE_FEED_NOT_FOUND: " <> symbol)
-getCtxPrice operator symbol (fCid :: rest) safe = do
+-- DAML-M-03: Accepts per-asset staleness instead of hardcoded 1h
+getCtxPrice : Party -> Text -> [ContractId CantonPriceFeed] -> Bool -> RelTime -> Update Money
+getCtxPrice _ symbol [] _ _ = error ("PRICE_FEED_NOT_FOUND: " <> symbol)
+getCtxPrice operator symbol (fCid :: rest) safe staleness = do
   feed <- fetch fCid
   if feed.symbol == symbol
     then if safe
       then exercise fCid PriceFeed_GetPrice with
         requester = operator
-        maxStaleness = hours 1
+        maxStaleness = staleness
       else exercise fCid PriceFeed_GetPriceUnsafe with
         requester = operator
-    else getCtxPrice operator symbol rest safe
+    else getCtxPrice operator symbol rest safe staleness
 
 -- | Get price by collateral type
-getCtxPriceByType : Party -> CollateralType -> [ContractId CantonPriceFeed] -> Bool -> Update Money
-getCtxPriceByType operator CTN_Coin feeds safe = getCtxPrice operator "CTN" feeds safe
-getCtxPriceByType operator CTN_USDC feeds safe = getCtxPrice operator "USDC" feeds safe
-getCtxPriceByType operator CTN_USDCx feeds safe = getCtxPrice operator "USDCx" feeds safe
-getCtxPriceByType operator CTN_SMUSD feeds safe = getCtxPrice operator "sMUSD" feeds safe
+-- DAML-M-03: Uses per-asset staleness from CollateralConfig
+getCtxPriceByType : Party -> CollateralType -> [CollateralConfig] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
+getCtxPriceByType operator ct cfgs feeds safe =
+  let cfg = getConfig ct cfgs
+      staleness = seconds cfg.maxStalenessSecs
+  in case ct of
+    CTN_Coin  -> getCtxPrice operator "CTN" feeds safe staleness
+    CTN_USDC  -> getCtxPrice operator "USDC" feeds safe staleness
+    CTN_USDCx -> getCtxPrice operator "USDCx" feeds safe staleness
+    CTN_SMUSD -> getCtxPrice operator "sMUSD" feeds safe staleness
 
 -- | Compute total collateral value weighted by collateralFactorBps
 computeWeightedCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
@@ -1397,7 +1432,7 @@ computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
   -- This prevents borrowing against collateral that has been disabled by the operator
-  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  price <- getCtxPriceByType operator escrow.collateralType cfgs feeds safe
   let value = if cfg.enabled
         then escrow.amount * price * intToNumeric cfg.collateralFactorBps / 10000.0
         else 0.0
@@ -1410,7 +1445,7 @@ computeRawCollateralValue _ _ _ [] _ _ = return 0.0
 computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
-  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  price <- getCtxPriceByType operator escrow.collateralType cfgs feeds safe
   let value = escrow.amount * price
   rest <- computeRawCollateralValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)
@@ -1422,7 +1457,7 @@ computeLiquidationThresholdValue operator expectedOwner cfgs (eCid :: eRest) fee
   escrow <- fetch eCid
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
-  price <- getCtxPriceByType operator escrow.collateralType feeds safe
+  price <- getCtxPriceByType operator escrow.collateralType cfgs feeds safe
   let value = escrow.amount * price * intToNumeric cfg.liquidationThresholdBps / 10000.0
   rest <- computeLiquidationThresholdValue operator expectedOwner cfgs eRest feeds safe
   return (value + rest)

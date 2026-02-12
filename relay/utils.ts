@@ -6,13 +6,16 @@
 import * as fs from "fs";
 
 // ============================================================
-//  INFRA-H-04 / INFRA-H-06: TLS Security Enforcement
+//  INFRA-H-01 / INFRA-H-02 / INFRA-H-06: TLS Security Enforcement
 // ============================================================
 
 /**
  * Enforce TLS certificate validation at process level.
  * This MUST be called before any network I/O.
  * Prevents accidental `NODE_TLS_REJECT_UNAUTHORIZED=0` in production.
+ *
+ * INFRA-H-06: Also installs a process-level guard that re-checks
+ * the env var periodically, preventing runtime tampering.
  */
 export function enforceTLSSecurity(): void {
   if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
@@ -21,6 +24,18 @@ export function enforceTLSSecurity(): void {
       console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     }
+    // INFRA-H-06: Define a getter that prevents runtime tampering with this env var
+    const originalValue = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    Object.defineProperty(process.env, "NODE_TLS_REJECT_UNAUTHORIZED", {
+      get: () => originalValue || "1",
+      set: (val: string) => {
+        if (val === "0") {
+          console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
+          return;
+        }
+      },
+      configurable: false,
+    });
   }
 }
 

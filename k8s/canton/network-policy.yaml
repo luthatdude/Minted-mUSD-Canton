@@ -144,6 +144,39 @@ spec:
         - port: 53
           protocol: TCP
 ---
+# INFRA-H-05: NetworkPolicy for backup CronJob pods
+# Backup pods only need egress to PostgreSQL and DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-backup-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-backup
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # No inbound traffic needed
+  egress:
+    # PostgreSQL only
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
 # Default deny all ingress/egress in namespace
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

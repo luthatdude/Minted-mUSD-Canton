@@ -23,8 +23,11 @@
  */
 
 import Ledger from "@daml/ledger";
-import { readSecret, requireHTTPS } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 import { fetchTradecraftQuote, fetchTradecraftPoolState, PriceOracleService } from "./price-oracle";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
