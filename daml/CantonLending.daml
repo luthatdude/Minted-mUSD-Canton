@@ -28,7 +28,7 @@ import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
 import DA.List (sort, length, (!!))
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import UserPrivacySettings (lookupUserObservers)
@@ -342,6 +342,9 @@ template EscrowedCollateral
     amount         : Money          -- Escrowed amount
     depositedAt    : Time           -- First deposit time
     lastUpdatedAt  : Time           -- Last deposit/withdrawal time
+    -- FIX DAML-017: Track original token provenance for USDCx (restored on withdrawal)
+    originalSourceChain : Optional Text   -- Original USDCx sourceChain (None for non-USDCx)
+    originalCctpNonce   : Optional Int    -- Original USDCx cctpNonce (None for non-USDCx)
     privacyObservers : [Party]      -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory operator, owner
@@ -591,6 +594,8 @@ template CantonLendingService
           None -> pure ()
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
+        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        assertMsg "CTN_ISSUER_MISMATCH" (coin.issuer == operator)
         let cfg = getConfig CTN_Coin configs
         assertMsg "CTN_NOT_ENABLED" cfg.enabled
 
@@ -611,6 +616,8 @@ template CantonLendingService
             amount = coin.amount
             depositedAt = now
             lastUpdatedAt = now
+            originalSourceChain = None
+            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -630,6 +637,8 @@ template CantonLendingService
           None -> pure ()
         usdc <- fetch usdcCid
         assertMsg "NOT_OWNER" (usdc.owner == user)
+        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == operator)
         let cfg = getConfig CTN_USDC configs
         assertMsg "USDC_NOT_ENABLED" cfg.enabled
 
@@ -649,6 +658,8 @@ template CantonLendingService
             amount = usdc.amount
             depositedAt = now
             lastUpdatedAt = now
+            originalSourceChain = None
+            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -668,6 +679,10 @@ template CantonLendingService
           None -> pure ()
         usdcx <- fetch usdcxCid
         assertMsg "NOT_OWNER" (usdcx.owner == user)
+        -- FIX DAML-007: Explicit issuer validation. Note: in production, USDCx issuer may be
+        -- the xReserve protocol operator rather than the lending operator. If these differ,
+        -- add a configurable `expectedUsdcxIssuer` field to CantonLendingService.
+        assertMsg "USDCx_ISSUER_MISMATCH" (usdcx.issuer == operator)
         let cfg = getConfig CTN_USDCx configs
         assertMsg "USDCx_NOT_ENABLED" cfg.enabled
 
@@ -680,6 +695,7 @@ template CantonLendingService
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = usdcx.amount
+          -- FIX DAML-017: Store original USDCx provenance for restoration on withdrawal
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -687,6 +703,8 @@ template CantonLendingService
             amount = usdcx.amount
             depositedAt = now
             lastUpdatedAt = now
+            originalSourceChain = Some usdcx.sourceChain
+            originalCctpNonce = Some usdcx.cctpNonce
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -706,6 +724,8 @@ template CantonLendingService
           None -> pure ()
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
+        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
         let cfg = getConfig CTN_SMUSD configs
         assertMsg "SMUSD_NOT_ENABLED" cfg.enabled
 
@@ -726,6 +746,8 @@ template CantonLendingService
             amount = smusd.shares
             depositedAt = now
             lastUpdatedAt = now
+            originalSourceChain = None
+            originalCctpNonce = None
             privacyObservers = userObs
 
         newService <- create this with {}
@@ -828,6 +850,10 @@ template CantonLendingService
         -- Accrue interest first
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = user
 
+        -- FIX DAML-002: Atomically couple BurnRateLimiter with CantonMUSD_Burn.
+        -- Both execute in same DAML transaction — if rate limit exceeded, burn rolls back.
+        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
+          burnAmount = musd.amount
         -- Burn the mUSD (repayment)
         exercise musdCid CantonMUSD_Burn
 
@@ -998,13 +1024,17 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
+        -- FIX DAML-017: Restore original USDCx provenance from escrowed metadata.
+        -- Note: issuer must remain `operator` due to DAML signatory constraints —
+        -- the lending service cannot create contracts signed by the original xReserve issuer.
+        -- sourceChain and cctpNonce ARE restored to preserve provenance trail.
         userObs <- lookupUserObservers operator user
         usdcxCid <- create USDCx with
           issuer = operator
           owner = user
           amount = withdrawAmount
-          sourceChain = "canton-lending-withdrawal"
-          cctpNonce = 0
+          sourceChain = fromOptional "canton-lending-withdrawal" escrow.originalSourceChain
+          cctpNonce = fromOptional 0 escrow.originalCctpNonce
           privacyObservers = userObs
 
         newService <- create this with {}
@@ -1141,6 +1171,9 @@ template CantonLendingService
         newDebtCid <- exercise accruedDebtCid Debt_ReduceForLiquidation with
           reductionAmount = actualRepay
 
+        -- FIX DAML-002: Atomically couple BurnRateLimiter with CantonMUSD_Burn
+        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
+          burnAmount = actualRepay
         -- FIX C-L3: Split mUSD if liquidator provided more than actualRepay, refund change
         if musd.amount > actualRepay then do
           (burnCid, changeCid) <- exercise musdCid CantonMUSD_Split with
@@ -1170,12 +1203,14 @@ template CantonLendingService
               privacyObservers = userObs
             pure ()
           CTN_USDCx -> do
+            -- FIX DAML-017: Restore original USDCx provenance from escrowed metadata.
+            -- issuer remains operator due to DAML signatory constraints.
             create USDCx with
               issuer = operator
               owner = liquidator
               amount = actualSeize
-              sourceChain = "canton-lending-seizure"
-              cctpNonce = 0
+              sourceChain = fromOptional "canton-lending-seizure" targetEscrow.originalSourceChain
+              cctpNonce = fromOptional 0 targetEscrow.originalCctpNonce
               privacyObservers = userObs
             pure ()
           CTN_SMUSD -> do

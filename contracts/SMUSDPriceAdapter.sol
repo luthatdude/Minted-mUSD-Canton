@@ -78,6 +78,9 @@ contract SMUSDPriceAdapter is AccessControl {
 
         smusd = _smusd;
         _roundId = 1;
+        // FIX SOL-002: Initialize _lastPrice to prevent rate limiter bypass on first query
+        _lastPrice = minSharePrice;
+        _lastPriceBlock = block.number;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(ADAPTER_ADMIN_ROLE, _admin);

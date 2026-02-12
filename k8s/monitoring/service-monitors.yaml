@@ -1,39 +1,60 @@
+# FIX INFRA-007: Ensure ServiceMonitor label selectors match actual Service/Deployment labels.
+# Each ServiceMonitor's selector.matchLabels must align with the metadata.labels on the
+# corresponding k8s Service so that Prometheus can discover and scrape the targets.
+#
+# FIX INFRA-006: All namespace references use "musd-canton" (not "musd") to match
+# the actual deployment namespace defined in k8s/base/namespace.yaml.
+
+# ──────────────────────────────────────────────────────────────
+# Relay Service Monitor
+# Requires a k8s Service with label "app.kubernetes.io/name: musd-relay"
+# and a port named "metrics". If the relay runs via docker-compose only,
+# deploy a headless Service + Endpoints pointing to the external relay host.
+# ──────────────────────────────────────────────────────────────
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: musd-relay
-  namespace: musd
+  namespace: musd-canton
   labels:
-    app: musd-relay
+    app.kubernetes.io/name: musd-relay
     release: prometheus
 spec:
   selector:
     matchLabels:
-      app: musd-relay
+      # INFRA-007: Must match the labels on the relay k8s Service
+      app.kubernetes.io/name: musd-relay
   endpoints:
     - port: metrics
       interval: 30s
       path: /metrics
   namespaceSelector:
     matchNames:
-      - musd
+      - musd-canton
 ---
+# ──────────────────────────────────────────────────────────────
+# Canton Participant Monitor
+# Targets the canton-participant Service (k8s/canton/participant-deployment.yaml)
+# which exposes port "metrics" (9090). The selector below matches the Service's
+# label: app.kubernetes.io/name: canton-participant
+# ──────────────────────────────────────────────────────────────
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: musd-canton
-  namespace: musd
+  namespace: musd-canton
   labels:
-    app: canton-participant
+    app.kubernetes.io/name: canton-participant
     release: prometheus
 spec:
   selector:
     matchLabels:
-      app: canton-participant
+      # INFRA-007: Matches canton-participant Service labels in participant-deployment.yaml
+      app.kubernetes.io/name: canton-participant
   endpoints:
     - port: metrics
       interval: 30s
       path: /metrics
   namespaceSelector:
     matchNames:
-      - musd
+      - musd-canton

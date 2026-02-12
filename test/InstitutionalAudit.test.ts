@@ -101,6 +101,9 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should re-enable circuit breaker", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
       await oracle.connect(admin).setCircuitBreakerEnabled(false);
+      // FIX H-04: Advance time past cooldown before toggling again
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
       await oracle.connect(admin).setCircuitBreakerEnabled(true);
       expect(await oracle.circuitBreakerEnabled()).to.be.true;
     });

@@ -1071,8 +1071,11 @@ contract TreasuryV2 is
      * @notice FIX T-H01: Request a timelocked upgrade
      * @param newImplementation Address of the new implementation contract
      */
+    /// @dev FIX C-01: Prevent overwriting a pending upgrade to block bait-and-switch attacks.
+    ///      Admin must cancelUpgrade() first before requesting a new one.
     function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(newImplementation != address(0), "ZERO_ADDRESS");
+        require(pendingImplementation == address(0), "UPGRADE_ALREADY_PENDING");
         pendingImplementation = newImplementation;
         upgradeRequestTime = block.timestamp;
         emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);

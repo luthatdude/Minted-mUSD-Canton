@@ -398,6 +398,8 @@ template BridgeOutRequest
 template ReserveTracker
   with
     operator : Party
+    -- FIX DAML-011: Governance party provides oversight of all reserve tracking mutations
+    governance : Party
     totalDeposited : Money      -- Total USDC ever deposited via Canton mint
     totalRedeemed : Money       -- Total USDC ever redeemed back
     totalBridgedOut : Money     -- Total successfully bridged to Ethereum
@@ -406,6 +408,8 @@ template ReserveTracker
     lastUpdated : Time
   where
     signatory operator
+    -- FIX DAML-011: Governance observer ensures all reserve changes are visible for audit
+    observer governance
 
     ensure totalDeposited >= 0.0
         && totalRedeemed >= 0.0
@@ -460,6 +464,37 @@ template ReserveTracker
           totalBridgedIn = totalBridgedIn + bridgeAmount
           lastUpdated = now
 
+    -- | FIX DAML-011: Governance-gated emergency reset for the ReserveTracker.
+    -- Allows admin to reset all accounting counters in case of discrepancies
+    -- between Canton and Ethereum state. Requires GovernanceActionLog proof.
+    -- Normal accounting choices (RecordDeposit, RecordRedemption, etc.) remain
+    -- operator-only as they are operational, not governance, actions.
+    choice Reserve_AdminReset : ContractId ReserveTracker
+      with
+        newTotalDeposited : Money
+        newTotalRedeemed : Money
+        newTotalBridgedOut : Money
+        newTotalBridgedIn : Money
+        newCantonMUSDSupply : Money
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        assertMsg "DEPOSITED_NON_NEGATIVE" (newTotalDeposited >= 0.0)
+        assertMsg "REDEEMED_NON_NEGATIVE" (newTotalRedeemed >= 0.0)
+        assertMsg "BRIDGED_OUT_NON_NEGATIVE" (newTotalBridgedOut >= 0.0)
+        assertMsg "BRIDGED_IN_NON_NEGATIVE" (newTotalBridgedIn >= 0.0)
+        assertMsg "SUPPLY_NON_NEGATIVE" (newCantonMUSDSupply >= 0.0)
+        now <- getTime
+        create this with
+          totalDeposited = newTotalDeposited
+          totalRedeemed = newTotalRedeemed
+          totalBridgedOut = newTotalBridgedOut
+          totalBridgedIn = newTotalBridgedIn
+          cantonMUSDSupply = newCantonMUSDSupply
+          lastUpdated = now
+
 -- ============================================================
 --                     SECTION 5: DIRECT MINT SERVICE
 -- ============================================================
@@ -498,9 +533,14 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
+    -- FIX DAML-019: Revoked minters retain redemption visibility via separate observer list.
+    -- When a minter is revoked from authorizedMinters, add them to redemptionObservers
+    -- so they can still see this service contract and exercise DirectMint_Redeem.
+    redemptionObservers : [Party]
   where
     signatory operator
-    observer usdcIssuer, authorizedMinters
+    -- FIX DAML-019: redemptionObservers included so revoked minters retain redemption visibility
+    observer usdcIssuer, authorizedMinters, redemptionObservers
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -691,6 +731,12 @@ template CantonDirectMintService
         let feeAmount = musd.amount * intToNumeric redeemFeeBps / 10000.0
         let netAmount = musd.amount - feeAmount
 
+        -- FIX DAML-002: Atomic coupling of BurnRateLimiter + CantonMUSD_Burn.
+        -- Both operations execute in the SAME DAML transaction (same `do` block),
+        -- guaranteeing atomicity: if the burn fails, rate-limit state rolls back,
+        -- and if the rate limit is exceeded, the burn never executes.
+        _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
+          burnAmount = musd.amount
         -- Burn the mUSD
         exercise musdCid CantonMUSD_Burn
 
@@ -803,6 +849,24 @@ template CantonDirectMintService
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with accumulatedFees = 0.0
+
+    -- FIX DAML-019: Add revoked minter to redemption observers for continued visibility
+    choice DirectMint_AddRedemptionObserver : ContractId CantonDirectMintService
+      with
+        party : Party
+      controller operator
+      do
+        archive self
+        create this with redemptionObservers = party :: redemptionObservers
+
+    -- FIX DAML-019: Remove party from redemption observers after all redemptions fulfilled
+    choice DirectMint_RemoveRedemptionObserver : ContractId CantonDirectMintService
+      with
+        party : Party
+      controller operator
+      do
+        archive self
+        create this with redemptionObservers = filter (/= party) redemptionObservers
 
 -- ============================================================
 --                     SECTION 6: REDEMPTION REQUEST

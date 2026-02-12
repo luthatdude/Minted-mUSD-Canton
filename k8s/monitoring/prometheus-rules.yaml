@@ -5,7 +5,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: musd-protocol-alerts
-  namespace: musd
+  namespace: musd-canton
   labels:
     app: musd-relay
     release: prometheus
@@ -197,7 +197,7 @@ spec:
             summary: "Container {{ $labels.container }} CPU at {{ $value | humanizePercentage }}"
 
         - alert: PodRestartLoop
-          expr: rate(kube_pod_container_status_restarts_total{namespace="musd"}[15m]) > 0.1
+          expr: rate(kube_pod_container_status_restarts_total{namespace="musd-canton"}[15m]) > 0.1
           for: 5m
           labels:
             severity: warning
@@ -207,7 +207,7 @@ spec:
             description: "{{ $value }} restarts/min. Check logs for crash cause."
 
         - alert: PVCNearlyFull
-          expr: kubelet_volume_stats_used_bytes{namespace="musd"} / kubelet_volume_stats_capacity_bytes > 0.85
+          expr: kubelet_volume_stats_used_bytes{namespace="musd-canton"} / kubelet_volume_stats_capacity_bytes > 0.85
           for: 10m
           labels:
             severity: warning
@@ -272,7 +272,7 @@ spec:
             description: "The DeFi pool alert service has been unreachable for >5 minutes. New pool notifications are not being sent."
 
         - alert: BotHighRestartRate
-          expr: rate(kube_pod_container_status_restarts_total{namespace="musd", container=~"liquidation-bot|oracle-keeper|pendle-sniper|pool-alerts"}[30m]) > 0.1
+          expr: rate(kube_pod_container_status_restarts_total{namespace="musd-canton", container=~"liquidation-bot|oracle-keeper|pendle-sniper|pool-alerts"}[30m]) > 0.1
           for: 5m
           labels:
             severity: warning

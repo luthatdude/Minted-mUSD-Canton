@@ -148,7 +148,7 @@ function loadConfig(): AlertConfig {
   return {
     rpcUrl: process.env.RPC_URL,
     wsRpcUrl: process.env.WS_RPC_URL,
-    chainId: parseInt(process.env.CHAIN_ID || "1"),
+    chainId: parseInt(process.env.CHAIN_ID || "1", 10),
 
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
     telegramChatId: process.env.TELEGRAM_CHAT_ID!,
@@ -159,7 +159,7 @@ function loadConfig(): AlertConfig {
 
     ptOnlyFilter: process.env.PT_ONLY_FILTER !== "false", // default ON for Aave/Morpho
 
-    pollIntervalMs: parseInt(process.env.ALERT_POLL_INTERVAL_MS || "15000"),
+    pollIntervalMs: parseInt(process.env.ALERT_POLL_INTERVAL_MS || "15000", 10),
   };
 }
 
@@ -232,7 +232,7 @@ class PoolAlertBot {
     this.config = config;
     // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
     const fetchReq = new ethers.FetchRequest(config.rpcUrl);
-    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000");
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
     this.httpProvider = new ethers.JsonRpcProvider(fetchReq, undefined, {
       staticNetwork: true,
       batchMaxCount: 1,

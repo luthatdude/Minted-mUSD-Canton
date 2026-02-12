@@ -14,6 +14,18 @@
 import { ethers } from "ethers";
 import { readSecret, readAndValidatePrivateKey } from "./utils";
 
+// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL: Unhandled promise rejection:', reason);
+  process.exit(1);
+});
+
+// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+process.on('uncaughtException', (error) => {
+  console.error('FATAL: Uncaught exception:', error);
+  process.exit(1);
+});
+
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
@@ -36,6 +48,15 @@ const DEFAULT_CONFIG: KeeperConfig = {
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
 };
+
+// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+if (DEFAULT_CONFIG.ethereumRpcUrl && DEFAULT_CONFIG.ethereumRpcUrl.startsWith('http://') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('localhost') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('127.0.0.1')) {
+  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
+}
+// FIX BE-004: Reject insecure HTTP transport in production
+if (process.env.NODE_ENV === 'production' && DEFAULT_CONFIG.ethereumRpcUrl && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('https://') && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('wss://')) {
+  throw new Error('FIX BE-004: Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
+}
 
 // FIX BE-H05: Validate Treasury address at startup
 if (DEFAULT_CONFIG.treasuryAddress && !ethers.isAddress(DEFAULT_CONFIG.treasuryAddress)) {

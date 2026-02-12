@@ -21,6 +21,18 @@ import * as path from "path";
 
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
+// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL: Unhandled promise rejection:', reason);
+  process.exit(1);
+});
+
+// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+process.on('uncaughtException', (error) => {
+  console.error('FATAL: Uncaught exception:', error);
+  process.exit(1);
+});
+
 const logger = createLogger({
   level: "info",
   format: format.combine(
@@ -464,6 +476,20 @@ async function main(): Promise<void> {
     logger.info("  GET /health              — Health check");
   });
 }
+
+// FIX BE-009: Graceful shutdown handlers
+const gracefulShutdown = (signal: string) => {
+  logger.info(`${signal} received. Shutting down gracefully...`);
+  server.close(() => {
+    logger.info('HTTP server closed.');
+    process.exit(0);
+  });
+  // Force exit after 10s if server hasn't closed
+  setTimeout(() => process.exit(0), 10_000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 main().catch((err) => {
   logger.error(`Fatal: ${err.message}`);

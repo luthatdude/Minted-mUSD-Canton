@@ -27,7 +27,7 @@ module CantonLoopStrategy where
 import DA.Time
 import DA.Optional (fromOptional)
 import DA.Foldable (forA_)
-import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps)
+import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
@@ -48,6 +48,7 @@ data LoopConfig = LoopConfig with
     maxLoops             : Int          -- Maximum loop iterations (default 5)
     minHealthFactorBps   : Bps          -- Min health factor before each loop (11500 = 115%)
     targetLtvBps         : Bps          -- Target LTV per loop (9000 = 90% for sMUSD collateral)
+    liquidationThresholdBps : Bps       -- FIX DAML-003: Configurable liquidation threshold (was hardcoded 9300)
     minLoopAmountMusd    : Money        -- Minimum mUSD per loop to avoid dust
     borrowFeeBps         : Bps          -- Expected borrow fee per loop
     cooldownCheckEnabled : Bool         -- Whether to check sMUSD cooldown before unstaking
@@ -58,6 +59,7 @@ defaultLoopConfig = LoopConfig with
     maxLoops = 5
     minHealthFactorBps = 11500       -- 115% min health factor
     targetLtvBps = 9000              -- 90% LTV (sMUSD collateral)
+    liquidationThresholdBps = 9300   -- FIX DAML-003: 93% sMUSD liquidation threshold (from CollateralConfig)
     minLoopAmountMusd = 10.0         -- 10 mUSD minimum per loop
     borrowFeeBps = 0                 -- No upfront fee (interest accrues)
     cooldownCheckEnabled = True
@@ -77,6 +79,7 @@ template CantonLoopStrategyConfig
 
     ensure config.maxLoops >= 1 && config.maxLoops <= 10
         && config.targetLtvBps >= 1000 && config.targetLtvBps <= 9500
+        && config.liquidationThresholdBps >= 5000 && config.liquidationThresholdBps <= 9900  -- FIX DAML-003
         && config.minHealthFactorBps >= 11000 && config.minHealthFactorBps <= 30000
         && config.minLoopAmountMusd >= 1.0
 
@@ -212,14 +215,12 @@ template CantonLoopPosition
         -- FIX D-H01: On-ledger health factor check before recording loop
         let newTotalStaked = totalStaked + musdStaked
         let newTotalBorrowed = totalBorrowed + musdBorrowed
-        -- FIX DAML-C08: Precision-preserving conversion from Money (Numeric 18) to Decimal (Numeric 10)
-        -- Previous code used intToDecimal(truncate x) which drops all sub-unit precision
-        -- Now divide by 1.0 to coerce Numeric 18 → Decimal (Numeric 10) preserving fractional values
-        let scale : Numeric 18 = 1.0
-        let stakedDec : Decimal = intToDecimal (truncate (newTotalStaked * 1000000.0)) / 1000000.0
-        let borrowedDec : Decimal = intToDecimal (truncate (newTotalBorrowed * 1000000.0)) / 1000000.0
-        let healthFactor = calculateHealthFactor stakedDec 9300 borrowedDec
-        let minHF = intToDecimal config.minHealthFactorBps / 10000.0
+        -- FIX DAML-009: Use Money (Numeric 18) directly for full 18-decimal precision.
+        -- Previous approach converted to Decimal (Numeric 10) via 10^10 scaling, losing 8 decimals.
+        -- Now operates entirely in Money space — no truncation, no precision loss.
+        -- FIX DAML-003: Use config-defined liquidation threshold instead of hardcoded 9300
+        let healthFactor = calculateHealthFactorMoney newTotalStaked config.liquidationThresholdBps newTotalBorrowed
+        let minHF : Money = intToNumeric config.minHealthFactorBps / 10000.0
         assertMsg "HEALTH_FACTOR_TOO_LOW" (healthFactor >= minHF)
 
         now <- getTime
@@ -385,10 +386,13 @@ template CantonLoopUnwindRequest
           )
 
         -- FIX LS-PROOF: Burn mUSD to prove debt repayment
+        -- FIX DAML-002: Atomically couple BurnRateLimiter with CantonMUSD_Burn
         case musdToBurn of
           Some musdCid -> do
             musd <- fetch musdCid
             assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == position.operator || musd.owner == position.user)
+            _ <- exerciseByKey @BurnRateLimiter position.operator BurnLimit_RecordBurn with
+              burnAmount = musd.amount
             exercise musdCid CantonMUSD_Burn
           None ->
             -- No mUSD to burn is only valid if there was no debt
@@ -452,13 +456,27 @@ calculateNetAPY stakingRate borrowRate leverage =
 -- healthFactor = (collateralValue × liquidationThreshold) / debtValue
 -- Must be > minHealthFactor before each new loop
 -- Uses Decimal (Numeric 10) to avoid Money (Numeric 18) type mismatch
+-- FIX DAML-009: Reordered to multiply before dividing, maximizing intermediate precision.
+-- Previously: (collateralValue * (thresholdBps / 10000)) / debtValue — intermediate division loses bits
+-- Now: (collateralValue * thresholdBps) / (debtValue * 10000) — multiplies first, divides last
 calculateHealthFactor : Decimal -> Bps -> Decimal -> Decimal
 calculateHealthFactor collateralValue liquidationThresholdBps debtValue =
   if debtValue <= 0.0
     then 999.0  -- No debt = infinite health
     else
-      let threshold = intToDecimal liquidationThresholdBps / 10000.0
-      in  (collateralValue * threshold) / debtValue
+      let threshold = intToDecimal liquidationThresholdBps
+      in  (collateralValue * threshold) / (debtValue * 10000.0)
+
+-- FIX DAML-009: Full 18-decimal precision health factor calculation using Money (Numeric 18).
+-- Avoids lossy Money → Decimal (Numeric 10) conversion that truncates 8 decimal places.
+-- Use this instead of calculateHealthFactor when operating on Money-typed collateral/debt values.
+calculateHealthFactorMoney : Money -> Bps -> Money -> Money
+calculateHealthFactorMoney collateralValue liquidationThresholdBps debtValue =
+  if debtValue <= 0.0
+    then 999.0  -- No debt = infinite health
+    else
+      let threshold : Money = intToNumeric liquidationThresholdBps
+      in  (collateralValue * threshold) / (debtValue * 10000.0)
 
 -- ============================================================
 --                     SECTION 6: LOOP STRATEGY TEMPLATES
@@ -500,8 +518,9 @@ data StrategyEstimate = StrategyEstimate with
   deriving (Eq, Show)
 
 -- | Calculate strategy estimate for frontend display
-estimateStrategy : LoopStrategy -> Money -> Int -> Decimal -> Decimal -> StrategyEstimate
-estimateStrategy strat deposit loops stakingRate borrowRate =
+-- FIX DAML-003: Accept LoopConfig parameter to avoid hardcoded default liquidation threshold
+estimateStrategy : LoopStrategy -> LoopConfig -> Money -> Int -> Decimal -> Decimal -> StrategyEstimate
+estimateStrategy strat cfg deposit loops stakingRate borrowRate =
   let
     ltv = 0.9  -- 90% for sMUSD collateral
     leverage = calculateLeverage ltv loops
@@ -512,7 +531,8 @@ estimateStrategy strat deposit loops stakingRate borrowRate =
     -- After all loops: total staked ≈ deposit × leverage, total borrowed ≈ deposit × (leverage - 1)
     totalStaked = depositDec * leverage
     totalBorrowed = depositDec * (leverage - 1.0)
-    healthFactor = calculateHealthFactor totalStaked 9300 totalBorrowed
+    -- FIX DAML-003: Use config-defined liquidation threshold from provided LoopConfig
+    healthFactor = calculateHealthFactor totalStaked cfg.liquidationThresholdBps totalBorrowed
   in StrategyEstimate with
     strategy = strat
     initialDeposit = deposit
