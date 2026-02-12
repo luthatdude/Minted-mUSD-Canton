@@ -787,76 +787,8 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
   // ═════════════════════════════════════════════════════════════════════
   // Upgrade timelock — _authorizeUpgrade paths
   // ═════════════════════════════════════════════════════════════════════
-  describe("_authorizeUpgrade — full paths", function () {
-    it("rejects upgrade when timelock is still active", async function () {
-      const { selector, admin, PendleMarketSelector } =
-        await loadFixture(deployFullFixture);
-
-      const newImpl = await PendleMarketSelector.deploy();
-      const newImplAddr = await newImpl.getAddress();
-
-      await selector.connect(admin).requestUpgrade(newImplAddr);
-
-      // Try to upgrade immediately (within 48h timelock)
-      await expect(
-        upgrades.upgradeProxy(await selector.getAddress(), PendleMarketSelector, {
-          call: { fn: "initialize", args: [admin.address] },
-        })
-      ).to.be.reverted;
-    });
-
-    it("rejects upgrade with wrong implementation address", async function () {
-      const { selector, admin, PendleMarketSelector } =
-        await loadFixture(deployFullFixture);
-
-      const requestedImpl = await PendleMarketSelector.deploy();
-      await selector.connect(admin).requestUpgrade(await requestedImpl.getAddress());
-
-      // Advance past timelock
-      await time.increase(48 * 3600 + 1);
-
-      // Deploy a DIFFERENT implementation and try to upgrade to it
-      const wrongImpl = await PendleMarketSelector.deploy();
-      // The proxy's _authorizeUpgrade will check pendingImplementation != wrongImpl
-      // This should revert with UPGRADE_NOT_REQUESTED
-      // We can't easily test this through upgrades.upgradeProxy since it deploys
-      // its own impl. Instead, test the low-level call.
-      // The requestUpgrade/cancelUpgrade flow is what matters for coverage.
-    });
-
-    it("cancel clears pending state", async function () {
-      const { selector, admin } = await loadFixture(deployFullFixture);
-      const impl = ethers.Wallet.createRandom().address;
-
-      await selector.connect(admin).requestUpgrade(impl);
-      expect(await selector.pendingImplementation()).to.equal(impl);
-      expect(await selector.upgradeRequestTime()).to.be.gt(0);
-
-      await selector.connect(admin).cancelUpgrade();
-      expect(await selector.pendingImplementation()).to.equal(ethers.ZeroAddress);
-      expect(await selector.upgradeRequestTime()).to.equal(0);
-    });
-
-    it("cancel allows new request after cancellation", async function () {
-      const { selector, admin } = await loadFixture(deployFullFixture);
-      const impl1 = ethers.Wallet.createRandom().address;
-      const impl2 = ethers.Wallet.createRandom().address;
-
-      await selector.connect(admin).requestUpgrade(impl1);
-      await selector.connect(admin).cancelUpgrade();
-
-      // Should succeed now
-      await expect(selector.connect(admin).requestUpgrade(impl2))
-        .to.emit(selector, "UpgradeRequested");
-      expect(await selector.pendingImplementation()).to.equal(impl2);
-    });
-
-    it("rejects cancelUpgrade from non-admin", async function () {
-      const { selector, admin, user1 } = await loadFixture(deployFullFixture);
-      await selector.connect(admin).requestUpgrade(ethers.Wallet.createRandom().address);
-      await expect(selector.connect(user1).cancelUpgrade()).to.be.reverted;
-    });
-  });
+  // _authorizeUpgrade tests removed — now uses onlyTimelock via MintedTimelockController
+  // (no more requestUpgrade/cancelUpgrade/pendingImplementation/upgradeRequestTime).
 
   // ═════════════════════════════════════════════════════════════════════
   // Constants & view getters
@@ -887,9 +819,9 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
       expect(await selector.MAX_WHITELISTED_MARKETS()).to.equal(100);
     });
 
-    it("UPGRADE_DELAY is 48 hours", async function () {
-      const { selector } = await loadFixture(deployFullFixture);
-      expect(await selector.UPGRADE_DELAY()).to.equal(48 * 3600);
+    it("timelock is set correctly", async function () {
+      const { selector, admin } = await loadFixture(deployFullFixture);
+      expect(await selector.timelock()).to.equal(admin.address);
     });
 
     it("default params are set correctly after initialize", async function () {

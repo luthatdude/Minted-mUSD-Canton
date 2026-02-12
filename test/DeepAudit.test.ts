@@ -90,15 +90,15 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy InterestRateModel (constructor takes admin address)
     const IRMF = await ethers.getContractFactory("InterestRateModel");
-    interestRateModel = await IRMF.deploy(admin.address);
+    interestRateModel = await IRMF.deploy(admin.address, admin.address);
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
-    priceOracle = await POF.deploy();
+    priceOracle = await POF.deploy(admin.address);
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(admin.address);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -107,11 +107,12 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       admin.address, // placeholder vault — will update later
       admin.address,
       admin.address, // fee recipient
+      admin.address
     ]);
 
     // Deploy SMUSD (constructor takes IERC20 _musd)
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), admin.address);
 
     // Deploy BorrowModule (constructor: vault, oracle, musd, interestRateBps, minDebt)
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -120,7 +121,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% fixed fallback rate
-      ethers.parseEther("100") // 100 mUSD min debt
+      ethers.parseEther("100"), // 100 mUSD min debt
+      admin.address
     );
 
     // Deploy DirectMintV2 (constructor: usdc, musd, treasury, feeRecipient)
@@ -129,7 +131,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      admin.address // fee recipient
+      admin.address, // fee recipient
+      admin.address
     );
 
     // Deploy LiquidationEngine (constructor: vault, borrowModule, oracle, musd, closeFactorBps)
@@ -139,7 +142,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000 // 50% close factor
+      5000, // 50% close factor
+      admin.address
     );
 
     // Deploy MockStrategy (constructor: asset, treasury)
@@ -365,7 +369,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const MockERC20F = await ethers.getContractFactory("MockERC20");
       const extraToken = await MockERC20F.deploy("Extra", "EXT", 18);
       await expect(
-        vault.requestAddCollateral(await extraToken.getAddress(), 7000, 7500, 500)
+        vault.addCollateral(await extraToken.getAddress(), 7000, 7500, 500)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
   });
@@ -883,6 +887,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         await musd.getAddress(),
         11000, // 110% collateral ratio
         ethers.parseEther("1000000"), // 1M daily limit
+        admin.address
       ]);
 
       const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));

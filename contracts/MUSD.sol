@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Fixed Version V2
 // Added: CAP_MANAGER_ROLE for BLEBridgeV9 supply cap updates
 

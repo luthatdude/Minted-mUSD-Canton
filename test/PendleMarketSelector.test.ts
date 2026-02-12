@@ -63,7 +63,7 @@ describe("PendleMarketSelector", function () {
     it("Should not allow re-initialization", async function () {
       const { selector, user1 } = await loadFixture(deployFixture);
 
-      await expect(selector.initialize(user1.address)).to.be.reverted;
+      await expect(selector.initialize(user1.address, user1.address)).to.be.reverted;
     });
   });
 
@@ -319,11 +319,8 @@ describe("PendleMarketSelector", function () {
       await selector.connect(marketAdmin).whitelistMarket(await market1.getAddress(), "USD");
       expect(await selector.isWhitelisted(await market1.getAddress())).to.be.true;
 
-      // Upgrade with timelock
+      // Upgrade via timelock (admin IS the timelock in tests)
       const PendleMarketSelectorV2 = await ethers.getContractFactory("PendleMarketSelector");
-      const newImpl = await upgrades.prepareUpgrade(await selector.getAddress(), PendleMarketSelectorV2) as string;
-      await selector.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600);
       const upgraded = await upgrades.upgradeProxy(await selector.getAddress(), PendleMarketSelectorV2);
 
       // Check state preserved
@@ -356,10 +353,7 @@ describe("PendleMarketSelector", function () {
       // Deploy V2
       const PendleMarketSelectorV2 = await ethers.getContractFactory("PendleMarketSelector");
       
-      // Upgrade with timelock
-      const newImpl = await upgrades.prepareUpgrade(await selector.getAddress(), PendleMarketSelectorV2) as string;
-      await selector.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600);
+      // Upgrade via timelock (admin IS the timelock in tests)
       const upgraded = await upgrades.upgradeProxy(await selector.getAddress(), PendleMarketSelectorV2);
       expect(await upgraded.getAddress()).to.equal(await selector.getAddress());
     });

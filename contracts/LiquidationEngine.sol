@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Liquidation Engine
 // Liquidates undercollateralized positions in the borrowing system
 

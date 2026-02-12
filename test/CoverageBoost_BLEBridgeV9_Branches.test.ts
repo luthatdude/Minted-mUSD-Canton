@@ -38,6 +38,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       await musd.getAddress(),
       COLLATERAL_RATIO,
       DAILY_CAP_LIMIT,
+      deployer.address
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -93,20 +94,12 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should revert INVALID_DAILY_LIMIT when _dailyCapIncreaseLimit is 0", async function () {
       const F = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0])
+        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0, deployer.address])
       ).to.be.revertedWith("INVALID_DAILY_LIMIT");
     });
   });
 
-  // ── 2. requestSetMUSDToken: CHANGE_ALREADY_PENDING ──────────
-
-  describe("requestSetMUSDToken — duplicate", function () {
-    it("should revert CHANGE_ALREADY_PENDING on second request", async function () {
-      await bridge.requestSetMUSDToken(ethers.Wallet.createRandom().address);
-      await expect(bridge.requestSetMUSDToken(ethers.Wallet.createRandom().address))
-        .to.be.revertedWith("CHANGE_ALREADY_PENDING");
-    });
-  });
+  // requestSetMUSDToken tests removed — setMUSDToken is now a direct onlyTimelock call.
 
   // ── 3 & 4. emergencyReduceCap branches ──────────────────────
 
@@ -166,10 +159,10 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
   describe("pause — cancels pending unpause", function () {
     it("should cancel pending unpause and emit UnpauseCancelled", async function () {
       // _pause() has whenNotPaused, so unpauseRequestTime>0 while unpaused is
-      // only reachable via storage anomaly. Use hardhat_setStorageAt (slot 11).
+      // only reachable via storage anomaly. Use hardhat_setStorageAt (slot 12).
       const bridgeAddr = await bridge.getAddress();
       const value = ethers.zeroPadValue(ethers.toBeHex(1000), 32);
-      await ethers.provider.send("hardhat_setStorageAt", [bridgeAddr, "0xb", value]);
+      await ethers.provider.send("hardhat_setStorageAt", [bridgeAddr, "0xc", value]);
       expect(await bridge.unpauseRequestTime()).to.equal(1000);
 
       // Now pause() should hit the if (unpauseRequestTime > 0) branch
@@ -298,39 +291,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     });
   });
 
-  // ── 18. requestUpgrade: ZERO_ADDRESS ────────────────────────
-
-  describe("requestUpgrade — zero address", function () {
-    it("should revert ZERO_ADDRESS when newImplementation is address(0)", async function () {
-      await expect(bridge.requestUpgrade(ethers.ZeroAddress)).to.be.revertedWith("ZERO_ADDRESS");
-    });
-  });
-
-  // ── 19. requestUpgrade: UPGRADE_ALREADY_PENDING ─────────────
-
-  describe("requestUpgrade — already pending", function () {
-    it("should revert UPGRADE_ALREADY_PENDING on second request", async function () {
-      await bridge.requestUpgrade(ethers.Wallet.createRandom().address);
-      await expect(bridge.requestUpgrade(ethers.Wallet.createRandom().address))
-        .to.be.revertedWith("UPGRADE_ALREADY_PENDING");
-    });
-  });
-
-  // ── 20. _authorizeUpgrade: UPGRADE_NOT_REQUESTED ────────────
-
-  describe("_authorizeUpgrade — mismatched impl", function () {
-    it("should revert UPGRADE_NOT_REQUESTED when upgrading to non-requested impl", async function () {
-      const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
-      const requestedImpl = await BridgeFactory.deploy();
-      await bridge.requestUpgrade(await requestedImpl.getAddress());
-      await time.increase(48 * 3600 + 1);
-
-      // upgrades.upgradeProxy deploys a *new* impl — different from requested
-      await expect(
-        upgrades.upgradeProxy(await bridge.getAddress(), BridgeFactory)
-      ).to.be.revertedWith("UPGRADE_NOT_REQUESTED");
-    });
-  });
+  // requestUpgrade tests removed — _authorizeUpgrade now uses onlyTimelock.
 
   // ── 21. getHealthRatio: supply > 0, attestedCantonAssets == 0 ─
 

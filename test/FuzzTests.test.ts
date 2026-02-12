@@ -41,7 +41,7 @@ describe("FUZZ: InterestRateModel", function () {
   async function deployFixture() {
     const [admin] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("InterestRateModel");
-    const model = await Factory.deploy(admin.address);
+    const model = await Factory.deploy(admin.address, admin.address);
     return { model };
   }
 
@@ -148,7 +148,7 @@ describe("FUZZ: PriceOracle", function () {
     const [admin] = await ethers.getSigners();
 
     const OracleFactory = await ethers.getContractFactory("PriceOracle");
-    const oracle = await OracleFactory.deploy();
+    const oracle = await OracleFactory.deploy(admin.address);
 
     const MockFeedFactory = await ethers.getContractFactory("MockAggregatorV3");
 
@@ -222,7 +222,7 @@ describe("FUZZ: SMUSD ERC-4626 Properties", function () {
     const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);
@@ -356,7 +356,7 @@ describe("FUZZ: LiquidationEngine", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy();
+    const priceOracle = await PriceOracle.deploy(owner.address);
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
@@ -364,7 +364,7 @@ describe("FUZZ: LiquidationEngine", function () {
     await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(owner.address);
 
     await timelockAddCollateral(
       collateralVault, owner,
@@ -382,7 +382,8 @@ describe("FUZZ: LiquidationEngine", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100")
+      ethers.parseEther("100"),
+      owner.address
     );
 
     const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
@@ -391,7 +392,8 @@ describe("FUZZ: LiquidationEngine", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000
+      5000,
+      owner.address
     );
 
     // Grant roles
@@ -518,7 +520,7 @@ describe("FUZZ: Arithmetic Edge Cases", function () {
   it("FUZZ: very large deposit amounts don't overflow in InterestRateModel", async function () {
     const [admin] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("InterestRateModel");
-    const model = await Factory.deploy(admin.address);
+    const model = await Factory.deploy(admin.address, admin.address);
 
     for (let i = 0; i < FUZZ_RUNS; i++) {
       // Large values near uint128 range
@@ -541,7 +543,7 @@ describe("FUZZ: Arithmetic Edge Cases", function () {
     const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.connect(bridge).mint(user1.address, ethers.parseEther("10000000"));

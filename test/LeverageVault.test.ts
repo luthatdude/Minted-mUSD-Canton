@@ -41,7 +41,7 @@ describe('LeverageVault', function () {
 
     // Deploy price oracle
     const PriceOracle = await ethers.getContractFactory('PriceOracle');
-    priceOracle = await PriceOracle.deploy();
+    priceOracle = await PriceOracle.deploy(owner.address);
 
     // Configure price oracle (token, feed, stalePeriod, tokenDecimals)
     await timelockSetFeed(
@@ -54,7 +54,7 @@ describe('LeverageVault', function () {
 
     // Deploy collateral vault
     const CollateralVault = await ethers.getContractFactory('CollateralVault');
-    collateralVault = await CollateralVault.deploy();
+    collateralVault = await CollateralVault.deploy(owner.address);
 
     // Add WETH as collateral (75% LTV, 80% liquidation threshold, 5% penalty)
     await timelockAddCollateral(
@@ -78,7 +78,8 @@ describe('LeverageVault', function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       200, // 2% APR
-      ethers.parseEther('10') // Min debt 10 mUSD
+      ethers.parseEther('10'), // Min debt 10 mUSD
+      owner.address
     );
 
     // Grant BORROW_MODULE_ROLE to BorrowModule
@@ -104,7 +105,8 @@ describe('LeverageVault', function () {
       await collateralVault.getAddress(),
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
-      await musd.getAddress()
+      await musd.getAddress(),
+      owner.address
     );
 
     // Grant LEVERAGE_VAULT_ROLE to LeverageVault in CollateralVault and BorrowModule
@@ -377,36 +379,19 @@ describe('LeverageVault', function () {
       // Send some tokens directly to the contract
       await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
 
-      // FIX V3-AUDIT: Emergency withdraw now requires request → 48h wait → execute
-      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
-
-      // Should revert before timelock expires
-      await expect(leverageVault.executeEmergencyWithdraw()).to.be.revertedWith('TIMELOCK_ACTIVE');
-
-      // Advance time past 48h
-      await ethers.provider.send('evm_increaseTime', [48 * 3600 + 1]);
-      await ethers.provider.send('evm_mine', []);
-
+      // emergencyWithdraw is now a direct onlyTimelock call (owner IS the timelock in tests)
       const balanceBefore = await weth.balanceOf(owner.address);
-      await leverageVault.executeEmergencyWithdraw();
+      await leverageVault.emergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'), owner.address);
       const balanceAfter = await weth.balanceOf(owner.address);
 
       expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther('5'));
     });
 
-    it('should allow cancelling emergency withdraw', async function () {
+    it('should reject emergency withdraw from non-timelock', async function () {
       await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
-      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
-      await leverageVault.cancelEmergencyWithdraw();
-      await expect(leverageVault.executeEmergencyWithdraw()).to.be.revertedWith('NO_PENDING_WITHDRAW');
-    });
-
-    it('should reject duplicate emergency withdraw request', async function () {
-      await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
-      await leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));
       await expect(
-        leverageVault.requestEmergencyWithdraw(await weth.getAddress(), ethers.parseEther('1'))
-      ).to.be.revertedWith('WITHDRAW_ALREADY_PENDING');
+        leverageVault.connect(user).emergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'), user.address)
+      ).to.be.reverted;
     });
   });
 

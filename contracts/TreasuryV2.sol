@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -764,7 +764,7 @@ contract TreasuryV2 is
  /**
  * @notice Claim accrued protocol fees
  */
- function claimFees() external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+ function claimFees() external nonReentrant onlyTimelock {
  _accrueFees();
 
  uint256 toClaim = fees.accruedFees;
@@ -1073,7 +1073,7 @@ contract TreasuryV2 is
  /**
  * @notice Update minimum auto-allocate amount
  */
- function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setMinAutoAllocate(uint256 _minAmount) external onlyTimelock {
  require(_minAmount > 0, "ZERO_MIN_AMOUNT");
  uint256 oldAmount = minAutoAllocateAmount;
  minAutoAllocateAmount = _minAmount;
@@ -1100,7 +1100,7 @@ contract TreasuryV2 is
  /**
  * @notice Emergency token recovery (not the primary asset)
  */
- function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function recoverToken(address token, uint256 amount) external onlyTimelock {
  require(token != address(asset), "CANNOT_RECOVER_ASSET");
  IERC20(token).safeTransfer(msg.sender, amount);
  }

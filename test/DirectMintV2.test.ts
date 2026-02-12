@@ -7,7 +7,6 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
-import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { timelockSetFees, timelockSetFeeRecipient, timelockSetLimits } from "./helpers/timelock";
 
 describe("DirectMintV2", function () {
@@ -43,7 +42,8 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       deployer.address, // vault placeholder
       deployer.address, // admin
-      feeRecipient.address
+      feeRecipient.address,
+      deployer.address
     ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
@@ -53,7 +53,8 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      feeRecipient.address
+      feeRecipient.address,
+      deployer.address
     );
     await directMint.waitForDeployment();
 
@@ -86,11 +87,11 @@ describe("DirectMintV2", function () {
       const DirectMintFactory = await ethers.getContractFactory("DirectMintV2");
       
       await expect(
-        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address)
+        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address, deployer.address)
       ).to.be.revertedWith("INVALID_USDC");
 
       await expect(
-        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address)
+        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address, deployer.address)
       ).to.be.revertedWith("INVALID_MUSD");
     });
   });
@@ -224,9 +225,7 @@ describe("DirectMintV2", function () {
 
   describe("Fee Management", function () {
     it("Should allow fee manager to update fees", async function () {
-      await directMint.requestFees(50, 75); // 0.5% mint, 0.75% redeem
-      await time.increase(48 * 3600);
-      await expect(directMint.executeFees())
+      await expect(directMint.setFees(50, 75)) // 0.5% mint, 0.75% redeem
         .to.emit(directMint, "FeesUpdated")
         .withArgs(50, 75);
 
@@ -235,7 +234,7 @@ describe("DirectMintV2", function () {
     });
 
     it("Should reject fees above maximum", async function () {
-      await expect(directMint.requestFees(600, 0)) // 6% > 5% max
+      await expect(directMint.setFees(600, 0)) // 6% > 5% max
         .to.be.revertedWith("MINT_FEE_TOO_HIGH");
     });
 
@@ -260,9 +259,7 @@ describe("DirectMintV2", function () {
     it("Should update fee recipient", async function () {
       const newRecipient = user.address;
 
-      await directMint.requestFeeRecipient(newRecipient);
-      await time.increase(48 * 3600);
-      await expect(directMint.executeFeeRecipient())
+      await expect(directMint.setFeeRecipient(newRecipient))
         .to.emit(directMint, "FeeRecipientUpdated")
         .withArgs(feeRecipient.address, newRecipient);
 
@@ -285,7 +282,7 @@ describe("DirectMintV2", function () {
 
     it("Should reject invalid limits (min > max)", async function () {
       await expect(
-        directMint.requestLimits(1000, 100, 1, 1000) // min > max
+        directMint.setLimits(1000, 100, 1, 1000) // min > max
       ).to.be.revertedWith("INVALID_MINT_LIMITS");
     });
   });
@@ -297,7 +294,7 @@ describe("DirectMintV2", function () {
     });
 
     it("Should reject fee changes from non-fee-manager", async function () {
-      await expect(directMint.connect(user).requestFees(100, 100))
+      await expect(directMint.connect(user).setFees(100, 100))
         .to.be.reverted;
     });
 
