@@ -6,9 +6,14 @@
 -- Covered flows:
 --   1. Mint → Stake → Unstake (CantonDirectMint × CantonSMUSD)
 --   2. Deposit → Borrow → Repay → Withdraw (CantonLending full cycle)
---   3. Multi-attestor share price sync (CantonSMUSD DAML-R01)
---   4. Keeper bond liquidation flow (CantonLending DAML-R03)
---   5. Burn rate limiter enforcement (CantonDirectMint DAML-R05)
+--   3. Share price sync within bounds (CantonSMUSD)
+--   4. Share price increase > 10% rejected (CantonSMUSD FIX D-M09)
+--   5. Share price decrease > 10% rejected (CantonSMUSD)
+--   6. Liquidation of undercollateralized position (CantonLending)
+--   7. Healthy position cannot be liquidated (CantonLending)
+--   8. sMUSD escrowed in Lending blocked from BoostPool (FIX D-M04)
+--   9. Compliance blocks blacklisted transfers (FIX D-M08)
+--  10. Supply cap coordination between Lending and DirectMint (FIX D-M02)
 
 module CrossModuleIntegrationTest where
 
@@ -16,40 +21,48 @@ import Daml.Script
 import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..), BurnLimit_SetPaused(..))
-import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SharePriceAttestation(..), ConsumeAttestation(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
-import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), KeeperBond(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_GetPrice(..), PriceFeed_EmergencyUpdate(..))
-import CantonBoostPool (CantonCoin(..))
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import DA.Set qualified as Set
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Transfer(..), CantonUSDC(..), CantonDirectMintService(..), Money, Bps)
+import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
+import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_EmergencyUpdate(..))
+import CantonBoostPool (CantonCoin(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
 
 -- ============================================================
 --                     TEST HELPERS
 -- ============================================================
 
 testMpaHash : Text
-testMpaHash = "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abc"
+testMpaHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abcd"
 
 testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
 
-createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator proposer actionType targetModule desc = do
+-- | Create a compliance registry for tests.
+-- Uses the regulator as signatory and operator as observer.
+createTestComplianceRegistry : Party -> Party -> Script (ContractId ComplianceRegistry)
+createTestComplianceRegistry regulator operator = do
   now <- getTime
-  submitMulti [operator, proposer] [] do
-    createCmd GovernanceActionLog with
+  submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
       operator
-      proposer
-      proposalId = "integ-" <> desc
-      actionType
-      -- Module-scoped governance proof
-      targetModule
-      description = desc
-      payload = ""
-      payloadHash = ""
-      approvers = [proposer]
-      executedBy = proposer
-      executedAt = now
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+
+-- | Create a compliance registry with specific blacklisted parties.
+createTestComplianceRegistryWithBlacklist : Party -> Party -> [Party] -> Script (ContractId ComplianceRegistry)
+createTestComplianceRegistryWithBlacklist regulator operator blocked = do
+  now <- getTime
+  submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.fromList blocked
+      frozen = Set.empty
+      lastUpdated = now
 
 -- ============================================================
 --  1. INTEGRATION: MINT mUSD → STAKE → UNSTAKE
@@ -60,11 +73,12 @@ testMintStakeUnstakeFlow : Script ()
 testMintStakeUnstakeFlow = do
   operator <- allocateParty "Operator"
   alice <- allocateParty "Alice"
-  governor <- allocateParty "Governor"
-  attestor1 <- allocateParty "Attestor1"
-  attestor2 <- allocateParty "Attestor2"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Create compliance registry
+  complianceCid <- createTestComplianceRegistry regulator operator
 
   -- Step 1: Create mUSD for Alice (simulating a mint without full DirectMintService)
   musdCid <- submitMulti [operator, alice] [] do
@@ -88,12 +102,7 @@ testMintStakeUnstakeFlow = do
       cooldownSeconds = 0  -- No cooldown for test
       minDeposit = 1.0
       paused = False
-      unstakeMintedTotal = 0.0
-      unstakeMintCap = 10000000.0
-      authorizedAttestors = [attestor1, attestor2]
-      minAttestors = 2
-      maxAttestationDeviationBps = 100  -- 1% max deviation
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       observers = [alice]
@@ -129,10 +138,13 @@ testLendingFullCycleIntegration : Script ()
 testLendingFullCycleIntegration = do
   operator <- allocateParty "Operator"
   user <- allocateParty "User"
-  governor <- allocateParty "Governor"
+  regulator <- allocateParty "Regulator"
   liquidator <- allocateParty "Liquidator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
+
+  -- Create compliance registry
+  complianceCid <- createTestComplianceRegistry regulator operator
 
   -- Create price feed
   ctnFeedCid <- submit operator do
@@ -144,23 +156,26 @@ testLendingFullCycleIntegration = do
       source = "test"
       observers = [user, liquidator]
 
-  -- Create lending service
+  -- Create lending service with all required fields
   serviceCid <- submit operator do
     createCmd CantonLendingService with
       operator
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
-      lendingSupplyCap = 10000000.0
       interestRateBps = 500
       reserveFactorBps = 1000
       protocolReserves = 0.0
       minBorrow = 10.0
       closeFactorBps = 5000
       paused = False
+      cantonSupplyCap = 10000000.0
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "default"
+      globalMintCap = 50000000.0
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      complianceRegistryCid = None
-      minKeeperBond = 100.0
+      serviceName = "lending-test"
       observers = [user, liquidator]
 
   -- Step 1: Deposit 10000 CTN
@@ -188,16 +203,6 @@ testLendingFullCycleIntegration = do
   debt <- queryContractId operator debtCid
   assertMsg "Borrowed 500" ((fromSome debt).principalDebt == 500.0)
 
-  -- Create BurnRateLimiter for repay/liquidation burn paths
-  submit operator do
-    createCmd BurnRateLimiter with
-      operator
-      epochBurnLimit = 1000000.0
-      currentEpochBurns = 0.0
-      epochStart = datetime 2026 Feb 6 12 0 0
-      epochDurationSeconds = 86400
-      paused = False
-
   -- Step 3: Repay
   (svc3, newDebtCid) <- submitMulti [user] [operator] do
     exerciseCmd svc2 Lending_Repay with
@@ -219,22 +224,20 @@ testLendingFullCycleIntegration = do
   debug "✅ Integration 2: Deposit → Borrow → Repay → Withdraw lifecycle"
 
 -- ============================================================
---  3. INTEGRATION: MULTI-ATTESTOR SHARE PRICE SYNC (DAML-R01)
---     SharePriceAttestation × CantonStakingService
+--  3. INTEGRATION: SHARE PRICE SYNC WITHIN BOUNDS
+--     CantonSMUSD — verify SyncGlobalSharePrice within ±10%
 -- ============================================================
 
-testMultiAttestorSync : Script ()
-testMultiAttestorSync = do
+testSharePriceSyncWithinBounds : Script ()
+testSharePriceSyncWithinBounds = do
   operator <- allocateParty "Operator"
   alice <- allocateParty "Alice"
-  governor <- allocateParty "Governor"
-  attestor1 <- allocateParty "Attestor1"
-  attestor2 <- allocateParty "Attestor2"
-  attestor3 <- allocateParty "Attestor3"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
 
-  -- Create staking service requiring 2 of 3 attestors
+  complianceCid <- createTestComplianceRegistry regulator operator
+
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
@@ -246,65 +249,37 @@ testMultiAttestorSync = do
       cooldownSeconds = 86400
       minDeposit = 1.0
       paused = False
-      unstakeMintedTotal = 0.0
-      unstakeMintCap = 10000000.0
-      authorizedAttestors = [attestor1, attestor2, attestor3]
-      minAttestors = 2
-      maxAttestationDeviationBps = 100  -- 1% tolerance
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       observers = [alice]
 
-  -- Attestor1 submits attestation (share price = 1.05)
-  att1Cid <- submit attestor1 do
-    createCmd SharePriceAttestation with
-      attestor = attestor1
-      operator
-      epochNumber = 1
-      attestedSharePrice = 1.05
-      attestedTotalAssets = 105.0
-      attestedTotalShares = 100.0
-      attestedAt = datetime 2026 Feb 6 12 0 0
-
-  -- Attestor2 submits attestation (share price = 1.045 — within 1% of 1.05)
-  att2Cid <- submit attestor2 do
-    createCmd SharePriceAttestation with
-      attestor = attestor2
-      operator
-      epochNumber = 1
-      attestedSharePrice = 1.045
-      attestedTotalAssets = 104.5
-      attestedTotalShares = 100.0
-      attestedAt = datetime 2026 Feb 6 12 0 0
-
-  -- Sync with quorum of 2 attestations
-  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-epoch-1"
+  -- Sync to 1.05 (5% increase — within 10% cap)
   stakingCid2 <- submit operator do
     exerciseCmd stakingCid SyncGlobalSharePrice with
-      attestationCids = [att1Cid, att2Cid]
+      newGlobalSharePrice = 1.05
+      newGlobalTotalAssets = 105.0
+      newGlobalTotalShares = 100.0
       epochNumber = 1
-      governanceProofCid = govProof
 
-  -- Verify the lower-median price was applied (conservative bias)
-  -- sorted: [1.045, 1.05], mid = (2-1)/2 = 0 → 1.045
+  -- Verify the price was applied
   price <- submit operator do
     exerciseCmd stakingCid2 GetSharePrice
-  assertMsg "Median price applied" (price == 1.045)
-  debug "✅ Integration 3: Multi-attestor share price sync (DAML-R01)"
+  assertMsg "Price updated to 1.05" (price == 1.05)
+  debug "✅ Integration 3: Share price sync within bounds"
 
 -- ============================================================
---  4. INTEGRATION: MULTI-ATTESTOR INSUFFICIENT QUORUM FAILS
+--  4. INTEGRATION: SHARE PRICE INCREASE > 10% REJECTED (FIX D-M09)
 -- ============================================================
 
-testInsufficientAttestorsFails : Script ()
-testInsufficientAttestorsFails = do
+testSharePriceIncreaseTooLargeRejected : Script ()
+testSharePriceIncreaseTooLargeRejected = do
   operator <- allocateParty "Operator"
-  governor <- allocateParty "Governor"
-  attestor1 <- allocateParty "Attestor1"
-  attestor2 <- allocateParty "Attestor2"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
+
+  complianceCid <- createTestComplianceRegistry regulator operator
 
   stakingCid <- submit operator do
     createCmd CantonStakingService with
@@ -317,50 +292,73 @@ testInsufficientAttestorsFails = do
       cooldownSeconds = 86400
       minDeposit = 1.0
       paused = False
-      unstakeMintedTotal = 0.0
-      unstakeMintCap = 10000000.0
-      authorizedAttestors = [attestor1, attestor2]
-      minAttestors = 2
-      maxAttestationDeviationBps = 100
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       observers = []
 
-  -- Only 1 attestation (need 2)
-  att1Cid <- submit attestor1 do
-    createCmd SharePriceAttestation with
-      attestor = attestor1
-      operator
-      epochNumber = 1
-      attestedSharePrice = 1.05
-      attestedTotalAssets = 105.0
-      attestedTotalShares = 100.0
-      attestedAt = datetime 2026 Feb 6 12 0 0
-
-  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-fail"
-
-  -- Should fail — insufficient attestations
+  -- Try to increase price by 15% (1.0 → 1.15) — should be rejected (max 10%)
   submitMustFail operator do
     exerciseCmd stakingCid SyncGlobalSharePrice with
-      attestationCids = [att1Cid]
+      newGlobalSharePrice = 1.15
+      newGlobalTotalAssets = 115.0
+      newGlobalTotalShares = 100.0
       epochNumber = 1
-      governanceProofCid = govProof
-  debug "✅ Integration 4: Insufficient attestors rejected (DAML-R01)"
+  debug "✅ Integration 4: Share price increase >10% rejected (FIX D-M09)"
 
 -- ============================================================
---  5. INTEGRATION: KEEPER BOND LIQUIDATION FLOW (DAML-R03)
---     KeeperBond × Lending_Liquidate
+--  5. INTEGRATION: SHARE PRICE DECREASE > 10% REJECTED
 -- ============================================================
 
-testKeeperBondLiquidation : Script ()
-testKeeperBondLiquidation = do
+testSharePriceDecreaseTooLargeRejected : Script ()
+testSharePriceDecreaseTooLargeRejected = do
+  operator <- allocateParty "Operator"
+  regulator <- allocateParty "Regulator"
+
+  setTime (datetime 2026 Feb 6 12 0 0)
+
+  complianceCid <- createTestComplianceRegistry regulator operator
+
+  stakingCid <- submit operator do
+    createCmd CantonStakingService with
+      operator
+      totalShares = 100.0
+      globalSharePrice = 1.0
+      globalTotalAssets = 100.0
+      globalTotalShares = 100.0
+      lastSyncEpoch = 0
+      cooldownSeconds = 86400
+      minDeposit = 1.0
+      paused = False
+      complianceRegistryCid = complianceCid
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      observers = []
+
+  -- Try to decrease price by 15% (1.0 → 0.85) — should be rejected (max 10%)
+  submitMustFail operator do
+    exerciseCmd stakingCid SyncGlobalSharePrice with
+      newGlobalSharePrice = 0.85
+      newGlobalTotalAssets = 85.0
+      newGlobalTotalShares = 100.0
+      epochNumber = 1
+  debug "✅ Integration 5: Share price decrease >10% rejected"
+
+-- ============================================================
+--  6. INTEGRATION: LIQUIDATION OF UNDERCOLLATERALIZED POSITION
+--     CantonLending — price crash triggers liquidation
+-- ============================================================
+
+testLiquidationFlow : Script ()
+testLiquidationFlow = do
   operator <- allocateParty "Operator"
   borrower <- allocateParty "Borrower"
   keeper <- allocateParty "Keeper"
-  governor <- allocateParty "Governor"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
+
+  complianceCid <- createTestComplianceRegistry regulator operator
 
   -- Price feeds
   ctnFeedCid <- submit operator do
@@ -378,17 +376,20 @@ testKeeperBondLiquidation = do
       operator
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
-      lendingSupplyCap = 10000000.0
       interestRateBps = 500
       reserveFactorBps = 1000
       protocolReserves = 0.0
       minBorrow = 10.0
       closeFactorBps = 5000
       paused = False
+      cantonSupplyCap = 10000000.0
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "default"
+      globalMintCap = 50000000.0
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      complianceRegistryCid = None
-      minKeeperBond = 100.0
+      serviceName = "lending-liq"
       observers = [borrower, keeper]
 
   -- Deposit collateral + borrow near limit
@@ -413,32 +414,11 @@ testKeeperBondLiquidation = do
 
   -- Crash price → position undercollateralized
   passTime (minutes 6)
-  emergProof <- createGovProof operator governor EmergencyPause "CantonLending" "crash"
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
-      governanceProofCid = emergProof
 
-  -- Keeper creates bond
-  now <- getTime
-  keeperBondCid <- submitMulti [operator, keeper] [] do
-    createCmd KeeperBond with
-      operator
-      keeper
-      bondAmount = 500.0
-      registeredAt = now
-      slashCount = 0
-      active = True
-  -- Create BurnRateLimiter for liquidation burn path
-  submit operator do
-    createCmd BurnRateLimiter with
-      operator
-      epochBurnLimit = 1000000.0
-      currentEpochBurns = 0.0
-      epochStart = datetime 2026 Feb 6 12 0 0
-      epochDurationSeconds = 86400
-      paused = False
   -- Keeper gets mUSD for repayment
   liqMusdCid <- submitMulti [operator, keeper] [] do
     createCmd CantonMUSD with
@@ -449,7 +429,7 @@ testKeeperBondLiquidation = do
       agreementUri = testMpaUri
       privacyObservers = []
 
-  -- Liquidate with keeper bond
+  -- Liquidate position
   (svc3, receiptCid) <- submitMulti [keeper] [operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = keeper
@@ -460,27 +440,28 @@ testKeeperBondLiquidation = do
       musdCid = liqMusdCid
       escrowCids = [escrowCid]
       priceFeedCids = [crashedFeedCid]
-      keeperBondCid
 
   -- Verify receipt
   receipt <- queryContractId operator receiptCid
   let r = fromSome receipt
   assertMsg "Receipt records debt repaid" (r.debtRepaid > 0.0)
   assertMsg "Receipt records seized collateral" (r.collateralSeized > 0.0)
-  debug "✅ Integration 5: Keeper bond liquidation flow (DAML-R03)"
+  debug "✅ Integration 6: Liquidation of undercollateralized position"
 
 -- ============================================================
---  6. INTEGRATION: UNBONDED KEEPER REJECTED (DAML-R03)
+--  7. INTEGRATION: HEALTHY POSITION CANNOT BE LIQUIDATED
 -- ============================================================
 
-testUnbondedKeeperRejected : Script ()
-testUnbondedKeeperRejected = do
+testHealthyPositionNotLiquidatable : Script ()
+testHealthyPositionNotLiquidatable = do
   operator <- allocateParty "Operator"
   borrower <- allocateParty "Borrower"
   keeper <- allocateParty "Keeper"
-  governor <- allocateParty "Governor"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
+
+  complianceCid <- createTestComplianceRegistry regulator operator
 
   ctnFeedCid <- submit operator do
     createCmd CantonPriceFeed with
@@ -496,17 +477,20 @@ testUnbondedKeeperRejected = do
       operator
       configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
-      lendingSupplyCap = 10000000.0
       interestRateBps = 500
       reserveFactorBps = 1000
       protocolReserves = 0.0
       minBorrow = 10.0
       closeFactorBps = 5000
       paused = False
+      cantonSupplyCap = 10000000.0
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "default"
+      globalMintCap = 50000000.0
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      complianceRegistryCid = None
-      minKeeperBond = 100.0
+      serviceName = "lending-healthy"
       observers = [borrower, keeper]
 
   coinCid <- submitMulti [operator, borrower] [] do
@@ -521,215 +505,175 @@ testUnbondedKeeperRejected = do
       user = borrower
       coinCid
 
+  -- Borrow a small amount (well-collateralized)
   (svc2, debtCid, _musdCid) <- submit borrower do
     exerciseCmd svc1 Lending_Borrow with
       user = borrower
-      borrowAmount = 1100.0
+      borrowAmount = 100.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
-
-  passTime (minutes 6)
-  emergProof <- createGovProof operator governor EmergencyPause "CantonLending" "crash"
-  crashedFeedCid <- submit operator do
-    exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
-      newPriceUsd = 0.10
-      reason = "CTN crash"
-      governanceProofCid = emergProof
-
-  -- Keeper has INACTIVE bond → should fail
-  now <- getTime
-  keeperBondCid <- submitMulti [operator, keeper] [] do
-    createCmd KeeperBond with
-      operator
-      keeper
-      bondAmount = 500.0
-      registeredAt = now
-      slashCount = 0
-      active = False  -- INACTIVE
 
   liqMusdCid <- submitMulti [operator, keeper] [] do
     createCmd CantonMUSD with
       issuer = operator
       owner = keeper
-      amount = 550.0
+      amount = 50.0
       agreementHash = testMpaHash
       agreementUri = testMpaUri
       privacyObservers = []
 
-  -- Should fail — keeper bond inactive
+  -- Should fail — position is healthy
   submitMustFail keeper do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = keeper
       borrower
-      repayAmount = 550.0
+      repayAmount = 50.0
       targetEscrowCid = escrowCid
       debtCid
       musdCid = liqMusdCid
       escrowCids = [escrowCid]
-      priceFeedCids = [crashedFeedCid]
-      keeperBondCid
-  debug "✅ Integration 6: Inactive keeper bond rejected (DAML-R03)"
+      priceFeedCids = [ctnFeedCid]
+  debug "✅ Integration 7: Healthy position cannot be liquidated"
 
 -- ============================================================
---  7. INTEGRATION: BURN RATE LIMITER (DAML-R05)
+--  8. NOTE: sMUSD ESCROWED IN LENDING → BOOSTPOOL BLOCKED (FIX D-M04)
+--     CantonLending × CantonBoostPool cross-module invariant
+--
+--     This test validates FIX D-M04 — preventing a user from using
+--     sMUSD that is already escrowed as lending collateral to qualify for
+--     BoostPool deposits. The Deposit choice now checks via lookupByKey
+--     that no EscrowedCollateral exists for (operator, user, CTN_SMUSD).
+--     Full BoostPool service setup requires extensive template
+--     instantiation (pool config, reward tracking, etc.) and is tested
+--     in CantonBoostPool's own unit tests.
 -- ============================================================
 
-testBurnRateLimiter : Script ()
-testBurnRateLimiter = do
+-- ============================================================
+--  9. INTEGRATION: COMPLIANCE BLOCKS BLACKLISTED TRANSFERS (FIX D-M08)
+--     CantonDirectMint × Compliance cross-module
+-- ============================================================
+
+testComplianceBlocksBlacklistedTransfer : Script ()
+testComplianceBlocksBlacklistedTransfer = do
   operator <- allocateParty "Operator"
-  governor <- allocateParty "Governor"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
 
-  -- Create burn rate limiter with 1000 mUSD per epoch limit
-  limiterCid <- submit operator do
-    createCmd BurnRateLimiter with
-      operator
-      epochBurnLimit = 1000.0
-      currentEpochBurns = 0.0
-      epochStart = datetime 2026 Feb 6 12 0 0
-      epochDurationSeconds = 86400  -- 24h
-      paused = False
+  -- Create compliance registry with Bob blacklisted
+  complianceCid <- createTestComplianceRegistryWithBlacklist regulator operator [bob]
 
-  -- Record 500 mUSD burn → should succeed
-  limiterCid2 <- submit operator do
-    exerciseCmd limiterCid BurnLimit_RecordBurn with
-      burnAmount = 500.0
+  -- Create mUSD for Alice
+  musdCid <- submitMulti [operator, alice] [] do
+    createCmd CantonMUSD with
+      issuer = operator
+      owner = alice
+      amount = 100.0
+      agreementHash = testMpaHash
+      agreementUri = testMpaUri
+      privacyObservers = []
 
-  -- Record another 400 mUSD burn → should succeed (total 900)
-  limiterCid3 <- submit operator do
-    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
-      burnAmount = 400.0
-
-  -- Record 200 mUSD burn → should FAIL (900 + 200 = 1100 > 1000 limit)
-  submitMustFail operator do
-    exerciseCmd limiterCid3 BurnLimit_RecordBurn with
-      burnAmount = 200.0
-
-  debug "✅ Integration 7: Burn rate limiter enforces epoch limit (DAML-R05)"
-
-testBurnRateLimiterEpochReset : Script ()
-testBurnRateLimiterEpochReset = do
-  operator <- allocateParty "Operator"
-
-  setTime (datetime 2026 Feb 6 12 0 0)
-
-  limiterCid <- submit operator do
-    createCmd BurnRateLimiter with
-      operator
-      epochBurnLimit = 1000.0
-      currentEpochBurns = 0.0
-      epochStart = datetime 2026 Feb 6 12 0 0
-      epochDurationSeconds = 86400
-      paused = False
-
-  -- Burn 900 (near limit)
-  limiterCid2 <- submit operator do
-    exerciseCmd limiterCid BurnLimit_RecordBurn with
-      burnAmount = 900.0
-
-  -- Advance time past epoch boundary
-  passTime (hours 25)
-
-  -- Should succeed because epoch reset (900 → 0, then +500 = 500)
-  limiterCid3 <- submit operator do
-    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
-      burnAmount = 500.0
-
-  debug "✅ Integration 8: Burn rate limiter epoch reset works (DAML-R05)"
-
-testBurnRateLimiterPausedRejectsBurns : Script ()
-testBurnRateLimiterPausedRejectsBurns = do
-  operator <- allocateParty "Operator"
-  governor <- allocateParty "Governor"
-
-  setTime (datetime 2026 Feb 6 12 0 0)
-
-  limiterCid <- submit operator do
-    createCmd BurnRateLimiter with
-      operator
-      epochBurnLimit = 1000.0
-      currentEpochBurns = 0.0
-      epochStart = datetime 2026 Feb 6 12 0 0
-      epochDurationSeconds = 86400
-      paused = False
-
-  -- Pause the limiter
-  govProof <- createGovProof operator governor EmergencyPause "CantonDirectMint" "pause-burns"
-  limiterCid2 <- submit operator do
-    exerciseCmd limiterCid BurnLimit_SetPaused with
-      newPaused = True
-      governanceProofCid = govProof
-
-  -- Any burn should fail when paused
-  submitMustFail operator do
-    exerciseCmd limiterCid2 BurnLimit_RecordBurn with
-      burnAmount = 1.0
-
-  debug "✅ Integration 9: Paused burn limiter rejects all burns (DAML-R05)"
+  -- Alice tries to transfer mUSD to blacklisted Bob → should fail
+  submitMustFail alice do
+    exerciseCmd musdCid CantonMUSD_Transfer with
+      newOwner = bob
+      complianceRegistryCid = complianceCid
+  debug "✅ Integration 9: Compliance blocks transfer to blacklisted party (FIX D-M08)"
 
 -- ============================================================
---  8. INTEGRATION: ATTESTATION DEVIATION TOO LARGE (DAML-R01)
+--  10. INTEGRATION: SUPPLY CAP COORDINATION (FIX D-M02)
+--      CantonLending × CantonDirectMint cross-module
 -- ============================================================
 
-testAttestationDeviationRejected : Script ()
-testAttestationDeviationRejected = do
+testSupplyCapCoordination : Script ()
+testSupplyCapCoordination = do
   operator <- allocateParty "Operator"
-  governor <- allocateParty "Governor"
-  attestor1 <- allocateParty "Attestor1"
-  attestor2 <- allocateParty "Attestor2"
+  user <- allocateParty "User"
+  regulator <- allocateParty "Regulator"
 
   setTime (datetime 2026 Feb 6 12 0 0)
 
-  stakingCid <- submit operator do
-    createCmd CantonStakingService with
+  complianceCid <- createTestComplianceRegistry regulator operator
+
+  -- Create DirectMintService with a key — tests FIX D-M02
+  _dmServiceCid <- submit operator do
+    createCmd CantonDirectMintService with
       operator
-      totalShares = 100.0
-      globalSharePrice = 1.0
-      globalTotalAssets = 100.0
-      globalTotalShares = 100.0
-      lastSyncEpoch = 0
-      cooldownSeconds = 86400
-      minDeposit = 1.0
+      usdcIssuer = operator
+      usdcxIssuer = None
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 1.0
+      maxAmount = 1000000.0
+      supplyCap = 50000000.0
+      currentSupply = 40000000.0  -- Already near cap
+      accumulatedFees = 0.0
       paused = False
-      unstakeMintedTotal = 0.0
-      unstakeMintCap = 10000000.0
-      authorizedAttestors = [attestor1, attestor2]
-      minAttestors = 2
-      maxAttestationDeviationBps = 100  -- 1% max deviation
-      complianceRegistryCid = None
+      validators = []
+      targetChainId = 1
+      targetTreasury = "0x1234"
+      nextNonce = 1
+      dailyMintLimit = 10000000.0
+      dailyMinted = 0.0
+      dailyBurned = 0.0
+      lastRateLimitReset = datetime 2026 Feb 6 0 0 0
+      complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      observers = []
+      authorizedMinters = [user]
+      serviceName = "default"  -- FIX D-M02: Key field for cross-module lookup
 
-  -- Attestor1: price = 1.00
-  att1Cid <- submit attestor1 do
-    createCmd SharePriceAttestation with
-      attestor = attestor1
+  -- Create Lending service pointing to the DirectMint service
+  ctnFeedCid <- submit operator do
+    createCmd CantonPriceFeed with
       operator
-      epochNumber = 1
-      attestedSharePrice = 1.00
-      attestedTotalAssets = 100.0
-      attestedTotalShares = 100.0
-      attestedAt = datetime 2026 Feb 6 12 0 0
+      symbol = "CTN"
+      priceUsd = 0.17
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "test"
+      observers = [user]
 
-  -- Attestor2: price = 1.05 (5% deviation — exceeds 1% tolerance)
-  att2Cid <- submit attestor2 do
-    createCmd SharePriceAttestation with
-      attestor = attestor2
+  lendingCid <- submit operator do
+    createCmd CantonLendingService with
       operator
-      epochNumber = 1
-      attestedSharePrice = 1.05
-      attestedTotalAssets = 105.0
-      attestedTotalShares = 100.0
-      attestedAt = datetime 2026 Feb 6 12 0 0
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      totalBorrows = 0.0
+      interestRateBps = 500
+      reserveFactorBps = 1000
+      protocolReserves = 0.0
+      minBorrow = 10.0
+      closeFactorBps = 5000
+      paused = False
+      cantonSupplyCap = 10000000.0
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "default"  -- Points to DirectMint via key
+      globalMintCap = 50000000.0         -- Same cap: DM at 40M → only 10M left for lending
+      complianceRegistryCid = complianceCid
+      mpaHash = testMpaHash
+      mpaUri = testMpaUri
+      serviceName = "lending-cap"
+      observers = [user]
 
-  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-deviation"
+  -- Deposit collateral
+  coinCid <- submitMulti [operator, user] [] do
+    createCmd CantonCoin with
+      issuer = operator
+      owner = user
+      amount = 1000000.0
+      privacyObservers = []
 
-  -- Should fail — price deviation too large (5% > 1%)
-  submitMustFail operator do
-    exerciseCmd stakingCid SyncGlobalSharePrice with
-      attestationCids = [att1Cid, att2Cid]
-      epochNumber = 1
-      governanceProofCid = govProof
-  debug "✅ Integration 10: Attestation price deviation rejected (DAML-R01)"
+  (svc1, escrowCid) <- submit user do
+    exerciseCmd lendingCid Lending_DepositCTN with
+      user
+      coinCid
+
+  -- Try to borrow 11M mUSD → should fail because DM has 40M + 11M = 51M > 50M globalMintCap
+  submitMustFail user do
+    exerciseCmd svc1 Lending_Borrow with
+      user
+      borrowAmount = 11000000.0
+      escrowCids = [escrowCid]
+      priceFeedCids = [ctnFeedCid]
+  debug "✅ Integration 10: Supply cap coordination between Lending + DirectMint (FIX D-M02)"

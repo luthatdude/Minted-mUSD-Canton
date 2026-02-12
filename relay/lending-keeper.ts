@@ -98,6 +98,30 @@ requireHTTPS(DEFAULT_CONFIG.tradecraftBaseUrl, "TRADECRAFT_URL");
 //                     TYPES
 // ============================================================
 
+// FIX R-06: Fixed-point precision constants for BigInt-based financial math
+// All USD/token values scaled to 18 decimals to avoid floating-point precision loss
+const PRECISION = BigInt(10) ** BigInt(18);
+const BPS_BASE = BigInt(10000);
+const YEAR_SECONDS = BigInt(31536000);
+
+/** Convert a number (potentially from ledger string) to fixed-point BigInt */
+function toFixed(value: number | string): bigint {
+  // Parse string → number if needed, then scale to 18 decimals
+  const num = typeof value === "string" ? parseFloat(value) : value;
+  // Use string conversion to avoid floating-point rounding in multiplication
+  const parts = num.toFixed(18).split(".");
+  const whole = BigInt(parts[0]);
+  const frac = BigInt((parts[1] || "0").padEnd(18, "0").slice(0, 18));
+  return whole * PRECISION + frac;
+}
+
+/** Convert fixed-point BigInt back to number (for display/logging only) */
+function fromFixed(value: bigint): number {
+  const whole = value / PRECISION;
+  const frac = value % PRECISION;
+  return Number(whole) + Number(frac) / Number(PRECISION);
+}
+
 interface DebtPosition {
   contractId: string;
   borrower: string;
@@ -249,6 +273,9 @@ export class LendingKeeperBot {
    * Calculate health factor for a borrower:
    * healthFactor = Σ(collateral × price × liqThreshold) / totalDebt
    * If < 1.0, position is liquidatable
+   *
+   * FIX R-06: Uses BigInt fixed-point (18 decimals) to avoid float precision loss
+   * on positions > $10M where 64-bit float loses sub-cent accuracy.
    */
   private calculateHealthFactor(
     escrows: EscrowPosition[],
@@ -256,59 +283,87 @@ export class LendingKeeperBot {
   ): number {
     if (totalDebt <= 0) return 999.0;
 
-    let totalLiqValue = 0;
+    const debtBig = toFixed(totalDebt);
+    let totalLiqValue = BigInt(0);
+
     for (const escrow of escrows) {
       const price = this.getPrice(escrow.collateralType);
       const cfg = this.config.collateralConfigs[escrow.collateralType];
       if (!cfg) continue;
 
-      totalLiqValue += escrow.amount * price * cfg.liqThresholdBps / 10000;
+      const amountBig = toFixed(escrow.amount);
+      const priceBig = toFixed(price);
+      const thresholdBps = BigInt(cfg.liqThresholdBps);
+
+      // amount * price * threshold / 10000, all in fixed-point
+      totalLiqValue +=
+        (amountBig * priceBig / PRECISION) * thresholdBps / BPS_BASE;
     }
 
-    return totalLiqValue / totalDebt;
+    // healthFactor = totalLiqValue / totalDebt (both in fixed-point)
+    return fromFixed((totalLiqValue * PRECISION) / debtBig);
   }
 
   /**
    * Calculate total debt including projected interest since last accrual
+   *
+   * FIX R-06: Uses BigInt fixed-point to prevent precision loss on large debts
    */
   private calculateTotalDebt(position: DebtPosition): number {
     const now = Date.now() / 1000;
     const lastAccrual = new Date(position.lastAccrualTime).getTime() / 1000;
     const elapsed = Math.max(0, now - lastAccrual);
-    const yearSeconds = 31536000;
 
+    const principalBig = toFixed(position.principalDebt);
+    const accruedBig = toFixed(position.accruedInterest);
+    const rateBps = BigInt(position.interestRateBps);
+    const elapsedBig = BigInt(Math.floor(elapsed));
+
+    // newInterest = principal * rateBps * elapsed / (10000 * yearSeconds)
     const newInterest =
-      position.principalDebt * position.interestRateBps * elapsed / (10000 * yearSeconds);
+      principalBig * rateBps * elapsedBig / (BPS_BASE * YEAR_SECONDS);
 
-    return position.principalDebt + position.accruedInterest + newInterest;
+    return fromFixed(principalBig + accruedBig + newInterest);
   }
 
   /**
    * Find the most profitable collateral to seize for a given position.
    * Prefers CTN (highest penalty = highest keeper bonus).
+   *
+   * FIX R-06: Uses BigInt fixed-point for seize/bonus calculations
    */
   private selectBestTarget(
     escrows: EscrowPosition[],
     maxRepayUsd: number
   ): { escrow: EscrowPosition; expectedProfit: number } | null {
     let bestEscrow: EscrowPosition | null = null;
-    let bestProfit = 0;
+    let bestProfit = BigInt(0);
+
+    const maxRepayBig = toFixed(maxRepayUsd);
 
     for (const escrow of escrows) {
       const cfg = this.config.collateralConfigs[escrow.collateralType];
       if (!cfg) continue;
 
       const price = this.getPrice(escrow.collateralType);
-      const collateralValueUsd = escrow.amount * price;
+      const priceBig = toFixed(price);
+      const amountBig = toFixed(escrow.amount);
+      const penaltyBps = BigInt(cfg.penaltyBps);
+      const bonusBps = BigInt(cfg.bonusBps);
+
+      const collateralValueUsd = amountBig * priceBig / PRECISION;
 
       // How much debt can we repay against this collateral?
-      const seizeValueUsd = maxRepayUsd * (10000 + cfg.penaltyBps) / 10000;
-      const actualSeizeUsd = Math.min(seizeValueUsd, collateralValueUsd);
+      const seizeValueUsd = maxRepayBig * (BPS_BASE + penaltyBps) / BPS_BASE;
+      const actualSeizeUsd =
+        seizeValueUsd < collateralValueUsd ? seizeValueUsd : collateralValueUsd;
 
       // Keeper bonus from penalty
-      const actualRepay = actualSeizeUsd * 10000 / (10000 + cfg.penaltyBps);
+      const actualRepay = actualSeizeUsd * BPS_BASE / (BPS_BASE + penaltyBps);
       const penaltyUsd = actualSeizeUsd - actualRepay;
-      const keeperBonusUsd = penaltyUsd * cfg.bonusBps / cfg.penaltyBps;
+      const keeperBonusUsd = penaltyBps > BigInt(0)
+        ? penaltyUsd * bonusBps / penaltyBps
+        : BigInt(0);
 
       if (keeperBonusUsd > bestProfit) {
         bestProfit = keeperBonusUsd;
@@ -318,7 +373,7 @@ export class LendingKeeperBot {
 
     if (!bestEscrow) return null;
 
-    return { escrow: bestEscrow, expectedProfit: bestProfit };
+    return { escrow: bestEscrow, expectedProfit: fromFixed(bestProfit) };
   }
 
   /**

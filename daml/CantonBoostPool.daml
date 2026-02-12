@@ -25,6 +25,7 @@ module CantonBoostPool where
 import DA.Time
 import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
+import CantonLending (EscrowedCollateral, CollateralType(..))
 import UserPrivacySettings (lookupUserObservers)
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
@@ -269,6 +270,12 @@ template CantonBoostPoolService
         smusd <- fetch smusdCid
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
+
+        -- FIX D-M04: Prevent sMUSD collateral escape — user cannot qualify for
+        -- BoostPool with sMUSD that is already escrowed as lending collateral
+        smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
+        assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
+
         archive smusdCid
 
         -- Calculate deposit cap from sMUSD value

@@ -20,7 +20,7 @@ import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
-import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -202,8 +202,13 @@ template CantonMUSD
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- FIX D-M08: Validate sender and recipient against compliance registry
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create CantonMUSDTransferProposal with
           musd = this
           newOwner
@@ -452,9 +457,14 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
+    serviceName : Text           -- FIX D-M02: Unique service name for lookupByKey
   where
     signatory operator
     observer usdcIssuer, authorizedMinters
+
+    -- FIX D-M02: Contract key for cross-module supply cap coordination
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury

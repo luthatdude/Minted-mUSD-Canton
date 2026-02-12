@@ -397,6 +397,8 @@ contract TreasuryV2 is
             asset.safeTransfer(vault, actualAmount);
         }
 
+        lastRecordedValue = totalValue();
+
         emit Withdrawn(vault, actualAmount);
         return actualAmount;
     }
