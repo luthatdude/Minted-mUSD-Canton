@@ -199,10 +199,12 @@ contract SMUSDPriceAdapter is AccessControl {
         return priceUsd;
     }
 
-    /// @notice Public function to update the cached price (called by keepers/admin)
-    /// @dev Separating read + write to allow view functions to stay view-compatible
+    /// @notice Public function to update the cached price (callable by anyone)
+    /// @dev FIX HIGH-04: Removed admin-only restriction so the rate limiter auto-updates.
+    /// Previously only ADAPTER_ADMIN could call this, making the rate limiter manual-only.
+    /// Now any price consumer can trigger a cache update before reading.
     /// @dev Also increments roundId so consumers can detect updates
-    function updateCachedPrice() external onlyRole(ADAPTER_ADMIN_ROLE) {
+    function updateCachedPrice() external {
         uint256 price = _getSharePriceUsd();
         _lastPrice = price;
         _lastPriceBlock = block.number;

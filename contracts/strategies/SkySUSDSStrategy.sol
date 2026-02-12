@@ -90,6 +90,8 @@ contract SkySUSDSStrategy is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+    /// @notice FIX CRIT-06: Timelock role for upgrade authorization — prevents instant upgrades
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -182,13 +184,12 @@ contract SkySUSDSStrategy is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _admin);
 
-        // Approve PSM to spend USDC (for sellGem: USDC→USDS)
-        usdc.forceApprove(_psm, type(uint256).max);
-        // Approve sUSDS to spend USDS (for deposit: USDS→sUSDS)
-        usds.forceApprove(_sUsds, type(uint256).max);
-        // Approve PSM to spend USDS (for buyGem: USDS→USDC)
-        usds.forceApprove(_psm, type(uint256).max);
+        // FIX HIGH-07: Removed infinite approvals from initialize().
+        // Per-operation approvals are set before each PSM/sUSDS interaction
+        // in deposit(), withdraw(), and withdrawAll() to limit exposure
+        // if PSM or sUSDS contracts are compromised.
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -214,11 +215,16 @@ contract SkySUSDSStrategy is
         // Transfer USDC from Treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
+        // FIX HIGH-07: Per-operation approval (replaces infinite approval)
+        usdc.forceApprove(address(psm), amount);
+
         // Step 1: Swap USDC → USDS via PSM (1:1, zero slippage)
         psm.sellGem(address(this), amount);
 
         // Step 2: Deposit USDS into sUSDS savings vault
         uint256 usdsAmount = amount * USDC_TO_USDS_SCALE; // Scale 6→18 decimals
+        // FIX HIGH-07: Per-operation approval for sUSDS deposit
+        usds.forceApprove(address(sUsds), usdsAmount);
         uint256 shares = sUsds.deposit(usdsAmount, address(this));
 
         totalPrincipal += amount;
@@ -255,6 +261,8 @@ contract SkySUSDSStrategy is
 
         // Step 2: Swap USDS → USDC via PSM
         uint256 usdcAmount = usdsNeeded / USDC_TO_USDS_SCALE;
+        // FIX HIGH-07: Per-operation approval for PSM buyGem
+        usds.forceApprove(address(psm), usdsNeeded);
         psm.buyGem(address(this), usdcAmount);
 
         // Update principal tracking
@@ -300,6 +308,8 @@ contract SkySUSDSStrategy is
         // Step 2: Swap all USDS → USDC via PSM
         uint256 usdcAmount = usdsOut / USDC_TO_USDS_SCALE;
         if (usdcAmount > 0) {
+            // FIX HIGH-07: Per-operation approval for PSM buyGem
+            usds.forceApprove(address(psm), usdsOut);
             psm.buyGem(address(this), usdcAmount);
         }
 
@@ -429,5 +439,6 @@ contract SkySUSDSStrategy is
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced by OZ)
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 }

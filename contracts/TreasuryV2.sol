@@ -51,6 +51,8 @@ contract TreasuryV2 is
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
+    /// @notice FIX HIGH-03: Timelock role for upgrade authorization — prevents instant upgrades
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STRUCTS
@@ -194,6 +196,8 @@ contract TreasuryV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
         _grantRole(VAULT_ROLE, _vault);
+        /// @notice FIX HIGH-03: Grant TIMELOCK_ROLE to admin (should be a timelock controller)
+        _grantRole(TIMELOCK_ROLE, _admin);
 
         lastFeeAccrual = block.timestamp;
     }
@@ -977,5 +981,6 @@ contract TreasuryV2 is
     /**
      * @notice UUPS upgrade authorization
      */
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX HIGH-03: Only MintedTimelockController can authorize upgrades (48h delay enforced by OZ)
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 }

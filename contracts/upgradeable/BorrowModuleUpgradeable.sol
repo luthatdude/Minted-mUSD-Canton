@@ -570,9 +570,13 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  totalBorrowsBeforeAccrual = totalBorrows;
  totalBorrows += interest;
  
+ // FIX CRIT-03: Use effective borrows (excluding unrouted interest) for utilization.
+ // Unrouted interest inflates totalBorrows without corresponding mUSD supply,
+ // creating phantom debt that artificially raises the utilization rate.
+ uint256 effectiveBorrows = totalBorrows > unroutedInterest ? totalBorrows - unroutedInterest : totalBorrows;
  uint256 utilization = address(interestRateModel) != address(0)
- ? interestRateModel.utilizationRate(totalBorrows, totalSupply)
- : (totalBorrows * BPS) / totalSupply;
+ ? interestRateModel.utilizationRate(effectiveBorrows, totalSupply)
+ : (effectiveBorrows * BPS) / totalSupply;
  
  emit GlobalInterestAccrued(interest, totalBorrows, utilization);
  }
