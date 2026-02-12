@@ -28,7 +28,7 @@ testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
 
 -- | Create a governance proof for tests
--- FIX CRIT-01: Now requires a proposer (governor) party separate from operator
+-- Now requires a proposer (governor) party separate from operator
 createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
 createGovProof operator proposer actionType targetModule desc = do
   now <- getTime
@@ -38,7 +38,7 @@ createGovProof operator proposer actionType targetModule desc = do
       proposer
       proposalId = "test-" <> desc
       actionType
-      -- FIX DAML-H03: Module-scoped governance proof
+      -- Module-scoped governance proof
       targetModule
       description = desc
       payload = ""
@@ -102,10 +102,10 @@ setupTest = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       complianceRegistryCid = None
-      minKeeperBond = 100.0      -- FIX DAML-R03: Minimum keeper bond
+      minKeeperBond = 100.0      -- Minimum keeper bond
       observers = [user, liquidator]
 
-  -- FIX DAML-R05: Create BurnRateLimiter for burn-path tests (repay, liquidation)
+  -- Create BurnRateLimiter for burn-path tests (repay, liquidation)
   submit operator do
     createCmd BurnRateLimiter with
       operator
@@ -134,7 +134,7 @@ testPriceFeedCreate = do
 testPriceFeedUpdate : Script ()
 testPriceFeedUpdate = do
   setup <- setupTest
-  -- FIX M-4: Advance time past the 10-second update cooldown
+  -- Advance time past the 10-second update cooldown
   passTime (seconds 15)
   -- Update CTN price to $0.20 (within 50% cap)
   govProof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLending" "price-update"
@@ -162,7 +162,7 @@ testPriceFeedMovementCap = do
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
-  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
+  -- Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
   -- Emergency update bypasses movement cap
   emergProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-override"
@@ -489,7 +489,7 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
-  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
+  -- Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
   emergProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "ctn-crash"
   crashedFeedCid <- submit setup.operator do
@@ -508,7 +508,7 @@ testLiquidation = do
       agreementUri = testMpaUri
       privacyObservers = []
 
-  -- FIX DAML-R03: Create keeper bond for liquidator
+  -- Create keeper bond for liquidator
   now <- getTime
   keeperBondCid <- submitMulti [setup.operator, setup.liquidator] [] do
     createCmd KeeperBond with
@@ -573,7 +573,7 @@ testLiquidationHealthyPositionFails = do
       agreementUri = testMpaUri
       privacyObservers = []
 
-  -- FIX DAML-R03: Create keeper bond for liquidator
+  -- Create keeper bond for liquidator
   now <- getTime
   keeperBondCid <- submitMulti [setup.operator, setup.liquidator] [] do
     createCmd KeeperBond with
@@ -719,7 +719,7 @@ testEscrowAddCollateral = do
       originalCctpNonce = None
       privacyObservers = []
 
-  -- FIX H-L3: Escrow_AddCollateral now controlled by operator (token proof required at service level)
+  -- Escrow_AddCollateral now controlled by operator (token proof required at service level)
   newEscrowCid <- submit operator do
     exerciseCmd escrowCid Escrow_AddCollateral with addAmount = 3000.0
 
@@ -877,7 +877,7 @@ testWithdrawReserves = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       complianceRegistryCid = None
-      minKeeperBond = 100.0      -- FIX DAML-R03: Minimum keeper bond
+      minKeeperBond = 100.0      -- Minimum keeper bond
       observers = [setup.user]
 
   govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "CantonLending" "withdraw-reserves"

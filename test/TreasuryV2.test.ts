@@ -380,7 +380,7 @@ describe("TreasuryV2", function () {
       // Simulate yield
       await usdc.mint(await strategyA.getAddress(), 10_000n * ONE_USDC);
 
-      // FIX: Advance time by > 1 hour to satisfy MIN_ACCRUAL_INTERVAL
+      // Advance time by > 1 hour to satisfy MIN_ACCRUAL_INTERVAL
       await ethers.provider.send("evm_increaseTime", [3601]);
       await ethers.provider.send("evm_mine", []);
 

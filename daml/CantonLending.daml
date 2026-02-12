@@ -145,7 +145,7 @@ template CantonPriceFeed
         return priceUsd
 
     -- | Update price from Tradecraft/Temple DEX API
-    -- FIX LS-GOV: Governance-gated to prevent unilateral oracle manipulation
+    -- Governance-gated to prevent unilateral oracle manipulation
     choice PriceFeed_Update : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
@@ -153,13 +153,13 @@ template CantonPriceFeed
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
-        -- FIX M-4: Minimum 10-second interval between updates to prevent rapid oscillation
+        -- Minimum 10-second interval between updates to prevent rapid oscillation
         now <- getTime
         let timeSinceUpdate = subTime now lastUpdated
         assertMsg "UPDATE_TOO_FREQUENT" (timeSinceUpdate >= seconds 10)
@@ -174,7 +174,7 @@ template CantonPriceFeed
 
     -- | Emergency price override (bypasses movement cap)
     -- Only for circuit-breaker scenarios where price moved >50%
-    -- FIX M-6: Minimum 5-minute cooldown between emergency updates
+    -- Minimum 5-minute cooldown between emergency updates
     choice PriceFeed_EmergencyUpdate : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
@@ -182,10 +182,10 @@ template CantonPriceFeed
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
@@ -198,11 +198,11 @@ template CantonPriceFeed
           source = "emergency-override: " <> reason
 
 -- ============================================================
---               SECTION 2b: MULTI-ORACLE FEED (FIX DAML-R04)
+--               SECTION 2b: MULTI-ORACLE FEED
 -- ============================================================
 
 -- | MultiOracleFeed — Aggregates multiple independent price feeds for an asset.
--- FIX DAML-R04: Instead of relying on a single oracle per asset, this template
+-- Instead of relying on a single oracle per asset, this template
 -- reads from 2+ independent CantonPriceFeed sources and uses the median price.
 -- This prevents any single oracle from manipulating prices.
 --
@@ -226,7 +226,7 @@ template MultiOracleFeed
     maintainer key._1
 
     -- | Get median price from multiple feeds with staleness check
-    -- FIX DAML-R04: Aggregates prices, checks deviation, returns median
+    -- Aggregates prices, checks deviation, returns median
     nonconsuming choice MultiOracle_GetPrice : Money
       with
         requester    : Party
@@ -278,17 +278,17 @@ template MultiOracleFeed
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_FEEDS" (DA.List.length newFeedCids >= minFeeds)
         create this with feedCids = newFeedCids
 
 -- ============================================================
---               SECTION 2c: KEEPER REGISTRY (FIX DAML-R03)
+--               SECTION 2c: KEEPER REGISTRY
 -- ============================================================
 
 -- | KeeperBond — On-ledger bond required for liquidation keepers.
--- FIX DAML-R03: Keepers must register and deposit a bond (in mUSD)
+-- Keepers must register and deposit a bond (in mUSD)
 -- before they can execute liquidations. The bond is slashable if the
 -- keeper submits a liquidation for a healthy position (disincentivizes
 -- griefing attacks). This replaces the fully-open liquidation model.
@@ -348,7 +348,7 @@ template EscrowedCollateral
     amount         : Money          -- Escrowed amount
     depositedAt    : Time           -- First deposit time
     lastUpdatedAt  : Time           -- Last deposit/withdrawal time
-    -- FIX DAML-017: Track original token provenance for USDCx (restored on withdrawal)
+    -- Track original token provenance for USDCx (restored on withdrawal)
     originalSourceChain : Optional Text   -- Original USDCx sourceChain (None for non-USDCx)
     originalCctpNonce   : Optional Int    -- Original USDCx cctpNonce (None for non-USDCx)
     privacyObservers : [Party]      -- Opt-in transparency (from UserPrivacySettings)
@@ -369,7 +369,7 @@ template EscrowedCollateral
       do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
-    -- FIX H-L3: Operator-controlled — called by LendingService after verifying token proof
+    -- Operator-controlled — called by LendingService after verifying token proof
     choice Escrow_AddCollateral : ContractId EscrowedCollateral
       with
         addAmount : Money
@@ -553,7 +553,7 @@ template CantonLendingService
     operator           : Party
     configs            : [CollateralConfig]     -- Per-asset configs
     totalBorrows       : Money                  -- Global total borrowed
-    -- FIX DAML-B1: Lending mUSD supply cap (prevents unbounded minting outside global cap)
+    -- Lending mUSD supply cap (prevents unbounded minting outside global cap)
     lendingSupplyCap   : Money                  -- Max mUSD mintable via lending
     interestRateBps    : Bps                    -- Current global borrow rate
     reserveFactorBps   : Bps                    -- Protocol reserve cut (e.g. 1000 = 10%)
@@ -561,12 +561,12 @@ template CantonLendingService
     minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
     closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
     paused             : Bool
-    -- FIX DAML-R03: Keeper bond requirement for liquidations
+    -- Keeper bond requirement for liquidations
     minKeeperBond      : Money                  -- Minimum bond required to liquidate
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
-    -- FIX LS-COMP: Compliance integration for blacklist/freeze checks
+    -- Compliance integration for blacklist/freeze checks
     complianceRegistryCid : Optional (ContractId ComplianceRegistry)
     observers          : [Party]
   where
@@ -594,13 +594,13 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- FIX LS-COMP: Compliance check before deposit
+        -- Compliance check before deposit
         case complianceRegistryCid of
           Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
           None -> pure ()
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
-        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
         assertMsg "CTN_ISSUER_MISMATCH" (coin.issuer == operator)
         let cfg = getConfig CTN_Coin configs
         assertMsg "CTN_NOT_ENABLED" cfg.enabled
@@ -608,7 +608,7 @@ template CantonLendingService
         -- Consume the actual token (escrow it)
         archive coinCid
 
-        -- FIX C-L2: Look up existing escrow by key; merge if found, create if not
+        -- Look up existing escrow by key; merge if found, create if not
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_Coin)
@@ -637,20 +637,20 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- FIX LS-COMP: Compliance check before deposit
+        -- Compliance check before deposit
         case complianceRegistryCid of
           Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
           None -> pure ()
         usdc <- fetch usdcCid
         assertMsg "NOT_OWNER" (usdc.owner == user)
-        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
         assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == operator)
         let cfg = getConfig CTN_USDC configs
         assertMsg "USDC_NOT_ENABLED" cfg.enabled
 
         archive usdcCid
 
-        -- FIX C-L2: Look up existing escrow by key; merge if found
+        -- Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDC)
@@ -679,13 +679,13 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- FIX LS-COMP: Compliance check before deposit
+        -- Compliance check before deposit
         case complianceRegistryCid of
           Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
           None -> pure ()
         usdcx <- fetch usdcxCid
         assertMsg "NOT_OWNER" (usdcx.owner == user)
-        -- FIX DAML-007: Explicit issuer validation. Note: in production, USDCx issuer may be
+        -- Explicit issuer validation. Note: in production, USDCx issuer may be
         -- the xReserve protocol operator rather than the lending operator. If these differ,
         -- add a configurable `expectedUsdcxIssuer` field to CantonLendingService.
         assertMsg "USDCx_ISSUER_MISMATCH" (usdcx.issuer == operator)
@@ -694,14 +694,14 @@ template CantonLendingService
 
         archive usdcxCid
 
-        -- FIX C-L2: Look up existing escrow by key; merge if found
+        -- Look up existing escrow by key; merge if found
         now <- getTime
         userObs <- lookupUserObservers operator user
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDCx)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = usdcx.amount
-          -- FIX DAML-017: Store original USDCx provenance for restoration on withdrawal
+          -- Store original USDCx provenance for restoration on withdrawal
           None -> create EscrowedCollateral with
             operator
             owner = user
@@ -724,20 +724,20 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- FIX LS-COMP: Compliance check before deposit
+        -- Compliance check before deposit
         case complianceRegistryCid of
           Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
           None -> pure ()
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
-        -- FIX DAML-007: Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
+        -- Explicit issuer validation (defence-in-depth beyond DAML's archive semantics)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
         let cfg = getConfig CTN_SMUSD configs
         assertMsg "SMUSD_NOT_ENABLED" cfg.enabled
 
         archive smusdCid
 
-        -- FIX C-L2: Look up existing escrow by key; merge if found
+        -- Look up existing escrow by key; merge if found
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
         userObs <- lookupUserObservers operator user
@@ -774,7 +774,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        -- FIX LS-COMP: Compliance check before borrow
+        -- Compliance check before borrow
         case complianceRegistryCid of
           Some crCid -> exercise crCid ValidateTransfer with sender = operator; receiver = user
           None -> pure ()
@@ -783,10 +783,10 @@ template CantonLendingService
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
-        -- FIX N-H3: Pass user as expectedOwner to verify all escrows belong to this user
+        -- Pass user as expectedOwner to verify all escrows belong to this user
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
 
-        -- FIX C-L1 + H-L5: Look up existing debt, accrue interest, then increase principal
+        -- Look up existing debt, accrue interest, then increase principal
         existingDebtOpt <- lookupByKey @CantonDebtPosition (operator, user)
         (existingDebt, accruedDebtCid) <- case existingDebtOpt of
           None -> return (0.0, None)
@@ -800,7 +800,7 @@ template CantonLendingService
         let totalDebtAfter = existingDebt + borrowAmount
         assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
 
-        -- FIX DAML-B1: Enforce lending supply cap (prevents unbounded mUSD minting)
+        -- Enforce lending supply cap (prevents unbounded mUSD minting)
         assertMsg "EXCEEDS_LENDING_SUPPLY_CAP" (totalBorrows + borrowAmount <= lendingSupplyCap)
 
         -- Mint mUSD to borrower
@@ -813,7 +813,7 @@ template CantonLendingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX C-L1: Increase existing debt principal (preserving accrued interest) or create new
+        -- Increase existing debt principal (preserving accrued interest) or create new
         now <- getTime
         debtCid <- case accruedDebtCid of
           Some existCid -> exercise existCid Debt_IncreasePrincipal with
@@ -837,7 +837,7 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Repay mUSD debt. Burns the mUSD token and reduces debt position.
-    -- FIX M-9: Repayment is intentionally allowed even when service is paused.
+    -- Repayment is intentionally allowed even when service is paused.
     -- Blocking repayment during pause would trap users in accruing-interest positions,
     -- which is harmful. Liquidation is also allowed during pause for the same reason.
     choice Lending_Repay : (ContractId CantonLendingService, ContractId CantonDebtPosition)
@@ -856,7 +856,7 @@ template CantonLendingService
         -- Accrue interest first
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = user
 
-        -- FIX DAML-002: Atomically couple BurnRateLimiter with CantonMUSD_Burn.
+        -- Atomically couple BurnRateLimiter with CantonMUSD_Burn.
         -- Both execute in same DAML transaction — if rate limit exceeded, burn rolls back.
         _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
           burnAmount = musd.amount
@@ -897,16 +897,16 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
-        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        -- Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
         -- Check health AFTER withdrawal
-        -- FIX N-H2: Accrue interest on-ledger for consistent state
+        -- Accrue interest on-ledger for consistent state
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- FIX N-H1: Filter out escrowCid from otherEscrowCids to prevent double-counting
+          -- Filter out escrowCid from otherEscrowCids to prevent double-counting
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
-          -- FIX N-H3: Pass user as expectedOwner
+          -- Pass user as expectedOwner
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           -- Add value of remaining portion of this escrow (if partial withdrawal)
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -939,7 +939,7 @@ template CantonLendingService
         return (newService, coinCid)
 
     -- ──────────────────────────────────────────────────────
-    --  FIX H-L4: WITHDRAW USDC / USDCx / sMUSD COLLATERAL
+    --  WITHDRAW USDC / USDCx / sMUSD COLLATERAL
     -- ──────────────────────────────────────────────────────
 
     -- | Withdraw USDC collateral. Must pass health check after withdrawal.
@@ -956,13 +956,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
-        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        -- Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- FIX N-H2: Accrue interest on-ledger
+        -- Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          -- Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1005,13 +1005,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
-        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        -- Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- FIX N-H2: Accrue interest on-ledger
+        -- Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          -- Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1030,7 +1030,7 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
-        -- FIX DAML-017: Restore original USDCx provenance from escrowed metadata.
+        -- Restore original USDCx provenance from escrowed metadata.
         -- Note: issuer must remain `operator` due to DAML signatory constraints —
         -- the lending service cannot create contracts signed by the original xReserve issuer.
         -- sourceChain and cctpNonce ARE restored to preserve provenance trail.
@@ -1060,13 +1060,13 @@ template CantonLendingService
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
-        -- FIX M-1: Validate withdraw amount does not exceed escrowed balance
+        -- Validate withdraw amount does not exceed escrowed balance
         assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
 
-        -- FIX N-H2: Accrue interest on-ledger
+        -- Accrue interest on-ledger
         existingDebt <- getExistingDebtAndAccrue operator user
         if existingDebt > 0.0 then do
-          -- FIX N-H1: Filter out escrowCid from otherEscrowCids
+          -- Filter out escrowCid from otherEscrowCids
           let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
           remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
           let remainingThisEscrow = escrow.amount - withdrawAmount
@@ -1085,7 +1085,7 @@ template CantonLendingService
           _ <- exercise escrowCid Escrow_WithdrawPartial with withdrawAmount
           pure ()
 
-        -- FIX M-5: Preserve original escrow deposit timestamp; use escrow depositedAt
+        -- Preserve original escrow deposit timestamp; use escrow depositedAt
         -- rather than resetting to now (which would unfairly restart cooldown timers)
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
@@ -1106,7 +1106,7 @@ template CantonLendingService
     -- | Liquidate an undercollateralized position.
     -- Liquidator repays part of the borrower's debt and receives
     -- seized collateral at a discount (penalty).
-    -- FIX DAML-R03: Requires keeper bond registration and revalidates health factor on-ledger.
+    -- Requires keeper bond registration and revalidates health factor on-ledger.
     -- Uses unsafe price (no staleness check) — liquidations must always proceed.
     choice Lending_Liquidate : (ContractId CantonLendingService, ContractId CantonLiquidationReceipt)
       with
@@ -1118,13 +1118,13 @@ template CantonLendingService
         musdCid          : ContractId CantonMUSD           -- Liquidator's mUSD for repayment
         escrowCids       : [ContractId EscrowedCollateral] -- All borrower's collateral
         priceFeedCids    : [ContractId CantonPriceFeed]
-        keeperBondCid    : ContractId KeeperBond           -- FIX DAML-R03: Keeper's bond proof
+        keeperBondCid    : ContractId KeeperBond           -- Keeper's bond proof
       controller liquidator
       do
-        -- FIX H-L1: Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
+        -- Block self-liquidation (borrower cannot liquidate own position for bonus extraction)
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
 
-        -- FIX DAML-R03: Verify keeper is registered with sufficient bond
+        -- Verify keeper is registered with sufficient bond
         keeperBond <- fetch keeperBondCid
         assertMsg "KEEPER_BOND_OWNER_MISMATCH" (keeperBond.keeper == liquidator)
         assertMsg "KEEPER_BOND_OPERATOR_MISMATCH" (keeperBond.operator == operator)
@@ -1141,7 +1141,7 @@ template CantonLendingService
         assertMsg "DEBT_OWNER_MISMATCH" (debt.borrower == borrower)
         accruedDebtCid <- exercise debtCid Debt_AccrueInterest with caller = liquidator
 
-        -- FIX DAML-R03: On-ledger health factor revalidation using fresh price reads
+        -- On-ledger health factor revalidation using fresh price reads
         -- This ensures the position is ACTUALLY undercollateralized at execution time,
         -- not just when the liquidator submitted the transaction.
         totalRawValue <- computeRawCollateralValue operator borrower configs escrowCids priceFeedCids False
@@ -1152,7 +1152,7 @@ template CantonLendingService
         totalLiqValue <- computeLiquidationThresholdValue operator borrower configs escrowCids priceFeedCids False
         let healthFactor = if totalDebt > 0.0 then totalLiqValue / totalDebt else 999.0
 
-        -- FIX DAML-R03: Revalidate health factor ON-LEDGER at execution time
+        -- Revalidate health factor ON-LEDGER at execution time
         -- Position must be genuinely undercollateralized (health factor < 1.0)
         assertMsg "POSITION_HEALTHY" (healthFactor < 1.0)
 
@@ -1177,10 +1177,10 @@ template CantonLendingService
         newDebtCid <- exercise accruedDebtCid Debt_ReduceForLiquidation with
           reductionAmount = actualRepay
 
-        -- FIX DAML-002: Atomically couple BurnRateLimiter with CantonMUSD_Burn
+        -- Atomically couple BurnRateLimiter with CantonMUSD_Burn
         _ <- exerciseByKey @BurnRateLimiter operator BurnLimit_RecordBurn with
           burnAmount = actualRepay
-        -- FIX C-L3: Split mUSD if liquidator provided more than actualRepay, refund change
+        -- Split mUSD if liquidator provided more than actualRepay, refund change
         if musd.amount > actualRepay then do
           (burnCid, changeCid) <- exercise musdCid CantonMUSD_Split with
             splitAmount = actualRepay
@@ -1190,7 +1190,7 @@ template CantonLendingService
         else
           exercise musdCid CantonMUSD_Burn
 
-        -- FIX H-L2: Transfer seized collateral to liquidator as the appropriate token type
+        -- Transfer seized collateral to liquidator as the appropriate token type
         -- (Seized amount is now minted as a new token for the liquidator)
         userObs <- lookupUserObservers operator liquidator
         case targetEscrow.collateralType of
@@ -1209,7 +1209,7 @@ template CantonLendingService
               privacyObservers = userObs
             pure ()
           CTN_USDCx -> do
-            -- FIX DAML-017: Restore original USDCx provenance from escrowed metadata.
+            -- Restore original USDCx provenance from escrowed metadata.
             -- issuer remains operator due to DAML signatory constraints.
             create USDCx with
               issuer = operator
@@ -1263,18 +1263,18 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
 
     -- | Update collateral config
-    -- FIX M-2: Validate config bounds to prevent operator misconfiguration
-    -- FIX LS-GOV: Governance-gated
+    -- Validate config bounds to prevent operator misconfiguration
+    -- Governance-gated
     choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
@@ -1285,96 +1285,96 @@ template CantonLendingService
         create this with configs = updatedConfigs
 
     -- | Update interest rate (synced from InterestRateService)
-    -- FIX LS-GOV: Governance-gated
+    -- Governance-gated
     choice Lending_UpdateRate : ContractId CantonLendingService
       with
         newRateBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
         create this with interestRateBps = newRateBps
 
     -- | Pause / unpause
-    -- FIX LS-GOV: Governance-gated
+    -- Governance-gated
     choice Lending_SetPaused : ContractId CantonLendingService
       with
         newPaused : Bool
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         create this with paused = newPaused
 
-    -- FIX M-3: Admin choices for operational parameters
-    -- FIX LS-GOV: Governance-gated
+    -- Admin choices for operational parameters
+    -- Governance-gated
     choice Lending_UpdateMinBorrow : ContractId CantonLendingService
       with
         newMinBorrow : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
         create this with minBorrow = newMinBorrow
 
-    -- FIX LS-GOV: Governance-gated
+    -- Governance-gated
     choice Lending_UpdateReserveFactor : ContractId CantonLendingService
       with
         newReserveFactorBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
         create this with reserveFactorBps = newReserveFactorBps
 
-    -- FIX LS-GOV: Governance-gated
+    -- Governance-gated
     choice Lending_UpdateCloseFactor : ContractId CantonLendingService
       with
         newCloseFactorBps : Bps
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
         create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
-    -- FIX LS-GOV: Governance-gated
+    -- Governance-gated
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
-        -- FIX HIGH-01: Use TreasuryWithdrawal (not ParameterUpdate) for reserve withdrawals
+        -- Use TreasuryWithdrawal (not ParameterUpdate) for reserve withdrawals
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
@@ -1423,7 +1423,7 @@ getConfig ct [] = error ("CONFIG_NOT_FOUND: " <> show ct)
 getConfig ct (c :: cs) = if c.collateralType == ct then c else getConfig ct cs
 
 -- | Get existing debt for a user (returns 0 if no position)
--- FIX H-L5: Accrue interest before reading so health checks use current values
+-- Accrue interest before reading so health checks use current values
 getExistingDebt : Party -> Party -> Update Money
 getExistingDebt operator user = do
   debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
@@ -1438,7 +1438,7 @@ getExistingDebt operator user = do
       let newInterest = debt.principalDebt * intToNumeric debt.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
       return (debt.principalDebt + debt.accruedInterest + newInterest)
 
--- | FIX N-H2: Get existing debt AND persist the accrual on-ledger.
+-- | Get existing debt AND persist the accrual on-ledger.
 -- Used by withdrawal paths to keep on-ledger state consistent.
 getExistingDebtAndAccrue : Party -> Party -> Update Money
 getExistingDebtAndAccrue operator user = do
@@ -1472,14 +1472,14 @@ getCtxPriceByType operator CTN_USDCx feeds safe = getCtxPrice operator "USDCx" f
 getCtxPriceByType operator CTN_SMUSD feeds safe = getCtxPrice operator "sMUSD" feeds safe
 
 -- | Compute total collateral value weighted by collateralFactorBps
--- FIX N-H3: Added expectedOwner param — each escrow is verified to belong to the expected user
+-- Added expectedOwner param — each escrow is verified to belong to the expected user
 computeWeightedCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeWeightedCollateralValue _ _ _ [] _ _ = return 0.0
 computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
   escrow <- fetch eCid
   assertMsg "ESCROW_OWNER_MISMATCH" (escrow.owner == expectedOwner)
   let cfg = getConfig escrow.collateralType cfgs
-  -- FIX M-10: Disabled collateral types contribute 0 value to weighted collateral
+  -- Disabled collateral types contribute 0 value to weighted collateral
   -- This prevents borrowing against collateral that has been disabled by the operator
   price <- getCtxPriceByType operator escrow.collateralType feeds safe
   let value = if cfg.enabled
@@ -1489,7 +1489,7 @@ computeWeightedCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds
   return (value + rest)
 
 -- | Compute total raw collateral value (no LTV weighting)
--- FIX N-H3: Added expectedOwner param
+-- Added expectedOwner param
 computeRawCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeRawCollateralValue _ _ _ [] _ _ = return 0.0
 computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do
@@ -1501,7 +1501,7 @@ computeRawCollateralValue operator expectedOwner cfgs (eCid :: eRest) feeds safe
   return (value + rest)
 
 -- | Compute total collateral value weighted by liquidationThresholdBps
--- FIX N-H3: Added expectedOwner param
+-- Added expectedOwner param
 computeLiquidationThresholdValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
 computeLiquidationThresholdValue _ _ _ [] _ _ = return 0.0
 computeLiquidationThresholdValue operator expectedOwner cfgs (eCid :: eRest) feeds safe = do

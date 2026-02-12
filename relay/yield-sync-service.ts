@@ -24,13 +24,13 @@ import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { readSecret, readAndValidatePrivateKey } from "./utils";
 
-// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
   console.error('FATAL: Unhandled promise rejection:', reason);
   process.exit(1);
 });
 
-// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+// Handle uncaught exceptions to prevent silent crashes
 process.on('uncaughtException', (error) => {
   console.error('FATAL: Uncaught exception:', error);
   process.exit(1);
@@ -66,7 +66,7 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
   ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
-  // FIX BE-001: Validate private key is in valid secp256k1 range
+  // Validate private key is in valid secp256k1 range
   bridgePrivateKey: readAndValidatePrivateKey("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
 
   cantonHost: process.env.CANTON_HOST || "localhost",
@@ -81,13 +81,13 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
   epochStartNumber: parseInt(process.env.EPOCH_START || "1", 10),
 };
 
-// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+// Warn if using insecure HTTP transport for Ethereum RPC
 if (DEFAULT_CONFIG.ethereumRpcUrl && DEFAULT_CONFIG.ethereumRpcUrl.startsWith('http://') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('localhost') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('127.0.0.1')) {
   console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
 }
-// FIX BE-004: Reject insecure HTTP transport in production
+// Reject insecure HTTP transport in production
 if (process.env.NODE_ENV === 'production' && DEFAULT_CONFIG.ethereumRpcUrl && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('https://') && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('wss://')) {
-  throw new Error('FIX BE-004: Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
+  throw new Error('Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
 }
 
 // ============================================================
@@ -251,7 +251,7 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
-    // FIX BE-H04: Validate Ethereum addresses before use
+    // Validate Ethereum addresses before use
     if (!config.treasuryAddress || !ethers.isAddress(config.treasuryAddress)) {
       throw new Error(`Invalid TREASURY_ADDRESS: ${config.treasuryAddress}`);
     }
@@ -416,7 +416,7 @@ class YieldSyncService {
     const sharePriceIncrease = globalSharePrice - this.lastGlobalSharePrice;
     console.log(`[YieldSync] Share price increase: ${sharePriceIncrease}`);
 
-    // FIX BE-C02: Sanity bound — reject share price changes > 10% per epoch
+    // Sanity bound — reject share price changes > 10% per epoch
     // Prevents relay compromise from pushing catastrophic price updates
     // (DAML-side SyncGlobalSharePrice has its own 10% decrease cap + quorum)
     if (this.lastGlobalSharePrice > 0n) {
@@ -431,13 +431,13 @@ class YieldSyncService {
 
     // ═══════════════════════════════════════════════════════════════════
     // STEP 3: Collect attestation quorum and sync global share price to Canton
-    // FIX RELAY-H-02: Route through multi-attestor quorum instead of direct
+    // Route through multi-attestor quorum instead of direct
     // operator exercise. Independent validators must submit SharePriceAttestations
     // before sync is accepted. This eliminates the single-relay trust boundary.
     // ═══════════════════════════════════════════════════════════════════
     console.log(`\n[YieldSync] Step 3: Collecting attestation quorum for Canton sync...`);
 
-    // FIX RELAY-H-02: Wait for independent validators to submit SharePriceAttestations.
+    // Wait for independent validators to submit SharePriceAttestations.
     // Each validator independently reads Ethereum share price and creates an attestation.
     // The relay (operator) collects attestation CIDs once quorum is reached.
     const attestationCids = await this.collectAttestationQuorum(this.currentEpoch);
@@ -447,7 +447,7 @@ class YieldSyncService {
       return;
     }
 
-    // FIX RELAY-H-02: Retrieve pre-approved governance proof for parameter update
+    // Retrieve pre-approved governance proof for parameter update
     const governanceProofCid = await this.getGovernanceProof("CantonSMUSD");
 
     if (!governanceProofCid) {
@@ -487,11 +487,11 @@ class YieldSyncService {
   }
 
   // ============================================================
-  //  FIX RELAY-H-02: Attestation Quorum Collection
+  //  Attestation Quorum Collection
   // ============================================================
 
   /**
-   * FIX RELAY-H-02: Collect attestation quorum from independent validators.
+   * Collect attestation quorum from independent validators.
    * Polls for SharePriceAttestation contracts matching the current epoch
    * until quorum (≥2/3 of authorized validators) is reached or timeout.
    *
@@ -547,7 +547,7 @@ class YieldSyncService {
   }
 
   /**
-   * FIX RELAY-H-02: Retrieve a pre-approved governance proof for CantonSMUSD ParameterUpdate.
+   * Retrieve a pre-approved governance proof for CantonSMUSD ParameterUpdate.
    * Governance proofs are created through the MultiSigProposal flow (Proposal_Execute)
    * and must be approved by the required governor quorum before they can be used.
    */

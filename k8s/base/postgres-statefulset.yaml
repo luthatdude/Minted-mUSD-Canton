@@ -47,7 +47,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: postgres
-          # FIX IF-H01: Pin to SHA256 digest for supply chain security
+          # Pin to SHA256 digest for supply chain security
           # To update: docker pull postgres:16.4-alpine && docker inspect --format='{{index .RepoDigests 0}}' postgres:16.4-alpine
           image: postgres:16.4-alpine@sha256:d898b0b78a2627cb4ee63464a14571e0a38aae2c66a9e0d7c5a44715c7bdc744
           ports:
@@ -89,7 +89,7 @@ spec:
           livenessProbe:
             exec:
               command:
-                # FIX INFRA-L04: $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
+                # $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
                 # Use shell wrapper to resolve env vars at runtime
                 - /bin/sh
                 - -c
@@ -101,7 +101,7 @@ spec:
           readinessProbe:
             exec:
               command:
-                # FIX INFRA-L04: $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
+                # $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
                 - /bin/sh
                 - -c
                 - pg_isready -U "$POSTGRES_USER" -d canton

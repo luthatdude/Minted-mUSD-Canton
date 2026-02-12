@@ -4,7 +4,7 @@
 import { ethers, Wallet } from "ethers";
 import { createLogger, format, transports } from "winston";
 
-// FIX BE-003: Crash handlers to prevent silent failures
+// Crash handlers to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
   console.error('FATAL: Unhandled promise rejection:', reason);
   process.exit(1);

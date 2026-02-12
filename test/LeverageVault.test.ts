@@ -148,7 +148,7 @@ describe('LeverageVault', function () {
         initialDeposit,
         20, // 2.0x leverage
         5,  // Max 5 loops
-        0,  // FIX CODEX-4: Use global slippage default
+        0,  // Use global slippage default
         futureDeadline()
       );
 
@@ -395,7 +395,7 @@ describe('LeverageVault', function () {
     });
   });
 
-  describe('Pause/Unpause (FIX H-03)', function () {
+  describe('Pause/Unpause', function () {
     it('should pause operations', async function () {
       await leverageVault.pause();
       expect(await leverageVault.paused()).to.be.true;
@@ -489,10 +489,10 @@ describe('LeverageVault', function () {
   });
 
   // ================================================================
-  //  FIX CODEX-4: User-Specified Slippage Tests
+  //  User-Specified Slippage Tests
   // ================================================================
 
-  describe('User-Specified Slippage (FIX CODEX-4)', function () {
+  describe('User-Specified Slippage', function () {
     it('should open position with user-specified slippage (stricter than global)', async function () {
       const initialDeposit = ethers.parseEther('10');
 

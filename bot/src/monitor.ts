@@ -6,26 +6,26 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
   console.error('FATAL: Unhandled promise rejection:', reason);
   process.exit(1);
 });
 
-// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+// Handle uncaught exceptions to prevent silent crashes
 process.on('uncaughtException', (error) => {
   console.error('FATAL: Uncaught exception:', error);
   process.exit(1);
 });
 
-// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+// Warn if using insecure HTTP transport for Ethereum RPC
 const _rpcUrl = process.env.RPC_URL || '';
 if (_rpcUrl.startsWith('http://') && !_rpcUrl.includes('localhost') && !_rpcUrl.includes('127.0.0.1')) {
   console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
 }
-// FIX BE-004: Reject insecure HTTP transport in production
+// Reject insecure HTTP transport in production
 if (process.env.NODE_ENV === 'production' && _rpcUrl && !_rpcUrl.startsWith('https://') && !_rpcUrl.startsWith('wss://')) {
-  throw new Error('FIX BE-004: Insecure RPC transport in production. RPC_URL must use https:// or wss://');
+  throw new Error('Insecure RPC transport in production. RPC_URL must use https:// or wss://');
 }
 
 const BORROW_MODULE_ABI = [
@@ -65,7 +65,7 @@ interface PositionInfo {
 }
 
 async function monitorPositions(borrowerAddresses: string[]) {
-  // FIX BE-007: Add RPC timeout to prevent indefinite hanging
+  // Add RPC timeout to prevent indefinite hanging
   const rpcFetchReq = new ethers.FetchRequest(process.env.RPC_URL || "http://localhost:8545");
   rpcFetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
   const provider = new ethers.JsonRpcProvider(rpcFetchReq, undefined, { staticNetwork: true, batchMaxCount: 1 });
@@ -180,7 +180,7 @@ async function watchMode(borrowerAddresses: string[], intervalMs: number = 30000
 
 // Scan for borrowers from events
 async function scanBorrowers(fromBlock: number): Promise<string[]> {
-  // FIX BE-007: Add RPC timeout to prevent indefinite hanging
+  // Add RPC timeout to prevent indefinite hanging
   const rpcFetchReq = new ethers.FetchRequest(process.env.RPC_URL || "http://localhost:8545");
   rpcFetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
   const provider = new ethers.JsonRpcProvider(rpcFetchReq, undefined, { staticNetwork: true, batchMaxCount: 1 });

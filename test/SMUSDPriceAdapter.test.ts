@@ -183,7 +183,7 @@ describe("SMUSDPriceAdapter", function () {
     it("should clamp when share price is below minimum (0.95 USD)", async function () {
       await setSharePrice("0.90");
       const [, answer] = await adapter.latestRoundData();
-      // FIX SPA-M03: price is clamped to minSharePrice instead of reverting
+      // price is clamped to minSharePrice instead of reverting
       expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
 
@@ -191,7 +191,7 @@ describe("SMUSDPriceAdapter", function () {
       await setSharePrice("2.5");
       await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
-      // FIX SPA-M03: price is clamped to maxSharePrice instead of reverting
+      // price is clamped to maxSharePrice instead of reverting
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
 
@@ -211,7 +211,7 @@ describe("SMUSDPriceAdapter", function () {
     it("should clamp when price is just below minimum", async function () {
       await setSharePrice("0.94");
       const [, answer] = await adapter.latestRoundData();
-      // FIX SPA-M03: price is clamped to minSharePrice
+      // price is clamped to minSharePrice
       expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
 
@@ -219,7 +219,7 @@ describe("SMUSDPriceAdapter", function () {
       await setSharePrice("2.01");
       await convergePriceAdapter(adapter);
       const [, answer] = await adapter.latestRoundData();
-      // FIX SPA-M03: price is clamped to maxSharePrice
+      // price is clamped to maxSharePrice
       expect(answer).to.equal(ethers.parseUnits("2.0", 8));
     });
 
@@ -251,7 +251,7 @@ describe("SMUSDPriceAdapter", function () {
     it("should clamp on getRoundData when price out of bounds", async function () {
       await setSharePrice("0.50");
       const [, answer] = await adapter.getRoundData(1);
-      // FIX SPA-M03: clamps to minSharePrice instead of reverting
+      // clamps to minSharePrice instead of reverting
       expect(answer).to.equal(ethers.parseUnits("0.95", 8));
     });
   });

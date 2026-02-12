@@ -776,7 +776,7 @@ test_PauseUnpause = script do
       cantonCid
       smusdCid
 
-  -- Pause again — FIX H-B1: withdrawals still allowed when paused (users can always exit)
+  -- Pause again — withdrawals still allowed when paused (users can always exit)
   pauseProof2 <- submitMulti [operator, governor] [] do
     createCmd GovernanceActionLog with
       operator

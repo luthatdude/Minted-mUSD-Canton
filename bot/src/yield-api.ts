@@ -21,13 +21,13 @@ import * as path from "path";
 
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
-// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
   console.error('FATAL: Unhandled promise rejection:', reason);
   process.exit(1);
 });
 
-// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+// Handle uncaught exceptions to prevent silent crashes
 process.on('uncaughtException', (error) => {
   console.error('FATAL: Uncaught exception:', error);
   process.exit(1);
@@ -127,7 +127,7 @@ const PROTOCOL_SECURITY: Record<string, { score: number; tier: string }> = {
   "default": { score: 40, tier: "D" },
 };
 
-// FIX V6-HIGH: Borrow rates are FALLBACK ESTIMATES — allow env-driven overrides
+// Borrow rates are FALLBACK ESTIMATES — allow env-driven overrides
 const BORROW_RATES: Record<string, number> = (() => {
   const defaults: Record<string, number> = {
     "aave-v3": 3.5,
@@ -194,7 +194,7 @@ async function fetchAndProcess(): Promise<void> {
       logger.error(`DeFi Llama returned ${resp.status}`);
       return;
     }
-    // FIX: Schema validation — verify response structure before using
+    // Schema validation — verify response structure before using
     const text = await resp.text();
     const MAX_RESPONSE_SIZE = 50 * 1024 * 1024; // 50MB
     if (text.length > MAX_RESPONSE_SIZE) {
@@ -319,7 +319,7 @@ function sendJSON(res: http.ServerResponse, data: unknown, status = 200): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FIX INSTITUTIONAL: In-memory rate limiting (token bucket per IP)
+// In-memory rate limiting (token bucket per IP)
 // ═══════════════════════════════════════════════════════════════════════════
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 60;  // 60 requests per minute per IP
@@ -345,7 +345,7 @@ setInterval(() => {
 }, 300_000);
 
 const server = http.createServer((req, res) => {
-  // FIX BE-RATE-01: Use socket.remoteAddress as primary IP source to prevent
+  // Use socket.remoteAddress as primary IP source to prevent
   // X-Forwarded-For spoofing. Only trust X-Forwarded-For behind a known reverse proxy.
   const trustedProxy = process.env.TRUSTED_PROXY_SUBNET || "";
   const socketIp = req.socket.remoteAddress || "unknown";
@@ -358,7 +358,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // FIX: Restrict CORS to configured origin instead of wildcard
+  // Restrict CORS to configured origin instead of wildcard
   const allowedOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
   // CORS preflight
   if (req.method === "OPTIONS") {
@@ -464,7 +464,7 @@ async function main(): Promise<void> {
   setInterval(() => fetchAndProcess(), interval);
 
   // Start HTTP server
-  // FIX: Bind to localhost — use a reverse proxy for external access
+  // Bind to localhost — use a reverse proxy for external access
   const HOST = process.env.HOST || "127.0.0.1";
   server.listen(PORT, HOST, () => {
     logger.info(`Yield API listening on http://${HOST}:${PORT}`);
@@ -477,7 +477,7 @@ async function main(): Promise<void> {
   });
 }
 
-// FIX BE-009: Graceful shutdown handlers
+// Graceful shutdown handlers
 const gracefulShutdown = (signal: string) => {
   logger.info(`${signal} received. Shutting down gracefully...`);
   server.close(() => {

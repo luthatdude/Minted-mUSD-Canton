@@ -1,6 +1,6 @@
 /**
  * Yield Scanner Unit Tests
- * FIX INFRA: Adds CI test coverage for bot services
+ * Adds CI test coverage for bot services
  */
 
 import { YieldScanner, YieldOpportunity, ScanResult } from "../yield-scanner";

@@ -1,7 +1,7 @@
 export const COLLATERAL_VAULT_ABI = [
   "function getDeposit(address user, address token) view returns (uint256)",
   "function getSupportedTokens() view returns (address[])",
-  // FIX FE-M01 (Final Audit): Field order must match Solidity: (bool, uint256, uint256, uint256)
+  // Field order must match Solidity: (bool, uint256, uint256, uint256)
   "function getConfig(address token) view returns (bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps)",
   "function deposit(address token, uint256 amount)",
   "function withdraw(address token, uint256 amount, address user)",

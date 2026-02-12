@@ -1,6 +1,6 @@
 /**
  * Bot Configuration & Security Tests
- * FIX INFRA: Validates secret management, key formats, and timeout configs
+ * Validates secret management, key formats, and timeout configs
  */
 
 import * as fs from "fs";

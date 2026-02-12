@@ -1,5 +1,5 @@
 # Minted mUSD Protocol — Prometheus Alerting Rules
-# FIX: Addresses audit finding for missing monitoring/alerting (P0 operational gap)
+# Monitoring and alerting rules
 
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
