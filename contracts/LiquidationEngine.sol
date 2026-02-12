@@ -219,7 +219,12 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         // If any call reverts, the entire transaction reverts atomically.
 
         // 1. Liquidator pays mUSD (burns it)
-        musd.burn(msg.sender, actualRepay);
+        // FIX CODEX-P2: Transfer mUSD from liquidator to this contract, then self-burn.
+        // Previously called musd.burn(msg.sender, actualRepay) which requires the
+        // liquidator to have pre-approved the LiquidationEngine — an undocumented
+        // requirement that causes silent liquidation failures in production bots.
+        IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), actualRepay);
+        musd.burn(address(this), actualRepay);
 
         // 2. Seize collateral to liquidator (moved before reduceDebt for safer ordering)
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);

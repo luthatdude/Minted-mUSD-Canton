@@ -901,13 +901,16 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///         This effectively distributes the loss across all borrowers by
     ///         slightly reducing the interest base. Should only be used as a
     ///         last resort when reserves are insufficient.
-    /// @dev This does NOT change individual debt positions — it reduces the
-    ///      global totalBorrows which lowers utilization and interest rates,
-    ///      effectively spreading the cost across future interest payments.
+    /// @dev FIX CODEX-P1: Socializes bad debt by proportionally reducing each active
+    ///      borrower's debt, maintaining the invariant sum(user_debts) == totalBorrows.
+    ///      Without proportional reduction, totalBorrows drops below user sums,
+    ///      breaking interest accrual math (overallocation via proportional share).
     /// @param amount Amount of bad debt to socialize
-    function socializeBadDebt(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @param borrowers Array of active borrower addresses whose debt should be reduced
+    function socializeBadDebt(uint256 amount, address[] calldata borrowers) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
         require(amount > 0, "ZERO_AMOUNT");
         require(badDebt > 0, "NO_BAD_DEBT");
+        require(borrowers.length > 0, "NO_BORROWERS");
 
         uint256 socializeAmount = amount > badDebt ? badDebt : amount;
         uint256 totalBorrowsBefore = totalBorrows;
@@ -915,10 +918,34 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         badDebt -= socializeAmount;
         badDebtCovered += socializeAmount;
 
-        // FIX CR-01: Decrement totalBorrows so utilization rate reflects the write-off.
-        // Without this, totalBorrows stays permanently inflated after socialization.
-        if (totalBorrows >= socializeAmount) {
-            totalBorrows -= socializeAmount;
+        // FIX CODEX-P1: Proportionally reduce each borrower's debt to maintain invariant.
+        // Each borrower's reduction = socializeAmount * (userDebt / totalBorrows)
+        uint256 totalReduced = 0;
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            _accrueInterest(borrowers[i]);
+            DebtPosition storage pos = positions[borrowers[i]];
+            uint256 userTotal = pos.principal + pos.accruedInterest;
+            if (userTotal == 0) continue;
+
+            uint256 userReduction = (socializeAmount * userTotal) / totalBorrowsBefore;
+            if (userReduction == 0) continue;
+            if (userReduction > userTotal) userReduction = userTotal;
+
+            // Reduce accrued interest first, then principal
+            if (userReduction <= pos.accruedInterest) {
+                pos.accruedInterest -= userReduction;
+            } else {
+                uint256 remaining = userReduction - pos.accruedInterest;
+                pos.accruedInterest = 0;
+                pos.principal = pos.principal > remaining ? pos.principal - remaining : 0;
+            }
+            totalReduced += userReduction;
+            emit DebtAdjusted(borrowers[i], pos.principal + pos.accruedInterest, "BAD_DEBT_SOCIALIZED");
+        }
+
+        // Reduce totalBorrows by the actual amount reduced across users
+        if (totalBorrows >= totalReduced) {
+            totalBorrows -= totalReduced;
         } else {
             totalBorrows = 0;
         }

@@ -44,6 +44,10 @@ contract TreasuryV2 is
     // FIX H-2: Minimum time between fee accruals to prevent flash loan manipulation
     uint256 public constant MIN_ACCRUAL_INTERVAL = 1 hours;
 
+    // FIX CODEX-P1: Maximum reasonable yield per accrual interval (5%).
+    // Value jumps above this threshold are likely strategy recovery, not yield.
+    uint256 public constant MAX_YIELD_PER_ACCRUAL_BPS = 2000;
+
     // ═══════════════════════════════════════════════════════════════════════
     // ROLES
     // ═══════════════════════════════════════════════════════════════════════
@@ -317,6 +321,8 @@ contract TreasuryV2 is
 
     /// @dev Event for strategy totalValue() failures
     event StrategyValueQueryFailed(address indexed strategy);
+    /// @dev FIX CODEX-P1: Emitted when a sudden value jump suggests strategy recovery, not yield
+    event StrategyRecoveryDetected(uint256 previousValue, uint256 currentValue, uint256 increase);
 
     /**
      * @notice Total value across reserve + all strategies
@@ -748,8 +754,24 @@ contract TreasuryV2 is
         
         uint256 currentValue = totalValue();
 
+        // FIX CODEX-P1: Detect strategy recovery (value jump after previous dip).
+        // If any strategy was reverting, totalValue() returned a depressed number.
+        // When it recovers, the jump is recovered principal, not yield.
+        // We detect this by checking if currentValue jumped by more than a
+        // reasonable yield cap (MAX_YIELD_PER_ACCRUAL_BPS) relative to lastRecordedValue.
+        // If so, skip fee accrual and re-baseline to prevent charging fees on principal.
         if (currentValue > lastRecordedValue) {
-            uint256 yield_ = currentValue - lastRecordedValue;
+            uint256 increase = currentValue - lastRecordedValue;
+            uint256 maxReasonableYield = (lastRecordedValue * MAX_YIELD_PER_ACCRUAL_BPS) / BPS;
+            if (increase > maxReasonableYield && lastRecordedValue > 0) {
+                // Likely strategy recovery, not yield — re-baseline without accruing fees
+                emit StrategyRecoveryDetected(lastRecordedValue, currentValue, increase);
+                lastRecordedValue = currentValue;
+                lastFeeAccrual = block.timestamp;
+                return;
+            }
+
+            uint256 yield_ = increase;
             uint256 protocolFee = (yield_ * fees.performanceFeeBps) / BPS;
 
             fees.accruedFees += protocolFee;

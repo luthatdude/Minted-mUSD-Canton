@@ -54,6 +54,8 @@ contract PriceOracle is AccessControl {
     event CircuitBreakerTriggered(address indexed token, uint256 oldPrice, uint256 newPrice, uint256 deviationBps);
     event MaxDeviationUpdated(uint256 oldBps, uint256 newBps);
     event CircuitBreakerToggled(bool enabled);
+    /// @dev FIX CODEX-P1: Emitted when permissionless refreshPrice() advances cached price
+    event PriceRefreshed(address indexed token, uint256 oldPrice, uint256 newPrice);
 
     // ═══════════════════════════════════════════════════════════════════════
     // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
@@ -199,9 +201,8 @@ contract PriceOracle is AccessControl {
     }
 
     /// @notice Get the USD price of a collateral token, normalized to 18 decimals
-    /// @notice Get the USD price of a collateral token, normalized to 18 decimals
-    /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed().
-    ///      Keeping getPrice as view ensures interface compatibility (IPriceOracleLiq, etc.).
+    /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed() / refreshPrice().
+    ///      Keeping getPrice as view ensures interface compatibility.
     function getPrice(address token) external view returns (uint256 price) {
         FeedConfig storage config = feeds[token];
         require(config.enabled, "FEED_NOT_ENABLED");
@@ -245,6 +246,38 @@ contract PriceOracle is AccessControl {
         }
         
         lastKnownPrice[token] = newPrice;
+    }
+
+    /// @notice FIX CODEX-P1: Permissionless price refresh — anyone can call to advance
+    ///         lastKnownPrice when the current feed price is within deviation tolerance.
+    /// @dev Solves the circuit breaker freeze: after a legitimate market move that stays
+    ///      within maxDeviationBps, bots/keepers call refreshPrice() to ratchet the
+    ///      cached price forward. For moves ABOVE the threshold, admin updatePrice()
+    ///      is still required (intentional — large deviations need human review).
+    ///      Without this, a series of small moves (each <threshold) that accumulate
+    ///      beyond the threshold would permanently freeze getPrice().
+    function refreshPrice(address token) external {
+        FeedConfig storage config = feeds[token];
+        require(config.enabled, "FEED_NOT_ENABLED");
+
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
+        require(answer > 0, "INVALID_PRICE");
+        require(block.timestamp - updatedAt <= config.stalePeriod, "STALE_PRICE");
+        require(answeredInRound >= roundId, "STALE_ROUND");
+
+        uint8 feedDecimals = config.feed.decimals();
+        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+
+        // Only update if within deviation tolerance (same check as getPrice)
+        if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
+            uint256 oldPrice = lastKnownPrice[token];
+            uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
+            uint256 deviationBps = (diff * 10000) / oldPrice;
+            require(deviationBps <= maxDeviationBps, "DEVIATION_TOO_LARGE");
+        }
+
+        lastKnownPrice[token] = newPrice;
+        emit PriceRefreshed(token, lastKnownPrice[token], newPrice);
     }
 
     /// @notice Get the USD value of a specific amount of collateral

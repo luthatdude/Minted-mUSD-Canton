@@ -591,7 +591,14 @@ describe("LiquidationEngine", function () {
         liquidator,
       } = await loadFixture(deployLiquidationFixture);
 
-      // Create a bad debt scenario
+      // Set up user2 as an active borrower (needed for socialization target)
+      await weth.mint(user2.address, ethers.parseEther("10"));
+      const user2Deposit = ethers.parseEther("5");
+      await weth.connect(user2).approve(await collateralVault.getAddress(), user2Deposit);
+      await collateralVault.connect(user2).deposit(await weth.getAddress(), user2Deposit);
+      await borrowModule.connect(user2).borrow(ethers.parseEther("5000"));
+
+      // Create a bad debt scenario with user1
       const depositAmount = ethers.parseEther("1");
       await weth.connect(user1).approve(await collateralVault.getAddress(), depositAmount);
       await collateralVault.connect(user1).deposit(await weth.getAddress(), depositAmount);
@@ -601,7 +608,7 @@ describe("LiquidationEngine", function () {
       await ethFeed.setAnswer(10000000000n); // $100
       await priceOracle.updatePrice(await weth.getAddress());
 
-      // Liquidate — creates bad debt
+      // Liquidate user1 — creates bad debt
       const repayAmount = ethers.parseEther("1400");
       await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
       await liquidationEngine
@@ -611,12 +618,17 @@ describe("LiquidationEngine", function () {
       const badDebtAmount = await borrowModule.badDebt();
       expect(badDebtAmount).to.be.gt(0);
 
-      // Socialize the bad debt (last resort)
-      const tx = await borrowModule.connect(owner).socializeBadDebt(badDebtAmount);
+      // Socialize the bad debt across active borrowers (last resort)
+      const user2DebtBefore = await borrowModule.totalDebt(user2.address);
+      const tx = await borrowModule.connect(owner).socializeBadDebt(badDebtAmount, [user2.address]);
       await expect(tx).to.emit(borrowModule, "BadDebtSocialized");
 
       // Bad debt accumulator should be cleared
       expect(await borrowModule.badDebt()).to.equal(0);
+
+      // User2's debt should have been reduced proportionally
+      const user2DebtAfter = await borrowModule.totalDebt(user2.address);
+      expect(user2DebtAfter).to.be.lt(user2DebtBefore);
     });
 
     it("Should reject recordBadDebt from non-LIQUIDATION_ROLE", async function () {
@@ -637,7 +649,7 @@ describe("LiquidationEngine", function () {
       const { borrowModule, user1 } = await loadFixture(deployLiquidationFixture);
 
       await expect(
-        borrowModule.connect(user1).socializeBadDebt(ethers.parseEther("100"))
+        borrowModule.connect(user1).socializeBadDebt(ethers.parseEther("100"), [user1.address])
       ).to.be.reverted;
     });
 
@@ -650,10 +662,10 @@ describe("LiquidationEngine", function () {
     });
 
     it("Should reject socializeBadDebt when no bad debt exists", async function () {
-      const { borrowModule, owner } = await loadFixture(deployLiquidationFixture);
+      const { borrowModule, owner, user1 } = await loadFixture(deployLiquidationFixture);
 
       await expect(
-        borrowModule.connect(owner).socializeBadDebt(ethers.parseEther("100"))
+        borrowModule.connect(owner).socializeBadDebt(ethers.parseEther("100"), [user1.address])
       ).to.be.revertedWith("NO_BAD_DEBT");
     });
   });
