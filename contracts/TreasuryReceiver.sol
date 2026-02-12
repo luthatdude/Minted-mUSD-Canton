@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -10,6 +10,7 @@ import "./interfaces/ITreasuryV2.sol";
 import "./interfaces/IWormhole.sol";
 import "./interfaces/ITokenBridge.sol";
 import "./interfaces/IDirectMint.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title TreasuryReceiver
@@ -18,7 +19,7 @@ import "./interfaces/IDirectMint.sol";
  * @dev Migrated from Ownable to AccessControl for role-based access
  * @dev Added Pausable for emergency controls
  */
-contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
+contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
 
  // ============ Roles ============
@@ -102,7 +103,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
  address _wormhole,
  address _tokenBridge,
  address _directMint,
- address _treasury
+ address _treasury,
+ address _timelock
  ) {
  if (_usdc == address(0)) revert InvalidAddress();
  if (_wormhole == address(0)) revert InvalidAddress();
@@ -110,6 +112,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
  if (_directMint == address(0)) revert InvalidAddress();
  if (_treasury == address(0)) revert InvalidAddress();
  
+ _setTimelock(_timelock);
  usdc = IERC20(_usdc);
  wormhole = IWormhole(_wormhole);
  tokenBridge = ITokenBridge(_tokenBridge);
@@ -267,7 +270,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
  */
  event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
 
- function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function emergencyWithdraw(address token, address to, uint256 amount) external onlyTimelock {
  if (to == address(0)) revert InvalidAddress();
  // Block USDC withdrawal unless contract is paused (true emergency).
  // When paused, admin needs full access to recover all tokens.

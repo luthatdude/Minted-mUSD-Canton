@@ -34,7 +34,7 @@ describe("CollateralVault", function () {
 
     // Deploy vault
     const VaultFactory = await ethers.getContractFactory("CollateralVault");
-    vault = await VaultFactory.deploy();
+    vault = await VaultFactory.deploy(deployer.address);
     await vault.waitForDeployment();
 
     // Grant roles
@@ -75,31 +75,31 @@ describe("CollateralVault", function () {
 
     it("should reject duplicate collateral add", async function () {
       await expect(
-        vault.requestAddCollateral(await weth.getAddress(), WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
+        vault.addCollateral(await weth.getAddress(), WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
       ).to.be.revertedWith("ALREADY_ADDED");
     });
 
     it("should reject zero address collateral", async function () {
       await expect(
-        vault.requestAddCollateral(ethers.ZeroAddress, WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
+        vault.addCollateral(ethers.ZeroAddress, WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
       ).to.be.revertedWith("INVALID_TOKEN");
     });
 
     it("should reject factor >= threshold", async function () {
       await expect(
-        vault.requestAddCollateral(await wbtc.getAddress(), 8000n, 8000n, 500n)
+        vault.addCollateral(await wbtc.getAddress(), 8000n, 8000n, 500n)
       ).to.be.revertedWith("INVALID_FACTOR");
     });
 
     it("should reject threshold > 95%", async function () {
       await expect(
-        vault.requestAddCollateral(await wbtc.getAddress(), 9000n, 9600n, 500n)
+        vault.addCollateral(await wbtc.getAddress(), 9000n, 9600n, 500n)
       ).to.be.revertedWith("THRESHOLD_TOO_HIGH");
     });
 
     it("should reject penalty > 20%", async function () {
       await expect(
-        vault.requestAddCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
+        vault.addCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
       ).to.be.revertedWith("INVALID_PENALTY");
     });
 
@@ -112,7 +112,7 @@ describe("CollateralVault", function () {
       }
       const oneMore = await MockERC20Factory.deploy("TooMany", "TM", 18);
       await expect(
-        vault.requestAddCollateral(await oneMore.getAddress(), 5000n, 6000n, 500n)
+        vault.addCollateral(await oneMore.getAddress(), 5000n, 6000n, 500n)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
 
@@ -136,7 +136,7 @@ describe("CollateralVault", function () {
 
     it("should reject unauthorized config changes", async function () {
       await expect(
-        vault.connect(user1).requestAddCollateral(await wbtc.getAddress(), 7500n, 8000n, 500n)
+        vault.connect(user1).addCollateral(await wbtc.getAddress(), 7500n, 8000n, 500n)
       ).to.be.reverted;
     });
   });

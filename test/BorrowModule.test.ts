@@ -23,9 +23,9 @@ describe("BorrowModule", function () {
     const MUSD = await ethers.getContractFactory("MUSD");
     const musd = await MUSD.deploy(ethers.parseEther("100000000")); // 100M cap
 
-    // Deploy PriceOracle (no constructor args)
+    // Deploy PriceOracle (timelock = owner for testing)
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy();
+    const priceOracle = await PriceOracle.deploy(owner.address);
 
     // Deploy mock Chainlink aggregator (decimals, initialAnswer)
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
@@ -36,7 +36,7 @@ describe("BorrowModule", function () {
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(owner.address);
 
     // Add collateral (token, collateralFactorBps, liquidationThresholdBps, liquidationPenaltyBps)
     await timelockAddCollateral(
@@ -57,7 +57,8 @@ describe("BorrowModule", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% APR
-      ethers.parseEther("100") // 100 mUSD min debt
+      ethers.parseEther("100"), // 100 mUSD min debt
+      owner.address
     );
 
     // Grant roles
@@ -375,13 +376,13 @@ describe("BorrowModule", function () {
       const { borrowModule, owner } = await loadFixture(deployBorrowModuleFixture);
 
       // Max is 5000 bps (50%)
-      await expect(borrowModule.connect(owner).requestInterestRate(6000)).to.be.reverted;
+      await expect(borrowModule.connect(owner).setInterestRate(6000)).to.be.reverted;
     });
 
     it("Should reject non-admin setting interest rate", async function () {
       const { borrowModule, user1 } = await loadFixture(deployBorrowModuleFixture);
 
-      await expect(borrowModule.connect(user1).requestInterestRate(800)).to.be.reverted;
+      await expect(borrowModule.connect(user1).setInterestRate(800)).to.be.reverted;
     });
 
     it("Should allow admin to set minimum debt", async function () {

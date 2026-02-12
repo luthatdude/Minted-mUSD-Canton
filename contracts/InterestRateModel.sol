@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // Minted mUSD Protocol - Interest Rate Model
 // Compound-style utilization-based interest rate curve
 

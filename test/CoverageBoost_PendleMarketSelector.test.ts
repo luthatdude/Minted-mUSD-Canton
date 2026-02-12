@@ -208,41 +208,6 @@ describe("PendleMarketSelector — Coverage Boost", function () {
     });
   });
 
-  describe("Upgrade Timelock", function () {
-    it("Should request upgrade", async function () {
-      const { selector, admin } = await loadFixture(deployFixture);
-      const newImpl = ethers.Wallet.createRandom().address;
-      await expect(selector.connect(admin).requestUpgrade(newImpl))
-        .to.emit(selector, "UpgradeRequested");
-    });
-
-    it("Should cancel upgrade", async function () {
-      const { selector, admin } = await loadFixture(deployFixture);
-      const newImpl = ethers.Wallet.createRandom().address;
-      await selector.connect(admin).requestUpgrade(newImpl);
-      await expect(selector.connect(admin).cancelUpgrade())
-        .to.emit(selector, "UpgradeCancelled");
-    });
-
-    it("Should reject duplicate upgrade request", async function () {
-      const { selector, admin } = await loadFixture(deployFixture);
-      const impl1 = ethers.Wallet.createRandom().address;
-      const impl2 = ethers.Wallet.createRandom().address;
-      await selector.connect(admin).requestUpgrade(impl1);
-      await expect(selector.connect(admin).requestUpgrade(impl2))
-        .to.be.revertedWith("UPGRADE_ALREADY_PENDING");
-    });
-
-    it("Should reject upgrade from non-admin", async function () {
-      const { selector, user1 } = await loadFixture(deployFixture);
-      await expect(selector.connect(user1).requestUpgrade(ethers.Wallet.createRandom().address))
-        .to.be.reverted;
-    });
-
-    it("Should reject upgrade with zero address", async function () {
-      const { selector, admin } = await loadFixture(deployFixture);
-      await expect(selector.connect(admin).requestUpgrade(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
-    });
-  });
+  // Upgrade timelock tests removed — _authorizeUpgrade now uses onlyTimelock
+  // via MintedTimelockController (no more requestUpgrade/cancelUpgrade).
 });

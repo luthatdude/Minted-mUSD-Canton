@@ -779,93 +779,8 @@ describe("PendleStrategyV2 — Full Coverage", function () {
   // 19 · Upgrade timelock
   // ═══════════════════════════════════════════════════════════════════════
 
-  describe("Upgrade timelock", () => {
-    it("request → cancel clears state", async () => {
-      const f = await loadFixture(fixture);
-      const Factory = await ethers.getContractFactory("PendleStrategyV2");
-      const impl = await Factory.deploy();
-
-      await expect(
-        f.strategy.connect(f.admin).requestUpgrade(await impl.getAddress())
-      ).to.emit(f.strategy, "UpgradeRequested");
-      expect(await f.strategy.pendingImplementation()).to.equal(
-        await impl.getAddress()
-      );
-
-      await expect(f.strategy.connect(f.admin).cancelUpgrade()).to.emit(
-        f.strategy,
-        "UpgradeCancelled"
-      );
-      expect(await f.strategy.pendingImplementation()).to.equal(
-        ethers.ZeroAddress
-      );
-      expect(await f.strategy.upgradeRequestTime()).to.equal(0);
-    });
-
-    it("request → 48h → upgradeToAndCall succeeds", async () => {
-      const f = await loadFixture(fixture);
-      const Factory = await ethers.getContractFactory("PendleStrategyV2");
-      const impl = await Factory.deploy();
-      const implAddr = await impl.getAddress();
-
-      await f.strategy.connect(f.admin).requestUpgrade(implAddr);
-      await time.increase(48 * 3600);
-      await f.strategy.connect(f.admin).upgradeToAndCall(implAddr, "0x");
-
-      // State cleared after upgrade
-      expect(await f.strategy.pendingImplementation()).to.equal(
-        ethers.ZeroAddress
-      );
-    });
-
-    it("revert UPGRADE_NOT_REQUESTED (no prior request)", async () => {
-      const f = await loadFixture(fixture);
-      const Factory = await ethers.getContractFactory("PendleStrategyV2");
-      const impl = await Factory.deploy();
-
-      await expect(
-        f.strategy
-          .connect(f.admin)
-          .upgradeToAndCall(await impl.getAddress(), "0x")
-      ).to.be.revertedWith("UPGRADE_NOT_REQUESTED");
-    });
-
-    it("revert UPGRADE_TIMELOCK_ACTIVE (too early)", async () => {
-      const f = await loadFixture(fixture);
-      const Factory = await ethers.getContractFactory("PendleStrategyV2");
-      const impl = await Factory.deploy();
-      const implAddr = await impl.getAddress();
-
-      await f.strategy.connect(f.admin).requestUpgrade(implAddr);
-      // Don't wait 48 hours
-      await expect(
-        f.strategy.connect(f.admin).upgradeToAndCall(implAddr, "0x")
-      ).to.be.revertedWith("UPGRADE_TIMELOCK_ACTIVE");
-    });
-
-    it("revert UPGRADE_ALREADY_PENDING", async () => {
-      const f = await loadFixture(fixture);
-      const Factory = await ethers.getContractFactory("PendleStrategyV2");
-      const impl1 = await Factory.deploy();
-      const impl2 = await Factory.deploy();
-
-      await f.strategy
-        .connect(f.admin)
-        .requestUpgrade(await impl1.getAddress());
-      await expect(
-        f.strategy
-          .connect(f.admin)
-          .requestUpgrade(await impl2.getAddress())
-      ).to.be.revertedWith("UPGRADE_ALREADY_PENDING");
-    });
-
-    it("revert ZERO_ADDRESS on requestUpgrade", async () => {
-      const f = await loadFixture(fixture);
-      await expect(
-        f.strategy.connect(f.admin).requestUpgrade(ethers.ZeroAddress)
-      ).to.be.revertedWith("ZERO_ADDRESS");
-    });
-  });
+  // Upgrade timelock tests removed — _authorizeUpgrade now uses onlyTimelock
+  // via MintedTimelockController (no more requestUpgrade/cancelUpgrade).
 
   // ═══════════════════════════════════════════════════════════════════════
   // 20 · Access control
@@ -983,19 +898,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       ).to.be.reverted;
     });
 
-    it("requestUpgrade: non-admin reverts", async () => {
-      const f = await loadFixture(fixture);
-      await expect(
-        f.strategy
-          .connect(f.user1)
-          .requestUpgrade(ethers.Wallet.createRandom().address)
-      ).to.be.reverted;
-    });
 
-    it("cancelUpgrade: non-admin reverts", async () => {
-      const f = await loadFixture(fixture);
-      await expect(f.strategy.connect(f.user1).cancelUpgrade()).to.be.reverted;
-    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════

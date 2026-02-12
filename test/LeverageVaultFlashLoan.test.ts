@@ -32,7 +32,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy price oracle + feed
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy();
+    const priceOracle = await PriceOracle.deploy(owner.address);
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
@@ -41,7 +41,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy CollateralVault
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(owner.address);
     await timelockAddCollateral(
       collateralVault, owner,
       await weth.getAddress(),
@@ -59,7 +59,8 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       200,  // 2% APR
-      ethers.parseEther("10") // Min debt
+      ethers.parseEther("10"), // Min debt
+      owner.address
     );
 
     // Deploy MockSwapRouter
@@ -77,7 +78,8 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await collateralVault.getAddress(),
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
-      await musd.getAddress()
+      await musd.getAddress(),
+      owner.address
     );
 
     // Grant roles

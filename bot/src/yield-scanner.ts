@@ -1,59 +1,20 @@
 /**
- * Minted Protocol — Yield Scanner
+ * YieldScanner — scans DeFi protocols for yield opportunities.
  *
- * Scans available DeFi yield opportunities across integrated protocols
- * (Pendle, Aave, Compound, Morpho) and ranks them by risk-adjusted return.
- *
- * Used by TreasuryV2 strategy allocation to decide where idle USDC
- * should be deployed for maximum yield within risk constraints.
+ * Filters by APY, risk tier, TVL, and active status.
+ * Used by the bot service to find the best yield opportunities.
  */
 
-// FIX BE-003: Crash handlers to prevent silent failures
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('FATAL: Unhandled promise rejection:', reason);
-  process.exit(1);
-});
-process.on('uncaughtException', (error) => {
-  console.error('FATAL: Uncaught exception:', error);
-  process.exit(1);
-});
-
-// ============================================================
-//                     TYPES
-// ============================================================
-
 export interface YieldOpportunity {
-  /** Protocol name (e.g. "Pendle", "Aave-v3", "Morpho") */
   protocol: string;
-  /** Asset being supplied (e.g. "USDC", "sDAI") */
   asset: string;
-  /** Chain ID where the opportunity exists */
   chainId: number;
-  /** Current APY in basis points (e.g. 500 = 5%) */
   apyBps: number;
-  /** Total value locked in USD */
   tvlUsd: number;
-  /** Risk tier: 1 = lowest risk (blue-chip lending), 5 = highest */
   riskTier: number;
-  /** Strategy contract address on target chain */
   strategyAddress: string;
-  /** When this data was last fetched */
   lastUpdated: Date;
-  /** Whether this opportunity is currently active / accepting deposits */
   isActive: boolean;
-}
-
-export interface ScannerConfig {
-  /** Minimum APY (bps) to include in results */
-  minApyBps: number;
-  /** Maximum risk tier to include */
-  maxRiskTier: number;
-  /** Minimum TVL (USD) to consider a pool safe */
-  minTvlUsd: number;
-  /** How often to re-scan (ms) */
-  scanIntervalMs: number;
-  /** Protocol endpoints */
-  endpoints: Record<string, string>;
 }
 
 export interface ScanResult {
@@ -63,136 +24,75 @@ export interface ScanResult {
   errors: string[];
 }
 
-// ============================================================
-//                     DEFAULT CONFIG
-// ============================================================
+export interface YieldScannerConfig {
+  scanIntervalMs?: number;
+  minApyBps?: number;
+  maxRiskTier?: number;
+  minTvlUsd?: number;
+}
 
-const DEFAULT_CONFIG: ScannerConfig = {
-  minApyBps: 100,             // 1% minimum
-  maxRiskTier: 3,             // Up to medium risk
-  minTvlUsd: 1_000_000,      // $1M minimum TVL
-  scanIntervalMs: 60_000,    // 1 minute
-  endpoints: {
-    pendle: process.env.PENDLE_API_URL || "https://api-v2.pendle.finance/core",
-    aave: process.env.AAVE_API_URL || "https://aave-api-v2.aave.com",
-  },
+const DEFAULT_CONFIG: Required<YieldScannerConfig> = {
+  scanIntervalMs: 60_000,
+  minApyBps: 100,
+  maxRiskTier: 3,
+  minTvlUsd: 1_000_000,
 };
 
-// ============================================================
-//                     YIELD SCANNER
-// ============================================================
-
 export class YieldScanner {
-  private config: ScannerConfig;
-  private running = false;
+  private config: Required<YieldScannerConfig>;
   private lastScan: ScanResult | null = null;
+  private intervalId: ReturnType<typeof setInterval> | null = null;
 
-  constructor(config: Partial<ScannerConfig> = {}) {
+  constructor(config?: YieldScannerConfig) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
-  /**
-   * Perform a single scan across all configured protocols.
-   * Returns ranked opportunities filtered by config constraints.
-   */
+  /** Scan all registered protocols and return filtered, sorted opportunities. */
   async scan(): Promise<ScanResult> {
-    const errors: string[] = [];
-    const opportunities: YieldOpportunity[] = [];
-    let protocolsScanned = 0;
-
-    // Scan each configured protocol
-    for (const [protocol, endpoint] of Object.entries(this.config.endpoints)) {
-      try {
-        const results = await this.scanProtocol(protocol, endpoint);
-        opportunities.push(...results);
-        protocolsScanned++;
-      } catch (err) {
-        const msg = `Failed to scan ${protocol}: ${(err as Error).message}`;
-        errors.push(msg);
-        console.warn(`[YieldScanner] ${msg}`);
-      }
-    }
-
-    // Filter by config constraints
-    const filtered = opportunities.filter(
+    const raw = await this.scanProtocols();
+    const filtered = raw.filter(
       (o) =>
         o.apyBps >= this.config.minApyBps &&
         o.riskTier <= this.config.maxRiskTier &&
         o.tvlUsd >= this.config.minTvlUsd &&
-        o.isActive
+        o.isActive,
     );
 
-    // Sort by risk-adjusted yield (APY / riskTier) descending
+    // Sort by risk-adjusted yield descending
     filtered.sort((a, b) => b.apyBps / b.riskTier - a.apyBps / a.riskTier);
 
     const result: ScanResult = {
       opportunities: filtered,
       scannedAt: new Date(),
-      protocolsScanned,
-      errors,
+      protocolsScanned: 0,
+      errors: [],
     };
 
     this.lastScan = result;
     return result;
   }
 
-  /**
-   * Scan a single protocol for yield opportunities.
-   * Subclasses or future implementations will add real API calls.
-   */
-  private async scanProtocol(
-    protocol: string,
-    _endpoint: string
-  ): Promise<YieldOpportunity[]> {
-    // Placeholder — production would call the real API
-    console.log(`[YieldScanner] Scanning ${protocol}...`);
-    return [];
-  }
-
-  /**
-   * Get the most recent scan result (cached).
-   */
-  getLastScan(): ScanResult | null {
-    return this.lastScan;
-  }
-
-  /**
-   * Get the single best opportunity from the last scan.
-   */
+  /** Return the best (highest risk-adjusted) opportunity from the last scan, or null. */
   getBestOpportunity(): YieldOpportunity | null {
     if (!this.lastScan || this.lastScan.opportunities.length === 0) return null;
     return this.lastScan.opportunities[0];
   }
 
-  /**
-   * Start continuous scanning loop.
-   */
-  async start(): Promise<void> {
-    console.log("[YieldScanner] Starting yield scanner...");
-    this.running = true;
+  /** Return the full last scan result, or null if no scan has been performed. */
+  getLastScan(): ScanResult | null {
+    return this.lastScan;
+  }
 
-    while (this.running) {
-      try {
-        const result = await this.scan();
-        console.log(
-          `[YieldScanner] Scan complete: ${result.opportunities.length} opportunities, ` +
-            `${result.errors.length} errors`
-        );
-      } catch (err) {
-        console.error("[YieldScanner] Scan failed:", (err as Error).message);
-      }
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, this.config.scanIntervalMs)
-      );
+  /** Stop the periodic scanner (no-op if not started). */
+  stop(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
     }
   }
 
-  /**
-   * Stop the scanner gracefully.
-   */
-  stop(): void {
-    this.running = false;
-    console.log("[YieldScanner] Stopped.");
+  /** Placeholder protocol scanner — returns empty array in test/dev. */
+  private async scanProtocols(): Promise<YieldOpportunity[]> {
+    return [];
   }
 }

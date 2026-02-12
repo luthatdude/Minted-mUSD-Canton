@@ -22,7 +22,7 @@ describe("Codex P1 — socializeBadDebt Incomplete List Invariant", function () 
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const oracle = await PriceOracle.deploy();
+    const oracle = await PriceOracle.deploy(admin.address);
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
@@ -30,7 +30,7 @@ describe("Codex P1 — socializeBadDebt Incomplete List Invariant", function () 
     await timelockSetFeed(oracle, admin, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const vault = await CollateralVault.deploy();
+    const vault = await CollateralVault.deploy(admin.address);
 
     await timelockAddCollateral(vault, admin, await weth.getAddress(), 7500, 8000, 1000);
     await refreshFeeds(ethFeed);
@@ -41,7 +41,8 @@ describe("Codex P1 — socializeBadDebt Incomplete List Invariant", function () 
       await oracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100")
+      ethers.parseEther("100"),
+      admin.address
     );
 
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
@@ -108,7 +109,7 @@ describe("Codex P1 — Treasury Recovery Fee Fix", function () {
     const TreasuryV2 = await ethers.getContractFactory("TreasuryV2");
     const treasury = await upgrades.deployProxy(
       TreasuryV2,
-      [await usdc.getAddress(), admin.address, admin.address, feeRecipient.address],
+      [await usdc.getAddress(), admin.address, admin.address, feeRecipient.address, admin.address],
       { kind: "uups", initializer: "initialize" }
     );
 

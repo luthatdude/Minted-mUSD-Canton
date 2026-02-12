@@ -96,15 +96,15 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
     // Deploy InterestRateModel
     const IRMF = await ethers.getContractFactory("InterestRateModel");
-    interestRateModel = await IRMF.deploy(admin.address);
+    interestRateModel = await IRMF.deploy(admin.address, admin.address);
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
-    priceOracle = await POF.deploy();
+    priceOracle = await POF.deploy(admin.address);
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(admin.address);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -113,11 +113,12 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       admin.address,
       admin.address,
       admin.address,
+      admin.address
     ]);
 
     // Deploy SMUSD
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), admin.address);
 
     // Deploy BorrowModule
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -126,7 +127,8 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100")
+      ethers.parseEther("100"),
+      admin.address
     );
 
     // Deploy DirectMintV2
@@ -135,6 +137,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
+      admin.address,
       admin.address
     );
 
@@ -145,7 +148,8 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000
+      5000,
+      admin.address
     );
 
     // Deploy MockStrategies
@@ -576,7 +580,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       // 50th should fail
       const extraToken = await MockERC20F.deploy("Extra", "EXTRA", 18);
       await expect(
-        vault.requestAddCollateral(await extraToken.getAddress(), 5000, 6000, 300)
+        vault.addCollateral(await extraToken.getAddress(), 5000, 6000, 300)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
     });
 
@@ -602,7 +606,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       // Array still has 50 entries — adding 51st should fail
       const token50 = await MockERC20F.deploy("Token50", "TK50", 18);
       await expect(
-        vault.requestAddCollateral(await token50.getAddress(), 5000, 6000, 300)
+        vault.addCollateral(await token50.getAddress(), 5000, 6000, 300)
       ).to.be.revertedWith("TOO_MANY_TOKENS");
       // Re-enabling token49 should succeed (no push needed, already in array)
       await vault.enableCollateral(await token49.getAddress());
@@ -866,7 +870,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
     it("should reject interest rate above 50% APR", async function () {
       await expect(
-        borrowModule.requestInterestRate(5001)
+        borrowModule.setInterestRate(5001)
       ).to.be.revertedWith("RATE_TOO_HIGH");
     });
 
@@ -1097,11 +1101,11 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
   describe("17. Access Control Exhaustive", function () {
     it("should reject unauthorized strategy operations on Treasury", async function () {
       await expect(
-        treasury.connect(user1).requestAddStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true)
+        treasury.connect(user1).addStrategy(await mockStrategy.getAddress(), 5000, 2000, 8000, true)
       ).to.be.reverted;
 
       await expect(
-        treasury.connect(user1).requestRemoveStrategy(await mockStrategy.getAddress())
+        treasury.connect(user1).removeStrategy(await mockStrategy.getAddress())
       ).to.be.reverted;
     });
 
@@ -1116,7 +1120,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       const newToken = await MockERC20F.deploy("NewToken", "NEW", 18);
 
       await expect(
-        vault.connect(user1).requestAddCollateral(await newToken.getAddress(), 5000, 6000, 300)
+        vault.connect(user1).addCollateral(await newToken.getAddress(), 5000, 6000, 300)
       ).to.be.reverted;
 
       await expect(
@@ -1129,7 +1133,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
       const newFeed = await MockAggF.deploy(8, 1000n * 10n ** 8n);
 
       await expect(
-        priceOracle.connect(user1).requestSetFeed(
+        priceOracle.connect(user1).setFeed(
           await weth.getAddress(),
           await newFeed.getAddress(),
           3600,
@@ -1140,7 +1144,7 @@ describe("DEEP AUDIT V2 – Post-Fix Verification & Hack Vectors", function () {
 
     it("should reject unauthorized interest rate changes", async function () {
       await expect(
-        borrowModule.connect(user1).requestInterestRate(1000)
+        borrowModule.connect(user1).setInterestRate(1000)
       ).to.be.reverted;
     });
 

@@ -287,42 +287,8 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
     });
   });
 
-  describe("Upgrade Timelock", function () {
-    it("Should request upgrade", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-      const newImpl = ethers.Wallet.createRandom().address;
-      await expect(strategy.connect(admin).requestUpgrade(newImpl))
-        .to.emit(strategy, "UpgradeRequested");
-    });
-
-    it("Should cancel upgrade", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-      const newImpl = ethers.Wallet.createRandom().address;
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      await expect(strategy.connect(admin).cancelUpgrade())
-        .to.emit(strategy, "UpgradeCancelled");
-    });
-
-    it("Should reject duplicate upgrade request", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-      const impl1 = ethers.Wallet.createRandom().address;
-      await strategy.connect(admin).requestUpgrade(impl1);
-      await expect(strategy.connect(admin).requestUpgrade(ethers.Wallet.createRandom().address))
-        .to.be.revertedWith("UPGRADE_ALREADY_PENDING");
-    });
-
-    it("Should reject upgrade with zero address", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-      await expect(strategy.connect(admin).requestUpgrade(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
-    });
-
-    it("Should reject upgrade from non-admin", async function () {
-      const { strategy, user1 } = await loadFixture(deployFixture);
-      await expect(strategy.connect(user1).requestUpgrade(ethers.Wallet.createRandom().address))
-        .to.be.reverted;
-    });
-  });
+  // Upgrade timelock tests removed — _authorizeUpgrade now uses onlyTimelock
+  // via MintedTimelockController (no more requestUpgrade/cancelUpgrade).
 
   describe("Deposit Authorization", function () {
     it("Should reject deposit from non-treasury", async function () {

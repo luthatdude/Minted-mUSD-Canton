@@ -12,7 +12,7 @@ describe("InterestRateModel", function () {
     const [admin, user] = await ethers.getSigners();
 
     const InterestRateModel = await ethers.getContractFactory("InterestRateModel");
-    const model = await InterestRateModel.deploy(admin.address);
+    const model = await InterestRateModel.deploy(admin.address, admin.address);
 
     return { model, admin, user };
   }
@@ -182,7 +182,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(200, 1000, 15000, 5000, 1000)
+        model.connect(admin).setParams(200, 1000, 15000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "KinkTooHigh");
     });
 
@@ -190,7 +190,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(200, 1000, 8000, 5000, 6000)
+        model.connect(admin).setParams(200, 1000, 8000, 5000, 6000)
       ).to.be.revertedWithCustomError(model, "ReserveFactorTooHigh");
     });
 
@@ -200,7 +200,7 @@ describe("InterestRateModel", function () {
       // maxRate = 2000 + (8000*5000)/10000 + (2000*10000)/10000 = 2000+4000+2000 = 8000 → OK
       // maxRate = 2000 + (8000*5000)/10000 + (2000*30000)/10000 = 2000+4000+6000 = 12000 → > 10000
       await expect(
-        model.connect(admin).requestSetParams(2000, 5000, 8000, 30000, 1000)
+        model.connect(admin).setParams(2000, 5000, 8000, 30000, 1000)
       ).to.be.revertedWithCustomError(model, "InvalidParameter");
     });
 
@@ -208,7 +208,7 @@ describe("InterestRateModel", function () {
       const { model, user } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(user).requestSetParams(300, 1500, 7500, 6000, 1500)
+        model.connect(user).setParams(300, 1500, 7500, 6000, 1500)
       ).to.be.reverted;
     });
   });
@@ -316,7 +316,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(2100, 1000, 8000, 5000, 1000)
+        model.connect(admin).setParams(2100, 1000, 8000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "BaseRateTooHigh");
     });
 
@@ -324,7 +324,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(200, 1000, 500, 5000, 1000)
+        model.connect(admin).setParams(200, 1000, 500, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "KinkTooLow");
     });
 
@@ -332,7 +332,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(200, 0, 8000, 5000, 1000)
+        model.connect(admin).setParams(200, 0, 8000, 5000, 1000)
       ).to.be.revertedWithCustomError(model, "MultiplierZero");
     });
 
@@ -340,7 +340,7 @@ describe("InterestRateModel", function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).requestSetParams(200, 1000, 8000, 0, 1000)
+        model.connect(admin).setParams(200, 1000, 8000, 0, 1000)
       ).to.be.revertedWithCustomError(model, "MultiplierZero");
     });
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Price Oracle Aggregator
 // Wraps Chainlink feeds for ETH/BTC price data used by CollateralVault and LiquidationEngine
 
@@ -36,6 +36,14 @@ contract PriceOracle is AccessControl, TimelockGoverned {
  uint256 public constant CIRCUIT_BREAKER_COOLDOWN = 1 hours;
  uint256 public lastCircuitBreakerToggle;
 
+ // ── L2 Sequencer Uptime Check ──
+ /// @dev Chainlink L2 sequencer uptime feed (set to address(0) on L1 / if not needed)
+ IAggregatorV3 public sequencerUptimeFeed;
+ /// @dev Grace period after sequencer restarts before prices are trusted
+ uint256 public constant SEQUENCER_GRACE_PERIOD = 1 hours;
+
+ event SequencerUptimeFeedUpdated(address indexed oldFeed, address indexed newFeed);
+
  event FeedUpdated(address indexed token, address feed, uint256 stalePeriod, uint8 tokenDecimals);
  event FeedRemoved(address indexed token);
  /// @dev Event for circuit breaker triggers
@@ -53,6 +61,23 @@ contract PriceOracle is AccessControl, TimelockGoverned {
  _setTimelock(_timelock);
  _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
  _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
+ }
+
+ /// @notice Set or clear the L2 sequencer uptime feed (timelocked)
+ /// @param _feed Address of the Chainlink sequencer uptime feed, or address(0) to disable
+ function setSequencerUptimeFeed(address _feed) external onlyTimelock {
+ address oldFeed = address(sequencerUptimeFeed);
+ sequencerUptimeFeed = IAggregatorV3(_feed);
+ emit SequencerUptimeFeedUpdated(oldFeed, _feed);
+ }
+
+ /// @dev Revert if the L2 sequencer is down or still within the grace period
+ function _checkSequencerUptime() internal view {
+ if (address(sequencerUptimeFeed) == address(0)) return; // L1 or not configured
+ (, int256 answer, , uint256 startedAt, ) = sequencerUptimeFeed.latestRoundData();
+ // answer == 0 means sequencer is up; answer == 1 means sequencer is down
+ require(answer == 0, "SEQUENCER_DOWN");
+ require(block.timestamp - startedAt >= SEQUENCER_GRACE_PERIOD, "SEQUENCER_GRACE_PERIOD_NOT_OVER");
  }
 
  /// @notice Set max deviation (timelocked via MintedTimelockController)
@@ -132,6 +157,7 @@ contract PriceOracle is AccessControl, TimelockGoverned {
  /// @dev PO-M01: lastKnownPrice is updated via updatePrice() / resetLastKnownPrice() / setFeed() / refreshPrice().
  /// Keeping getPrice as view ensures interface compatibility.
  function getPrice(address token) external view returns (uint256 price) {
+ _checkSequencerUptime();
  FeedConfig storage config = feeds[token];
  require(config.enabled, "FEED_NOT_ENABLED");
 
@@ -185,6 +211,7 @@ contract PriceOracle is AccessControl, TimelockGoverned {
  /// Without this, a series of small moves (each <threshold) that accumulate
  /// beyond the threshold would permanently freeze getPrice().
  function refreshPrice(address token) external {
+ _checkSequencerUptime();
  FeedConfig storage config = feeds[token];
  require(config.enabled, "FEED_NOT_ENABLED");
 
@@ -222,6 +249,7 @@ contract PriceOracle is AccessControl, TimelockGoverned {
  /// @notice Internal price function to avoid external self-calls
  /// @dev Same logic as getPrice() but callable internally without external call overhead
  function _getPriceInternal(address token) internal view returns (uint256 price) {
+ _checkSequencerUptime();
  FeedConfig storage config = feeds[token];
  require(config.enabled, "FEED_NOT_ENABLED");
 
