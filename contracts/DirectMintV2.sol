@@ -62,6 +62,24 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     event FeesUpdated(uint256 mintFeeBps, uint256 redeemFeeBps);
     event LimitsUpdated(uint256 minMint, uint256 maxMint, uint256 minRedeem, uint256 maxRedeem);
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    uint256 public constant ADMIN_DELAY = 48 hours;
+
+    uint256 public pendingMintFeeBps;
+    uint256 public pendingRedeemFeeBps;
+    uint256 public pendingFeesTime;
+    bool    public pendingFeesSet;
+    address public pendingFeeRecipient;
+    uint256 public pendingFeeRecipientTime;
+
+    event FeesChangeRequested(uint256 mintBps, uint256 redeemBps, uint256 readyAt);
+    event FeesChangeCancelled();
+    event FeeRecipientChangeRequested(address indexed recipient, uint256 readyAt);
+    event FeeRecipientChangeCancelled(address indexed recipient);
+
     constructor(
         address _usdc,
         address _musd,
@@ -256,14 +274,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     //                    ADMIN FUNCTIONS
     // ============================================================
 
-    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(FEE_MANAGER_ROLE) {
-        require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
-        require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
-        mintFeeBps = _mintFeeBps;
-        redeemFeeBps = _redeemFeeBps;
-        emit FeesUpdated(_mintFeeBps, _redeemFeeBps);
-    }
-
+    /// @notice Update per-transaction limits (kept instant — bounded by validation)
     function setLimits(
         uint256 _minMint,
         uint256 _maxMint,
@@ -279,11 +290,56 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         emit LimitsUpdated(_minMint, _maxMint, _minRedeem, _maxRedeem);
     }
 
-    function setFeeRecipient(address _recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    // ── FIX H-01: Timelocked fee & recipient setters ──────────────────
+
+    function requestFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(FEE_MANAGER_ROLE) {
+        require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
+        require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
+        pendingMintFeeBps = _mintFeeBps;
+        pendingRedeemFeeBps = _redeemFeeBps;
+        pendingFeesTime = block.timestamp;
+        pendingFeesSet = true;
+        emit FeesChangeRequested(_mintFeeBps, _redeemFeeBps, block.timestamp + ADMIN_DELAY);
+    }
+    function cancelFees() external onlyRole(FEE_MANAGER_ROLE) {
+        pendingMintFeeBps = 0;
+        pendingRedeemFeeBps = 0;
+        pendingFeesTime = 0;
+        pendingFeesSet = false;
+        emit FeesChangeCancelled();
+    }
+    function executeFees() external onlyRole(FEE_MANAGER_ROLE) {
+        require(pendingFeesSet, "NO_PENDING");
+        require(block.timestamp >= pendingFeesTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        mintFeeBps = pendingMintFeeBps;
+        redeemFeeBps = pendingRedeemFeeBps;
+        pendingMintFeeBps = 0;
+        pendingRedeemFeeBps = 0;
+        pendingFeesTime = 0;
+        pendingFeesSet = false;
+        emit FeesUpdated(mintFeeBps, redeemFeeBps);
+    }
+
+    function requestFeeRecipient(address _recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_recipient != address(0), "INVALID_RECIPIENT");
+        pendingFeeRecipient = _recipient;
+        pendingFeeRecipientTime = block.timestamp;
+        emit FeeRecipientChangeRequested(_recipient, block.timestamp + ADMIN_DELAY);
+    }
+    function cancelFeeRecipient() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingFeeRecipient;
+        pendingFeeRecipient = address(0);
+        pendingFeeRecipientTime = 0;
+        emit FeeRecipientChangeCancelled(cancelled);
+    }
+    function executeFeeRecipient() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingFeeRecipient != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingFeeRecipientTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
         address old = feeRecipient;
-        feeRecipient = _recipient;
-        emit FeeRecipientUpdated(old, _recipient);
+        feeRecipient = pendingFeeRecipient;
+        pendingFeeRecipient = address(0);
+        pendingFeeRecipientTime = 0;
+        emit FeeRecipientUpdated(old, feeRecipient);
     }
 
     /// @notice Withdraw accumulated mint fees (held in this contract)

@@ -57,55 +57,118 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     event Withdrawn(address indexed user, address indexed token, uint256 amount);
     event Seized(address indexed user, address indexed token, uint256 amount, address indexed liquidator);
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX H-01: ADMIN TIMELOCK (48h propose → execute)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    uint256 public constant ADMIN_DELAY = 48 hours;
+
+    // Pending setBorrowModule
+    address public pendingBorrowModule;
+    uint256 public pendingBorrowModuleTime;
+
+    // Pending addCollateral
+    struct PendingCollateral {
+        address token;
+        uint256 collateralFactorBps;
+        uint256 liquidationThresholdBps;
+        uint256 liquidationPenaltyBps;
+        uint256 requestTime;
+    }
+    PendingCollateral public pendingAddCollateral;
+
+    // Pending updateCollateral
+    PendingCollateral public pendingUpdateCollateral;
+
+    event BorrowModuleChangeRequested(address indexed module, uint256 readyAt);
+    event BorrowModuleChangeCancelled(address indexed module);
+    event CollateralAddRequested(address indexed token, uint256 factorBps, uint256 liqThreshold, uint256 readyAt);
+    event CollateralAddCancelled(address indexed token);
+    event CollateralUpdateRequested(address indexed token, uint256 factorBps, uint256 liqThreshold, uint256 readyAt);
+    event CollateralUpdateCancelled(address indexed token);
+
     constructor() {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(VAULT_ADMIN_ROLE, msg.sender);
     }
 
-    /// @dev FIX S-H04: Set the BorrowModule address for health factor checks
-    function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
+    /// @dev FIX H-01: Timelocked setBorrowModule (48h delay)
+    function requestBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
         require(_borrowModule != address(0), "INVALID_MODULE");
-        emit BorrowModuleUpdated(borrowModule, _borrowModule);
-        borrowModule = _borrowModule;
+        pendingBorrowModule = _borrowModule;
+        pendingBorrowModuleTime = block.timestamp;
+        emit BorrowModuleChangeRequested(_borrowModule, block.timestamp + ADMIN_DELAY);
+    }
+    function cancelBorrowModule() external onlyRole(VAULT_ADMIN_ROLE) {
+        address cancelled = pendingBorrowModule;
+        pendingBorrowModule = address(0);
+        pendingBorrowModuleTime = 0;
+        emit BorrowModuleChangeCancelled(cancelled);
+    }
+    function executeBorrowModule() external onlyRole(VAULT_ADMIN_ROLE) {
+        require(pendingBorrowModule != address(0), "NO_PENDING");
+        require(block.timestamp >= pendingBorrowModuleTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        emit BorrowModuleUpdated(borrowModule, pendingBorrowModule);
+        borrowModule = pendingBorrowModule;
+        pendingBorrowModule = address(0);
+        pendingBorrowModuleTime = 0;
     }
 
     // ============================================================
     //                  COLLATERAL CONFIG
     // ============================================================
 
-    /// @notice Add a new supported collateral token
-    function addCollateral(
+    /// @notice FIX H-01: Propose adding a new collateral token (48h delay)
+    function requestAddCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
     ) external onlyRole(VAULT_ADMIN_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
-        // FIX CV-H01 (Final Audit): Use collateralFactorBps == 0 instead of !enabled.
-        // A disabled token still has collateralFactorBps > 0, so the old guard
-        // allowed addCollateral to push a duplicate into supportedTokens[],
-        // causing BorrowModule._weightedCollateralValue() to double-count.
-        // Use enableCollateral() to re-enable a disabled token instead.
         require(collateralConfigs[token].collateralFactorBps == 0, "ALREADY_ADDED");
-        // FIX M-08: Cap supported tokens array to prevent unbounded growth
         require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
-        require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH"); // Max 95%
-        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");    // Max 20%
+        require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
+        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
 
-        collateralConfigs[token] = CollateralConfig({
-            enabled: true,
+        pendingAddCollateral = PendingCollateral({
+            token: token,
             collateralFactorBps: collateralFactorBps,
             liquidationThresholdBps: liquidationThresholdBps,
-            liquidationPenaltyBps: liquidationPenaltyBps
+            liquidationPenaltyBps: liquidationPenaltyBps,
+            requestTime: block.timestamp
         });
-
-        supportedTokens.push(token);
-        emit CollateralAdded(token, collateralFactorBps, liquidationThresholdBps);
+        emit CollateralAddRequested(token, collateralFactorBps, liquidationThresholdBps, block.timestamp + ADMIN_DELAY);
     }
 
-    /// @notice Update collateral parameters
-    function updateCollateral(
+    function cancelAddCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
+        address cancelled = pendingAddCollateral.token;
+        delete pendingAddCollateral;
+        emit CollateralAddCancelled(cancelled);
+    }
+
+    function executeAddCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
+        PendingCollateral memory p = pendingAddCollateral;
+        require(p.token != address(0), "NO_PENDING");
+        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        // Re-validate in case state changed during timelock
+        require(collateralConfigs[p.token].collateralFactorBps == 0, "ALREADY_ADDED");
+        require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
+
+        collateralConfigs[p.token] = CollateralConfig({
+            enabled: true,
+            collateralFactorBps: p.collateralFactorBps,
+            liquidationThresholdBps: p.liquidationThresholdBps,
+            liquidationPenaltyBps: p.liquidationPenaltyBps
+        });
+        supportedTokens.push(p.token);
+        delete pendingAddCollateral;
+        emit CollateralAdded(p.token, p.collateralFactorBps, p.liquidationThresholdBps);
+    }
+
+    /// @notice FIX H-01: Propose updating collateral parameters (48h delay)
+    function requestUpdateCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
@@ -116,11 +179,33 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
         require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
 
-        collateralConfigs[token].collateralFactorBps = collateralFactorBps;
-        collateralConfigs[token].liquidationThresholdBps = liquidationThresholdBps;
-        collateralConfigs[token].liquidationPenaltyBps = liquidationPenaltyBps;
+        pendingUpdateCollateral = PendingCollateral({
+            token: token,
+            collateralFactorBps: collateralFactorBps,
+            liquidationThresholdBps: liquidationThresholdBps,
+            liquidationPenaltyBps: liquidationPenaltyBps,
+            requestTime: block.timestamp
+        });
+        emit CollateralUpdateRequested(token, collateralFactorBps, liquidationThresholdBps, block.timestamp + ADMIN_DELAY);
+    }
 
-        emit CollateralUpdated(token, collateralFactorBps, liquidationThresholdBps);
+    function cancelUpdateCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
+        address cancelled = pendingUpdateCollateral.token;
+        delete pendingUpdateCollateral;
+        emit CollateralUpdateCancelled(cancelled);
+    }
+
+    function executeUpdateCollateral() external onlyRole(VAULT_ADMIN_ROLE) {
+        PendingCollateral memory p = pendingUpdateCollateral;
+        require(p.token != address(0), "NO_PENDING");
+        require(block.timestamp >= p.requestTime + ADMIN_DELAY, "TIMELOCK_ACTIVE");
+        require(collateralConfigs[p.token].enabled, "NOT_SUPPORTED");
+
+        collateralConfigs[p.token].collateralFactorBps = p.collateralFactorBps;
+        collateralConfigs[p.token].liquidationThresholdBps = p.liquidationThresholdBps;
+        collateralConfigs[p.token].liquidationPenaltyBps = p.liquidationPenaltyBps;
+        delete pendingUpdateCollateral;
+        emit CollateralUpdated(p.token, p.collateralFactorBps, p.liquidationThresholdBps);
     }
 
     /// FIX M-09: Allow disabling collateral (no new deposits, existing positions can withdraw)

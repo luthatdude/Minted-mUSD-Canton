@@ -15,6 +15,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockSetFeed, timelockAddCollateral, refreshFeeds } from "./helpers/timelock";
 
 // ============================================================
 //  HELPERS
@@ -155,7 +156,7 @@ describe("FUZZ: PriceOracle", function () {
   }
 
   it("FUZZ: normalized price always has 18 decimals regardless of feed decimals", async function () {
-    const { oracle, MockFeedFactory } = await loadFixture(deployFixture);
+    const { oracle, admin, MockFeedFactory } = await loadFixture(deployFixture);
 
     // Test with different Chainlink feed decimal configurations (6, 8, 18)
     const feedDecimals = [6, 8, 18];
@@ -176,7 +177,8 @@ describe("FUZZ: PriceOracle", function () {
 
         const feed = await MockFeedFactory.deploy(decimals, rawPrice);
 
-        await oracle.setFeed(tokenAddr, await feed.getAddress(), 3600, 18);
+        await timelockSetFeed(oracle, admin, tokenAddr, await feed.getAddress(), 3600, 18);
+        await refreshFeeds(feed);
         const price = await oracle.getPrice(tokenAddr);
 
         // Price should always be normalized to 18 decimals
@@ -191,7 +193,7 @@ describe("FUZZ: PriceOracle", function () {
   });
 
   it("FUZZ: getPrice never returns negative", async function () {
-    const { oracle, MockFeedFactory } = await loadFixture(deployFixture);
+    const { oracle, admin, MockFeedFactory } = await loadFixture(deployFixture);
 
     for (let i = 0; i < FUZZ_RUNS; i++) {
       const price = randomBigInt(i, 1n, 10n ** 18n);
@@ -199,7 +201,8 @@ describe("FUZZ: PriceOracle", function () {
         "0x" + (i + 1).toString(16).padStart(40, "0")
       );
       const feed = await MockFeedFactory.deploy(8, price);
-      await oracle.setFeed(tokenAddr, await feed.getAddress(), 3600, 18);
+      await timelockSetFeed(oracle, admin, tokenAddr, await feed.getAddress(), 3600, 18);
+      await refreshFeeds(feed);
 
       const normalizedPrice = await oracle.getPrice(tokenAddr);
       expect(normalizedPrice).to.be.gt(0, `Iteration ${i}: price was <= 0`);
@@ -358,17 +361,20 @@ describe("FUZZ: LiquidationEngine", function () {
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
 
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
 
-    await collateralVault.addCollateral(
+    await timelockAddCollateral(
+      collateralVault, owner,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       1000  // 10% penalty
     );
+
+    await refreshFeeds(ethFeed);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     const borrowModule = await BorrowModule.deploy(
