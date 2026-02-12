@@ -129,6 +129,7 @@ interface AttestationPayload {
   chainId: string;
   expiresAt: string;  // ISO timestamp
   entropy: string;    // FIX C-05: Hex-encoded entropy from aggregator
+  cantonStateHash: string;  // FIX INFRA-03: Canton ledger state hash for on-chain verification
 }
 
 interface AttestationRequest {
@@ -308,8 +309,18 @@ class RelayService {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
+        // Reset failure counter on success
+        this.consecutiveFailures = 0;
       } catch (error) {
         console.error("[Relay] Poll error:", error);
+        // FIX INFRA-04: Failover to backup RPC on consecutive failures
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+          console.warn(
+            `[Relay] ${this.consecutiveFailures} consecutive failures — attempting provider failover`
+          );
+          await this.switchToFallbackProvider();
+        }
       }
       await this.sleep(this.config.pollIntervalMs);
     }
@@ -345,6 +356,43 @@ class RelayService {
     }
     
     console.log(`[Relay] All ${validatorEntries.length} validator addresses verified on-chain`);
+  }
+
+  /**
+   * FIX INFRA-04: Switch to the next fallback RPC provider on consecutive failures.
+   * Re-initializes the signer against the new provider so all subsequent
+   * contract calls go through the healthy endpoint.
+   */
+  private async switchToFallbackProvider(): Promise<boolean> {
+    if (this.fallbackProviders.length === 0) {
+      console.warn("[Relay] No fallback RPC providers configured — cannot failover");
+      return false;
+    }
+
+    const nextIndex = (this.activeProviderIndex + 1) % (this.fallbackProviders.length + 1);
+
+    // Index 0 = primary, 1..N = fallback providers
+    if (nextIndex === 0) {
+      console.log("[Relay] Cycling back to primary RPC provider");
+      this.provider = new ethers.JsonRpcProvider(this.config.ethereumRpcUrl);
+    } else {
+      const fallbackUrl = this.config.fallbackRpcUrls[nextIndex - 1];
+      console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${fallbackUrl}`);
+      this.provider = this.fallbackProviders[nextIndex - 1];
+    }
+
+    this.activeProviderIndex = nextIndex;
+    this.consecutiveFailures = 0;
+
+    // Re-initialise signer + contract against the new provider
+    try {
+      await this.initSigner();
+      console.log("[Relay] Signer re-initialised on new provider");
+      return true;
+    } catch (err: any) {
+      console.error(`[Relay] Failed to re-init signer on fallback: ${err.message}`);
+      return false;
+    }
   }
 
   /**
@@ -518,6 +566,10 @@ class RelayService {
       const entropy = payload.entropy
         ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
         : ethers.hexlify(new Uint8Array(crypto.randomBytes(32)));
+      // FIX INFRA-03: Read cantonStateHash from payload
+      const cantonStateHash = payload.cantonStateHash
+        ? (payload.cantonStateHash.startsWith("0x") ? payload.cantonStateHash : "0x" + payload.cantonStateHash)
+        : ethers.ZeroHash;
       const cantonAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
       const nonce = BigInt(payload.nonce);
       const expiresAtMs = new Date(payload.expiresAt).getTime();
@@ -529,9 +581,10 @@ class RelayService {
         throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
       }
       const chainId = expectedChainId;
+      // FIX INFRA-03: Include cantonStateHash in deterministic ID derivation
       const idBytes32 = ethers.solidityPackedKeccak256(
-        ["uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
-        [nonce, cantonAssets, BigInt(timestampSec), entropy, chainId, this.config.bridgeContractAddress]
+        ["uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+        [nonce, cantonAssets, BigInt(timestampSec), entropy, cantonStateHash, chainId, this.config.bridgeContractAddress]
       );
 
       // Check if already used on-chain
@@ -550,12 +603,14 @@ class RelayService {
       const sortedSigs = sortSignaturesBySignerAddress(formattedSigs, messageHash);
 
       // Build attestation struct (entropy and ID already computed above)
+      // FIX INFRA-03: Include cantonStateHash to bind attestation to Canton ledger state
       const attestation = {
         id: idBytes32,
         cantonAssets: cantonAssets,
         nonce: nonce,
         timestamp: BigInt(timestampSec),
         entropy: entropy,
+        cantonStateHash: cantonStateHash,
       };
 
       // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
@@ -634,6 +689,7 @@ class RelayService {
   /**
    * Build the message hash that validators signed
    * FIX C-05: Includes entropy in hash to match BLEBridgeV9 verification
+   * FIX INFRA-03: Includes cantonStateHash to bind attestation to Canton ledger state
    */
   private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
     // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
@@ -644,8 +700,13 @@ class RelayService {
       ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
       : ethers.ZeroHash;
 
+    // FIX INFRA-03: Include cantonStateHash (defaults to zero hash if absent)
+    const cantonStateHash = payload.cantonStateHash
+      ? (payload.cantonStateHash.startsWith("0x") ? payload.cantonStateHash : "0x" + payload.cantonStateHash)
+      : ethers.ZeroHash;
+
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
@@ -653,6 +714,7 @@ class RelayService {
         // FIX B-M01: Use validated timestamp calculation consistent with bridgeAttestation
         BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
         entropy,
+        cantonStateHash,
         chainId,
         this.config.bridgeContractAddress,
       ]
@@ -843,6 +905,8 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         processedCount: (relay as any).processedAttestations.size,
+        activeProviderIndex: (relay as any).activeProviderIndex,
+        consecutiveFailures: (relay as any).consecutiveFailures,
       }));
     } else {
       res.writeHead(404);
