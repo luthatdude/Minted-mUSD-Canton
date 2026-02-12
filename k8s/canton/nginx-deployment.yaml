@@ -10,7 +10,6 @@ metadata:
     app.kubernetes.io/name: nginx-proxy
     app.kubernetes.io/component: api-gateway
   annotations:
-    # ── FIX HIGH-WAF: Cloud provider WAF integration ──
     # GCP: Reference a BackendConfig that attaches Cloud Armor security policy
     cloud.google.com/backend-config: '{"default": "nginx-waf-backend"}'
     cloud.google.com/neg: '{"ingress": true}'
@@ -172,7 +171,6 @@ spec:
     matchLabels:
       app.kubernetes.io/name: nginx-proxy
 ---
-# ── FIX HIGH-WAF: GCP Cloud Armor BackendConfig ──
 # Attaches a Cloud Armor security policy for Layer-7 WAF protection.
 # Create the Cloud Armor policy first:
 #   gcloud compute security-policies create minted-waf-policy \

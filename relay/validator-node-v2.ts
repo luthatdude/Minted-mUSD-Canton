@@ -18,10 +18,7 @@ import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-// FIX M-17: Removed unused crypto import
-// FIX M-20: Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
-// FIX T-M01: Use shared readSecret utility
 import { readSecret } from "./utils";
 import * as fs from "fs";
 
@@ -55,9 +52,7 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
-  // FIX H-7: Added explicit radix 10 to all parseInt calls
   cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "6865", 10),
-  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
   cantonLedgerToken: readSecret("canton_token", "CANTON_LEDGER_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -141,7 +136,6 @@ class CantonAssetClient {
    * Fetch current snapshot of all tokenized assets from Canton Network
    */
   async getAssetSnapshot(): Promise<CantonAssetSnapshot> {
-    // FIX 5C-M03: Add request timeout to prevent indefinite hangs
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -182,7 +176,6 @@ class CantonAssetClient {
    * Fetch specific assets by ID
    */
   async getAssetsByIds(assetIds: string[]): Promise<CantonAsset[]> {
-    // FIX 5C-M03: Add request timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -218,7 +211,6 @@ class CantonAssetClient {
    * Verify a state hash matches Canton's current state
    */
   async verifyStateHash(stateHash: string): Promise<boolean> {
-    // FIX 5C-M03: Add request timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;
@@ -254,12 +246,10 @@ class ValidatorNode {
   private ledger: Ledger;
   private cantonClient: CantonAssetClient;
   private kmsClient: KMSClient;
-  // FIX C-6: Bounded cache with eviction (was unbounded — memory leak)
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
 
-  // FIX HIGH-SIGNER: Rate-limiting & anomaly detection for single-signer risk mitigation
   private signingTimestamps: number[] = [];
   private readonly MAX_SIGNS_PER_WINDOW = parseInt(process.env.MAX_SIGNS_PER_WINDOW || "50", 10);
   private readonly SIGNING_WINDOW_MS = parseInt(process.env.SIGNING_WINDOW_MS || "3600000", 10); // 1 hour
@@ -269,7 +259,6 @@ class ValidatorNode {
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -300,7 +289,6 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
         try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
@@ -350,7 +338,6 @@ class ValidatorNode {
         continue;
       }
 
-      // FIX HIGH-SIGNER: Rate-limit signing to mitigate single-signer key compromise
       const now = Date.now();
       this.signingTimestamps = this.signingTimestamps.filter(t => now - t < this.SIGNING_WINDOW_MS);
       if (this.signingTimestamps.length >= this.MAX_SIGNS_PER_WINDOW) {
@@ -359,7 +346,6 @@ class ValidatorNode {
         continue;
       }
 
-      // FIX HIGH-SIGNER: Anomaly detection — reject attestations with sudden large value jumps
       const attestedTotalValue = ethers.parseUnits(payload.totalCantonValue, 18);
       if (this.lastSignedTotalValue > 0n) {
         const diff = attestedTotalValue > this.lastSignedTotalValue
@@ -408,10 +394,8 @@ class ValidatorNode {
           };
         }
 
-        // FIX H-13: Use ethers.parseUnits for financial precision
         const attestedValue = ethers.parseUnits(attestedAsset.assetValue, 18);
 
-        // FIX B-H06: Add absolute tolerance cap to prevent percentage tolerance from being too large
         // 0.1% of $500M = $500K which is too high; cap at $100K absolute
         const MAX_ABSOLUTE_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
         const percentTolerance = cantonAsset.currentValue / 1000n; // 0.1%
@@ -432,7 +416,6 @@ class ValidatorNode {
 
       // 4. Verify total matches
       const attestedTotal = ethers.parseUnits(payload.totalCantonValue, 18);
-      // FIX B-H06: Cap tolerance at $100K absolute to prevent exploitation on large TVL
       const MAX_TOTAL_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
       const percentTolerance = snapshot.totalValue / 1000n;
       const tolerance = percentTolerance < MAX_TOTAL_TOLERANCE ? percentTolerance : MAX_TOTAL_TOLERANCE;
@@ -442,7 +425,6 @@ class ValidatorNode {
         : snapshot.totalValue - attestedTotal;
 
       // Only verify against assets included in attestation
-      // FIX H-13: Use ethers.parseUnits
       const includedAssetsValue = payload.cantonAssets.reduce((sum, a) => {
         return sum + ethers.parseUnits(a.assetValue, 18);
       }, 0n);
@@ -468,7 +450,6 @@ class ValidatorNode {
         };
       }
 
-      // FIX M-16: Verify the snapshot state hash is valid with Canton
       const stateValid = await this.cantonClient.verifyStateHash(snapshot.stateHash);
       if (!stateValid) {
         return {
@@ -501,7 +482,6 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
-    // FIX C-6: Mark as signing BEFORE async KMS call to prevent TOCTOU race
     this.signedAttestations.add(attestationId);
 
     try {
@@ -526,7 +506,6 @@ class ValidatorNode {
       this.signedAttestations.add(attestationId);
       console.log(`[Validator] ✓ Signed attestation ${attestationId}`);
 
-      // FIX C-6: Evict oldest entries if cache exceeds limit
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
         const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
         let evicted = 0;
@@ -540,7 +519,6 @@ class ValidatorNode {
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // FIX C-6: Remove from set on failure so it can be retried
       // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED") ||
           error.message?.includes("already signed")) {
@@ -553,7 +531,6 @@ class ValidatorNode {
 
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    // FIX B-M01: Validate timestamp to prevent negative values
     const timestamp = Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600);
 
     return ethers.solidityPackedKeccak256(
@@ -586,7 +563,6 @@ class ValidatorNode {
       throw new Error("KMS returned empty signature");
     }
 
-    // FIX M-20: Uses static import declared at top of file
     return formatKMSSignature(
       Buffer.from(response.Signature),
       ethSignedHash,
@@ -638,7 +614,6 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiKey) {
     throw new Error("CANTON_ASSET_API_KEY not set");
   }
-  // FIX T-H01: Validate Canton Asset API URL uses HTTPS in production
   if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
   }
@@ -657,7 +632,6 @@ async function main(): Promise<void> {
   await validator.start();
 }
 
-// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
   process.exit(1);

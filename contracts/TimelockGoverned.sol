@@ -11,7 +11,7 @@ pragma solidity 0.8.26;
  *      cancellation, overwrite-protection, and event emission are all handled
  *      by the OZ TimelockController — no hand-rolled state needed.
  *
- * STORAGE SAFETY (CRIT-01 FIX):
+ * STORAGE SAFETY:
  *   Uses ERC-7201 namespaced storage to prevent slot collisions when
  *   inherited by UUPS-upgradeable contracts alongside OZ upgradeable parents.
  *   keccak256(abi.encode(uint256(keccak256("minted.storage.TimelockGoverned")) - 1)) & ~bytes32(uint256(0xff))

@@ -44,7 +44,6 @@ contract SMUSDPriceAdapter is AccessControl {
     uint256 private constant ONE_SHARE = 1e18;
 
     /// @notice Maximum blocks for rate limiter (~1 hour at 12s blocks)
-    /// @dev FIX CRIT-07: Prevents unbounded rate limiter growth after extended inactivity
     uint256 private constant MAX_RATE_LIMIT_BLOCKS = 300;
 
     /// @notice Minimum valid share price (0.95 USD) — protects against vault manipulation
@@ -55,7 +54,7 @@ contract SMUSDPriceAdapter is AccessControl {
 
     /// @notice Minimum totalSupply to trust convertToAssets (anti-donation-attack)
     /// @dev If totalSupply < this, the vault is too small and share price is unreliable
-    uint256 public minTotalSupply = 1000e18; // FIX CRIT-08: 1000 shares minimum for donation protection
+    uint256 public minTotalSupply = 1000e18;
 
     /// @notice Maximum allowed price change per block (rate limiter, 8 decimals)
     /// @dev Prevents single-block donation from moving price more than 5%
@@ -154,15 +153,11 @@ contract SMUSDPriceAdapter is AccessControl {
     //                  INTERNAL
     // ============================================================
 
-    /// @notice FIX SPA-M03: Event emitted when price is clamped to bounds
     event SharePriceClamped(uint256 rawPrice, uint256 clampedPrice);
 
     /// @notice Derive sMUSD price in USD (8 decimals) from vault share price
     /// @dev SPA-M01: Round is managed via incrementRound() admin function.
-    /// @dev FIX SPA-M03: Clamps to bounds instead of reverting to prevent downstream DoS
-    /// @dev FIX DONATION-ATTACK: Cross-checks totalSupply floor + rate-limits per-block price moves
     function _getSharePriceUsd() internal view returns (uint256) {
-        // FIX DONATION-ATTACK: Reject price if vault has near-zero shares
         // With very few shares, a small donation can wildly inflate convertToAssets
         uint256 totalSupply = ISMUSD(smusd).totalSupply();
         if (totalSupply < minTotalSupply) {
@@ -170,7 +165,6 @@ contract SMUSDPriceAdapter is AccessControl {
             return _lastPrice > 0 ? _lastPrice : minSharePrice;
         }
 
-        // FIX DONATION-ATTACK: Cross-check totalAssets vs actual underlying balance
         // If totalAssets greatly exceeds the vault's actual token balance, someone donated
         // Note: totalAssets is used implicitly via convertToAssets; the totalSupply check
         // above is the primary guard since donation attacks work by inflating assets/shares ratio
@@ -181,18 +175,15 @@ contract SMUSDPriceAdapter is AccessControl {
         // Convert from 18 decimals (mUSD) to 8 decimals (Chainlink USD)
         uint256 priceUsd = assetsPerShare / 1e10;
 
-        // FIX SPA-M03: Clamp to bounds instead of reverting to prevent downstream DoS
         if (priceUsd < minSharePrice) {
             priceUsd = minSharePrice;
         } else if (priceUsd > maxSharePrice) {
             priceUsd = maxSharePrice;
         }
 
-        // FIX DONATION-ATTACK: Rate-limit per-block price movement
         // If the price jumped too much from last block, clamp the change
         if (_lastPrice > 0 && _lastPriceBlock < block.number) {
             uint256 blocksSinceLast = block.number - _lastPriceBlock;
-            // FIX CRIT-07: Cap blocks to prevent unbounded rate limiter growth
             // After MAX_RATE_LIMIT_BLOCKS, the rate limiter becomes ineffective
             if (blocksSinceLast > MAX_RATE_LIMIT_BLOCKS) {
                 blocksSinceLast = MAX_RATE_LIMIT_BLOCKS;
@@ -210,7 +201,6 @@ contract SMUSDPriceAdapter is AccessControl {
 
     /// @notice Public function to update the cached price (called by keepers/admin)
     /// @dev Separating read + write to allow view functions to stay view-compatible
-    /// @notice FIX: Restrict cache updates to admin to prevent manipulation
     /// @dev Also increments roundId so consumers can detect updates
     function updateCachedPrice() external onlyRole(ADAPTER_ADMIN_ROLE) {
         uint256 price = _getSharePriceUsd();

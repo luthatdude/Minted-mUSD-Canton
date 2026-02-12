@@ -244,7 +244,6 @@ contract CollateralVaultUpgradeable is
     // INTERNAL
     // ══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX HIGH-15: Wrapped in try/catch to prevent oracle circuit breaker
     /// from permanently blocking withdrawals during extreme price moves
     function _checkHealthFactor(address user) internal view {
         if (borrowModule != address(0)) {

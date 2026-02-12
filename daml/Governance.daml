@@ -128,7 +128,7 @@ template MultiSigProposal
     proposedAt : Time
     expiresAt : Time
     timelockEndsAt : Optional Time      -- Set when approved
-    timelockDuration : RelTime          -- FIX C-03: Configurable timelock duration (from GovernanceConfig)
+    timelockDuration : RelTime
     status : ProposalStatus
     observers : [Party]
   where
@@ -158,7 +158,6 @@ template MultiSigProposal
 
         let newApprovals = Set.insert approver approvals
         let isApproved = Set.size newApprovals >= requiredApprovals
-        -- FIX C-03: Use configurable timelockDuration instead of hardcoded 24h
         let newTimelockEnds = if isApproved
               then Some (addRelTime now timelockDuration)
               else None

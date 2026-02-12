@@ -169,17 +169,14 @@ export class TransparencyService {
     blockNumber: number,
     balances: PointBalance[]
   ): Promise<SnapshotManifest> {
-    // FIX HIGH-PATH: Validate snapshotId is a positive integer to prevent path traversal
     if (!Number.isInteger(snapshotId) || snapshotId < 1 || snapshotId > 1_000_000) {
       throw new Error(`Invalid snapshotId: must be a positive integer, got ${snapshotId}`);
     }
 
-    // FIX HIGH-PATH: Validate outputDir resolves within expected base
     const resolvedBase = path.resolve(this.outputDir);
 
     // Ensure output directory exists
     const snapshotDir = path.join(resolvedBase, `snapshot-${snapshotId}`);
-    // FIX HIGH-PATH: Verify resolved path is still under base directory
     if (!path.resolve(snapshotDir).startsWith(resolvedBase)) {
       throw new Error(`Path traversal detected: ${snapshotDir}`);
     }
@@ -296,14 +293,12 @@ export class TransparencyService {
     snapshotId: number,
     address: string
   ): MerkleProof | null {
-    // FIX HIGH-PATH: Validate snapshotId to prevent path traversal
     if (!Number.isInteger(snapshotId) || snapshotId < 1 || snapshotId > 1_000_000) {
       return null;
     }
 
     const resolvedBase = path.resolve(this.outputDir);
     const snapshotDir = path.join(resolvedBase, `snapshot-${snapshotId}`);
-    // FIX HIGH-PATH: Verify resolved path stays within base
     if (!path.resolve(snapshotDir).startsWith(resolvedBase)) {
       return null;
     }

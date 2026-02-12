@@ -940,30 +940,30 @@ template AttestationRequest
 ├── Signatories: aggregator
 ├── Observers: validatorGroup
 ├── Invariants:
-│   ├── length validatorGroup > 0 && <= 100 (FIX H-6: DoS bound)
-│   └── collectedSignatures tracks signed validators (FIX D-02)
+│   ├── length validatorGroup > 0 && <= 100
+│   └── collectedSignatures tracks signed validators
 │
-├── choice ProvideSignature (CONSUMING — FIX D-01: TOCTOU prevention)
+├── choice ProvideSignature (CONSUMING TOCTOU prevention)
 │   ├── Controller: validator
 │   ├── Validates:
-│   │   ├── validator not in collectedSignatures (FIX D-02: duplicate prevention)
+│   │   ├── validator not in collectedSignatures
 │   │   ├── validator in validatorGroup
-│   │   ├── signature length >= 130 chars (FIX M-24)
-│   │   ├── now < payload.expiresAt (FIX D-03: expiration)
+│   │   ├── signature length >= 130 chars
+│   │   ├── now < payload.expiresAt
 │   │   ├── Fetches all positionCids atomically
 │   │   ├── totalValue >= amount * 1.1 (110% collateral)
-│   │   └── Tolerance-based value comparison (FIX D-H08: Numeric 18 rounding)
+│   │   └── Tolerance-based value comparison
 │   └── Risk: Medium — consuming choice locks state between signatures
 │
 ├── choice FinalizeAttestation (CONSUMING)
 │   ├── Controller: aggregator
 │   ├── Validates:
-│   │   ├── Derives requiredSignatures = (n+1)/2 + 1 (FIX C-12: supermajority)
-│   │   ├── Dedup check on sigValidators (FIX H-17)
+│   │   ├── Derives requiredSignatures = (n+1)/2 + 1
+│   │   ├── Dedup check on sigValidators
 │   │   ├── All signers in validatorGroup
-│   │   ├── Expiration check (FIX D-03)
+│   │   ├── Expiration check
 │   │   └── Final collateral verification
-│   ├── Effects: Archives signature contracts (FIX D-M05: prevents reuse)
+│   ├── Effects: Archives signature contracts
 │   └── Risk: CRITICAL — finalization gates all minting operations
 ```
 
@@ -981,12 +981,12 @@ template AttestationRequest
 template BridgeOutAttestation  — Canton stables → Ethereum Treasury
 ├── Signatories: aggregator
 ├── Observers: validatorGroup
-├── choice BridgeOut_Sign (CONSUMING — FIX D-02)
+├── choice BridgeOut_Sign (CONSUMING
 │   ├── Tracks signedValidators list to prevent double-signing
 │   ├── Expiration check, collateral verification (110%)
 │   └── Returns updated attestation + signature contract
 ├── choice BridgeOut_Finalize
-│   ├── Derives majority quorum: (n/2) + 1 (FIX DL-H1)
+│   ├── Derives majority quorum: (n/2) + 1
 │   ├── Validates nonce consistency across all signatures
 │   ├── Dedup check on validators
 │   └── Final collateral verification
@@ -997,7 +997,7 @@ template BridgeInAttestation  — Ethereum USDC → Canton
 │   └── ⚠️ WARNING: nonconsuming — does NOT prevent double-signing
 │       (contrast with BridgeOutAttestation which uses consuming)
 ├── choice BridgeIn_Finalize
-│   ├── Derives majority quorum: (n/2) + 1 (FIX DL-H2)
+│   ├── Derives majority quorum: (n/2) + 1
 │   ├── Validates requestCid consistency
 │   └── Dedup check on validators
 └── Risk: HIGH — controls minting of Canton USDC on redemption
@@ -1005,14 +1005,14 @@ template BridgeInAttestation  — Ethereum USDC → Canton
 template SupplyCapAttestation  — Cross-chain supply sync
 ├── Invariant: totalGlobalSupply == cantonMUSDSupply + ethereumMUSDSupply
 ├── choice SupplyCap_Finalize
-│   ├── Majority quorum (FIX DL-H3)
+│   ├── Majority quorum
 │   └── Validates: globalBackingUSDC >= totalGlobalSupply (no undercollateralization)
 └── Risk: HIGH — incorrect supply cap could enable over-minting
 
 template YieldAttestation  — Ethereum yield → Canton smUSD
 ├── Invariant: totalTreasuryAssets >= totalMUSDSupply
 ├── choice Yield_Finalize
-│   ├── Majority quorum (FIX DL-H4)
+│   ├── Majority quorum
 │   └── Sequential epoch numbers prevent replay
 └── Risk: MEDIUM — inflated yield could benefit smUSD holders unfairly
 ```
@@ -1168,7 +1168,7 @@ template AttestationRequest (V3)
 │   ├── Signature length validation
 │   └── Expiration enforcement
 ├── choice Attestation_Complete
-│   ├── Derives majority quorum: (n/2) + 1 (FIX A-03)
+│   ├── Derives majority quorum: (n/2) + 1
 │   └── Risk: CRITICAL — previously accepted caller-supplied requiredSignatures
 ```
 
@@ -1207,10 +1207,10 @@ Additional Fixes:
 ```daml
 template IssuerRole
 ├── Signatories: issuer
-├── State: supplyCap, currentSupply (on-ledger — FIX D-C01)
+├── State: supplyCap, currentSupply (on-ledger
 │
 ├── choice IssuerRole_Mint (CONSUMING)
-│   ├── Controller: issuer, mintOwner (dual controller — FIX AUTH)
+│   ├── Controller: issuer, mintOwner (dual controller
 │   ├── Validates: currentSupply + mintAmount <= supplyCap
 │   ├── Returns: updated IssuerRole + minted MUSD
 │   └── Risk: MEDIUM — supply cap enforced, dual authorization required
@@ -1222,14 +1222,14 @@ template IssuerRole
 template MintRequest
 ├── Signatories: owner (requester)
 ├── choice MintRequest_Approve
-│   ├── Controller: issuer, owner (dual — FIX AUTH)
-│   ├── Exercises IssuerRole_Mint (enforces supply cap — FIX 5C-C01)
+│   ├── Controller: issuer, owner (dual
+│   ├── Exercises IssuerRole_Mint (enforces supply cap
 │   └── Risk: LOW — separation of request/approval duties
 
 template MintProposal
 ├── Signatories: issuer
 ├── choice MintProposal_Accept
-│   ├── Controller: owner, issuer (dual — FIX AUTH)
+│   ├── Controller: owner, issuer (dual
 │   └── Risk: LOW — airdrop-safe (user must accept)
 ```
 
@@ -1248,7 +1248,7 @@ template Asset
 │
 ├── choice Asset_EmergencyTransfer
 │   ├── Controller: issuer (court order/regulatory)
-│   ├── Validates: non-empty reason (FIX IA-M03), compliance whitelist (FIX IA-C01)
+│   ├── Validates: non-empty reason, compliance whitelist
 │   ├── Appends reason to metadata audit trail
 │   └── Risk: MEDIUM — issuer can forcibly move assets (by design for regulatory)
 │
@@ -1257,10 +1257,10 @@ template Asset
 │   └── Risk: LOW — precision validation prevents dust
 
 template Instrument
-├── Invariant: decimalScale in [0, 18] (FIX IA-L01)
+├── Invariant: decimalScale in [0, 18]
 
 template AssetRegistry
-├── Invariant: 1 <= authorizedParties length <= 10,000 (FIX IA-M02)
+├── Invariant: 1 <= authorizedParties length <= 10,000
 ```
 
 ### 10.5 Canton Security Posture Summary
@@ -1270,16 +1270,16 @@ template AssetRegistry
 | Dual Signatory Enforcement | ✅ All token templates use dual signatories (issuer + owner) |
 | Proposal Pattern (Anti-Airdrop) | ✅ All transfers use accept/reject proposals |
 | Replay Prevention | ✅ Consuming choices archive attestations after use |
-| TOCTOU Prevention | ✅ Consuming choices lock position CIDs during attestation (FIX D-01) |
-| Duplicate Signature Prevention | ✅ Set-based tracking on attestation requests (FIX D-02) |
-| Timestamp Validation | ✅ `expiresAt` with `getTime` checks (FIX D-03) |
-| Quorum Derivation | ✅ Required signatures derived from validator group size, not caller-supplied (FIX C-12) |
+| TOCTOU Prevention | ✅ Consuming choices lock position CIDs during attestation |
+| Duplicate Signature Prevention | ✅ Set-based tracking on attestation requests |
+| Timestamp Validation | ✅ `expiresAt` with `getTime` checks |
+| Quorum Derivation | ✅ Required signatures derived from validator group size, not caller-supplied |
 | Supply Cap Enforcement | ✅ On-ledger state tracking in IssuerRole / service contracts |
 | Rate Limiting | ✅ 24h rolling window with mint/burn offset tracking |
 | Compliance Hooks | ✅ Optional ComplianceRegistry with O(log n) blacklist/freeze checks |
 | Oracle Staleness | ✅ Enforced via `getTime` comparison (not user-supplied time) |
 | Numeric Precision | ✅ Numeric 18 with tolerance-based comparisons where needed |
-| Validator Group Bounds | ✅ Capped at 100 parties (FIX H-6) |
+| Validator Group Bounds | ✅ Capped at 100 parties |
 | Legal Agreement Embedding | ✅ MPA hash + URI in every minted token |
 
 ### 10.6 Canton-Specific Findings & Recommendations
