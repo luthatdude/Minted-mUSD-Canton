@@ -631,6 +631,8 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
   }
+  // INFRA-H-01 / INFRA-H-02: Validate HTTPS for all external endpoints
+  requireHTTPS(DEFAULT_CONFIG.cantonAssetApiUrl, "CANTON_ASSET_API_URL");
 
   const validator = new ValidatorNode(DEFAULT_CONFIG);
 

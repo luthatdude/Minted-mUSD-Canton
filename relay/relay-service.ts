@@ -59,9 +59,10 @@ const DEFAULT_CONFIG: RelayConfig = {
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
 
-  // INFRA-H-02: No insecure fallback — require explicit RPC URL in production
+  // INFRA-H-01 / INFRA-H-03: No insecure fallback — require explicit RPC URL in production
+  // Read from Docker secret first (contains API keys), fallback to env var
   ethereumRpcUrl: (() => {
-    const url = process.env.ETHEREUM_RPC_URL;
+    const url = readSecret("ethereum_rpc_url", "ETHEREUM_RPC_URL");
     if (!url) throw new Error("ETHEREUM_RPC_URL is required");
     if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
       throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
