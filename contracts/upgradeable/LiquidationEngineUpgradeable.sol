@@ -117,6 +117,120 @@ contract LiquidationEngineUpgradeable is
         emit FullLiquidationThresholdUpdated(old, _bps);
     }
 
+    // ── Core Liquidation ───────────────────────────────────────────────
+
+    /// @notice Liquidate an undercollateralized position
+    /// @param borrower The address of the undercollateralized borrower
+    /// @param collateralToken The collateral token to seize
+    /// @param debtToRepay Amount of mUSD debt to repay on behalf of borrower
+    function liquidate(
+        address borrower,
+        address collateralToken,
+        uint256 debtToRepay
+    ) external nonReentrant whenNotPaused {
+        require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
+        require(debtToRepay > 0, "INVALID_AMOUNT");
+        require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
+
+        // Use healthFactorUnsafe to bypass circuit breaker during price crashes
+        uint256 hf = borrowModule.healthFactorUnsafe(borrower);
+        require(hf < 10000, "POSITION_HEALTHY");
+
+        // Determine max repayable amount
+        uint256 totalDebt = borrowModule.totalDebt(borrower);
+        uint256 maxRepay;
+
+        if (hf < fullLiquidationThreshold) {
+            maxRepay = totalDebt;
+        } else {
+            maxRepay = (totalDebt * closeFactorBps) / 10000;
+        }
+
+        uint256 actualRepay = debtToRepay > maxRepay ? maxRepay : debtToRepay;
+
+        // Calculate collateral to seize
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
+
+        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
+        require(collateralPrice > 0, "INVALID_PRICE");
+
+        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
+        uint256 seizeAmount = (actualRepay * (10000 + penaltyBps) * (10 ** tokenDecimals)) / (10000 * collateralPrice);
+
+        // Cap at available collateral
+        uint256 available = vault.deposits(borrower, collateralToken);
+        if (seizeAmount > available) {
+            seizeAmount = available;
+            uint256 seizeValue = oracle.getValueUsdUnsafe(collateralToken, seizeAmount);
+            actualRepay = (seizeValue * 10000) / (10000 + penaltyBps);
+        }
+
+        require(seizeAmount > 0, "NOTHING_TO_SEIZE");
+
+        // Execute liquidation (CEI pattern — all calls to trusted protocol contracts)
+        IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), actualRepay);
+        musd.burn(address(this), actualRepay);
+
+        vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
+
+        borrowModule.reduceDebt(borrower, actualRepay);
+
+        emit Liquidation(msg.sender, borrower, collateralToken, actualRepay, seizeAmount);
+
+        if (seizeAmount == available) {
+            _checkAndRecordBadDebt(borrower, actualRepay, seizeAmount);
+        }
+    }
+
+    /// @dev Check if borrower has residual debt with zero collateral (bad debt)
+    function _checkAndRecordBadDebt(
+        address borrower,
+        uint256 debtRepaid,
+        uint256 collateralSeized
+    ) private {
+        uint256 residualDebt = borrowModule.totalDebt(borrower);
+        if (residualDebt == 0) return;
+
+        address[] memory tokens = vault.getSupportedTokens();
+        for (uint256 i = 0; i < tokens.length; i++) {
+            if (vault.deposits(borrower, tokens[i]) > 0) {
+                return;
+            }
+        }
+
+        emit BadDebtDetected(borrower, residualDebt, debtRepaid, collateralSeized);
+        borrowModule.recordBadDebt(borrower);
+    }
+
+    // ── View Functions ──────────────────────────────────────────────────
+
+    /// @notice Check if a position is liquidatable
+    function isLiquidatable(address borrower) external view returns (bool) {
+        uint256 debt = borrowModule.totalDebt(borrower);
+        if (debt == 0) return false;
+        return borrowModule.healthFactorUnsafe(borrower) < 10000;
+    }
+
+    /// @notice Estimate collateral received for a given debt repayment
+    function estimateSeize(
+        address borrower,
+        address collateralToken,
+        uint256 debtToRepay
+    ) external view returns (uint256 collateralAmount) {
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
+
+        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
+        if (collateralPrice == 0) return 0;
+
+        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
+        collateralAmount = (debtToRepay * (10000 + penaltyBps) * (10 ** tokenDecimals)) / (10000 * collateralPrice);
+
+        uint256 available = vault.deposits(borrower, collateralToken);
+        if (collateralAmount > available) {
+            collateralAmount = available;
+        }
+    }
+
     // ── Pause / Unpause ─────────────────────────────────────────────────
 
     function pause() external onlyRole(PAUSER_ROLE) { _pause(); }
