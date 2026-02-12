@@ -248,6 +248,9 @@ template CantonStakingService
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
+        -- FIX D-M09: Cap share price increase at 10% per epoch to prevent manipulation
+        let maxAllowedPrice = globalSharePrice * 1.1
+        assertMsg "SHARE_PRICE_INCREASE_TOO_LARGE" (newGlobalSharePrice <= maxAllowedPrice)
 
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
