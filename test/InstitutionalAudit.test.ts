@@ -19,7 +19,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
+import { timelockSetFeed, timelockRemoveFeed, timelockSetMaxDeviation, timelockSetCircuitBreakerEnabled, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 1: PriceOracle — Circuit Breaker Coverage
@@ -53,40 +53,42 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
   describe("setMaxDeviation", function () {
     it("should update max deviation within valid range", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).setMaxDeviation(500); // 5%
+      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
       expect(await oracle.maxDeviationBps()).to.equal(500);
     });
 
     it("should emit MaxDeviationUpdated event", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(admin).setMaxDeviation(1000))
+      await oracle.connect(admin).requestSetMaxDeviation(1000);
+      await time.increase(48 * 3600);
+      await expect(oracle.connect(admin).executeSetMaxDeviation())
         .to.emit(oracle, "MaxDeviationUpdated")
         .withArgs(2000, 1000); // old=2000 (20%), new=1000 (10%)
     });
 
     it("should reject deviation below 1% (100 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(admin).setMaxDeviation(50))
+      await expect(oracle.connect(admin).requestSetMaxDeviation(50))
         .to.be.revertedWith("DEVIATION_OUT_OF_RANGE");
     });
 
     it("should reject deviation above 50% (5000 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(admin).setMaxDeviation(6000))
+      await expect(oracle.connect(admin).requestSetMaxDeviation(6000))
         .to.be.revertedWith("DEVIATION_OUT_OF_RANGE");
     });
 
     it("should accept boundary values (100 and 5000 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).setMaxDeviation(100);
+      await timelockSetMaxDeviation(oracle, admin, 100);
       expect(await oracle.maxDeviationBps()).to.equal(100);
-      await oracle.connect(admin).setMaxDeviation(5000);
+      await timelockSetMaxDeviation(oracle, admin, 5000);
       expect(await oracle.maxDeviationBps()).to.equal(5000);
     });
 
     it("should reject non-admin caller", async function () {
       const { oracle, user } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(user).setMaxDeviation(1000)).to.be.reverted;
+      await expect(oracle.connect(user).requestSetMaxDeviation(1000)).to.be.reverted;
     });
   });
 
@@ -97,30 +99,31 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
   describe("setCircuitBreakerEnabled", function () {
     it("should disable circuit breaker", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).setCircuitBreakerEnabled(false);
+      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
       expect(await oracle.circuitBreakerEnabled()).to.be.false;
     });
 
     it("should re-enable circuit breaker", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await oracle.connect(admin).setCircuitBreakerEnabled(false);
-      // FIX H-04: Advance time past cooldown before toggling again
-      await ethers.provider.send("evm_increaseTime", [3601]);
-      await ethers.provider.send("evm_mine", []);
-      await oracle.connect(admin).setCircuitBreakerEnabled(true);
+      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
+      // Wait for cooldown (1h) before requesting another toggle
+      await time.increase(3600);
+      await timelockSetCircuitBreakerEnabled(oracle, admin, true);
       expect(await oracle.circuitBreakerEnabled()).to.be.true;
     });
 
     it("should emit CircuitBreakerToggled event", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(admin).setCircuitBreakerEnabled(false))
+      await oracle.connect(admin).requestSetCircuitBreakerEnabled(false);
+      await time.increase(48 * 3600);
+      await expect(oracle.connect(admin).executeSetCircuitBreakerEnabled())
         .to.emit(oracle, "CircuitBreakerToggled")
         .withArgs(false);
     });
 
     it("should reject non-admin caller", async function () {
       const { oracle, user } = await loadFixture(deployOracleFixture);
-      await expect(oracle.connect(user).setCircuitBreakerEnabled(false)).to.be.reverted;
+      await expect(oracle.connect(user).requestSetCircuitBreakerEnabled(false)).to.be.reverted;
     });
   });
 
@@ -220,7 +223,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
       // setFeed auto-initializes lastKnownPrice to $2000
       // Set max deviation to 5% so any >5% move triggers it
-      await oracle.connect(admin).setMaxDeviation(500); // 5%
+      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
+      await refreshFeeds(ethFeed);
 
       // Move price 10% ($2000 → $2200)
       await ethFeed.setAnswer(220000000000n);
@@ -233,7 +237,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
       // Set tight deviation (5%)
-      await oracle.connect(admin).setMaxDeviation(500);
+      await timelockSetMaxDeviation(oracle, admin, 500);
+      await refreshFeeds(ethFeed);
 
       // Move price 3% ($2000 → $2060)
       await ethFeed.setAnswer(206000000000n);
@@ -245,8 +250,9 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should bypass circuit breaker when disabled", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await oracle.connect(admin).setMaxDeviation(500); // 5%
-      await oracle.connect(admin).setCircuitBreakerEnabled(false);
+      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
+      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
+      await refreshFeeds(ethFeed);
 
       // Move price 30% ($2000 → $2600)
       await ethFeed.setAnswer(260000000000n);
@@ -259,7 +265,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should allow getPrice after admin resets lastKnownPrice", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await oracle.connect(admin).setMaxDeviation(500);
+      await timelockSetMaxDeviation(oracle, admin, 500);
+      await refreshFeeds(ethFeed);
 
       // Trigger circuit breaker
       await ethFeed.setAnswer(260000000000n); // 30% move
@@ -276,7 +283,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should allow getPrice after admin updatePrice", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await oracle.connect(admin).setMaxDeviation(500);
+      await timelockSetMaxDeviation(oracle, admin, 500);
+      await refreshFeeds(ethFeed);
       await ethFeed.setAnswer(260000000000n);
       await expect(oracle.getPrice(WETH)).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
 
@@ -297,7 +305,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should return price even when circuit breaker would trigger", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await oracle.connect(admin).setMaxDeviation(500); // 5%
+      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
+      await refreshFeeds(ethFeed);
       await ethFeed.setAnswer(260000000000n); // 30% move
 
       // getPrice reverts
@@ -334,7 +343,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should calculate value bypassing circuit breaker", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await oracle.connect(admin).setMaxDeviation(500);
+      await timelockSetMaxDeviation(oracle, admin, 500);
+      await refreshFeeds(ethFeed);
       await ethFeed.setAnswer(260000000000n); // $2600
 
       // getValueUsd calls getPrice → would revert
@@ -790,7 +800,8 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       // Trip circuit breaker
       const ORACLE_ADMIN = await f.priceOracle.ORACLE_ADMIN_ROLE();
       await f.priceOracle.grantRole(ORACLE_ADMIN, f.owner.address);
-      await f.priceOracle.connect(f.owner).setMaxDeviation(100); // 1%
+      await timelockSetMaxDeviation(f.priceOracle, f.owner, 100); // 1%
+      await refreshFeeds(f.ethFeed);
       await f.ethFeed.setAnswer(180000000000n); // $1800 (10% drop)
 
       // healthFactor (safe) reverts

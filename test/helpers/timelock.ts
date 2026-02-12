@@ -1,7 +1,7 @@
 /**
  * Timelock Helper — wraps the propose→advance→execute pattern for test convenience.
- * FIX H-01: All admin operations now require a 48h timelock.
- * These helpers let tests call the 3-step pattern in a single line.
+ * All admin operations require a 48h timelock. These helpers let tests call the
+ * 3-step pattern in a single line.
  *
  * NOTE: Each helper advances block time by 48h. After calling multiple helpers
  * in a fixture, call refreshFeeds() to update mock Chainlink feed timestamps
@@ -40,6 +40,18 @@ export async function timelockRemoveFeed(oracle: any, admin: HardhatEthersSigner
   await oracle.connect(admin).requestRemoveFeed(token);
   await time.increase(ADMIN_DELAY);
   await oracle.connect(admin).executeRemoveFeed();
+}
+
+export async function timelockSetMaxDeviation(oracle: any, admin: HardhatEthersSigner, bps: number) {
+  await oracle.connect(admin).requestSetMaxDeviation(bps);
+  await time.increase(ADMIN_DELAY);
+  await oracle.connect(admin).executeSetMaxDeviation();
+}
+
+export async function timelockSetCircuitBreakerEnabled(oracle: any, admin: HardhatEthersSigner, enabled: boolean) {
+  await oracle.connect(admin).requestSetCircuitBreakerEnabled(enabled);
+  await time.increase(ADMIN_DELAY);
+  await oracle.connect(admin).executeSetCircuitBreakerEnabled();
 }
 
 // ─── CollateralVault ─────────────────────────────────────────
@@ -157,4 +169,26 @@ export async function timelockSetFeeRecipient(dm: any, admin: HardhatEthersSigne
   await dm.connect(admin).requestFeeRecipient(recipient);
   await time.increase(ADMIN_DELAY);
   await dm.connect(admin).executeFeeRecipient();
+}
+
+export async function timelockSetLimits(
+  dm: any, admin: HardhatEthersSigner,
+  minMint: bigint | number, maxMint: bigint | number,
+  minRedeem: bigint | number, maxRedeem: bigint | number
+) {
+  await dm.connect(admin).requestLimits(minMint, maxMint, minRedeem, maxRedeem);
+  await time.increase(ADMIN_DELAY);
+  await dm.connect(admin).executeLimits();
+}
+
+// ─── InterestRateModel ───────────────────────────────────────
+
+export async function timelockSetIRMParams(
+  irm: any, admin: HardhatEthersSigner,
+  baseRate: number, multiplier: number, kink: number,
+  jumpMultiplier: number, reserveFactor: number
+) {
+  await irm.connect(admin).requestSetParams(baseRate, multiplier, kink, jumpMultiplier, reserveFactor);
+  await time.increase(ADMIN_DELAY);
+  await irm.connect(admin).executeSetParams();
 }
