@@ -401,8 +401,11 @@ contract SkySUSDSStrategy is
     }
 
     /// @notice Emergency withdraw all to Treasury, bypassing normal flow
+    /// FIX CR-08: Recipient must hold TREASURY_ROLE to prevent compromised guardian
+    /// from redirecting funds to an arbitrary address.
     function emergencyWithdraw(address recipient) external onlyRole(GUARDIAN_ROLE) {
         require(recipient != address(0), "Zero recipient");
+        require(hasRole(TREASURY_ROLE, recipient), "RECIPIENT_MUST_BE_TREASURY");
 
         // Redeem all sUSDS
         uint256 shares = sUsdsVault.balanceOf(address(this));
