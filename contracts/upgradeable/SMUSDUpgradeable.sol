@@ -50,11 +50,23 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  /// @notice Last Canton sync timestamp
  uint256 public lastCantonSyncTime;
  
- /// @notice Minimum interval between syncs (1 hour)
- uint256 public constant MIN_SYNC_INTERVAL = 1 hours;
+ /// @notice FIX CRIT-02: Minimum interval between syncs (4 hours, was 1 hour)
+ /// @dev At 1h intervals, 24 syncs/day × 1.05^24 ≈ 3.2x/day — too permissive.
+ ///      At 4h intervals, 6 syncs/day × 1.01^6 ≈ 1.06x/day — safe.
+ uint256 public constant MIN_SYNC_INTERVAL = 4 hours;
  
- /// @notice Maximum share change per sync (5% = 500 bps)
- uint256 public constant MAX_SHARE_CHANGE_BPS = 500;
+ /// @notice FIX CRIT-02: Maximum share change per sync (1% = 100 bps, was 5% = 500 bps)
+ uint256 public constant MAX_SHARE_CHANGE_BPS = 100;
+
+ /// @notice FIX CRIT-02: Daily cumulative share change cap (5% = 500 bps)
+ /// @dev Prevents compounding small changes across multiple syncs in 24h
+ uint256 public constant MAX_DAILY_SHARE_CHANGE_BPS = 500;
+
+ /// @notice FIX CRIT-02: Track cumulative daily share change
+ uint256 public dailyCumulativeShareChangeBps;
+
+ /// @notice FIX CRIT-02: Last daily reset timestamp
+ uint256 public lastDailyResetTime;
 
  // ═══════════════════════════════════════════════════════════════════════
  // INTEREST ROUTING: Track interest from BorrowModule
@@ -279,8 +291,14 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
  require(epoch > lastCantonSyncEpoch, "EPOCH_NOT_SEQUENTIAL");
  
- // Rate limit - minimum 1 hour between syncs
+ // Rate limit - minimum 4 hours between syncs
  require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
+ 
+ // FIX CRIT-02: Reset daily cumulative tracker every 24h
+ if (block.timestamp >= lastDailyResetTime + 24 hours) {
+  dailyCumulativeShareChangeBps = 0;
+  // Note: lastDailyResetTime is updated below after all checks pass
+ }
  
  // First sync must use admin-only initialization to prevent manipulation
  // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
@@ -291,16 +309,29 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : 1_000_000e18;
  require(_cantonShares <= maxInitialShares, "INITIAL_SHARES_TOO_LARGE");
  } else {
- // Magnitude limit - max 5% change per sync to prevent manipulation
+ // Magnitude limit - max 1% change per sync to prevent manipulation
  uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
  uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
  require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
  require(_cantonShares >= maxDecrease, "SHARE_DECREASE_TOO_LARGE");
+
+ // FIX CRIT-02: Check daily cumulative change
+ uint256 changeBps;
+ if (_cantonShares > cantonTotalShares) {
+  changeBps = ((_cantonShares - cantonTotalShares) * 10000) / cantonTotalShares;
+ } else {
+  changeBps = ((cantonTotalShares - _cantonShares) * 10000) / cantonTotalShares;
+ }
+ require(dailyCumulativeShareChangeBps + changeBps <= MAX_DAILY_SHARE_CHANGE_BPS, "DAILY_SHARE_CHANGE_EXCEEDED");
+ dailyCumulativeShareChangeBps += changeBps;
  }
  
  cantonTotalShares = _cantonShares;
  lastCantonSyncEpoch = epoch;
  lastCantonSyncTime = block.timestamp;
+ if (block.timestamp >= lastDailyResetTime + 24 hours) {
+  lastDailyResetTime = block.timestamp;
+ }
  
  emit CantonSharesSynced(_cantonShares, epoch, globalSharePrice());
  }

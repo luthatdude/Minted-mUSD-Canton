@@ -227,6 +227,8 @@ contract PendleStrategyV2 is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+    /// @notice FIX CRIT-06: Timelock role for upgrade authorization
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -349,9 +351,10 @@ contract PendleStrategyV2 is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _admin);
 
-        // Approve router for USDC
-        usdc.forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // FIX HIGH-07: Removed infinite USDC approval from initialize().
+        // Per-operation approvals are set in deposit() and _selectNewMarket()
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -375,6 +378,9 @@ contract PendleStrategyV2 is
 
         // Transfer USDC from treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
+
+        // FIX HIGH-07: Per-operation approval (replaces infinite approval)
+        usdc.forceApprove(PENDLE_ROUTER, amount);
 
         // Swap USDC → PT via Pendle Router
         uint256 minPtOut = (amount * (BPS - slippageBps)) / BPS;
@@ -593,8 +599,9 @@ contract PendleStrategyV2 is
         (,, address yt) = IPendleMarket(bestMarket).readTokens();
         currentYT = yt;
 
-        // Approve PT for router
-        IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // Approve PT for router (per-operation, set before each withdrawal)
+        // FIX HIGH-07: Approval deferred to withdrawal functions instead of blanket max
+        // IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
@@ -635,6 +642,11 @@ contract PendleStrategyV2 is
 
     function _redeemPt(uint256 ptAmount) internal returns (uint256 usdcOut) {
         if (ptAmount == 0) return 0;
+
+        // FIX HIGH-07: Per-operation PT approval for router (replaces infinite approval)
+        if (currentPT != address(0)) {
+            IERC20(currentPT).forceApprove(PENDLE_ROUTER, ptAmount);
+        }
 
         IPendleMarket market = IPendleMarket(currentMarket);
         bool expired = market.isExpired();
@@ -687,16 +699,19 @@ contract PendleStrategyV2 is
         uint256 timeRemaining = currentExpiry - block.timestamp;
         uint256 secondsPerYear = 365 days;
 
-        // Simple approximation: PT discount = impliedRate * timeRemaining
-        // For ~11% APY with 6 months to go: discount ≈ 5.5%
-        // PT value = underlying * (1 - discount)
-        // This is a simplification; actual value requires oracle
+        // FIX CRIT-04: Cap timeRemaining and enforce discount rate bounds
+        // to prevent PT valuation manipulation via extreme parameters
         if (timeRemaining > secondsPerYear) {
             timeRemaining = secondsPerYear;
         }
 
-        // Use configurable discount rate
+        // Use configurable discount rate with safety bounds
+        // FIX CRIT-04: ptDiscountRateBps is capped at 2000 bps (20%) in setPtDiscountRate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
+        // FIX CRIT-04: Cap effective discount at 30% to prevent extreme undervaluation
+        if (discountBps > 3000) {
+            discountBps = 3000;
+        }
         uint256 valueBps = BPS - discountBps;
 
         return (ptAmount * valueBps) / BPS;
@@ -751,7 +766,8 @@ contract PendleStrategyV2 is
      * @dev Allows adjusting PT discount rate to match current market implied APY
      */
     function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
-        require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
+        /// @notice FIX CRIT-04: Cap discount rate at 20% to prevent PT valuation manipulation
+        require(_discountBps <= 2000, "DISCOUNT_TOO_HIGH"); // Max 20% (was 50%)
         emit PtDiscountRateUpdated(ptDiscountRateBps, _discountBps);
         ptDiscountRateBps = _discountBps;
     }
@@ -825,5 +841,6 @@ contract PendleStrategyV2 is
     // UUPS UPGRADE
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 }

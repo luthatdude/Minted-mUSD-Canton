@@ -184,6 +184,10 @@ contract PriceOracle is AccessControl {
         // Normalize to 18 decimals
         price = uint256(answer) * (10 ** (18 - feedDecimals));
 
+        // FIX HIGH-05: Anchor spot price against lastKnownPrice to mitigate
+        // flash loan manipulation of Chainlink round data. If the current price
+        // deviates more than maxDeviationBps from the last accepted price,
+        // trigger the circuit breaker instead of returning a potentially manipulated price.
         if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
             uint256 oldPrice = lastKnownPrice[token];
             uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;

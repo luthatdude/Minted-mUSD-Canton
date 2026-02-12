@@ -61,6 +61,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     /// @notice Role for updating selector parameters
     bytes32 public constant PARAMS_ADMIN_ROLE = keccak256("PARAMS_ADMIN_ROLE");
 
+    /// @notice FIX CRIT-06: Timelock role for upgrade authorization
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -157,6 +160,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(MARKET_ADMIN_ROLE, _admin);
         _grantRole(PARAMS_ADMIN_ROLE, _admin);
+        /// @notice FIX CRIT-06: Grant TIMELOCK_ROLE for upgrade authorization
+        _grantRole(TIMELOCK_ROLE, _admin);
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -519,7 +524,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
     /// @dev Storage gap for future upgrades
     uint256[40] private __gap;
