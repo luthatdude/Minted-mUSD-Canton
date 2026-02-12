@@ -227,8 +227,40 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
+    -- FIX CRITICAL C-02: Issuer-only burn replaced with burn-proposal pattern.
+    -- Owner must consent to burns via CantonMUSDBurnProposal (below).
+    -- Only the RedemptionService (exercised by owner) can call this directly.
     choice CantonMUSD_Burn : ()
-      controller issuer
+      controller issuer, owner
+      do
+        return ()
+
+-- | FIX CRITICAL C-02: Burn proposal pattern — issuer proposes, owner must accept.
+-- Prevents unilateral burns. For compliance freezes, use separate FreezeProposal.
+template CantonMUSDBurnProposal
+  with
+    musdCid : ContractId CantonMUSD
+    musd : CantonMUSD
+    reason : Text
+  where
+    signatory musd.issuer
+    observer musd.owner
+
+    -- Owner accepts the burn
+    choice CantonMUSDBurnProposal_Accept : ()
+      controller musd.owner
+      do
+        exercise musdCid CantonMUSD_Burn
+
+    -- Owner rejects the burn
+    choice CantonMUSDBurnProposal_Reject : ()
+      controller musd.owner
+      do
+        return ()
+
+    -- Issuer can cancel their own proposal
+    choice CantonMUSDBurnProposal_Cancel : ()
+      controller musd.issuer
       do
         return ()
 

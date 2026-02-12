@@ -314,12 +314,35 @@ export class OracleKeeper {
       const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!resp.ok) return null;
       const data = await resp.json();
-      // CoinGecko format: { "ethereum": { "usd": 2500 } }
-      const values = Object.values(data as Record<string, any>);
-      if (values.length > 0 && values[0]?.usd) {
-        return values[0].usd as number;
+
+      // FIX H-09: Schema validation for CoinGecko response.
+      // Prevents MITM/malformed response from injecting arbitrary price data.
+      // Expected format: { "ethereum": { "usd": 2500.0 } }
+      if (typeof data !== "object" || data === null || Array.isArray(data)) {
+        logger.warn(`${symbol} — external feed returned non-object response`);
+        return null;
       }
-      return null;
+      const values = Object.values(data as Record<string, unknown>);
+      if (values.length !== 1) {
+        logger.warn(`${symbol} — external feed returned unexpected number of entries: ${values.length}`);
+        return null;
+      }
+      const entry = values[0];
+      if (typeof entry !== "object" || entry === null || !("usd" in entry)) {
+        logger.warn(`${symbol} — external feed entry missing 'usd' field`);
+        return null;
+      }
+      const price = (entry as Record<string, unknown>).usd;
+      if (typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+        logger.warn(`${symbol} — external feed returned invalid price: ${price}`);
+        return null;
+      }
+      // Sanity bound: reject prices outside $0.0001 — $10M range
+      if (price < 0.0001 || price > 10_000_000) {
+        logger.warn(`${symbol} — external price $${price} outside sanity bounds [$0.0001, $10M]`);
+        return null;
+      }
+      return price;
     } catch {
       return null;
     }
