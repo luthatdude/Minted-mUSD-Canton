@@ -1,7 +1,7 @@
 /**
  * Minted Protocol — PriceOracle Circuit Breaker Keeper
  *
- * FIX INFRA: Automates PriceOracle circuit breaker resets.
+ * Automates PriceOracle circuit breaker resets.
  * Monitors oracle staleness and resets the circuit breaker when
  * the price feed recovers after a legitimate price move.
  *
@@ -19,13 +19,13 @@ import { createLogger, format, transports } from "winston";
 
 dotenv.config();
 
-// FIX BE-003: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
   console.error('FATAL: Unhandled promise rejection:', reason);
   process.exit(1);
 });
 
-// FIX BE-003: Handle uncaught exceptions to prevent silent crashes
+// Handle uncaught exceptions to prevent silent crashes
 process.on('uncaughtException', (error) => {
   console.error('FATAL: Uncaught exception:', error);
   process.exit(1);
@@ -71,13 +71,13 @@ export const DEFAULT_KEEPER_CONFIG: OracleKeeperConfig = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
 };
 
-// FIX BE-004: Warn if using insecure HTTP transport for Ethereum RPC
+// Warn if using insecure HTTP transport for Ethereum RPC
 if (DEFAULT_KEEPER_CONFIG.rpcUrl && DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('http://') && !DEFAULT_KEEPER_CONFIG.rpcUrl.includes('localhost') && !DEFAULT_KEEPER_CONFIG.rpcUrl.includes('127.0.0.1')) {
   console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
 }
-// FIX BE-004: Reject insecure HTTP transport in production
+// Reject insecure HTTP transport in production
 if (process.env.NODE_ENV === 'production' && DEFAULT_KEEPER_CONFIG.rpcUrl && !DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('https://') && !DEFAULT_KEEPER_CONFIG.rpcUrl.startsWith('wss://')) {
-  throw new Error('FIX BE-004: Insecure RPC transport in production. RPC_URL must use https:// or wss://');
+  throw new Error('Insecure RPC transport in production. RPC_URL must use https:// or wss://');
 }
 
 // ============================================================
@@ -148,12 +148,12 @@ function readSecret(name: string, envVar: string): string {
   return process.env[envVar] || "";
 }
 
-// FIX BE-001: secp256k1 curve order — private keys must be in range [1, n-1]
+// secp256k1 curve order — private keys must be in range [1, n-1]
 const SECP256K1_N = BigInt(
   "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
 );
 
-/** FIX BE-001: Validate private key is in valid secp256k1 range and read from secret/env */
+/** Validate private key is in valid secp256k1 range and read from secret/env */
 function readAndValidatePrivateKey(secretName: string, envVar: string): string {
   const key = readSecret(secretName, envVar);
   if (!key) return "";
@@ -350,7 +350,7 @@ export class OracleKeeper {
 // ============================================================
 
 async function main(): Promise<void> {
-  // FIX BE-001: Validate private key is in valid secp256k1 range
+  // Validate private key is in valid secp256k1 range
   const privateKey = readAndValidatePrivateKey("keeper_private_key", "KEEPER_PRIVATE_KEY");
   if (!privateKey) {
     console.error("FATAL: KEEPER_PRIVATE_KEY is required");

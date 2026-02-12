@@ -9,7 +9,7 @@ import MEVProtectedExecutor from "./flashbots";
 
 dotenv.config();
 
-// FIX BE-SECRET-01: Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
+// Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
 function readSecret(name: string, envVar: string): string {
   const secretPath = `/run/secrets/${name}`;
   try {
@@ -27,7 +27,7 @@ function readSecret(name: string, envVar: string): string {
 const config = {
   rpcUrl: process.env.RPC_URL!,
   chainId: parseInt(process.env.CHAIN_ID || "1", 10),
-  // FIX BE-SECRET-01: Use Docker secret with env var fallback
+  // Use Docker secret with env var fallback
   privateKey: readSecret("bot_private_key", "PRIVATE_KEY"),
   
   // Contract addresses
@@ -50,13 +50,13 @@ const config = {
   flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
 };
 
-// FIX: Validate private key format on startup
+// Validate private key format on startup
 if (!config.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(config.privateKey)) {
   console.error("FATAL: PRIVATE_KEY env var is missing or invalid (expected 64 hex chars)");
   process.exit(1);
 }
 
-// FIX BE-002: Validate private key is within secp256k1 curve order range
+// Validate private key is within secp256k1 curve order range
 {
   const SECP256K1_N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
   const keyBigInt = BigInt(config.privateKey.startsWith('0x') ? config.privateKey : '0x' + config.privateKey);
@@ -163,7 +163,7 @@ class LiquidationBot {
   private borrowers: Set<string> = new Set();
   private static readonly MAX_BORROWERS = config.maxTrackedBorrowers;
 
-  /** FIX: Add with eviction to keep bounded */
+  /** Add with eviction to keep bounded */
   private trackBorrower(addr: string): void {
     if (this.borrowers.size >= LiquidationBot.MAX_BORROWERS) {
       // Evict oldest entry (first inserted)
@@ -181,7 +181,7 @@ class LiquidationBot {
   private totalProfitUsd = 0;
 
   constructor() {
-    // FIX INFRA-MED: Configure RPC timeout to prevent indefinite hanging
+    // Configure RPC timeout to prevent indefinite hanging
     const fetchReq = new ethers.FetchRequest(config.rpcUrl);
     fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
     this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
@@ -270,7 +270,7 @@ class LiquidationBot {
 
   private async ensureApproval(): Promise<void> {
     const allowance = await this.musd.allowance(this.wallet.address, config.liquidationEngine);
-    // FIX: Use bounded approval instead of MaxUint256
+    // Use bounded approval instead of MaxUint256
     // Approve enough for ~100 liquidations at max debt threshold
     const boundedApproval = ethers.parseEther("10000000"); // 10M mUSD — practical upper bound
     
@@ -301,7 +301,7 @@ class LiquidationBot {
     logger.info("Stopping bot...");
     this.isRunning = false;
 
-    // FIX BE-001: Remove event listeners to prevent memory leaks
+    // Remove event listeners to prevent memory leaks
     this.borrowModule.removeAllListeners();
     this.collateralVault.removeAllListeners();
     this.liquidationEngine.removeAllListeners();
@@ -396,7 +396,7 @@ class LiquidationBot {
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * config.ethPriceUsd; // FIX: env-driven ETH price
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * config.ethPriceUsd; // env-driven ETH price
           
           const netProfitUsd = profitUsd - gasCostUsd;
           

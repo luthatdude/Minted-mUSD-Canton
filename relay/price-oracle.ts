@@ -49,7 +49,7 @@ interface PriceOracleConfig {
   maxConsecutiveFailures: number; // Circuit breaker threshold
   stablecoinPrice: number;      // Hardcoded USDC/USDCx price
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: number;          // Absolute floor (reject below)
   maxPriceUsd: number;          // Absolute ceiling (reject above)
   maxChangePerUpdatePct: number; // Max % change from last known price
@@ -71,7 +71,7 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   maxConsecutiveFailures: parseInt(process.env.MAX_FAILURES || "10", 10),
   stablecoinPrice: 1.0,
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: parseFloat(process.env.MIN_PRICE_USD || "0.001"),
   maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
   maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
@@ -184,7 +184,7 @@ export async function fetchTradecraftQuote(
   config: PriceOracleConfig,
   givingAmountCC: number
 ): Promise<{ userGets: number; effectivePrice: number }> {
-  // FIX BE-H02: Encode parameter to prevent URL injection
+  // Encode parameter to prevent URL injection
   const url = `${config.tradecraftBaseUrl}/quoteForFixedInput/CC/USDCx?givingAmount=${encodeURIComponent(String(givingAmountCC))}`;
   const response = await fetch(url, {
     method: "GET",
@@ -320,7 +320,7 @@ export class PriceOracleService {
       throw new Error("CANTON_PARTY not configured");
     }
 
-    // FIX: Use TLS by default for Canton connections (matching other services)
+    // Use TLS by default for Canton connections (matching other services)
     const httpScheme = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsScheme = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
 
@@ -372,7 +372,7 @@ export class PriceOracleService {
     }
 
     // Cross-validation: block update if both sources available but diverge
-    // FIX PO-01: Divergence now blocks updates instead of just logging
+    // Divergence now blocks updates instead of just logging
     if (tradecraftResult && templeResult) {
       const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
       const divergencePct = Math.abs(tradecraftResult.price - templeResult.price) / avgPrice * 100;
@@ -409,7 +409,7 @@ export class PriceOracleService {
       throw new Error("All price sources unavailable");
     }
 
-    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass (FIX NEW-PO-01)
+    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass
     return result;
   }
 
@@ -496,15 +496,15 @@ export class PriceOracleService {
     this.running = true;
 
     let boundsViolationCount = 0;
-    const MAX_BOUNDS_VIOLATIONS = 5; // FIX NEW-PO-02: After N consecutive rejections, reset lastCtnPrice to allow recovery
+    const MAX_BOUNDS_VIOLATIONS = 5; // After N consecutive rejections, reset lastCtnPrice to allow recovery
 
     while (this.running) {
       if (!this.health.paused) {
         try {
           const result = await this.fetchCTNPrice();
 
-          // FIX PO-04: Off-chain price sanity check (absolute range + rate-of-change)
-          // FIX NEW-PO-01: Compare against lastCtnPrice BEFORE updating it
+          // Off-chain price sanity check (absolute range + rate-of-change)
+          // Compare against lastCtnPrice BEFORE updating it
           if (result.price < this.config.minPriceUsd || result.price > this.config.maxPriceUsd) {
             boundsViolationCount++;
             console.error(
@@ -522,11 +522,11 @@ export class PriceOracleService {
             );
           } else {
             await this.pushPriceUpdate("CTN", result.price, result.source);
-            this.lastCtnPrice = result.price; // FIX NEW-PO-01: Only update AFTER successful push
+            this.lastCtnPrice = result.price; // Only update AFTER successful push
             boundsViolationCount = 0; // Reset on success
           }
 
-          // FIX NEW-PO-02: If too many consecutive bounds violations, reset baseline to allow recovery
+          // If too many consecutive bounds violations, reset baseline to allow recovery
           if (boundsViolationCount >= MAX_BOUNDS_VIOLATIONS) {
             console.warn(
               `[PriceOracle] ⚠️ ${MAX_BOUNDS_VIOLATIONS} consecutive bounds violations. ` +

@@ -102,14 +102,14 @@ describe("BLEBridgeV9", function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: Now requires >= 2
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // Now requires >= 2
     });
 
-    it("Should reject initialization with one minSig (FIX C-01)", async function () {
+    it("Should reject initialization with one minSig", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // At least 2 required
     });
 
     it("Should reject initialization with zero MUSD address", async function () {
@@ -253,7 +253,7 @@ describe("BLEBridgeV9", function () {
       };
 
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
-      // FIX B-C04: Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
+      // Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
       await expect(bridge.processAttestation(attestation2, sigs2))
         .to.be.revertedWith("ATTESTATION_TOO_CLOSE");
     });

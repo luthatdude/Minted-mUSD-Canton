@@ -15,9 +15,9 @@ import Ledger, { CreateEvent } from "@daml/ledger";
 import { ContractId } from "@daml/types";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-// FIX M-20: Use static import instead of dynamic require
+// Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
-// FIX T-M01: Use shared readSecret utility
+// Use shared readSecret utility
 import { readSecret } from "./utils";
 import * as fs from "fs";
 
@@ -46,9 +46,9 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  // Added explicit radix 10 to all parseInt calls
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
-  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  // Read sensitive values from Docker secrets, fallback to env vars
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -101,18 +101,18 @@ class ValidatorNode {
   private config: ValidatorConfig;
   private ledger: Ledger;
   private kmsClient: KMSClient;
-  // FIX M-18: Use a bounded cache with eviction instead of unbounded Set
+  // Use a bounded cache with eviction instead of unbounded Set
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
-  // FIX B-C06: Ethereum provider for contract verification
+  // Ethereum provider for contract verification
   private ethereumProvider: ethers.JsonRpcProvider | null = null;
   private verifiedBridgeCodeHash: string | null = null;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    // Default to TLS for Canton ledger connections (opt-out instead of opt-in)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -124,7 +124,7 @@ class ValidatorNode {
     // Initialize AWS KMS
     this.kmsClient = new KMSClient({ region: config.awsRegion });
 
-    // FIX B-C06: Initialize Ethereum provider for bridge verification
+    // Initialize Ethereum provider for bridge verification
     if (process.env.ETHEREUM_RPC_URL) {
       this.ethereumProvider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL);
     }
@@ -141,7 +141,7 @@ class ValidatorNode {
   async start(): Promise<void> {
     console.log("[Validator] Starting...");
     
-    // FIX B-C06: Verify bridge contract before starting
+    // Verify bridge contract before starting
     await this.verifyBridgeContract();
     
     this.isRunning = true;
@@ -150,7 +150,7 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
+        // Write heartbeat file for Docker healthcheck
         try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
       } catch (error) {
         console.error("[Validator] Poll error:", error);
@@ -168,7 +168,7 @@ class ValidatorNode {
   }
 
   /**
-   * FIX B-C06: Verify bridge contract exists and has expected code
+   * Verify bridge contract exists and has expected code
    * This prevents signing attestations for malicious/wrong contracts
    */
   private async verifyBridgeContract(): Promise<void> {
@@ -218,10 +218,10 @@ class ValidatorNode {
 
   /**
    * Poll for attestation requests that need signing
-   * FIX B-H05: Added query timeout to prevent indefinite hangs
+   * Added query timeout to prevent indefinite hangs
    */
   private async pollForAttestations(): Promise<void> {
-    // FIX B-H05: Timeout for Canton ledger queries (30 seconds)
+    // Timeout for Canton ledger queries (30 seconds)
     const QUERY_TIMEOUT_MS = 30000;
     const queryWithTimeout = async <T>(queryFn: () => Promise<T>): Promise<T> => {
       return Promise.race([
@@ -233,7 +233,7 @@ class ValidatorNode {
     };
 
     // Query AttestationRequest contracts where we're in the validator group
-    // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
+    // Use MintedProtocolV3 to match relay-service.ts
     const attestations = await queryWithTimeout(() =>
       (this.ledger.query as any)(
         "MintedProtocolV3:AttestationRequest",
@@ -284,15 +284,15 @@ class ValidatorNode {
   /**
    * Verify the attestation has sufficient collateral backing
    */
-  // FIX C-09: Fetch positions ONCE and deduplicate to prevent inflated collateral
-  // FIX H-13: Use ethers.parseUnits instead of parseFloat for financial precision
+  // Fetch positions ONCE and deduplicate to prevent inflated collateral
+  // Use ethers.parseUnits instead of parseFloat for financial precision
   private async verifyCollateral(request: AttestationRequest): Promise<boolean> {
     const payload = request.payload;
 
-    // FIX C-09: Fetch all positions ONCE, not per positionCid
+    // Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
     try {
-      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
+      // Use MintedProtocolV3 to match relay-service.ts
       const positions = await (this.ledger.query as any)(
         "MintedProtocolV3:InstitutionalEquityPosition",
         {}
@@ -304,7 +304,7 @@ class ValidatorNode {
         const refId = pos.payload.referenceId;
         if (seen.has(refId)) continue;
         seen.add(refId);
-        // FIX H-13: Use ethers.parseUnits for precision
+        // Use ethers.parseUnits for precision
         totalValue += ethers.parseUnits(pos.payload.totalValue, 18);
       }
     } catch (error) {
@@ -312,7 +312,7 @@ class ValidatorNode {
       return false;
     }
 
-    // FIX H-13: Use ethers.parseUnits instead of parseFloat
+    // Use ethers.parseUnits instead of parseFloat
     const requestedAmount = ethers.parseUnits(payload.amount, 18);
     const reportedAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
 
@@ -348,7 +348,7 @@ class ValidatorNode {
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
-    // FIX H-14: Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    // Mark as signing BEFORE async KMS call to prevent TOCTOU race
     this.signedAttestations.add(attestationId);
 
     try {
@@ -359,7 +359,7 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
-      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
+      // Use MintedProtocolV3 to match relay-service.ts
       await (this.ledger.exercise as any)(
         "MintedProtocolV3:AttestationRequest",
         contractId,
@@ -372,7 +372,7 @@ class ValidatorNode {
 
       console.log(`[Validator] Signed attestation ${attestationId}`);
 
-      // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
+      // Evict oldest 10% of entries if cache exceeds limit
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
         const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
         let evicted = 0;
@@ -386,7 +386,7 @@ class ValidatorNode {
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // FIX H-14: Remove from set on failure so it can be retried
+      // Remove from set on failure so it can be retried
       // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED")) {
         // Already signed on ledger - keep in set
@@ -401,9 +401,9 @@ class ValidatorNode {
    */
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    // Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
-    // FIX B-M01: Validate timestamp to prevent negative values
+    // Validate timestamp to prevent negative values
     const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
     const timestamp = Math.max(1, rawTimestamp);
 
@@ -416,7 +416,7 @@ class ValidatorNode {
         BigInt(payload.nonce),
         BigInt(timestamp),
         chainId,
-        // FIX C-7: Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
+        // Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
         process.env.BRIDGE_CONTRACT_ADDRESS || (() => { throw new Error("BRIDGE_CONTRACT_ADDRESS not set"); })(),
       ]
     );
@@ -455,7 +455,7 @@ class ValidatorNode {
    * Convert DER-encoded signature to RSV format
    * Uses the logic from signer.ts
    */
-  // FIX M-20: Use static import (declared at top of file) instead of dynamic require
+  // Use static import (declared at top of file) instead of dynamic require
   private derToRsv(derSig: Buffer, messageHash: string): string {
     return formatKMSSignature(derSig, messageHash, this.config.ethereumAddress);
   }
@@ -488,11 +488,11 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.ethereumAddress) {
     throw new Error("VALIDATOR_ETH_ADDRESS not set");
   }
-  // FIX M-23: Validate Ethereum address format
+  // Validate Ethereum address format
   if (!ethers.isAddress(DEFAULT_CONFIG.ethereumAddress)) {
     throw new Error("VALIDATOR_ETH_ADDRESS is not a valid Ethereum address");
   }
-  // FIX C-7: Validate bridge contract address at startup
+  // Validate bridge contract address at startup
   if (!process.env.BRIDGE_CONTRACT_ADDRESS) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
   }
@@ -520,7 +520,7 @@ async function main(): Promise<void> {
   await validator.start();
 }
 
-// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
   process.exit(1);

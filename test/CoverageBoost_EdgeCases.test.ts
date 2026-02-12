@@ -1,17 +1,16 @@
 /**
- * Codex Finding Regression Tests
- * Validates fixes for all Codex findings:
- *   P1: socializeBadDebt incomplete-list accounting invariant
- *   P1: Treasury recovery fee (peakRecordedValue high-water mark)
- *   P1: Referral auth binding (verified in integration)
- *   P2: keccak256 leaf encoding (TypeScript — Solidity-compatible)
+ * Edge Case Regression Tests
+ *   - socializeBadDebt incomplete-list accounting invariant
+ *   - Treasury recovery fee (peakRecordedValue high-water mark)
+ *   - Referral auth binding (verified in integration)
+ *   - keccak256 leaf encoding (TypeScript — Solidity-compatible)
  */
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { refreshFeeds, timelockSetFeed, timelockAddCollateral } from "./helpers/timelock";
 
-describe("Codex P1 — socializeBadDebt Incomplete List Invariant", function () {
+describe("socializeBadDebt — Incomplete List Invariant", function () {
   async function deployBadDebtFixture() {
     const [admin, user1, user2, user3] = await ethers.getSigners();
 
@@ -98,7 +97,7 @@ describe("Codex P1 — socializeBadDebt Incomplete List Invariant", function () 
   });
 });
 
-describe("Codex P1 — Treasury Recovery Fee Fix", function () {
+describe("Treasury — Recovery Fee", function () {
   async function deployTreasuryFixture() {
     const [admin, allocator, feeRecipient] = await ethers.getSigners();
 

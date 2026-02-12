@@ -134,7 +134,7 @@ describe("MUSD", function () {
   });
 
   // ============================================================
-  //  SUPPLY CAP (FIX C-2)
+  //  SUPPLY CAP
   // ============================================================
 
   describe("Supply Cap", function () {
@@ -161,7 +161,7 @@ describe("MUSD", function () {
       await expect(musd.setSupplyCap(0)).to.be.revertedWith("INVALID_SUPPLY_CAP");
     });
 
-    it("FIX: should ALLOW cap below current supply (undercollateralization response)", async function () {
+    it("should ALLOW cap below current supply (undercollateralization response)", async function () {
       // Mint 5M tokens
       await musd.connect(bridge).mint(user1.address, ethers.parseEther("5000000"));
       
@@ -180,7 +180,7 @@ describe("MUSD", function () {
       ).to.be.revertedWith("EXCEEDS_CAP");
     });
 
-    it("FIX C-2: should allow cap equal to current supply", async function () {
+    it("should allow cap equal to current supply", async function () {
       const mintAmount = ethers.parseEther("5000000");
       await musd.connect(bridge).mint(user1.address, mintAmount);
       await musd.setSupplyCap(mintAmount);
@@ -251,10 +251,10 @@ describe("MUSD", function () {
   });
 
   // ============================================================
-  //  PAUSABLE (FIX H-3)
+  //  PAUSABLE
   // ============================================================
 
-  describe("Pausable (FIX H-3)", function () {
+  describe("Pausable", function () {
     beforeEach(async function () {
       await musd.connect(bridge).mint(user1.address, ethers.parseEther("1000"));
     });

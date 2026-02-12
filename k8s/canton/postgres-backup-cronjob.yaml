@@ -1,4 +1,4 @@
-# FIX INFRA-003: PostgreSQL backup CronJob for disaster recovery
+# PostgreSQL backup CronJob for disaster recovery
 # Runs daily at 2:00 AM UTC, dumps the Canton participant database,
 # and stores the backup in a PersistentVolumeClaim.
 #
@@ -37,7 +37,7 @@ metadata:
     app.kubernetes.io/name: postgres-backup
     app.kubernetes.io/component: backup
 spec:
-  # FIX INFRA-003: Run daily at 2:00 AM UTC
+  # Run daily at 2:00 AM UTC
   schedule: "0 2 * * *"
   # Forbid concurrent backup runs
   concurrencyPolicy: Forbid

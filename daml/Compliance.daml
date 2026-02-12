@@ -33,7 +33,7 @@ template ComplianceRegistry
 
     ensure regulator /= operator
 
-    -- FIX DAML-C01: Add contract key so other templates can look up the registry
+    -- Add contract key so other templates can look up the registry
     -- rather than accepting a caller-supplied CID that could be None/forged
     key (regulator, operator) : (Party, Party)
     maintainer key._1
@@ -98,7 +98,7 @@ template ComplianceRegistry
 
     -- | Validate a mint transaction. Only the sender (minter) needs to be checked.
     -- Nonconsuming — can be called from DirectMint choices without archiving.
-    -- FIX CRITICAL: Changed controller to operator only. The operator acts on behalf of the
+    -- Changed controller to operator only. The operator acts on behalf of the
     -- regulator when exercising from CantonDirectMint. The regulator's policy is enforced
     -- by the blacklist/frozen data maintained on this contract (which only regulator can modify).
     nonconsuming choice ValidateMint : ()
@@ -113,7 +113,7 @@ template ComplianceRegistry
     -- | Validate a transfer between two parties.
     -- Checks both sender and receiver against blacklist.
     -- Also checks sender against freeze list (frozen can receive but not send).
-    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
+    -- Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateTransfer : ()
       with
         sender : Party
@@ -125,7 +125,7 @@ template ComplianceRegistry
         assertMsg "SENDER_FROZEN" (not (Set.member sender frozen))
 
     -- | Validate a redemption (burn). Checks the redeemer is not blacklisted or frozen.
-    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
+    -- Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateRedemption : ()
       with
         redeemer : Party
@@ -135,7 +135,7 @@ template ComplianceRegistry
         assertMsg "REDEEMER_FROZEN" (not (Set.member redeemer frozen))
 
     -- | Check if a party is in good standing (not blacklisted, not frozen)
-    -- FIX DAML-C06: Changed controller from 'caller' to 'operator' to prevent
+    -- Changed controller from 'caller' to 'operator' to prevent
     -- arbitrary parties from probing blacklist/freeze status of other users
     nonconsuming choice IsCompliant : Bool
       with

@@ -1,5 +1,5 @@
 /**
- * FIX TEST-001: Property-Based / Fuzz Tests
+ * Property-Based / Fuzz Tests
  *
  * Randomized input testing for core financial math invariants across:
  *   - InterestRateModel: utilization/borrow rate monotonicity, bounds, kink behavior

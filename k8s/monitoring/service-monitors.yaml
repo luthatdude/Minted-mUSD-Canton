@@ -1,8 +1,8 @@
-# FIX INFRA-007: Ensure ServiceMonitor label selectors match actual Service/Deployment labels.
+# Ensure ServiceMonitor label selectors match actual Service/Deployment labels.
 # Each ServiceMonitor's selector.matchLabels must align with the metadata.labels on the
 # corresponding k8s Service so that Prometheus can discover and scrape the targets.
 #
-# FIX INFRA-006: All namespace references use "musd-canton" (not "musd") to match
+# All namespace references use "musd-canton" (not "musd") to match
 # the actual deployment namespace defined in k8s/base/namespace.yaml.
 
 # ──────────────────────────────────────────────────────────────

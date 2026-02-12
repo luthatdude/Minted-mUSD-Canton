@@ -1,13 +1,13 @@
 # Minted Bridge - Dockerfile
 # Multi-stage build for minimal production image
-# FIX H-14: Missing Dockerfile referenced by docker-compose.yml
+# Missing Dockerfile referenced by docker-compose.yml
 #
-# FIX IF-H01: Use specific version tag for reproducibility
+# Use specific version tag for reproducibility
 # For production deployments, pin to SHA256 digest after verifying:
 #   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 
 # Build stage
-# FIX INFRA-001: Pin to SHA256 digest for supply chain security
+# Pin to SHA256 digest for supply chain security
 # Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS builder
 
@@ -27,7 +27,7 @@ COPY tsconfig.json* ./
 RUN npm run build
 
 # Production stage
-# FIX INFRA-001: Pin to SHA256 digest for supply chain security (must match builder base)
+# Pin to SHA256 digest for supply chain security (must match builder base)
 # Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS production
 

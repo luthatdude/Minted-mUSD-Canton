@@ -15,7 +15,7 @@ template MUSD
     currency   : Text
     observers  : [Party] 
   where
-    -- FIX A-01: Dual signatory prevents unilateral control over user tokens
+    -- Dual signatory prevents unilateral control over user tokens
     -- Provider cannot archive/modify without owner consent, owner cannot inflate supply
     signatory provider, owner
     observer observers
@@ -141,7 +141,7 @@ template MUSD_MintProposal
     signatory provider
     observer owner
     ensure amount >= minimumAmount
-    -- FIX AUTH: Dual controller for creating dual-signatory MUSD
+    -- Dual controller for creating dual-signatory MUSD
     choice MUSD_MintProposal_Accept : ContractId MUSD
       controller owner, provider
       do create MUSD with ..
@@ -152,8 +152,8 @@ template MUSD_MintProposal
 -- 3b. ADVANCED ISSUER & MINT WORKFLOWS (from validator-ledger)
 -- =============================================================================
 -- | Issuer role contract for minting mUSD.
--- FIX D-C01: supplyCap and currentSupply stored in contract state (not caller-supplied).
--- FIX D-C02: requiredSignatures derived from validatorGroup length (not caller-supplied).
+-- supplyCap and currentSupply stored in contract state (not caller-supplied).
+-- requiredSignatures derived from validatorGroup length (not caller-supplied).
 -- Supports two minting paths:
 --   1. MintFromAttestation: Collateral-backed minting gated by finalized attestation
 --   2. Mint: Direct minting (consuming — updates supply tracking)
@@ -168,8 +168,8 @@ template IssuerRole
     observer observers
 
     -- | Direct mint (for bootstrapping/admin use).
-    -- FIX D-C01: Consuming choice — supply tracked in contract state.
-    -- FIX AUTH: Dual controller (issuer + mintOwner) required for dual-signatory MUSD
+    -- Consuming choice — supply tracked in contract state.
+    -- Dual controller (issuer + mintOwner) required for dual-signatory MUSD
     choice IssuerRole_Mint : (ContractId IssuerRole, ContractId MUSD)
       with
         mintOwner : Party
@@ -201,7 +201,7 @@ template IssuerRole
         create this with supplyCap = newCap
 
     -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
-    -- FIX DL-C03: This enables vault leverage to respect global supply caps
+    -- This enables vault leverage to respect global supply caps
     choice Vault_Borrow : (ContractId IssuerRole, ContractId MUSD)
       with
         borrower : Party
@@ -233,7 +233,7 @@ template IssuerRole
 -- | User-initiated mint request.
 -- Separation of duties: the user requests minting, the issuer approves
 -- after verifying collateral or off-ledger conditions.
--- FIX 5C-C01: ApproveMint now requires IssuerRole to enforce supply cap.
+-- ApproveMint now requires IssuerRole to enforce supply cap.
 template MintRequest
   with
     issuer : Party
@@ -248,7 +248,7 @@ template MintRequest
     ensure requestAmount > 0.0
 
     -- | Issuer approves the request via IssuerRole (enforces supply cap).
-    -- FIX AUTH: Dual controller (issuer + owner) for nested IssuerRole_Mint
+    -- Dual controller (issuer + owner) for nested IssuerRole_Mint
     choice MintRequest_Approve : (ContractId IssuerRole, ContractId MUSD)
       with
         issuerRoleCid : ContractId IssuerRole
@@ -275,7 +275,7 @@ template MintRequest
 -- | Issuer-initiated mint proposal (airdrop-safe).
 -- The issuer proposes minting to a user, but the user must explicitly
 -- accept because they become a signatory on the resulting MUSD contract.
--- FIX 5C-C02: AcceptMint now requires IssuerRole to enforce supply cap.
+-- AcceptMint now requires IssuerRole to enforce supply cap.
 template MintProposal
   with
     issuer : Party
@@ -290,7 +290,7 @@ template MintProposal
     ensure proposalAmount > 0.0
 
     -- | Owner accepts the mint proposal via IssuerRole (enforces supply cap).
-    -- FIX AUTH: Dual controller (owner + issuer) for nested IssuerRole_Mint
+    -- Dual controller (owner + issuer) for nested IssuerRole_Mint
     choice MintProposal_Accept : (ContractId IssuerRole, ContractId MUSD)
       with
         issuerRoleCid : ContractId IssuerRole
@@ -319,7 +319,7 @@ template MintProposal
 test_stablecoin_audit : Script ()
 test_stablecoin_audit = script do
   [bank, alice, bob, regAlice, regBob] <- mapA allocateParty ["Bank", "Alice", "Bob", "RegAlice", "RegBob"]
-  -- 1. Mint (FIX AUTH: dual-controller for dual-signatory MUSD)
+  -- 1. Mint (dual-controller for dual-signatory MUSD)
   mintProp <- submit bank do createCmd MUSD_MintProposal with provider=bank; owner=alice; amount=100.0; currency="USD"; observers=[regAlice]
   aliceUSD <- submitMulti [alice, bank] [] do exerciseCmd mintProp MUSD_MintProposal_Accept
   -- 2. Privacy Check: Transfer

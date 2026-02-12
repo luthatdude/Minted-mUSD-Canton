@@ -1,6 +1,6 @@
 /**
  * Oracle Keeper Unit Tests
- * FIX INFRA: Tests PriceOracle circuit breaker keeper logic
+ * Tests PriceOracle circuit breaker keeper logic
  */
 
 import {

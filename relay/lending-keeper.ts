@@ -26,7 +26,7 @@ import Ledger from "@daml/ledger";
 import { readSecret } from "./utils";
 import { fetchTradecraftQuote, fetchTradecraftPoolState, PriceOracleService } from "./price-oracle";
 
-// FIX BE-008: Safe decimal parser for DAML Numeric values — avoids IEEE 754 precision loss
+// Safe decimal parser for DAML Numeric values — avoids IEEE 754 precision loss
 function parseDamlNumericSafe(value: string, fieldName?: string): number {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`Invalid DAML numeric value for ${fieldName || 'unknown'}: "${value}"`);
@@ -38,7 +38,7 @@ function parseDamlNumericSafe(value: string, fieldName?: string): number {
   return num;
 }
 
-// FIX BE-008: BigInt-based decimal parsing for precision-critical comparisons
+// BigInt-based decimal parsing for precision-critical comparisons
 function parseDamlNumericBigInt(value: string, decimals: number = 18): bigint {
   const trimmed = value.trim();
   const negative = trimmed.startsWith('-');
@@ -80,7 +80,7 @@ interface KeeperBotConfig {
     bonusBps: number;
   }>;
 
-  // FIX LK-03: Configurable sMUSD price (should come from yield-sync service in production)
+  // Configurable sMUSD price (should come from yield-sync service in production)
   smusdPrice: number;
 }
 
@@ -106,7 +106,7 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
     "CTN_SMUSD": { ltvBps: 9000, liqThresholdBps: 9300, penaltyBps: 400, bonusBps: 200 },
   },
 
-  // FIX LK-03: Read sMUSD price from env (production: synced from yield-sync-service)
+  // Read sMUSD price from env (production: synced from yield-sync-service)
   smusdPrice: parseFloat(process.env.SMUSD_PRICE || "1.05"),
 };
 
@@ -193,7 +193,7 @@ export class LendingKeeperBot {
   private async connectLedger(): Promise<void> {
     if (this.ledger) return;
 
-    // FIX M-7: Default to TLS for Canton ledger connections (consistent with relay-service.ts)
+    // Default to TLS for Canton ledger connections (consistent with relay-service.ts)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -248,7 +248,7 @@ export class LendingKeeperBot {
   /**
    * Get the current price for a collateral type.
    * Uses the oracle's last known prices.
-   * FIX LK-07: Guard against price=0 which causes infinite seize amount
+   * Guard against price=0 which causes infinite seize amount
    */
   private getPrice(collateralType: string): number {
     let price: number;
@@ -267,7 +267,7 @@ export class LendingKeeperBot {
         throw new Error(`Unknown collateral type: ${collateralType}`);
     }
     
-    // FIX LK-07: Reject zero or negative prices to prevent infinite seize
+    // Reject zero or negative prices to prevent infinite seize
     if (!price || price <= 0 || isNaN(price)) {
       throw new Error(`Invalid price for ${collateralType}: ${price}`);
     }
@@ -300,13 +300,13 @@ export class LendingKeeperBot {
 
   /**
    * Calculate total debt including projected interest since last accrual
-   * FIX LK-05: Guard against NaN from invalid date parsing
+   * Guard against NaN from invalid date parsing
    */
   private calculateTotalDebt(position: DebtPosition): number {
     const now = Date.now() / 1000;
     const lastAccrualMs = new Date(position.lastAccrualTime).getTime();
     
-    // FIX LK-05: NaN guard — if date parsing fails, use accrued interest only
+    // NaN guard — if date parsing fails, use accrued interest only
     if (isNaN(lastAccrualMs)) {
       console.warn(`[Keeper] Invalid lastAccrualTime for ${position.borrower}: "${position.lastAccrualTime}"`);
       return position.principalDebt + position.accruedInterest;
@@ -319,7 +319,7 @@ export class LendingKeeperBot {
     const newInterest =
       position.principalDebt * position.interestRateBps * elapsed / (10000 * yearSeconds);
 
-    // FIX LK-05: Final NaN guard on computed interest
+    // Final NaN guard on computed interest
     if (isNaN(newInterest)) {
       return position.principalDebt + position.accruedInterest;
     }
@@ -523,7 +523,7 @@ export class LendingKeeperBot {
       }
 
       // Find an mUSD contract with enough balance
-      // FIX BE-008: Use BigInt comparison for precision-safe balance check
+      // Use BigInt comparison for precision-safe balance check
       const maxRepayScaled = BigInt(Math.ceil(candidate.maxRepay * 1e18));
       const musdContract = keeperMusd.find(
         (c: any) => parseDamlNumericBigInt(c.payload.amount, 18) >= maxRepayScaled
@@ -542,8 +542,8 @@ export class LendingKeeperBot {
         };
       }
 
-      // FIX LK-01: Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
-      // FIX LK-02: Force fresh price fetch before execution
+      // Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
+      // Force fresh price fetch before execution
       try {
         await this.oracle.fetchCTNPrice();
       } catch (err) {
@@ -579,9 +579,9 @@ export class LendingKeeperBot {
         };
       }
 
-      // FIX BE-H03: Re-compute health factor with fresh data before executing liquidation
+      // Re-compute health factor with fresh data before executing liquidation
       // The original scan data may be stale (user may have repaid or added collateral)
-      // FIX BE-008: Use parseDamlNumericSafe instead of parseFloat to avoid IEEE 754 precision loss
+      // Use parseDamlNumericSafe instead of parseFloat to avoid IEEE 754 precision loss
       const freshDebt = parseDamlNumericSafe((freshDebtPositions[0] as any).payload.totalBorrowed || "0", 'freshDebt');
       const freshCollateralValue = freshEscrows.reduce((sum, e) => {
         const price = this.getPrice(e.collateralType);
@@ -632,10 +632,10 @@ export class LendingKeeperBot {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
           repayAmount: candidate.maxRepay.toFixed(18),
-          targetEscrowCid: freshTarget.contractId,         // FIX LK-01: Fresh CID
-          debtCid: freshDebtCid,                           // FIX LK-01: Fresh CID
+          targetEscrowCid: freshTarget.contractId,         // Fresh CID
+          debtCid: freshDebtCid,                           // Fresh CID
           musdCid: (musdContract as any).contractId,
-          escrowCids: freshEscrows.map((e) => e.contractId), // FIX LK-01: Fresh CIDs
+          escrowCids: freshEscrows.map((e) => e.contractId), // Fresh CIDs
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
         } as any
       );
@@ -705,7 +705,7 @@ export class LendingKeeperBot {
 
         const candidates = await this.scanPositions();
         
-        // FIX LK-08: Update lastScan only AFTER successful scan
+        // Update lastScan only AFTER successful scan
         this.stats.lastScan = new Date();
         this.stats.activeCandidates = candidates.length;
 
@@ -719,12 +719,12 @@ export class LendingKeeperBot {
           }
         }
         
-        // FIX LK-06: Reset backoff on success
+        // Reset backoff on success
         this.consecutiveFailures = 0;
       } catch (err) {
         console.error("[Keeper] Scan cycle failed:", (err as Error).message);
         
-        // FIX LK-06: Exponential backoff on consecutive failures
+        // Exponential backoff on consecutive failures
         this.consecutiveFailures++;
         const backoffMs = Math.min(
           this.config.pollIntervalMs * Math.pow(2, this.consecutiveFailures),

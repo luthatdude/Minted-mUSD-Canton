@@ -119,7 +119,7 @@ template MultiSigProposal
     proposer : Party                    -- Governor who created proposal
     governors : [Party]                 -- Snapshot of governors at creation
     actionType : ActionType
-    -- FIX DAML-H03: Module scope for governance proof (prevents cross-module replay)
+    -- Module scope for governance proof (prevents cross-module replay)
     targetModule : Text
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
@@ -204,13 +204,13 @@ template MultiSigProposal
             assertMsg "TIMELOCK_NOT_ENDED" (now >= timelockEnd)
         
         -- Log the execution
-        -- FIX CRIT-01: Include proposer from this proposal to prevent operator forgery
+        -- Include proposer from this proposal to prevent operator forgery
         create GovernanceActionLog with
           operator
-          proposer             -- FIX CRIT-01: proposer's authority flows from MultiSigProposal
+          proposer             -- proposer's authority flows from MultiSigProposal
           proposalId
           actionType
-          -- FIX DAML-H03: Carry targetModule through to proof
+          -- Carry targetModule through to proof
           targetModule
           description
           payload
@@ -260,10 +260,10 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
         
@@ -277,10 +277,10 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
         
@@ -314,10 +314,10 @@ template MinterRegistry
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
         
@@ -331,17 +331,17 @@ template MinterRegistry
 
 -- | GovernanceActionLog - Immutable record of executed governance actions.
 -- Provides permanent audit trail for compliance.
--- FIX CRIT-01: Added `proposer` as co-signatory to prevent operator forgery.
+-- Added `proposer` as co-signatory to prevent operator forgery.
 -- The operator cannot create this template directly via createCmd because
 -- they lack the proposer's authority. Only Proposal_Execute has the
 -- authority chain: MultiSigProposal(operator+proposer) → GovernanceActionLog.
 template GovernanceActionLog
   with
     operator : Party
-    proposer : Party              -- FIX CRIT-01: The governor who proposed (prevents forgery)
+    proposer : Party              -- The governor who proposed (prevents forgery)
     proposalId : Text
     actionType : ActionType
-    -- FIX DAML-H03: Scopes proof to a specific module, preventing cross-module replay
+    -- Scopes proof to a specific module, preventing cross-module replay
     -- A ParameterUpdate proof approved for lending cannot be consumed by boost pool, etc.
     targetModule : Text
     description : Text
@@ -351,9 +351,9 @@ template GovernanceActionLog
     executedBy : Party
     executedAt : Time
   where
-    signatory operator, proposer  -- FIX CRIT-01: proposer must be different from operator
+    signatory operator, proposer  -- proposer must be different from operator
 
-    -- FIX DAML-S1: Consuming choice to archive proof after use.
+    -- Consuming choice to archive proof after use.
     -- Prevents governance proof replay — each approval is single-use.
     choice ConsumeProof : GovernanceActionLog
       controller operator
@@ -406,10 +406,10 @@ template EmergencyPauseState
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX DAML-S1: Consume proof after use (prevents replay)
+        -- Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
-        -- FIX DAML-H03: Verify proof is scoped to this module
+        -- Verify proof is scoped to this module
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_PAUSED" isPaused
         now <- getTime

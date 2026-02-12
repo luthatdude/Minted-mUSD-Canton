@@ -1,5 +1,5 @@
 -- | CrossModuleIntegrationTest
--- FIX DAML-R02: Cross-module integration tests covering multi-module flows.
+-- Cross-module integration tests covering multi-module flows.
 -- These tests verify that templates from different modules compose correctly
 -- and that security invariants hold across module boundaries.
 --
@@ -42,7 +42,7 @@ createGovProof operator proposer actionType targetModule desc = do
       proposer
       proposalId = "integ-" <> desc
       actionType
-      -- FIX DAML-H03: Module-scoped governance proof
+      -- Module-scoped governance proof
       targetModule
       description = desc
       payload = ""
@@ -188,7 +188,7 @@ testLendingFullCycleIntegration = do
   debt <- queryContractId operator debtCid
   assertMsg "Borrowed 500" ((fromSome debt).principalDebt == 500.0)
 
-  -- FIX DAML-R05: Create BurnRateLimiter for repay/liquidation burn paths
+  -- Create BurnRateLimiter for repay/liquidation burn paths
   submit operator do
     createCmd BurnRateLimiter with
       operator
@@ -286,7 +286,7 @@ testMultiAttestorSync = do
       epochNumber = 1
       governanceProofCid = govProof
 
-  -- Verify the lower-median price was applied (FIX DAML-M-02: conservative bias)
+  -- Verify the lower-median price was applied (conservative bias)
   -- sorted: [1.045, 1.05], mid = (2-1)/2 = 0 → 1.045
   price <- submit operator do
     exerciseCmd stakingCid2 GetSharePrice
@@ -430,7 +430,7 @@ testKeeperBondLiquidation = do
       registeredAt = now
       slashCount = 0
       active = True
-  -- FIX DAML-R05: Create BurnRateLimiter for liquidation burn path
+  -- Create BurnRateLimiter for liquidation burn path
   submit operator do
     createCmd BurnRateLimiter with
       operator

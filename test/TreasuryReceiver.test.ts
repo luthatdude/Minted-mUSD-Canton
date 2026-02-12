@@ -354,7 +354,7 @@ describe("TreasuryReceiver", function () {
       // Send some USDC to receiver
       await usdc.mint(await receiver.getAddress(), ethers.parseUnits("1000", 6));
 
-      // FIX TR-M01: USDC withdrawal only allowed when paused (true emergency)
+      // USDC withdrawal only allowed when paused (true emergency)
       await receiver.connect(pauser).pause();
 
       await receiver.connect(admin).emergencyWithdraw(

@@ -24,7 +24,7 @@ baseTime : Time
 baseTime = datetime 2026 Feb 6 12 0 0
 
 -- | Create a governance proof for tests
--- FIX CRIT-01: Now requires a proposer (governor) party separate from operator
+-- Now requires a proposer (governor) party separate from operator
 createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
 createGovProof operator proposer actionType targetModule desc = do
   now <- getTime
@@ -34,7 +34,7 @@ createGovProof operator proposer actionType targetModule desc = do
       proposer
       proposalId = "test-" <> desc
       actionType
-      -- FIX DAML-H03: Module-scoped governance proof
+      -- Module-scoped governance proof
       targetModule
       description = desc
       payload = ""
@@ -83,7 +83,7 @@ setupLoopTest = do
       complianceRegistryCid = Some registryCid
       observers = [user]
 
-  -- FIX DAML-R05: Create BurnRateLimiter for unwind burn paths
+  -- Create BurnRateLimiter for unwind burn paths
   submit operator do
     createCmd BurnRateLimiter with
       operator
