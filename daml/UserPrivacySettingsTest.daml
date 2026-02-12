@@ -456,7 +456,7 @@ testUnauthorizedGetSettings = do
   settingsCid <- createPrivateSettings operator alice
 
   -- Stranger cannot query Alice's settings
-  submitMustFail stranger do
+  submitMultiMustFail [stranger] [operator] do
     exerciseCmd settingsCid Privacy_GetSettings with requester = stranger
   debug "✅ 17. Unauthorized settings query rejected"
 
