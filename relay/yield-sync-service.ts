@@ -22,7 +22,10 @@
 import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
-import { readSecret } from "./utils";
+import { readSecret, enforceTLSSecurity } from "./utils";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION

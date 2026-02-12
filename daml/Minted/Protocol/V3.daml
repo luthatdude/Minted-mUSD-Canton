@@ -400,12 +400,17 @@ template PriceOracle
         assertMsg "PRICE_STALE" (age <= maxStaleness)
         return price
 
+    -- DAML-M-07: Added price movement cap to prevent oracle manipulation
     choice Oracle_UpdatePrice : ContractId PriceOracle
       with
         newPrice : Money
       controller provider
       do
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPrice > 0.0)
+        -- DAML-M-07: Cap price movement to ±50% per update
+        let maxPrice = price * 1.5
+        let minPrice = price * 0.5
+        assertMsg "PRICE_MOVE_TOO_LARGE" (newPrice >= minPrice && newPrice <= maxPrice)
         now <- getTime
         create this with 
           price = newPrice

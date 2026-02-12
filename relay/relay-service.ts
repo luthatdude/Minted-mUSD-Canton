@@ -18,9 +18,13 @@ import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 // FIX B-H07: Use readAndValidatePrivateKey for secp256k1 range validation
-import { readSecret, readAndValidatePrivateKey } from "./utils";
+// INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION

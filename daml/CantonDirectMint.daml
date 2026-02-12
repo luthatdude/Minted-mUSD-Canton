@@ -52,11 +52,15 @@ template CantonUSDC
       controller owner
       do create this with privacyObservers = newObservers
 
+    -- DAML-M-05: Compliance check on transfer recipient (matches MUSD behavior)
     choice CantonUSDC_Transfer : ContractId CantonUSDCTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- DAML-M-05: Validate recipient is not blacklisted/frozen
+        exercise complianceRegistryCid ValidateMint with minter = newOwner
         create CantonUSDCTransferProposal with
           usdc = this
           newOwner
@@ -320,6 +324,20 @@ template BridgeOutRequest
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
         create this with status = "failed"
+
+    -- | DAML-M-08: Refund user's USDC after a failed bridge-out.
+    -- Uses `operator` (the signatory/canonical issuer) — prevents arbitrary issuer injection.
+    choice BridgeOut_Refund : ContractId CantonUSDC
+      with
+        refundObservers : [Party]
+      controller operator
+      do
+        assertMsg "MUST_BE_FAILED" (status == "failed")
+        create CantonUSDC with
+          issuer = operator
+          owner = user
+          amount = amount
+          privacyObservers = refundObservers
 
 -- ============================================================
 --                     SECTION 4: RESERVE TRACKER

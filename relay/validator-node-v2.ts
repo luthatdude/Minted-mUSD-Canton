@@ -137,8 +137,14 @@ class CantonAssetClient {
 
   /**
    * Fetch current snapshot of all tokenized assets from Canton Network
+   * INFRA-H-06: All external API calls use HTTPS with certificate validation
+   * enforced by enforceTLSSecurity() at process level
    */
   async getAssetSnapshot(): Promise<CantonAssetSnapshot> {
+    // INFRA-H-06: Validate URL scheme before making request
+    if (!this.apiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
+      throw new Error(`SECURITY: Canton Asset API must use HTTPS. Got: ${this.apiUrl.substring(0, 40)}`);
+    }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
     let response: Response;

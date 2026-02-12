@@ -58,6 +58,8 @@ spec:
             app.kubernetes.io/component: backup
         spec:
           restartPolicy: OnFailure
+          # INFRA-H-05: Use dedicated zero-permission ServiceAccount
+          serviceAccountName: postgres-backup
           securityContext:
             runAsNonRoot: true
             runAsUser: 999
