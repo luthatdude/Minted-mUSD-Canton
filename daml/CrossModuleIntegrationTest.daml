@@ -33,8 +33,8 @@ testMpaHash = "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abc"
 testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
 
-createGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator proposer actionType desc = do
+createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator proposer actionType targetModule desc = do
   now <- getTime
   submitMulti [operator, proposer] [] do
     createCmd GovernanceActionLog with
@@ -42,6 +42,8 @@ createGovProof operator proposer actionType desc = do
       proposer
       proposalId = "integ-" <> desc
       actionType
+      -- FIX DAML-H03: Module-scoped governance proof
+      targetModule
       description = desc
       payload = ""
       payloadHash = ""
@@ -267,7 +269,7 @@ testMultiAttestorSync = do
       attestedAt = datetime 2026 Feb 6 12 0 0
 
   -- Sync with quorum of 2 attestations
-  govProof <- createGovProof operator governor ParameterUpdate "sync-epoch-1"
+  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-epoch-1"
   stakingCid2 <- submit operator do
     exerciseCmd stakingCid SyncGlobalSharePrice with
       attestationCids = [att1Cid, att2Cid]
@@ -325,7 +327,7 @@ testInsufficientAttestorsFails = do
       attestedTotalShares = 100.0
       attestedAt = datetime 2026 Feb 6 12 0 0
 
-  govProof <- createGovProof operator governor ParameterUpdate "sync-fail"
+  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-fail"
 
   -- Should fail — insufficient attestations
   submitMustFail operator do
@@ -400,7 +402,7 @@ testKeeperBondLiquidation = do
 
   -- Crash price → position undercollateralized
   passTime (minutes 6)
-  emergProof <- createGovProof operator governor EmergencyPause "crash"
+  emergProof <- createGovProof operator governor EmergencyPause "CantonLending" "crash"
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
@@ -508,7 +510,7 @@ testUnbondedKeeperRejected = do
       priceFeedCids = [ctnFeedCid]
 
   passTime (minutes 6)
-  emergProof <- createGovProof operator governor EmergencyPause "crash"
+  emergProof <- createGovProof operator governor EmergencyPause "CantonLending" "crash"
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
@@ -634,7 +636,7 @@ testBurnRateLimiterPausedRejectsBurns = do
       paused = False
 
   -- Pause the limiter
-  govProof <- createGovProof operator governor EmergencyPause "pause-burns"
+  govProof <- createGovProof operator governor EmergencyPause "CantonDirectMint" "pause-burns"
   limiterCid2 <- submit operator do
     exerciseCmd limiterCid BurnLimit_SetPaused with
       newPaused = True
@@ -703,7 +705,7 @@ testAttestationDeviationRejected = do
       attestedTotalShares = 100.0
       attestedAt = datetime 2026 Feb 6 12 0 0
 
-  govProof <- createGovProof operator governor ParameterUpdate "sync-deviation"
+  govProof <- createGovProof operator governor ParameterUpdate "CantonSMUSD" "sync-deviation"
 
   -- Should fail — price deviation too large (5% > 1%)
   submitMustFail operator do

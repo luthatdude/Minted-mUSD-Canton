@@ -434,6 +434,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
         -- FIX M-11: Limit max epoch gap to prevent accounting anomalies from large skips
         assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastRewardEpoch + 100)
@@ -468,6 +470,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "PRICE_POSITIVE" (newPriceMusd > 0.0)
         -- Cap price change at 20% per update
         let maxPrice = cantonPriceMusd * 1.2
@@ -490,6 +494,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "SHARE_PRICE_POSITIVE" (newGlobalSharePrice > 0.0)
         -- Cap at 10% decrease (same guard as CantonStakingService)
         let minAllowed = globalSharePrice * 0.9
@@ -514,6 +520,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
         assertMsg "INSUFFICIENT_PROTOCOL_REWARDS" (withdrawAmount <= protocolRewardsAccrued)
 
@@ -542,6 +550,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "AMOUNT_POSITIVE" (withdrawAmount > 0.0)
         assertMsg "INSUFFICIENT_PROTOCOL_FEES" (withdrawAmount <= protocolFeesAccrued)
 
@@ -572,6 +582,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         create this with paused = newPaused
 
     -- FIX D-H2: Governance-gated
@@ -586,6 +598,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "ENTRY_FEE_VALID" (newEntryFeeBps >= 0 && newEntryFeeBps <= 500)
         assertMsg "EXIT_FEE_VALID" (newExitFeeBps >= 0 && newExitFeeBps <= 500)
         create this with
@@ -603,6 +617,8 @@ template CantonBoostPoolService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "CAP_RATIO_VALID" (newCapRatio > 0.0 && newCapRatio <= 1.0)
         create this with cantonCapRatio = newCapRatio
 

@@ -334,6 +334,8 @@ template BurnRateLimiter
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
         create this with epochBurnLimit = newLimit
 
@@ -346,6 +348,8 @@ template BurnRateLimiter
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         create this with paused = newPaused
 
 -- ============================================================
@@ -481,6 +485,8 @@ template ReserveTracker
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "DEPOSITED_NON_NEGATIVE" (newTotalDeposited >= 0.0)
         assertMsg "REDEEMED_NON_NEGATIVE" (newTotalRedeemed >= 0.0)
         assertMsg "BRIDGED_OUT_NON_NEGATIVE" (newTotalBridgedOut >= 0.0)
@@ -784,6 +790,8 @@ template CantonDirectMintService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         -- FIX D-M02: Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
@@ -802,6 +810,8 @@ template CantonDirectMintService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
@@ -816,6 +826,8 @@ template CantonDirectMintService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
@@ -832,6 +844,8 @@ template CantonDirectMintService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with complianceRegistryCid = newRegistryCid
@@ -845,6 +859,8 @@ template CantonDirectMintService
         -- FIX DAML-010: Consume governance proof (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
         -- FIX CRITICAL: Archive old service before creating new one
         archive self

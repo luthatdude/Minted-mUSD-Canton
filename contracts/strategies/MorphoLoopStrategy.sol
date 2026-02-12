@@ -835,8 +835,10 @@ contract MorphoLoopStrategy is
     event UpgradeCancelled(address indexed cancelledImplementation);
 
     /// @notice Request a timelocked upgrade
+    /// @dev FIX SOL-002: Prevent overwriting pending upgrade (bait-and-switch protection)
     function requestUpgrade(address newImplementation) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(newImplementation != address(0), "ZERO_ADDRESS");
+        require(pendingImplementation == address(0), "UPGRADE_ALREADY_PENDING");
         pendingImplementation = newImplementation;
         upgradeRequestTime = block.timestamp;
         emit UpgradeRequested(newImplementation, block.timestamp + UPGRADE_DELAY);

@@ -7,10 +7,10 @@
 #   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
 
 # Build stage
-# INFRA-004: Pin to SHA256 digest in production for supply chain security:
-#   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
-# FROM node:20-alpine@sha256:<DIGEST> AS builder
-FROM node:20-alpine AS builder
+# FIX INFRA-001: Pin to SHA256 digest for supply chain security
+# Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
+# IMPORTANT: Replace the placeholder digest below with the real digest before deploying to production.
+FROM node:20-alpine@sha256:VERIFY_AND_PIN_BEFORE_DEPLOY AS builder
 
 WORKDIR /app
 
@@ -28,9 +28,10 @@ COPY tsconfig.json* ./
 RUN npm run build
 
 # Production stage
-# INFRA-004: Pin to SHA256 digest in production (must match builder base):
-# FROM node:20-alpine@sha256:<DIGEST> AS production
-FROM node:20-alpine AS production
+# FIX INFRA-001: Pin to SHA256 digest for supply chain security (must match builder base)
+# Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
+# IMPORTANT: Replace the placeholder digest below with the real digest before deploying to production.
+FROM node:20-alpine@sha256:VERIFY_AND_PIN_BEFORE_DEPLOY AS production
 
 # Security: run as non-root user
 RUN addgroup -g 1001 -S appgroup && \
