@@ -940,14 +940,17 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
         .to.be.reverted;
     });
 
-    it("should block repay when paused", async function () {
+    // FIX CR-05: repay() must remain available even when paused,
+    // so users can reduce debt and avoid unfair liquidation.
+    it("should ALLOW repay when paused (CR-05 fix)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
       await f.borrowModule.connect(f.owner).pause();
 
       await f.musd.connect(f.user1).approve(await f.borrowModule.getAddress(), ethers.parseEther("5000"));
+      // Should succeed — repay must work even when paused
       await expect(f.borrowModule.connect(f.user1).repay(ethers.parseEther("1000")))
-        .to.be.reverted;
+        .to.not.be.reverted;
     });
 
     it("should block borrowFor when paused", async function () {

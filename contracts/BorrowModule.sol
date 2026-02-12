@@ -378,7 +378,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Repay mUSD debt
     /// @param amount Amount of mUSD to repay (18 decimals)
-    function repay(uint256 amount) external nonReentrant whenNotPaused {
+    /// FIX CR-05: Removed whenNotPaused — users must always be able to repay debt,
+    /// even during a pause, to avoid unfair liquidation from accruing interest.
+    function repay(uint256 amount) external nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
 
         _accrueInterest(msg.sender);
@@ -426,7 +428,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @dev FIX CRITICAL: Allows LeverageVault to repay user debt when closing positions
     /// @param user The user whose debt to repay
     /// @param amount Amount of mUSD to repay (18 decimals)
-    function repayFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
+    /// FIX CR-05: Removed whenNotPaused — repayment must always be available.
+    function repayFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
         require(user != address(0), "INVALID_USER");
 
@@ -907,6 +910,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
         badDebt -= socializeAmount;
         badDebtCovered += socializeAmount;
+
+        // FIX CR-01: Decrement totalBorrows so utilization rate reflects the write-off.
+        // Without this, totalBorrows stays permanently inflated after socialization.
+        if (totalBorrows >= socializeAmount) {
+            totalBorrows -= socializeAmount;
+        } else {
+            totalBorrows = 0;
+        }
 
         emit BadDebtSocialized(socializeAmount, totalBorrowsBefore, totalBorrows);
         emit BadDebtCovered(socializeAmount, badDebt, "SOCIALIZED");
