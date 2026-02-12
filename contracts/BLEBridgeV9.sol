@@ -140,10 +140,45 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                    ADMIN FUNCTIONS
     // ============================================================
 
-    function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX V3-AUDIT: Pending mUSD token address for timelocked change
+    address public pendingMUSDToken;
+    /// @notice FIX V3-AUDIT: Timestamp of mUSD token change request
+    uint256 public musdTokenChangeRequestTime;
+
+    event MUSDTokenChangeRequested(address indexed newToken, uint256 executeAfter);
+    event MUSDTokenChangeCancelled(address indexed cancelledToken);
+
+    /// @notice FIX V3-AUDIT: Request mUSD token change (48h timelock)
+    /// @dev Previously instant — admin key compromise could swap to malicious token in 1 tx
+    function requestSetMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(_musdToken != address(0), "INVALID_ADDRESS");
-        emit MUSDTokenUpdated(address(musdToken), _musdToken);
-        musdToken = IMUSD(_musdToken);
+        require(pendingMUSDToken == address(0), "CHANGE_ALREADY_PENDING");
+        pendingMUSDToken = _musdToken;
+        musdTokenChangeRequestTime = block.timestamp;
+        emit MUSDTokenChangeRequested(_musdToken, block.timestamp + UPGRADE_DELAY);
+    }
+
+    /// @notice Cancel a pending mUSD token change
+    function cancelSetMUSDToken() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address cancelled = pendingMUSDToken;
+        pendingMUSDToken = address(0);
+        musdTokenChangeRequestTime = 0;
+        emit MUSDTokenChangeCancelled(cancelled);
+    }
+
+    /// @notice Execute mUSD token change after 48h timelock
+    function executeSetMUSDToken() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(pendingMUSDToken != address(0), "NO_PENDING_CHANGE");
+        require(block.timestamp >= musdTokenChangeRequestTime + UPGRADE_DELAY, "TIMELOCK_ACTIVE");
+
+        address oldToken = address(musdToken);
+        address newToken = pendingMUSDToken;
+
+        pendingMUSDToken = address(0);
+        musdTokenChangeRequestTime = 0;
+
+        musdToken = IMUSD(newToken);
+        emit MUSDTokenUpdated(oldToken, newToken);
     }
 
     // FIX S-M02: Emit event for admin parameter change
@@ -519,7 +554,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         upgradeRequestTime = 0;
     }
 
-    // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
-    // FIX: Adjusted from 37 to 35 after adding pendingImplementation + upgradeRequestTime
-    uint256[35] private __gap;
+    // Storage gap for future upgrades — 17 state variables → 50 - 17 = 33
+    // FIX: Adjusted from 35 to 33 after adding pendingMUSDToken + musdTokenChangeRequestTime
+    uint256[33] private __gap;
 }

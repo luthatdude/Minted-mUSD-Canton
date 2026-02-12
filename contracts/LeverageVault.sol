@@ -737,9 +737,60 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         emit TokenDisabled(token);
     }
 
-    /// @notice Emergency withdraw stuck tokens
-    function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        IERC20(token).safeTransfer(msg.sender, amount);
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX V3-AUDIT: Timelocked emergency withdraw to prevent instant token drain
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Pending emergency withdrawal details
+    struct PendingEmergencyWithdraw {
+        address token;
+        uint256 amount;
+        address recipient;
+        uint256 requestTime;
+    }
+    PendingEmergencyWithdraw public pendingEmergencyWithdraw;
+
+    uint256 public constant EMERGENCY_WITHDRAW_DELAY = 48 hours;
+
+    event EmergencyWithdrawRequested(address indexed token, uint256 amount, address indexed recipient, uint256 executeAfter);
+    event EmergencyWithdrawCancelled(address indexed token, uint256 amount);
+    event EmergencyWithdrawExecuted(address indexed token, uint256 amount, address indexed recipient);
+
+    /// @notice Request emergency withdrawal of stuck tokens (48h timelock)
+    /// @dev FIX V3-AUDIT: Previously instant — admin key compromise could drain all tokens in 1 tx
+    function requestEmergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(token != address(0), "INVALID_TOKEN");
+        require(amount > 0, "ZERO_AMOUNT");
+        require(pendingEmergencyWithdraw.token == address(0), "WITHDRAW_ALREADY_PENDING");
+
+        pendingEmergencyWithdraw = PendingEmergencyWithdraw({
+            token: token,
+            amount: amount,
+            recipient: msg.sender,
+            requestTime: block.timestamp
+        });
+
+        emit EmergencyWithdrawRequested(token, amount, msg.sender, block.timestamp + EMERGENCY_WITHDRAW_DELAY);
+    }
+
+    /// @notice Cancel a pending emergency withdrawal
+    function cancelEmergencyWithdraw() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address token = pendingEmergencyWithdraw.token;
+        uint256 amount = pendingEmergencyWithdraw.amount;
+        delete pendingEmergencyWithdraw;
+        emit EmergencyWithdrawCancelled(token, amount);
+    }
+
+    /// @notice Execute emergency withdrawal after 48h timelock
+    function executeEmergencyWithdraw() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        PendingEmergencyWithdraw memory pending = pendingEmergencyWithdraw;
+        require(pending.token != address(0), "NO_PENDING_WITHDRAW");
+        require(block.timestamp >= pending.requestTime + EMERGENCY_WITHDRAW_DELAY, "TIMELOCK_ACTIVE");
+
+        delete pendingEmergencyWithdraw;
+
+        IERC20(pending.token).safeTransfer(pending.recipient, pending.amount);
+        emit EmergencyWithdrawExecuted(pending.token, pending.amount, pending.recipient);
     }
 
     /// @notice FIX C-4: Emergency close a position when normal close fails (e.g., bad debt)
