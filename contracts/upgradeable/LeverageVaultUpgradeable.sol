@@ -293,7 +293,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  /// @param userMaxSlippageBps User-specified slippage tolerance in bps (0 = use global default, must be <= maxSlippageBps)
  /// @return collateralReturned Amount of collateral returned to user
  /// @dev If swap fails, use closeLeveragedPositionWithMusd() instead
- /// @dev HIGH-14 fix: whenNotPaused removed so users can always close positions and repay debt, even during emergency pause.
+ /// @dev whenNotPaused removed so users can always close positions and repay debt, even during emergency pause.
  function closeLeveragedPosition(uint256 minCollateralOut, uint256 userMaxSlippageBps, uint256 swapDeadline) external nonReentrant returns (uint256 collateralReturned) {
  // Validate user-supplied deadline
  require(swapDeadline > block.timestamp, "EXPIRED_DEADLINE");
@@ -389,7 +389,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  /// This completely eliminates swap failure risk.
  /// @param musdAmount Amount of mUSD to provide for debt repayment
  /// @return collateralReturned Amount of collateral returned to user
- /// @dev HIGH-14 fix: whenNotPaused removed so users can always close positions and repay debt, even during emergency pause.
+ /// @dev whenNotPaused removed so users can always close positions and repay debt, even during emergency pause.
  function closeLeveragedPositionWithMusd(uint256 musdAmount) external nonReentrant returns (uint256 collateralReturned) {
  LeveragePosition storage pos = positions[msg.sender];
  require(pos.totalCollateral > 0, "NO_POSITION");

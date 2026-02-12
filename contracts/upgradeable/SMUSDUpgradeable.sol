@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // BLE Protocol - UUPS Upgradeable Version with Unified Cross-Chain Yield
-// Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
-// S-03 (Donation attack mitigation), S-04 (SafeERC20)
+// Features: Cooldown enforcement, global share price, donation attack mitigation, SafeERC20
 // Feature: Unified share price across Ethereum and Canton for equal yield distribution
 
 pragma solidity 0.8.26;
