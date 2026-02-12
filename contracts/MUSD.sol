@@ -21,6 +21,11 @@ contract MUSD is ERC20, AccessControl, Pausable {
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
 
+    /// @notice FIX HIGH-02: Cooldown between supply cap increases to prevent rapid chaining
+    /// 100M → 120M → 144M → 172.8M could happen in minutes without this
+    uint256 public lastCapIncreaseTime;
+    uint256 public constant MIN_CAP_INCREASE_INTERVAL = 24 hours;
+
     event SupplyCapUpdated(uint256 oldCap, uint256 newCap);
     event BlacklistUpdated(address indexed account, bool status);
     event Mint(address indexed to, uint256 amount);
@@ -48,6 +53,16 @@ contract MUSD is ERC20, AccessControl, Pausable {
         
         uint256 oldCap = supplyCap;
         uint256 currentSupply = totalSupply();
+
+        // FIX HIGH-02: Enforce 24h cooldown between supply cap INCREASES
+        // Decreases are always allowed (emergency undercollateralization response)
+        if (_cap > oldCap) {
+            require(
+                block.timestamp >= lastCapIncreaseTime + MIN_CAP_INCREASE_INTERVAL,
+                "CAP_INCREASE_COOLDOWN"
+            );
+            lastCapIncreaseTime = block.timestamp;
+        }
         
         // Allow cap below current supply (signals undercollateralization)
         // Existing holders keep their tokens, but no new mints until supply drops

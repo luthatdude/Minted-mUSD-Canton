@@ -466,6 +466,9 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  // Check if we've reached target leverage
  if ((totalCollateral * 10) / currentCollateral >= targetLeverageX10) break;
 
+ // FIX HIGH-06: Track collateral before loop iteration for convergence check
+ uint256 collateralBefore = totalCollateral;
+
  // Calculate and execute borrow (scoped to free stack slots)
  uint256 toBorrow;
  {
@@ -490,6 +493,16 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
  collateralVault.depositFor(user, collateralToken, collateralReceived);
  totalCollateral += collateralReceived;
+
+ // FIX HIGH-06: Convergence check — if collateral gained is <1% of remaining gap,
+ // break early to prevent gas waste and potential infinite loops
+ uint256 remainingGap = (targetLeverageX10 * currentCollateral / 10) > totalCollateral
+     ? (targetLeverageX10 * currentCollateral / 10) - totalCollateral
+     : 0;
+ uint256 progressMade = totalCollateral - collateralBefore;
+ if (remainingGap > 0 && progressMade * 100 < remainingGap) {
+     break; // Less than 1% progress toward target — convergence failure
+ }
 
  loopsExecuted++;
  }

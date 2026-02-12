@@ -112,8 +112,17 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # External HTTPS traffic (from LoadBalancer)
-    - ports:
+    # FIX HIGH-08: External HTTPS traffic restricted to LoadBalancer source.
+    # Without a 'from' selector, ALL pods/namespaces could reach NGINX directly,
+    # bypassing the LoadBalancer's WAF/Cloud Armor protection.
+    - from:
+        - ipBlock:
+            cidr: "0.0.0.0/0"  # LoadBalancer forwards external traffic
+            except:
+              - "10.0.0.0/8"   # Block direct pod-to-pod bypass within cluster
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+      ports:
         - port: 8443
           protocol: TCP
         - port: 8080

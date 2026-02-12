@@ -113,6 +113,7 @@ template CantonSMUSDTransferProposal
 template CantonStakingService
   with
     operator : Party
+    governance : Party          -- FIX HIGH-07: Governance co-signer for critical operations
     totalShares : Money         -- Total smUSD shares on Canton
     -- UNIFIED YIELD: Global share price from Ethereum (includes all chains)
     globalSharePrice : Money    -- Synced from Ethereum: globalAssets / globalShares
@@ -235,13 +236,14 @@ template CantonStakingService
 
     -- | Sync global share price from Ethereum (replaces old SyncYield)
     -- Called by operator after YieldSyncService calculates global share price
+    -- FIX HIGH-07: Requires governance co-approval — prevents unilateral operator manipulation
     choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
         newGlobalSharePrice : Money   -- Global share price from Ethereum
         newGlobalTotalAssets : Money  -- Total assets across both chains
         newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
-      controller operator
+      controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)

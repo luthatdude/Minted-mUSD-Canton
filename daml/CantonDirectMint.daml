@@ -679,6 +679,7 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
+    -- FIX HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
@@ -687,8 +688,15 @@ template CantonDirectMintService
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
+        -- FIX HIGH-02: Enforce 24h cooldown between supply cap increases
+        now <- getTime
+        let cooldownRel = hours 24
+        let elapsed = subTime now lastRateLimitReset
+        -- Reuse lastRateLimitReset as cap update cooldown tracker
+        -- (cap updates are rare vs mints, so this coupling is safe)
+        assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
         archive self
-        create this with supplyCap = newCap
+        create this with supplyCap = newCap, lastRateLimitReset = now
 
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
