@@ -1,21 +1,24 @@
 # Minted Bridge - Docker Compose
-# Use Docker secrets for sensitive values instead of env vars
-# Added network isolation, resource limits, and read-only rootfs
-# Health check binds to localhost
+# FIX C-11: Use Docker secrets for sensitive values instead of env vars
+# FIX H-22: Added network isolation, resource limits, and read-only rootfs
+# FIX M-22: Health check binds to localhost
 #
 # Usage:
 #   docker-compose up relay         # Start relay service only
 #   docker-compose up validator1    # Start validator 1
 #   docker-compose up               # Start everything
 
-# Removed deprecated 'version' field (docker compose v2+ ignores it)
+# FIX 5C-L01: Removed deprecated 'version' field (docker compose v2+ ignores it)
 
-# Define secrets (files must be created on host)
+# FIX C-11: Define secrets (files must be created on host)
 secrets:
   canton_token:
     file: ./secrets/canton_token
-  bridge_private_key:
-    file: ./secrets/bridge_private_key
+  relayer_private_key:
+    file: ./secrets/relayer_private_key
+  # INFRA-H-03: RPC URLs contain API keys (Infura/Alchemy) — treat as secrets
+  ethereum_rpc_url:
+    file: ./secrets/ethereum_rpc_url
   validator1_aws_access_key:
     file: ./secrets/validator1_aws_access_key
   validator1_aws_secret_key:
@@ -29,7 +32,7 @@ secrets:
   validator3_aws_secret_key:
     file: ./secrets/validator3_aws_secret_key
 
-# Network isolation
+# FIX H-22: Network isolation
 networks:
   bridge_internal:
     driver: bridge
@@ -52,24 +55,24 @@ services:
       - CANTON_PORT=${CANTON_PORT:-6865}
       - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
       - CANTON_PARTY=${CANTON_PARTY}
-      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      # INFRA-H-03: ETHEREUM_RPC_URL moved to secrets (contains API keys)
+      # Read from /run/secrets/ethereum_rpc_url at runtime
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - CONFIRMATIONS=${CONFIRMATIONS:-2}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-5000}
       - HEALTH_PORT=8080
-      # Bind health server to localhost
+      # FIX M-22: Bind health server to localhost
       - HEALTH_BIND_HOST=127.0.0.1
       - NODE_ENV=production
-    # Mount secrets instead of env vars for sensitive values
-    # Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
+    # FIX C-11: Mount secrets instead of env vars for sensitive values
     secrets:
       - canton_token
-      - bridge_private_key
-    # Only expose health port to localhost
+      - relayer_private_key
+      - ethereum_rpc_url
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
-    # Resource limits and security hardening
+    # FIX H-22: Resource limits and security hardening
     read_only: true
     tmpfs:
       - /tmp
@@ -85,7 +88,7 @@ services:
     networks:
       - bridge_internal
       - bridge_external
-    # Use node instead of curl (not available in alpine)
+    # FIX I-H01: Use node instead of curl (not available in alpine)
     healthcheck:
       test: ["CMD", "node", "-e", "const http = require('http'); http.get('http://127.0.0.1:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -112,16 +115,16 @@ services:
       - CANTON_PORT=${CANTON_PORT:-6865}
       - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
       - CANTON_PARTY=${CANTON_PARTY}
-      - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      # INFRA-H-03: ETHEREUM_RPC_URL moved to secrets (contains API keys)
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
       - SMUSD_ADDRESS=${SMUSD_ADDRESS}
       - YIELD_SYNC_INTERVAL_MS=${YIELD_SYNC_INTERVAL_MS:-3600000}
       - MIN_YIELD_THRESHOLD=${MIN_YIELD_THRESHOLD:-1000000000}
       - NODE_ENV=production
-    # Renamed from relayer_private_key to match code's readSecret('bridge_private_key')
     secrets:
       - canton_token
-      - bridge_private_key
+      - relayer_private_key
+      - ethereum_rpc_url
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -169,9 +172,9 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # Set NODE_ENV for HTTPS enforcement in validator-node-v2
+      # FIX 5C-L04: Set NODE_ENV for HTTPS enforcement in validator-node-v2
       - NODE_ENV=production
-    # Use secrets for AWS credentials
+    # FIX C-11: Use secrets for AWS credentials
     secrets:
       - canton_token
       - validator1_aws_access_key
@@ -191,7 +194,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # Healthcheck for validator (process-level since no HTTP endpoint)
+    # FIX I-M01: Healthcheck for validator (process-level since no HTTP endpoint)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
@@ -219,7 +222,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
+      # INFRA-H-03: NODE_ENV was missing — required for HTTPS enforcement in validator-node-v2
       - NODE_ENV=production
     secrets:
       - canton_token
@@ -240,7 +243,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # Healthcheck for validator (process-level)
+    # FIX I-M01: Healthcheck for validator (process-level)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
@@ -268,7 +271,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # Set NODE_ENV for HTTPS enforcement (was missing from validator2/3)
+      # INFRA-H-03: NODE_ENV was missing — required for HTTPS enforcement in validator-node-v2
       - NODE_ENV=production
     secrets:
       - canton_token
@@ -289,7 +292,7 @@ services:
       - no-new-privileges:true
     networks:
       - bridge_internal
-    # Healthcheck for validator (process-level)
+    # FIX I-M01: Healthcheck for validator (process-level)
     healthcheck:
       test: ["CMD", "node", "-e", "const fs=require('fs');try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}"]
       interval: 30s
