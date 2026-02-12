@@ -7,6 +7,11 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
+/// @dev FIX CR-06: Interface for TreasuryV2 withdrawal
+interface ITreasuryV2_Withdraw {
+    function withdraw(address to, uint256 amount) external;
+}
+
 /**
  * @title IWormhole
  * @notice Minimal interface for Wormhole core contract
@@ -320,8 +325,10 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         // Clear before external calls (CEI)
         delete failedMints[vaaHash];
 
-        // Pull USDC from treasury and mint
-        usdc.safeTransferFrom(treasury, address(this), amount);
+        // FIX CR-06: Use treasury.withdraw() instead of safeTransferFrom.
+        // safeTransferFrom requires treasury to have approved this contract (it doesn't).
+        // withdraw() is the proper TreasuryV2 interface for pulling USDC.
+        ITreasuryV2_Withdraw(treasury).withdraw(address(this), amount);
         usdc.forceApprove(directMint, amount);
         uint256 musdMinted = IDirectMint(directMint).mintFor(recipient, amount);
 

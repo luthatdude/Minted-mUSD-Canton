@@ -467,12 +467,12 @@ describe("SkySUSDSStrategy", function () {
       // Deposit first
       await strategy.connect(treasury).deposit(ethers.parseUnits("10000", USDC_DECIMALS));
 
-      // Emergency withdraw to admin
-      const balBefore = await usdc.balanceOf(admin.address);
-      await expect(strategy.connect(guardian).emergencyWithdraw(admin.address))
+      // FIX CR-08: Emergency withdraw must go to treasury (has TREASURY_ROLE)
+      const balBefore = await usdc.balanceOf(treasury.address);
+      await expect(strategy.connect(guardian).emergencyWithdraw(treasury.address))
         .to.emit(strategy, "EmergencyWithdraw");
 
-      const balAfter = await usdc.balanceOf(admin.address);
+      const balAfter = await usdc.balanceOf(treasury.address);
       expect(balAfter - balBefore).to.be.gte(ethers.parseUnits("9999", USDC_DECIMALS));
       expect(await strategy.totalPrincipal()).to.equal(0);
       expect(await strategy.active()).to.be.false;
