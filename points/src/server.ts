@@ -308,9 +308,16 @@ export class PointsServer {
 
     r.post("/api/referral/link", requireWalletSig, (req, res) => {
       try {
-        const { referee, code } = req.body;
+        const { referee, code, address } = req.body;
         if (!referee || !code) {
           res.status(400).json({ error: "REFEREE_AND_CODE_REQUIRED" });
+          return;
+        }
+        // Bind referee to the authenticated signer: the caller can only
+        // link themselves as the referee, preventing referral hijacking
+        // where an attacker signs as themselves but links a victim address.
+        if (!address || (referee as string).toLowerCase() !== (address as string).toLowerCase()) {
+          res.status(403).json({ error: "REFEREE_MUST_BE_SIGNER", detail: "You can only link your own address as referee" });
           return;
         }
         const link = this.referralService.linkReferral(referee, code);
