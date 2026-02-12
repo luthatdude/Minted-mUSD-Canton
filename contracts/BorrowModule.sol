@@ -105,6 +105,31 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @dev Tracked separately so totalBorrows stays in sync with actual mUSD supply.
     ///      Cleared when a subsequent mint succeeds or admin calls drainUnroutedInterest().
     uint256 public unroutedInterest;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX C-02: BAD DEBT TRACKING & SOCIALIZATION
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Accumulated bad debt from underwater liquidations (unbacked mUSD)
+    /// @dev When a liquidation exhausts all collateral but debt remains, the
+    ///      residual debt is written off the user's position and accumulated here.
+    ///      This represents mUSD in circulation that is no longer collateral-backed.
+    uint256 public badDebt;
+
+    /// @notice Total bad debt ever recorded (for analytics, never decremented)
+    uint256 public cumulativeBadDebt;
+
+    /// @notice Total bad debt covered by protocol reserves or external injection
+    uint256 public badDebtCovered;
+
+    /// @notice Emitted when bad debt is recorded from an underwater liquidation
+    event BadDebtRecorded(address indexed user, uint256 amount, uint256 totalBadDebt);
+
+    /// @notice Emitted when bad debt is covered (burned from reserves or injection)
+    event BadDebtCovered(uint256 amount, uint256 remainingBadDebt, string source);
+
+    /// @notice Emitted when bad debt is socialized across the protocol
+    event BadDebtSocialized(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -715,6 +740,98 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         emit DebtAdjusted(user, totalDebt(user), "LIQUIDATION");
+    }
+
+    /// @notice FIX C-02: Record bad debt from underwater liquidation.
+    ///         Called by LiquidationEngine after a liquidation exhausts all collateral
+    ///         on a borrower who still has residual debt. Writes off the user's position
+    ///         and moves the shortfall into the badDebt accumulator.
+    /// @param user The borrower whose remaining debt is uncollectible
+    function recordBadDebt(address user) external nonReentrant {
+        require(
+            hasRole(LIQUIDATION_ROLE, msg.sender),
+            "UNAUTHORIZED_RECORD_BAD_DEBT"
+        );
+
+        _accrueInterest(user);
+
+        DebtPosition storage pos = positions[user];
+        uint256 residual = pos.principal + pos.accruedInterest;
+        if (residual == 0) return;
+
+        // Verify borrower truly has no collateral left
+        address[] memory tokens = vault.getSupportedTokens();
+        uint256 remainingCollateralValue = 0;
+        for (uint256 i = 0; i < tokens.length; i++) {
+            uint256 deposited = vault.deposits(user, tokens[i]);
+            if (deposited > 0) {
+                remainingCollateralValue += oracle.getValueUsdUnsafe(tokens[i], deposited);
+            }
+        }
+        require(remainingCollateralValue == 0, "COLLATERAL_REMAINING");
+
+        // Write off the user's position
+        pos.principal = 0;
+        pos.accruedInterest = 0;
+
+        // Remove from totalBorrows (this debt no longer earns interest)
+        if (totalBorrows >= residual) {
+            totalBorrows -= residual;
+        } else {
+            totalBorrows = 0;
+        }
+
+        // Track bad debt
+        badDebt += residual;
+        cumulativeBadDebt += residual;
+
+        emit BadDebtRecorded(user, residual, badDebt);
+        emit DebtAdjusted(user, 0, "BAD_DEBT_WRITEOFF");
+    }
+
+    /// @notice FIX C-02: Cover bad debt by burning mUSD from protocol reserves.
+    ///         Admin sends mUSD to this contract, which is burned to reduce
+    ///         the unbacked supply. Reduces the badDebt accumulator accordingly.
+    /// @param amount Amount of bad debt to cover (mUSD, 18 decimals)
+    function coverBadDebt(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(amount > 0, "ZERO_AMOUNT");
+        require(badDebt > 0, "NO_BAD_DEBT");
+
+        uint256 coverAmount = amount > badDebt ? badDebt : amount;
+
+        // Burn mUSD from this contract to reduce unbacked supply
+        // Admin must transfer mUSD to this contract before calling
+        uint256 balance = IERC20(address(musd)).balanceOf(address(this));
+        require(balance >= coverAmount, "INSUFFICIENT_MUSD_BALANCE");
+
+        musd.burn(address(this), coverAmount);
+
+        badDebt -= coverAmount;
+        badDebtCovered += coverAmount;
+
+        emit BadDebtCovered(coverAmount, badDebt, "PROTOCOL_RESERVES");
+    }
+
+    /// @notice FIX C-02: Socialize remaining bad debt by reducing totalBorrows.
+    ///         This effectively distributes the loss across all borrowers by
+    ///         slightly reducing the interest base. Should only be used as a
+    ///         last resort when reserves are insufficient.
+    /// @dev This does NOT change individual debt positions — it reduces the
+    ///      global totalBorrows which lowers utilization and interest rates,
+    ///      effectively spreading the cost across future interest payments.
+    /// @param amount Amount of bad debt to socialize
+    function socializeBadDebt(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(amount > 0, "ZERO_AMOUNT");
+        require(badDebt > 0, "NO_BAD_DEBT");
+
+        uint256 socializeAmount = amount > badDebt ? badDebt : amount;
+        uint256 totalBorrowsBefore = totalBorrows;
+
+        badDebt -= socializeAmount;
+        badDebtCovered += socializeAmount;
+
+        emit BadDebtSocialized(socializeAmount, totalBorrowsBefore, totalBorrows);
+        emit BadDebtCovered(socializeAmount, badDebt, "SOCIALIZED");
     }
 
     // ============================================================

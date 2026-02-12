@@ -424,4 +424,234 @@ describe("LiquidationEngine", function () {
       await expect(liquidationEngine.connect(user1).setCloseFactor(6000)).to.be.reverted;
     });
   });
+
+  // ================================================================
+  // FIX C-02: Bad Debt Detection & Socialization Tests
+  // ================================================================
+  describe("Bad Debt Detection (C-02)", function () {
+    it("Should detect and record bad debt when liquidation exhausts all collateral", async function () {
+      const {
+        liquidationEngine,
+        borrowModule,
+        collateralVault,
+        priceOracle,
+        musd,
+        weth,
+        ethFeed,
+        user1,
+        liquidator,
+      } = await loadFixture(deployLiquidationFixture);
+
+      // User deposits 1 ETH ($2000) and borrows near max: 1400 mUSD (70% of $2000)
+      const depositAmount = ethers.parseEther("1");
+      await weth.connect(user1).approve(await collateralVault.getAddress(), depositAmount);
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), depositAmount);
+      await borrowModule.connect(user1).borrow(ethers.parseEther("1400"));
+
+      // Crash ETH price to $100 — now 1 ETH = $100, debt = $1400
+      // Collateral value ($100) << debt ($1400) → deep underwater
+      await ethFeed.setAnswer(10000000000n); // $100
+      await priceOracle.updatePrice(await weth.getAddress());
+
+      // The position is liquidatable
+      expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
+
+      // Full liquidation threshold (HF < 0.5) allows 100% close factor
+      // seize = min(repayAmount * (1+penalty) / price, available)
+      // With $100 ETH, all 1 ETH collateral gets seized, but debt remains
+
+      // Liquidator tries to repay 1400 mUSD — but all collateral is only worth $100
+      const repayAmount = ethers.parseEther("1400");
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
+
+      const tx = await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), repayAmount);
+
+      // Should emit BadDebtDetected
+      await expect(tx).to.emit(liquidationEngine, "BadDebtDetected");
+
+      // Should emit BadDebtRecorded on BorrowModule
+      await expect(tx).to.emit(borrowModule, "BadDebtRecorded");
+
+      // User should have zero collateral and zero debt (written off)
+      expect(await collateralVault.deposits(user1.address, await weth.getAddress())).to.equal(0);
+      expect(await borrowModule.totalDebt(user1.address)).to.equal(0);
+
+      // Bad debt accumulator should be non-zero
+      expect(await borrowModule.badDebt()).to.be.gt(0);
+      expect(await borrowModule.cumulativeBadDebt()).to.be.gt(0);
+    });
+
+    it("Should NOT record bad debt when collateral remains after partial liquidation", async function () {
+      const {
+        liquidationEngine,
+        borrowModule,
+        collateralVault,
+        priceOracle,
+        musd,
+        weth,
+        ethFeed,
+        user1,
+        liquidator,
+      } = await loadFixture(deployLiquidationFixture);
+
+      // User deposits 10 ETH ($20,000) and borrows 14,000 mUSD
+      const depositAmount = ethers.parseEther("10");
+      await weth.connect(user1).approve(await collateralVault.getAddress(), depositAmount);
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), depositAmount);
+      await borrowModule.connect(user1).borrow(ethers.parseEther("14000"));
+
+      // Drop ETH price to $1500 — collateral = $15,000, debt = $14,000
+      // Position is liquidatable but NOT underwater (collateral > debt)
+      await ethFeed.setAnswer(150000000000n); // $1500
+      await priceOracle.updatePrice(await weth.getAddress());
+
+      // Partial liquidation (50% close factor caps it)
+      const repayAmount = ethers.parseEther("5000");
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
+
+      const tx = await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), repayAmount);
+
+      // Should NOT emit BadDebtDetected
+      await expect(tx).to.not.emit(liquidationEngine, "BadDebtDetected");
+
+      // User should still have collateral remaining
+      expect(await collateralVault.deposits(user1.address, await weth.getAddress())).to.be.gt(0);
+
+      // No bad debt should be recorded
+      expect(await borrowModule.badDebt()).to.equal(0);
+    });
+
+    it("Should cover bad debt by burning mUSD from reserves", async function () {
+      const {
+        liquidationEngine,
+        borrowModule,
+        collateralVault,
+        priceOracle,
+        musd,
+        weth,
+        ethFeed,
+        owner,
+        user1,
+        liquidator,
+      } = await loadFixture(deployLiquidationFixture);
+
+      // Create a bad debt scenario
+      const depositAmount = ethers.parseEther("1");
+      await weth.connect(user1).approve(await collateralVault.getAddress(), depositAmount);
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), depositAmount);
+      await borrowModule.connect(user1).borrow(ethers.parseEther("1400"));
+
+      // Crash ETH price to $100
+      await ethFeed.setAnswer(10000000000n); // $100
+      await priceOracle.updatePrice(await weth.getAddress());
+
+      // Liquidate — creates bad debt
+      const repayAmount = ethers.parseEther("1400");
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
+      await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), repayAmount);
+
+      const badDebtAmount = await borrowModule.badDebt();
+      expect(badDebtAmount).to.be.gt(0);
+
+      // Admin transfers mUSD to BorrowModule to cover bad debt
+      await musd.mint(owner.address, badDebtAmount);
+      await musd.connect(owner).transfer(await borrowModule.getAddress(), badDebtAmount);
+
+      // Cover bad debt
+      const tx = await borrowModule.connect(owner).coverBadDebt(badDebtAmount);
+      await expect(tx).to.emit(borrowModule, "BadDebtCovered");
+
+      // Bad debt should be zero now
+      expect(await borrowModule.badDebt()).to.equal(0);
+      // Cumulative should still reflect historical bad debt
+      expect(await borrowModule.cumulativeBadDebt()).to.be.gt(0);
+    });
+
+    it("Should socialize bad debt as last resort", async function () {
+      const {
+        liquidationEngine,
+        borrowModule,
+        collateralVault,
+        priceOracle,
+        musd,
+        weth,
+        ethFeed,
+        owner,
+        user1,
+        user2,
+        liquidator,
+      } = await loadFixture(deployLiquidationFixture);
+
+      // Create a bad debt scenario
+      const depositAmount = ethers.parseEther("1");
+      await weth.connect(user1).approve(await collateralVault.getAddress(), depositAmount);
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), depositAmount);
+      await borrowModule.connect(user1).borrow(ethers.parseEther("1400"));
+
+      // Crash ETH price
+      await ethFeed.setAnswer(10000000000n); // $100
+      await priceOracle.updatePrice(await weth.getAddress());
+
+      // Liquidate — creates bad debt
+      const repayAmount = ethers.parseEther("1400");
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), repayAmount);
+      await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), repayAmount);
+
+      const badDebtAmount = await borrowModule.badDebt();
+      expect(badDebtAmount).to.be.gt(0);
+
+      // Socialize the bad debt (last resort)
+      const tx = await borrowModule.connect(owner).socializeBadDebt(badDebtAmount);
+      await expect(tx).to.emit(borrowModule, "BadDebtSocialized");
+
+      // Bad debt accumulator should be cleared
+      expect(await borrowModule.badDebt()).to.equal(0);
+    });
+
+    it("Should reject recordBadDebt from non-LIQUIDATION_ROLE", async function () {
+      const { borrowModule, user1 } = await loadFixture(deployLiquidationFixture);
+
+      await expect(borrowModule.connect(user1).recordBadDebt(user1.address)).to.be.reverted;
+    });
+
+    it("Should reject coverBadDebt from non-admin", async function () {
+      const { borrowModule, user1 } = await loadFixture(deployLiquidationFixture);
+
+      await expect(
+        borrowModule.connect(user1).coverBadDebt(ethers.parseEther("100"))
+      ).to.be.reverted;
+    });
+
+    it("Should reject socializeBadDebt from non-admin", async function () {
+      const { borrowModule, user1 } = await loadFixture(deployLiquidationFixture);
+
+      await expect(
+        borrowModule.connect(user1).socializeBadDebt(ethers.parseEther("100"))
+      ).to.be.reverted;
+    });
+
+    it("Should reject coverBadDebt when no bad debt exists", async function () {
+      const { borrowModule, owner } = await loadFixture(deployLiquidationFixture);
+
+      await expect(
+        borrowModule.connect(owner).coverBadDebt(ethers.parseEther("100"))
+      ).to.be.revertedWith("NO_BAD_DEBT");
+    });
+
+    it("Should reject socializeBadDebt when no bad debt exists", async function () {
+      const { borrowModule, owner } = await loadFixture(deployLiquidationFixture);
+
+      await expect(
+        borrowModule.connect(owner).socializeBadDebt(ethers.parseEther("100"))
+      ).to.be.revertedWith("NO_BAD_DEBT");
+    });
+  });
 });
