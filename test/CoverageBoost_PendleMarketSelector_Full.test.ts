@@ -101,7 +101,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
 
     // ─── Deploy PendleMarketSelector (proxy) ───────────────────────────
     const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-    const selector = await upgrades.deployProxy(PendleMarketSelector, [admin.address], {
+    const selector = await upgrades.deployProxy(PendleMarketSelector, [admin.address, admin.address], {
       kind: "uups",
       initializer: "initialize",
     });
@@ -139,9 +139,10 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
   // ═════════════════════════════════════════════════════════════════════
   describe("initialize", function () {
     it("reverts when admin is zero address", async function () {
+      const [deployer] = await ethers.getSigners();
       const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
       await expect(
-        upgrades.deployProxy(PendleMarketSelector, [ethers.ZeroAddress], {
+        upgrades.deployProxy(PendleMarketSelector, [ethers.ZeroAddress, deployer.address], {
           kind: "uups",
           initializer: "initialize",
         })

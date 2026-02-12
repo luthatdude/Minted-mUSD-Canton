@@ -34,7 +34,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
 
     // Deploy PendleMarketSelector
     const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address], {
+    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address, admin.address], {
       kind: "uups",
       initializer: "initialize",
     });
