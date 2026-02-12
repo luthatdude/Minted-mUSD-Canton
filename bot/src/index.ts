@@ -2,69 +2,97 @@
 // Monitors positions and executes profitable liquidations
 
 import { ethers } from "ethers";
-import * as dotenv from "dotenv";
 import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 
-dotenv.config();
-
-// Read Docker secrets with env var fallback (mirrors relay/utils.ts readSecret)
+// FIX C-03: Read secrets from Docker secrets file, fallback to env vars.
+// Never load .env files containing private keys via dotenv.
 function readSecret(name: string, envVar: string): string {
   const secretPath = `/run/secrets/${name}`;
   try {
     if (fs.existsSync(secretPath)) {
       return fs.readFileSync(secretPath, "utf-8").trim();
     }
-  } catch { /* Fall through to env var */ }
+  } catch { /* fall through to env var */ }
   return process.env[envVar] || "";
 }
+
+// secp256k1 curve order — private keys must be in range [1, n-1]
+const SECP256K1_N = BigInt(
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+);
+
+// FIX C-04: Validate private key format and range at startup
+function readAndValidatePrivateKey(secretName: string, envVar: string): string {
+  const key = readSecret(secretName, envVar);
+  if (!key) {
+    throw new Error(`FATAL: ${envVar} not set. Use Docker secrets or env vars — never .env files.`);
+  }
+  const normalized = key.startsWith("0x") ? key.slice(2) : key;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`SECURITY: ${envVar} is not a valid private key (expected 64 hex chars)`);
+  }
+  const keyValue = BigInt("0x" + normalized);
+  if (keyValue === 0n || keyValue >= SECP256K1_N) {
+    throw new Error(`SECURITY: ${envVar} is out of valid secp256k1 range [1, n-1]`);
+  }
+  return key;
+}
+
+// FIX H-07: Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[FATAL] Uncaught exception:", error);
+  process.exit(1);
+});
 
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
 
-const config = {
-  rpcUrl: process.env.RPC_URL!,
-  chainId: parseInt(process.env.CHAIN_ID || "1", 10),
-  // Use Docker secret with env var fallback
-  privateKey: readSecret("bot_private_key", "PRIVATE_KEY"),
-  
-  // Contract addresses
-  borrowModule: process.env.BORROW_MODULE_ADDRESS!,
-  liquidationEngine: process.env.LIQUIDATION_ENGINE_ADDRESS!,
-  collateralVault: process.env.COLLATERAL_VAULT_ADDRESS!,
-  priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
-  musd: process.env.MUSD_ADDRESS!,
-  
-  // Bot settings
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
-  gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20", 10),
-  maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
-  ethPriceUsd: parseFloat(process.env.ETH_PRICE_USD || "2500"),
-  maxTrackedBorrowers: parseInt(process.env.MAX_TRACKED_BORROWERS || "10000", 10),
-  
-  // Flashbots
-  useFlashbots: process.env.USE_FLASHBOTS === "true",
-  flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
-};
+// FIX C-03/C-04: Validate all required config at startup with clear error messages.
+// Private key loaded via Docker secrets / env — never from .env file.
+function loadConfig() {
+  const privateKey = readAndValidatePrivateKey("bot_private_key", "PRIVATE_KEY");
 
-// Validate private key format on startup
-if (!config.privateKey || !/^(0x)?[0-9a-fA-F]{64}$/.test(config.privateKey)) {
-  console.error("FATAL: PRIVATE_KEY env var is missing or invalid (expected 64 hex chars)");
-  process.exit(1);
-}
+  const rpcUrl = process.env.RPC_URL;
+  if (!rpcUrl) throw new Error("FATAL: RPC_URL is required");
 
-// Validate private key is within secp256k1 curve order range
-{
-  const SECP256K1_N = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
-  const keyBigInt = BigInt(config.privateKey.startsWith('0x') ? config.privateKey : '0x' + config.privateKey);
-  if (keyBigInt <= 0n || keyBigInt >= SECP256K1_N) {
-    console.error('FATAL: Private key out of secp256k1 curve range');
-    process.exit(1);
+  const requiredAddrs = [
+    "BORROW_MODULE_ADDRESS", "LIQUIDATION_ENGINE_ADDRESS",
+    "COLLATERAL_VAULT_ADDRESS", "PRICE_ORACLE_ADDRESS", "MUSD_ADDRESS",
+  ] as const;
+  for (const name of requiredAddrs) {
+    const val = process.env[name];
+    if (!val || !ethers.isAddress(val)) {
+      throw new Error(`FATAL: ${name} is missing or not a valid Ethereum address`);
+    }
   }
+
+  return {
+    rpcUrl,
+    chainId: parseInt(process.env.CHAIN_ID || "1", 10),
+    privateKey,
+    borrowModule: process.env.BORROW_MODULE_ADDRESS!,
+    liquidationEngine: process.env.LIQUIDATION_ENGINE_ADDRESS!,
+    collateralVault: process.env.COLLATERAL_VAULT_ADDRESS!,
+    priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
+    musd: process.env.MUSD_ADDRESS!,
+    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
+    minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
+    gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20", 10),
+    maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
+    useFlashbots: process.env.USE_FLASHBOTS === "true",
+    flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
+  };
 }
+
+const config = loadConfig();
 
 // ============================================================
 //                     LOGGER
@@ -161,17 +189,6 @@ class LiquidationBot {
   private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
-  private static readonly MAX_BORROWERS = config.maxTrackedBorrowers;
-
-  /** Add with eviction to keep bounded */
-  private trackBorrower(addr: string): void {
-    if (this.borrowers.size >= LiquidationBot.MAX_BORROWERS) {
-      // Evict oldest entry (first inserted)
-      const oldest = this.borrowers.values().next().value;
-      if (oldest) this.borrowers.delete(oldest);
-    }
-    this.borrowers.add(addr);
-  }
   private supportedTokens: string[] = [];
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
@@ -181,14 +198,7 @@ class LiquidationBot {
   private totalProfitUsd = 0;
 
   constructor() {
-    // Configure RPC timeout to prevent indefinite hanging
-    const fetchReq = new ethers.FetchRequest(config.rpcUrl);
-    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
-    this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
-      staticNetwork: true,
-      pollingInterval: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
-      batchMaxCount: 1,
-    });
+    this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);
     
     this.borrowModule = new ethers.Contract(config.borrowModule, BORROW_MODULE_ABI, this.wallet);
@@ -246,7 +256,7 @@ class LiquidationBot {
     // Listen for new borrowers
     this.borrowModule.on("Borrowed", (user: string, amount: bigint, totalDebt: bigint) => {
       logger.info(`New borrower detected: ${user} - Debt: ${ethers.formatEther(totalDebt)} mUSD`);
-      this.trackBorrower(user);
+      this.borrowers.add(user);
     });
     
     // Listen for deposits (potential new positions)
@@ -268,17 +278,30 @@ class LiquidationBot {
     );
   }
 
-  private async ensureApproval(): Promise<void> {
+  // FIX H-06: Use bounded approval instead of infinite MaxUint256.
+  // Approve only the amount needed for the current liquidation + buffer.
+  // This limits exposure if the liquidation engine contract has a vulnerability.
+  private async ensureApproval(requiredAmount?: bigint): Promise<void> {
     const allowance = await this.musd.allowance(this.wallet.address, config.liquidationEngine);
-    // Use bounded approval instead of MaxUint256
-    // Approve enough for ~100 liquidations at max debt threshold
-    const boundedApproval = ethers.parseEther("10000000"); // 10M mUSD — practical upper bound
     
-    if (allowance < boundedApproval / 2n) {
-      logger.info("Approving mUSD for liquidation engine (bounded: 10M mUSD)...");
-      const tx = await this.musd.approve(config.liquidationEngine, boundedApproval);
-      await tx.wait();
-      logger.info("Approval complete (bounded)");
+    if (requiredAmount) {
+      // Per-liquidation approval: approve exactly what's needed + 1% buffer
+      if (allowance < requiredAmount) {
+        const approvalAmount = requiredAmount * 102n / 100n; // 2% buffer
+        logger.info(`Approving ${ethers.formatEther(approvalAmount)} mUSD for liquidation...`);
+        const tx = await this.musd.approve(config.liquidationEngine, approvalAmount);
+        await tx.wait();
+        logger.info("Per-tx approval complete");
+      }
+    } else {
+      // Initial startup: set a reasonable cap (e.g. 1M mUSD)
+      const APPROVAL_CAP = ethers.parseEther("1000000"); // 1M mUSD max
+      if (allowance < APPROVAL_CAP / 2n) {
+        logger.info("Setting bounded mUSD approval for liquidation engine...");
+        const tx = await this.musd.approve(config.liquidationEngine, APPROVAL_CAP);
+        await tx.wait();
+        logger.info(`Approval set to ${ethers.formatEther(APPROVAL_CAP)} mUSD (bounded)`);
+      }
     }
   }
 
@@ -300,11 +323,6 @@ class LiquidationBot {
   stop(): void {
     logger.info("Stopping bot...");
     this.isRunning = false;
-
-    // Remove event listeners to prevent memory leaks
-    this.borrowModule.removeAllListeners();
-    this.collateralVault.removeAllListeners();
-    this.liquidationEngine.removeAllListeners();
   }
 
   private async checkAndLiquidate(): Promise<void> {
@@ -360,7 +378,7 @@ class LiquidationBot {
           continue;
         }
         
-        logger.info(`Liquidatable position found: ${borrower} (HF: ${(Number(healthFactor) / 10000).toFixed(4)})`);
+        logger.info(`Liquidatable position found: ${borrower} (HF: ${Number(healthFactor) / 10000})`);
         
         // Check each collateral token
         for (const token of this.supportedTokens) {
@@ -376,7 +394,7 @@ class LiquidationBot {
           if (healthFactor < fullLiqThreshold) {
             maxRepay = totalDebt; // Full liquidation allowed
           } else {
-            maxRepay = (totalDebt * BigInt(closeFactorBps)) / 10000n;
+            maxRepay = (totalDebt * closeFactorBps) / 10000n;
           }
           
           // Estimate collateral to seize
@@ -385,10 +403,10 @@ class LiquidationBot {
           // Calculate profit
           const collateralPrice = await this.priceOracle.getPrice(token);
           const decimals = this.tokenDecimals.get(token) || 18;
-          const seizeValueUsd = Number(estimatedSeize) * Number(collateralPrice) / (10 ** decimals);
+          const seizeValueUsd = (estimatedSeize * collateralPrice) / BigInt(10 ** decimals);
           
           // Profit = seize value - debt repaid
-          const profitWei = seizeValueUsd - Number(maxRepay);
+          const profitWei = seizeValueUsd - maxRepay;
           const profitUsd = Number(ethers.formatEther(profitWei));
           
           // Estimate gas cost
@@ -396,7 +414,7 @@ class LiquidationBot {
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * config.ethPriceUsd; // env-driven ETH price
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * 2500; // Assume ETH = $2500
           
           const netProfitUsd = profitUsd - gasCostUsd;
           
@@ -433,6 +451,9 @@ class LiquidationBot {
         logger.error(`Insufficient mUSD balance: have ${ethers.formatEther(musdBalance)}, need ${ethers.formatEther(opp.debtToRepay)}`);
         return;
       }
+
+      // FIX H-06: Ensure bounded per-tx approval before liquidation
+      await this.ensureApproval(opp.debtToRepay);
       
       let success = false;
       let txHash: string | undefined;
@@ -511,7 +532,7 @@ class LiquidationBot {
       for (const event of events) {
         const args = (event as any).args;
         if (args && args.user) {
-          this.trackBorrower(args.user);
+          this.borrowers.add(args.user);
         }
       }
       
