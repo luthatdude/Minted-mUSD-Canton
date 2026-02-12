@@ -304,7 +304,10 @@ async function main() {
   const v8 = await ethers.getContractAt("BLEBridgeV8", config.v8ProxyAddress) as BLEBridgeV8;
   const musd = await ethers.getContractAt("MUSD", config.musdAddress) as MUSD;
   
-  // Step 1: Extract V8 state
+  // Step 1: Pre-flight safety checks (SC-01)
+  await preFlightChecks(v8, musd, deployer.address, config);
+
+  // Step 2: Extract V8 state
   const v8State = await extractV8State(v8);
   console.log(`\n📋 V8 State Summary:`);
   console.log(`   Total Canton Assets: ${ethers.formatEther(v8State.totalCantonAssets)} USD`);

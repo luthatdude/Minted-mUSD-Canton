@@ -326,7 +326,14 @@ export class PriceOracleService {
       throw new Error("CANTON_PARTY not configured");
     }
 
-    // INFRA-H-01: TLS by default for Canton ledger connection
+    // INFRA-H-01 / INF-01: TLS by default for Canton ledger connection
+    // INF-01 FIX: Reject cleartext HTTP in production — matches relay-service.ts TLS pattern
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
+        "Canton ledger connections must use TLS. Remove CANTON_USE_TLS or set to 'true'."
+      );
+    }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
 
@@ -396,8 +403,31 @@ export class PriceOracleService {
       }
     }
 
-    // Pick result: Tradecraft > Temple > error
+    // FIX OR-01: Multi-provider averaging for robustness
+    // When both sources are available and within divergence threshold, use their
+    // average instead of preferring a single source. This prevents manipulation
+    // of any single DEX from fully controlling the oracle price.
+    if (tradecraftResult && templeResult) {
+      const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
+      console.log(
+        `[PriceOracle] 🔀 Multi-provider average: $${avgPrice.toFixed(6)} ` +
+        `(Tradecraft: $${tradecraftResult.price.toFixed(6)}, Temple: $${templeResult.price.toFixed(6)})`
+      );
+      return {
+        price: avgPrice,
+        source: "multi-provider-avg(tradecraft+temple)",
+        timestamp: new Date(),
+      };
+    }
+
+    // Single-source fallback: Tradecraft > Temple > error
     const result = tradecraftResult || templeResult;
+    if (result) {
+      console.warn(
+        `[PriceOracle] ⚠️  Single-source price from ${result.source}. ` +
+        `Multi-provider averaging unavailable — other source down.`
+      );
+    }
     if (!result) {
       // Circuit breaker check
       const totalFailures =

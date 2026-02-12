@@ -206,6 +206,13 @@ class RelayService {
     this.config = config;
 
     // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    // INF-01 FIX: Reject cleartext HTTP in production
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
+        "Canton ledger connections must use TLS. Remove CANTON_USE_TLS or set to 'true'."
+      );
+    }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
