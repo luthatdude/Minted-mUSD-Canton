@@ -9,8 +9,7 @@
 # Build stage
 # FIX INFRA-001: Pin to SHA256 digest for supply chain security
 # Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
-# IMPORTANT: Replace the placeholder digest below with the real digest before deploying to production.
-FROM node:20-alpine@sha256:VERIFY_AND_PIN_BEFORE_DEPLOY AS builder
+FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS builder
 
 WORKDIR /app
 
@@ -30,8 +29,7 @@ RUN npm run build
 # Production stage
 # FIX INFRA-001: Pin to SHA256 digest for supply chain security (must match builder base)
 # Verified: 2026-02-11 | To update: docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
-# IMPORTANT: Replace the placeholder digest below with the real digest before deploying to production.
-FROM node:20-alpine@sha256:VERIFY_AND_PIN_BEFORE_DEPLOY AS production
+FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS production
 
 # Security: run as non-root user
 RUN addgroup -g 1001 -S appgroup && \

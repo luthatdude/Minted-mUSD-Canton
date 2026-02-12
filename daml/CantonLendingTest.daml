@@ -9,7 +9,7 @@ import Daml.Script
 import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import CantonLending
@@ -104,6 +104,16 @@ setupTest = do
       complianceRegistryCid = None
       minKeeperBond = 100.0      -- FIX DAML-R03: Minimum keeper bond
       observers = [user, liquidator]
+
+  -- FIX DAML-R05: Create BurnRateLimiter for burn-path tests (repay, liquidation)
+  submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400
+      paused = False
 
   return TestSetup with ..
 
@@ -401,7 +411,7 @@ testRepayDebt = do
       priceFeedCids = [setup.ctnFeedCid]
 
   -- Repay with the borrowed mUSD
-  (svc3, newDebtCid) <- submit setup.user do
+  (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Repay with
       user = setup.user
       musdCid
@@ -510,7 +520,7 @@ testLiquidation = do
       active = True
 
   -- Liquidate (50% close factor → max repay = $550)
-  (svc3, receiptCid) <- submit setup.liquidator do
+  (svc3, receiptCid) <- submitMulti [setup.liquidator] [setup.operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = setup.liquidator
       borrower = setup.user
@@ -967,7 +977,7 @@ testFullLifecycle = do
       priceFeedCids = [setup.ctnFeedCid]
 
   -- 3. Repay 500 mUSD
-  (svc3, newDebtCid) <- submit setup.user do
+  (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Repay with
       user = setup.user
       musdCid

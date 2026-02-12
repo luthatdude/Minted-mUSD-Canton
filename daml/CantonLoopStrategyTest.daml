@@ -9,7 +9,7 @@ import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
 import DA.Set qualified as Set
-import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps)
+import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import CantonLoopStrategy
@@ -82,6 +82,16 @@ setupLoopTest = do
       config = defaultLoopConfig
       complianceRegistryCid = Some registryCid
       observers = [user]
+
+  -- FIX DAML-R05: Create BurnRateLimiter for unwind burn paths
+  submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000000.0
+      currentEpochBurns = 0.0
+      epochStart = baseTime
+      epochDurationSeconds = 86400
+      paused = False
 
   return LoopTestSetup with ..
 

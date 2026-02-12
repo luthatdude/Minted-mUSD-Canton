@@ -188,8 +188,18 @@ testLendingFullCycleIntegration = do
   debt <- queryContractId operator debtCid
   assertMsg "Borrowed 500" ((fromSome debt).principalDebt == 500.0)
 
+  -- FIX DAML-R05: Create BurnRateLimiter for repay/liquidation burn paths
+  submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400
+      paused = False
+
   -- Step 3: Repay
-  (svc3, newDebtCid) <- submit user do
+  (svc3, newDebtCid) <- submitMulti [user] [operator] do
     exerciseCmd svc2 Lending_Repay with
       user
       musdCid
@@ -419,7 +429,15 @@ testKeeperBondLiquidation = do
       registeredAt = now
       slashCount = 0
       active = True
-
+  -- FIX DAML-R05: Create BurnRateLimiter for liquidation burn path
+  submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      epochBurnLimit = 1000000.0
+      currentEpochBurns = 0.0
+      epochStart = datetime 2026 Feb 6 12 0 0
+      epochDurationSeconds = 86400
+      paused = False
   -- Keeper gets mUSD for repayment
   liqMusdCid <- submitMulti [operator, keeper] [] do
     createCmd CantonMUSD with
@@ -431,7 +449,7 @@ testKeeperBondLiquidation = do
       privacyObservers = []
 
   -- Liquidate with keeper bond
-  (svc3, receiptCid) <- submit keeper do
+  (svc3, receiptCid) <- submitMulti [keeper] [operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = keeper
       borrower
