@@ -156,6 +156,8 @@ template CantonPriceFeed
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         -- FIX M-4: Minimum 10-second interval between updates to prevent rapid oscillation
         now <- getTime
@@ -183,6 +185,8 @@ template CantonPriceFeed
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
         now <- getTime
@@ -274,6 +278,8 @@ template MultiOracleFeed
       do
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_FEEDS" (DA.List.length newFeedCids >= minFeeds)
         create this with feedCids = newFeedCids
 
@@ -1268,6 +1274,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
         assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
@@ -1287,6 +1295,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
         create this with interestRateBps = newRateBps
@@ -1302,6 +1312,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         create this with paused = newPaused
 
     -- FIX M-3: Admin choices for operational parameters
@@ -1315,6 +1327,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
         create this with minBorrow = newMinBorrow
 
@@ -1328,6 +1342,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
         create this with reserveFactorBps = newReserveFactorBps
 
@@ -1341,6 +1357,8 @@ template CantonLendingService
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
         create this with closeFactorBps = newCloseFactorBps
 
@@ -1356,6 +1374,8 @@ template CantonLendingService
         proof <- exercise governanceProofCid ConsumeProof
         -- FIX HIGH-01: Use TreasuryWithdrawal (not ParameterUpdate) for reserve withdrawals
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator

@@ -373,12 +373,17 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return ownerMax < vaultBalance ? ownerMax : vaultBalance;
     }
 
-    /// @notice FIX ERC-4626: Max redeemable shares for owner
-    /// @dev Returns 0 when paused or in cooldown, otherwise owner's full balance
+    /// @notice FIX SOL-001: Max redeemable shares for owner, capped by vault's local mUSD balance.
+    /// @dev ERC-4626 requires maxRedeem to return an amount that won't cause revert.
+    ///      Since _convertToAssets uses globalTotalAssets (which may exceed local balance),
+    ///      we must cap at the share equivalent of what the vault can actually pay out.
     function maxRedeem(address owner) public view override returns (uint256) {
         if (paused()) return 0;
         if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) return 0;
-        return balanceOf(owner);
+        uint256 ownerShares = balanceOf(owner);
+        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 maxRedeemableShares = _convertToShares(vaultBalance, Math.Rounding.Floor);
+        return ownerShares < maxRedeemableShares ? ownerShares : maxRedeemableShares;
     }
 
     /// @notice FIX ERC-4626: Max depositable assets

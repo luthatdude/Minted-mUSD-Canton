@@ -87,13 +87,14 @@ spec:
               memory: 32Mi
       containers:
         - name: canton
-          # FIX IC-07: Pin Canton image to SHA256 digest for supply chain security
-          # FIX INFRA-005: Previous digest was fabricated (sequential hex pattern).
+          # FIX INFRA-002: Pin to SHA256 digest for supply chain security
           # REQUIRED: Before deployment, pull the real image and record the actual digest:
           #   docker pull digitalasset/canton-open-source:2.9.3
           #   docker inspect --format='{{index .RepoDigests 0}}' digitalasset/canton-open-source:2.9.3
-          # Then replace the tag-only reference below with the @sha256:... pinned version.
-          image: digitalasset/canton-open-source:2.9.3  # TODO: Pin to verified @sha256 digest before production
+          # Then replace the tag-only reference below with:
+          #   image: digitalasset/canton-open-source@sha256:<actual-digest>
+          image: digitalasset/canton-open-source:2.9.3  # MUST pin to @sha256:<digest> before mainnet
+          imagePullPolicy: Always  # FIX INFRA-002: Ensure latest tag-matching image until digest is pinned
           args:
             - "-c"
             - "/etc/canton/participant.conf"
@@ -168,13 +169,14 @@ spec:
             failureThreshold: 30  # 150s max startup
 
         - name: json-api
-          # FIX IC-07: Pin DAML SDK image to SHA256 digest for supply chain security
-          # FIX INFRA-005: Previous digest was fabricated (sequential hex pattern).
+          # FIX INFRA-002: Pin to SHA256 digest for supply chain security
           # REQUIRED: Before deployment, pull the real image and record the actual digest:
           #   docker pull digitalasset/daml-sdk:2.9.3
           #   docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
-          # Then replace the tag-only reference below with the @sha256:... pinned version.
-          image: digitalasset/daml-sdk:2.9.3  # TODO: Pin to verified @sha256 digest before production
+          # Then replace the tag-only reference below with:
+          #   image: digitalasset/daml-sdk@sha256:<actual-digest>
+          image: digitalasset/daml-sdk:2.9.3  # MUST pin to @sha256:<digest> before mainnet
+          imagePullPolicy: Always  # FIX INFRA-002: Ensure latest tag-matching image until digest is pinned
           command:
             - "daml"
             - "json-api"

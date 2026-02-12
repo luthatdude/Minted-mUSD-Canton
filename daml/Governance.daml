@@ -119,6 +119,8 @@ template MultiSigProposal
     proposer : Party                    -- Governor who created proposal
     governors : [Party]                 -- Snapshot of governors at creation
     actionType : ActionType
+    -- FIX DAML-H03: Module scope for governance proof (prevents cross-module replay)
+    targetModule : Text
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
     payloadHash : Text                  -- SHA-256 of payload for verification
@@ -208,6 +210,8 @@ template MultiSigProposal
           proposer             -- FIX CRIT-01: proposer's authority flows from MultiSigProposal
           proposalId
           actionType
+          -- FIX DAML-H03: Carry targetModule through to proof
+          targetModule
           description
           payload
           payloadHash
@@ -259,6 +263,8 @@ template MinterRegistry
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
         
         create this with
@@ -274,6 +280,8 @@ template MinterRegistry
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
         
         create this with
@@ -309,6 +317,8 @@ template MinterRegistry
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
         
         let updateQuota (p, q) = if p == minter then (p, q + additionalQuota) else (p, q)
@@ -331,6 +341,9 @@ template GovernanceActionLog
     proposer : Party              -- FIX CRIT-01: The governor who proposed (prevents forgery)
     proposalId : Text
     actionType : ActionType
+    -- FIX DAML-H03: Scopes proof to a specific module, preventing cross-module replay
+    -- A ParameterUpdate proof approved for lending cannot be consumed by boost pool, etc.
+    targetModule : Text
     description : Text
     payload : Text
     payloadHash : Text
@@ -396,6 +409,8 @@ template EmergencyPauseState
         -- FIX DAML-S1: Consume proof after use (prevents replay)
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        -- FIX DAML-H03: Verify proof is scoped to this module
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "Governance")
         assertMsg "NOT_PAUSED" isPaused
         now <- getTime
         
