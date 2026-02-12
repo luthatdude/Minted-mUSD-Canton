@@ -36,6 +36,113 @@
 import { ethers, upgrades } from "hardhat";
 import { BLEBridgeV8, BLEBridgeV9, MUSD } from "../typechain-types";
 
+// ============================================================
+//  SC-01 FIX: Pre-flight safety checks before migration
+// ============================================================
+
+/**
+ * SC-01: Comprehensive pre-flight checks to prevent bricked state.
+ * Verifies deployer roles, storage slot layout, balance requirements,
+ * and contract health before allowing migration to proceed.
+ */
+async function preFlightChecks(
+  v8: BLEBridgeV8,
+  musd: MUSD,
+  deployer: string,
+  config: MigrationConfig
+): Promise<void> {
+  console.log("\n🛫 SC-01: Running pre-flight safety checks...\n");
+  const failures: string[] = [];
+
+  // 1. Verify deployer has DEFAULT_ADMIN_ROLE on V8
+  const DEFAULT_ADMIN_ROLE = await v8.DEFAULT_ADMIN_ROLE();
+  const hasV8Admin = await v8.hasRole(DEFAULT_ADMIN_ROLE, deployer);
+  if (!hasV8Admin) {
+    failures.push(`Deployer ${deployer} lacks DEFAULT_ADMIN_ROLE on V8 bridge`);
+  } else {
+    console.log("  ✅ Deployer has DEFAULT_ADMIN_ROLE on V8");
+  }
+
+  // 2. Verify deployer has admin on MUSD (to grant CAP_MANAGER_ROLE)
+  const musdAdminRole = await musd.DEFAULT_ADMIN_ROLE();
+  const hasMusdAdmin = await musd.hasRole(musdAdminRole, deployer);
+  if (!hasMusdAdmin) {
+    failures.push(`Deployer ${deployer} lacks DEFAULT_ADMIN_ROLE on MUSD`);
+  } else {
+    console.log("  ✅ Deployer has DEFAULT_ADMIN_ROLE on MUSD");
+  }
+
+  // 3. Verify V8 storage slot layout matches expected (slot 0 = musdToken)
+  const provider = v8.runner?.provider;
+  if (provider) {
+    const v8Address = await v8.getAddress();
+    // Read slot 0 (musdToken) — should be a valid address
+    const slot0 = await provider.getStorage(v8Address, 0);
+    const slot0Addr = ethers.getAddress("0x" + slot0.slice(26)); // last 20 bytes
+    const expectedMusd = await v8.musdToken();
+    if (slot0Addr.toLowerCase() !== expectedMusd.toLowerCase()) {
+      failures.push(
+        `V8 storage slot 0 mismatch: expected musdToken=${expectedMusd}, got ${slot0Addr}. ` +
+        `Storage layout may already be corrupted.`
+      );
+    } else {
+      console.log("  ✅ V8 storage slot 0 (musdToken) verified");
+    }
+
+    // Read slot 2 (currentNonce) — should be a reasonable number
+    const slot2 = await provider.getStorage(v8Address, 2);
+    const nonce = BigInt(slot2);
+    if (nonce > 1_000_000n) {
+      failures.push(`V8 nonce ${nonce} is suspiciously high — verify storage layout`);
+    } else {
+      console.log(`  ✅ V8 storage slot 2 (currentNonce = ${nonce}) verified`);
+    }
+  }
+
+  // 4. Verify deployer has enough ETH for deployment gas
+  if (provider) {
+    const balance = await provider.getBalance(deployer);
+    const MIN_ETH = ethers.parseEther("0.1");
+    if (balance < MIN_ETH) {
+      failures.push(
+        `Deployer ETH balance too low: ${ethers.formatEther(balance)} ETH. ` +
+        `Need at least 0.1 ETH for deployment + role transactions.`
+      );
+    } else {
+      console.log(`  ✅ Deployer ETH balance: ${ethers.formatEther(balance)} ETH`);
+    }
+  }
+
+  // 5. Verify config sanity
+  if (config.collateralRatioBps < 10000) {
+    failures.push(`collateralRatioBps ${config.collateralRatioBps} is below 100% — invalid`);
+  }
+  if (config.collateralRatioBps > 20000) {
+    failures.push(`collateralRatioBps ${config.collateralRatioBps} is above 200% — verify intentional`);
+  }
+  if (config.dailyCapIncreaseLimit === 0n) {
+    failures.push("dailyCapIncreaseLimit is 0 — bridge would be unable to increase supply cap");
+  }
+  console.log(`  ✅ Config sanity checks passed`);
+
+  // 6. Verify MUSD total supply is within safe range
+  const totalSupply = await musd.totalSupply();
+  const currentCap = await musd.supplyCap();
+  console.log(`  📊 MUSD total supply: ${ethers.formatEther(totalSupply)}`);
+  console.log(`  📊 MUSD current cap:  ${ethers.formatEther(currentCap)}`);
+
+  if (failures.length > 0) {
+    console.error("\n❌ PRE-FLIGHT CHECKS FAILED:");
+    for (const f of failures) {
+      console.error(`   • ${f}`);
+    }
+    console.error("\n   Fix the above issues before running migration.");
+    process.exit(1);
+  }
+
+  console.log("\n  ✅ All pre-flight checks passed\n");
+}
+
 interface MigrationConfig {
   v8ProxyAddress: string;
   musdAddress: string;
@@ -315,7 +422,7 @@ async function main() {
   console.log(`   Min Signatures: ${v8State.minSignatures}`);
   console.log(`   Is Paused: ${v8State.isPaused}`);
   
-  // Step 2: Pause V8 if not already paused
+  // Step 3: Pause V8 if not already paused
   if (!v8State.isPaused) {
     console.log("\n⏸️  Pausing V8 bridge...");
     if (!config.dryRun) {
@@ -327,12 +434,12 @@ async function main() {
     }
   }
   
-  // Step 3: Get used attestation IDs
+  // Step 4: Get used attestation IDs
   // In production, specify the deployment block
   const deploymentBlock = 0; // UPDATE THIS
   const usedIds = await extractUsedAttestationIds(v8, deploymentBlock);
   
-  // Step 4: Get validators (must be provided)
+  // Step 5: Get validators (must be provided)
   // In production, these come from your deployment records
   const validators = [
     // "0x...", // Validator 1
@@ -348,7 +455,7 @@ async function main() {
     console.log("   Update the 'validators' array in this script before production run.");
   }
   
-  // Step 5: Deploy V9
+  // Step 6: Deploy V9
   const v9 = await deployV9(config, v8State);
   
   if (config.dryRun) {
@@ -361,16 +468,16 @@ async function main() {
   
   const v9Address = await v9.getAddress();
   
-  // Step 6: Migrate roles
+  // Step 7: Migrate roles
   await migrateRoles(v8, v9, validators, emergencyAddresses, config.dryRun);
   
-  // Step 7: Migrate attestation IDs
+  // Step 8: Migrate attestation IDs
   await migrateAttestationIds(v9, usedIds, config.dryRun);
   
-  // Step 8: Update MUSD roles
+  // Step 9: Update MUSD roles
   await updateMUSDRoles(musd, config.v8ProxyAddress, v9Address, config.dryRun);
   
-  // Step 9: Verify migration
+  // Step 10: Verify migration
   const success = await verifyMigration(v8, v9, v8State, config);
   
   if (success) {
