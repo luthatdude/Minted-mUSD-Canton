@@ -1,31 +1,18 @@
 // Minted mUSD Protocol - Position Monitor
 // View-only monitoring without liquidation execution
+//
+// FIX H-08: This is a READ-ONLY monitor — no private key needed.
+// Never load .env files. All config comes from env vars.
 
 import { ethers } from "ethers";
-import * as dotenv from "dotenv";
 
-dotenv.config();
-
-// Handle unhandled promise rejections to prevent silent failures
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('FATAL: Unhandled promise rejection:', reason);
-  process.exit(1);
-});
-
-// Handle uncaught exceptions to prevent silent crashes
-process.on('uncaughtException', (error) => {
-  console.error('FATAL: Uncaught exception:', error);
-  process.exit(1);
-});
-
-// Warn if using insecure HTTP transport for Ethereum RPC
-const _rpcUrl = process.env.RPC_URL || '';
-if (_rpcUrl.startsWith('http://') && !_rpcUrl.includes('localhost') && !_rpcUrl.includes('127.0.0.1')) {
-  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
-}
-// Reject insecure HTTP transport in production
-if (process.env.NODE_ENV === 'production' && _rpcUrl && !_rpcUrl.startsWith('https://') && !_rpcUrl.startsWith('wss://')) {
-  throw new Error('Insecure RPC transport in production. RPC_URL must use https:// or wss://');
+// Validate required env vars at startup (read-only — no private key needed)
+const REQUIRED_MONITOR_VARS = ["RPC_URL", "BORROW_MODULE_ADDRESS", "LIQUIDATION_ENGINE_ADDRESS", "COLLATERAL_VAULT_ADDRESS", "PRICE_ORACLE_ADDRESS"] as const;
+for (const name of REQUIRED_MONITOR_VARS) {
+  if (!process.env[name]) {
+    console.error(`FATAL: ${name} env var is required`);
+    process.exit(1);
+  }
 }
 
 const BORROW_MODULE_ABI = [
@@ -65,10 +52,7 @@ interface PositionInfo {
 }
 
 async function monitorPositions(borrowerAddresses: string[]) {
-  // Add RPC timeout to prevent indefinite hanging
-  const rpcFetchReq = new ethers.FetchRequest(process.env.RPC_URL || "http://localhost:8545");
-  rpcFetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
-  const provider = new ethers.JsonRpcProvider(rpcFetchReq, undefined, { staticNetwork: true, batchMaxCount: 1 });
+  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   
   const borrowModule = new ethers.Contract(process.env.BORROW_MODULE_ADDRESS!, BORROW_MODULE_ABI, provider);
   const liquidationEngine = new ethers.Contract(process.env.LIQUIDATION_ENGINE_ADDRESS!, LIQUIDATION_ENGINE_ABI, provider);
@@ -180,10 +164,7 @@ async function watchMode(borrowerAddresses: string[], intervalMs: number = 30000
 
 // Scan for borrowers from events
 async function scanBorrowers(fromBlock: number): Promise<string[]> {
-  // Add RPC timeout to prevent indefinite hanging
-  const rpcFetchReq = new ethers.FetchRequest(process.env.RPC_URL || "http://localhost:8545");
-  rpcFetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
-  const provider = new ethers.JsonRpcProvider(rpcFetchReq, undefined, { staticNetwork: true, batchMaxCount: 1 });
+  const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
   const borrowModule = new ethers.Contract(process.env.BORROW_MODULE_ADDRESS!, BORROW_MODULE_ABI, provider);
   
   const currentBlock = await provider.getBlockNumber();
@@ -216,7 +197,7 @@ async function main() {
   const args = process.argv.slice(2);
   
   if (args[0] === "--scan") {
-    const fromBlock = parseInt(args[1] || "0", 10);
+    const fromBlock = parseInt(args[1] || "0");
     const borrowers = await scanBorrowers(fromBlock);
     console.log("Borrower addresses:");
     borrowers.forEach((b) => console.log(b));
@@ -224,7 +205,7 @@ async function main() {
   }
   
   if (args[0] === "--watch") {
-    const fromBlock = parseInt(args[1] || "0", 10);
+    const fromBlock = parseInt(args[1] || "0");
     const borrowers = await scanBorrowers(fromBlock);
     await watchMode(borrowers);
     return;

@@ -130,6 +130,8 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
+ // FIX CRITICAL C-01: Write lastDeposit to enforce 24h withdrawal cooldown
+ lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.deposit(assets, receiver);
  }
@@ -146,6 +148,8 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   } catch {
   // Treasury unreachable — proceed with local totalAssets fallback
   }
+ // FIX CRITICAL C-01: Write lastDeposit to enforce 24h withdrawal cooldown
+ lastDeposit[receiver] = block.timestamp;
  emit CooldownUpdated(receiver, block.timestamp);
  return super.mint(shares, receiver);
  }
