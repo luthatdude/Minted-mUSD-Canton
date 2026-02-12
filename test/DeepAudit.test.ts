@@ -94,7 +94,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
-    priceOracle = await POF.deploy(admin.address);
+    priceOracle = await POF.deploy();
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");

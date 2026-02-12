@@ -427,8 +427,9 @@ template CantonDirectMintService
     dailyMinted : Money          -- Cumulative mints in current window
     dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
     lastRateLimitReset : Time    -- Timestamp of last window reset
-    -- Compliance hook (optional — None disables compliance checks)
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    -- DAML-H-04: Compliance hook is mandatory — cannot be bypassed
+    -- To disable compliance in development, deploy a permissive registry
+    complianceRegistryCid : ContractId ComplianceRegistry
     -- Master Participation Agreement reference (embedded in every minted token)
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
@@ -447,9 +448,8 @@ template CantonDirectMintService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
-        -- Compliance check: verify minter is not blacklisted
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateMint with minter = user
+        -- DAML-H-04: Mandatory compliance check
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         usdc <- fetch usdcCid
         assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
@@ -526,8 +526,7 @@ template CantonDirectMintService
         assertMsg "USDCX_MINTING_DISABLED" (isSome usdcxIssuer)
 
         -- Compliance check: verify minter is not blacklisted
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateMint with minter = user
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         usdcx <- fetch usdcxCid
         let expectedIssuer = fromSome usdcxIssuer
@@ -607,8 +606,7 @@ template CantonDirectMintService
         assertMsg "SERVICE_PAUSED" (not paused)
 
         -- Compliance check: verify redeemer is not blacklisted or frozen
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateRedemption with redeemer = user
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
 
         musd <- fetch musdCid
         assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
@@ -683,7 +681,7 @@ template CantonDirectMintService
 
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
-        newRegistryCid : Optional (ContractId ComplianceRegistry)
+        newRegistryCid : ContractId ComplianceRegistry
       controller operator
       do
         archive self

@@ -1,60 +1,128 @@
-# Ensure ServiceMonitor label selectors match actual Service/Deployment labels.
-# Each ServiceMonitor's selector.matchLabels must align with the metadata.labels on the
-# corresponding k8s Service so that Prometheus can discover and scrape the targets.
-#
-# All namespace references use "musd-canton" (not "musd") to match
-# the actual deployment namespace defined in k8s/base/namespace.yaml.
-
-# ──────────────────────────────────────────────────────────────
-# Relay Service Monitor
-# Requires a k8s Service with label "app.kubernetes.io/name: musd-relay"
-# and a port named "metrics". If the relay runs via docker-compose only,
-# deploy a headless Service + Endpoints pointing to the external relay host.
-# ──────────────────────────────────────────────────────────────
+# Minted Protocol - ServiceMonitor Definitions
+# INFRA-H-03: Prometheus service discovery for all Canton namespace services.
+# Requires prometheus-operator CRDs (ServiceMonitor, PodMonitor).
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: musd-relay
-  namespace: musd-canton
+  name: canton-participant-metrics
+  namespace: canton
   labels:
-    app.kubernetes.io/name: musd-relay
-    release: prometheus
+    app: minted
+    component: canton-participant
 spec:
   selector:
     matchLabels:
-      # INFRA-007: Must match the labels on the relay k8s Service
-      app.kubernetes.io/name: musd-relay
+      app: canton-participant
   endpoints:
     - port: metrics
-      interval: 30s
+      interval: 15s
       path: /metrics
+      scheme: http
+      tlsConfig:
+        insecureSkipVerify: false
   namespaceSelector:
     matchNames:
-      - musd-canton
+      - canton
 ---
-# ──────────────────────────────────────────────────────────────
-# Canton Participant Monitor
-# Targets the canton-participant Service (k8s/canton/participant-deployment.yaml)
-# which exposes port "metrics" (9090). The selector below matches the Service's
-# label: app.kubernetes.io/name: canton-participant
-# ──────────────────────────────────────────────────────────────
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: musd-canton
-  namespace: musd-canton
+  name: nginx-proxy-metrics
+  namespace: canton
   labels:
-    app.kubernetes.io/name: canton-participant
-    release: prometheus
+    app: minted
+    component: nginx-proxy
 spec:
   selector:
     matchLabels:
-      # INFRA-007: Matches canton-participant Service labels in participant-deployment.yaml
-      app.kubernetes.io/name: canton-participant
+      app: nginx-proxy
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /nginx_status
+      scheme: http
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: postgres
+spec:
+  selector:
+    matchLabels:
+      app: canton-postgres
   endpoints:
     - port: metrics
       interval: 30s
       path: /metrics
+      scheme: http
   namespaceSelector:
     matchNames:
-      - musd-canton
+      - canton
+---
+# PodMonitor for relay services (no Service object — metrics exposed on sidecar)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: bridge-relay-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: bridge-relay
+spec:
+  selector:
+    matchLabels:
+      app: bridge-relay
+  podMetricsEndpoints:
+    - port: health
+      interval: 15s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: price-oracle-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: price-oracle
+spec:
+  selector:
+    matchLabels:
+      app: price-oracle
+  podMetricsEndpoints:
+    - port: health
+      interval: 15s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: yield-sync-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: yield-sync
+spec:
+  selector:
+    matchLabels:
+      app: yield-sync
+  podMetricsEndpoints:
+    - port: health
+      interval: 30s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton

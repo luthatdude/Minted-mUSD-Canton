@@ -5,6 +5,39 @@
 
 import * as fs from "fs";
 
+// ============================================================
+//  INFRA-H-04 / INFRA-H-06: TLS Security Enforcement
+// ============================================================
+
+/**
+ * Enforce TLS certificate validation at process level.
+ * This MUST be called before any network I/O.
+ * Prevents accidental `NODE_TLS_REJECT_UNAUTHORIZED=0` in production.
+ */
+export function enforceTLSSecurity(): void {
+  if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+    // Force-enable TLS certificate validation in production
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+      console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+    }
+  }
+}
+
+/**
+ * Validate that a URL uses HTTPS in production environments.
+ * Throws if HTTP is used outside development.
+ */
+export function requireHTTPS(url: string, label: string): void {
+  if (!url) return;
+  if (url.startsWith("https://") || url.startsWith("wss://")) return;
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") return;
+  throw new Error(`SECURITY: ${label} must use HTTPS in production. Got: ${url.substring(0, 40)}...`);
+}
+
+// Initialize TLS enforcement on module load
+enforceTLSSecurity();
+
 // secp256k1 curve order - private keys must be in range [1, n-1]
 const SECP256K1_N = BigInt(
   "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"

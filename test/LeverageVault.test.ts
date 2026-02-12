@@ -41,7 +41,7 @@ describe('LeverageVault', function () {
 
     // Deploy price oracle
     const PriceOracle = await ethers.getContractFactory('PriceOracle');
-    priceOracle = await PriceOracle.deploy(owner.address);
+    priceOracle = await PriceOracle.deploy();
 
     // Configure price oracle (token, feed, stalePeriod, tokenDecimals)
     await timelockSetFeed(
@@ -78,8 +78,7 @@ describe('LeverageVault', function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       200, // 2% APR
-      ethers.parseEther('10'), // Min debt 10 mUSD
-      owner.address
+      ethers.parseEther('10') // Min debt 10 mUSD
     );
 
     // Grant BORROW_MODULE_ROLE to BorrowModule
@@ -105,8 +104,7 @@ describe('LeverageVault', function () {
       await collateralVault.getAddress(),
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
-      await musd.getAddress(),
-      owner.address
+      await musd.getAddress()
     );
 
     // Grant LEVERAGE_VAULT_ROLE to LeverageVault in CollateralVault and BorrowModule

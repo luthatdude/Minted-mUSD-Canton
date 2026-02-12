@@ -364,7 +364,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
       const PriceOracle = await ethers.getContractFactory("PriceOracle");
-      priceOracle = await PriceOracle.deploy(owner.address);
+      priceOracle = await PriceOracle.deploy();
 
       const MockAgg = await ethers.getContractFactory("MockAggregatorV3");
       ethFeed = await MockAgg.deploy(8, 200000000000n); // $2000
@@ -384,8 +384,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         await priceOracle.getAddress(),
         await musd.getAddress(),
         500, 
-        ethers.parseEther("100"),
-        owner.address
+        ethers.parseEther("100")
       );
 
       const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
@@ -776,8 +775,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         treasury.address,
         directMint.address,
         30, // 0.30%
-        admin.address,
-        admin.address // timelock
+        admin.address
       );
 
       await usdc.mint(user1.address, 10_000_000n * 10n ** 6n);
@@ -789,28 +787,28 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero wormhole relayer", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero token bridge", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero directMint", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero admin", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
@@ -1118,7 +1116,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       musd = await MF.deploy(ethers.parseEther("100000000"));
 
       const SF = await ethers.getContractFactory("SMUSD");
-      smusd = await SF.deploy(await musd.getAddress(), deployer.address);
+      smusd = await SF.deploy(await musd.getAddress());
 
       await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
       await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);
@@ -1483,8 +1481,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         admin.address, // collateralVault (mock)
         admin.address, // borrowModule (mock)
         admin.address, // priceOracle (mock)
-        await musd.getAddress(),
-        admin.address  // timelock
+        await musd.getAddress()
       );
 
       await leverageVault.grantRole(await leverageVault.LEVERAGE_ADMIN_ROLE(), admin.address);
@@ -1495,35 +1492,35 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero swapRouter", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address, admin.address)
+        LV.deploy(ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_ROUTER");
     });
 
     it("should revert constructor with zero collateralVault", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address)
+        LV.deploy(admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_VAULT");
     });
 
     it("should revert constructor with zero borrowModule", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address)
+        LV.deploy(admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_BORROW");
     });
 
     it("should revert constructor with zero priceOracle", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address)
+        LV.deploy(admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address)
       ).to.be.revertedWith("INVALID_ORACLE");
     });
 
     it("should revert constructor with zero musd", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address)
+        LV.deploy(admin.address, admin.address, admin.address, admin.address, ethers.ZeroAddress)
       ).to.be.revertedWith("INVALID_MUSD");
     });
 

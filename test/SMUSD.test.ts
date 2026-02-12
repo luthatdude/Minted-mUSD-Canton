@@ -32,7 +32,7 @@ describe("SMUSD", function () {
 
     // Deploy SMUSD
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
+    smusd = await SMUSDFactory.deploy(await musd.getAddress());
     await smusd.waitForDeployment();
 
     // Grant roles
@@ -193,7 +193,7 @@ describe("SMUSD", function () {
     it("should reject yield distribution with no shares", async function () {
       // Deploy fresh SMUSD with no deposits
       const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-      const emptySmusd = await SMUSDFactory.deploy(await musd.getAddress(), deployer.address);
+      const emptySmusd = await SMUSDFactory.deploy(await musd.getAddress());
       await emptySmusd.grantRole(await emptySmusd.YIELD_MANAGER_ROLE(), yieldManager.address);
 
       await expect(

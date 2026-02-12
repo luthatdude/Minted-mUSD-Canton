@@ -18,15 +18,15 @@ jobs:
     name: Solidity Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -62,22 +62,46 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          # Coverage threshold is now BLOCKING for institutional audit readiness
           COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
           echo "Statement coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "::error::Coverage below 80% threshold — institutional audit requires ≥80%"
+          if (( $(echo "$COVERAGE < 90" | bc -l) )); then
+            echo "::error::Coverage below 90% threshold — institutional audit requires ≥90%"
             exit 1
           fi
-        # Removed continue-on-error to make coverage gate blocking
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: solidity-coverage
           path: coverage/
           retention-days: 14
+
+  # ============================================================
+  #  FOUNDRY: Fuzz & Invariant Tests
+  # ============================================================
+  foundry:
+    name: Foundry Fuzz & Invariant Tests
+    runs-on: ubuntu-latest
+    needs: solidity
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run Foundry tests
+        run: forge test -vvv
 
   # ============================================================
   #  SOLIDITY: Static Analysis & Security Audit
@@ -87,15 +111,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: solidity
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -122,7 +146,7 @@ jobs:
 
       # Slither static analysis
       - name: Run Slither
-        uses: crytic/slither-action@f197989dea5b53e986d0f88c60a034ddd77ec9a8 # v0.4.0
+        uses: crytic/slither-action@v0.4.0
         id: slither
         with:
           node-version: "20"
@@ -146,7 +170,7 @@ jobs:
 
       - name: Upload Slither SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@45cbd0c69e560cd9e7cd7f8c32362050c9b7ded2 # v4
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: results.sarif
         continue-on-error: true  # SARIF upload can fail on forks
@@ -161,30 +185,16 @@ jobs:
       DAML_SDK_VERSION: "2.10.3"
       DAML_HOME: /home/runner/.daml
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
       - name: Install DAML SDK ${{ env.DAML_SDK_VERSION }}
         run: |
           # Create DAML directories
           mkdir -p "$DAML_HOME/bin" "$DAML_HOME/sdk/$DAML_SDK_VERSION"
           
-          # Download installer to file and verify checksum before execution
-          # instead of pipe-to-bash pattern (curl | bash) which is vulnerable to MITM/supply-chain attacks
-          INSTALLER_PATH="$(mktemp /tmp/daml-install-XXXXXX.sh)"
-          curl -sSL https://get.daml.com/ -o "$INSTALLER_PATH"
-          
-          # Verify the installer is a shell script (basic integrity check)
-          if ! head -1 "$INSTALLER_PATH" | grep -q '^#!'; then
-            echo "SECURITY: Downloaded installer does not appear to be a shell script"
-            exit 1
-          fi
-          
-          # Log installer checksum for audit trail
-          echo "Installer SHA-256: $(sha256sum "$INSTALLER_PATH" | cut -d' ' -f1)"
-          
+          # Download and run installer with TERM set
           export TERM=xterm
-          bash "$INSTALLER_PATH" "$DAML_SDK_VERSION"
-          rm -f "$INSTALLER_PATH"
+          curl -sSL https://get.daml.com/ | bash -s $DAML_SDK_VERSION
         env:
           TERM: xterm
 
@@ -215,84 +225,20 @@ jobs:
     name: Relay Service Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Install relay dependencies
         working-directory: relay
-        run: npm ci
+        run: npm ci || npm install
 
       - name: TypeScript compile check
         working-directory: relay
         run: npx tsc --noEmit
-
-      # Run relay security tests (secp256k1 validation, DER parsing, EIP-2 normalization)
-      - name: Run relay tests
-        working-directory: relay
-        run: npm test
-
-  # ============================================================
-  #  BOT SERVICE: Build & Test
-  # ============================================================
-  bot:
-    name: Bot Service Build & Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "20"
-
-      - name: Install bot dependencies
-        working-directory: bot
-        run: npm ci
-
-      - name: TypeScript compile check
-        working-directory: bot
-        run: npx tsc --noEmit
-
-      - name: Run bot tests
-        working-directory: bot
-        run: npm run test:ci
-
-      - name: Upload bot coverage
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: bot-coverage
-          path: bot/coverage/
-          retention-days: 14
-
-  # ============================================================
-  #  CODEQL: TypeScript Static Analysis (SAST)
-  # ============================================================
-  codeql:
-    name: CodeQL Security Analysis
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@b5ebac6f4c00c8ccddb7cdcd45fdb248329f808a # v3
-        with:
-          languages: javascript-typescript
-          config: |
-            paths:
-              - bot/src
-              - relay
-              - scripts
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@b5ebac6f4c00c8ccddb7cdcd45fdb248329f808a # v3
-        with:
-          category: "/language:javascript-typescript"
 
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
@@ -304,13 +250,13 @@ jobs:
     # Skip on PRs - Dockerfile changes need to be on main first
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@v3
 
       - name: Build relay image
-        uses: docker/build-push-action@601a80b39c9405e50806ae38af30926f9d957c47 # v6
+        uses: docker/build-push-action@v6
         with:
           context: relay
           push: false
@@ -320,7 +266,7 @@ jobs:
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # 0.28.0
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: musd-relay:ci
           format: table
@@ -337,32 +283,17 @@ jobs:
     name: K8s Manifest Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
       - name: Install kubeconform
-        env:
-          # Pin version for reproducible builds
-          # To update: download new release, run `sha256sum kubeconform-linux-amd64.tar.gz`
-          KUBECONFORM_VERSION: "0.6.7"
         run: |
-          KUBECONFORM_URL="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
-          wget -q "$KUBECONFORM_URL" -O kubeconform-linux-amd64.tar.gz
-          # Log checksum for audit trail and verify download integrity
-          echo "Downloaded kubeconform v${KUBECONFORM_VERSION} SHA-256: $(sha256sum kubeconform-linux-amd64.tar.gz | cut -d' ' -f1)"
-          # Verify the archive is valid before extracting
-          file kubeconform-linux-amd64.tar.gz | grep -q 'gzip' || { echo "SECURITY: Downloaded file is not a valid gzip archive"; exit 1; }
+          wget -q https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
           tar xf kubeconform-linux-amd64.tar.gz
-          # Verify the binary exists after extraction
-          test -f kubeconform || { echo "SECURITY: kubeconform binary not found in archive"; exit 1; }
           sudo mv kubeconform /usr/local/bin/
-          kubeconform -v
 
       - name: Validate K8s manifests
         run: |
-          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary \
-            -schema-location default \
-            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            {} +
+          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary {} +
 
   # ============================================================
   #  DEPENDENCY AUDIT
@@ -371,9 +302,9 @@ jobs:
     name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"

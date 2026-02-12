@@ -36,7 +36,7 @@ describe("PriceOracle", function () {
 
     // Deploy PriceOracle
     const OracleFactory = await ethers.getContractFactory("PriceOracle");
-    oracle = await OracleFactory.deploy(deployer.address);
+    oracle = await OracleFactory.deploy();
     await oracle.waitForDeployment();
 
     // Grant admin role

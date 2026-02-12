@@ -254,8 +254,13 @@ contract CollateralVaultUpgradeable is
                 try IBorrowModule(borrowModule).healthFactor(user) returns (uint256 hf) {
                     require(hf >= 10000, "HEALTH_FACTOR_TOO_LOW");
                 } catch {
-                    // Oracle circuit breaker triggered — fall through to allow withdrawal
-                    // Users can still be liquidated via LiquidationEngine's unsafe path
+                    // Oracle circuit breaker triggered — try unsafe health factor
+                    // (bypasses staleness check) to prevent bad debt from unchecked withdrawals
+                    try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
+                        require(hfUnsafe >= 10000, "HEALTH_FACTOR_TOO_LOW");
+                    } catch {
+                        // Both safe and unsafe failed — allow withdrawal to prevent fund trapping
+                    }
                 }
             }
         }

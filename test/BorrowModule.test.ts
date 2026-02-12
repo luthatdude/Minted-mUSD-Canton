@@ -25,7 +25,7 @@ describe("BorrowModule", function () {
 
     // Deploy PriceOracle (timelock = owner for testing)
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy(owner.address);
+    const priceOracle = await PriceOracle.deploy();
 
     // Deploy mock Chainlink aggregator (decimals, initialAnswer)
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
@@ -57,8 +57,7 @@ describe("BorrowModule", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% APR
-      ethers.parseEther("100"), // 100 mUSD min debt
-      owner.address
+      ethers.parseEther("100") // 100 mUSD min debt
     );
 
     // Grant roles
