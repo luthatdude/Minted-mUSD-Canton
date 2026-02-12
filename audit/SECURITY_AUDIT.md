@@ -611,10 +611,75 @@ function getValueUsd(address token, uint256 amount) external view returns (uint2
 
 | ID | Issue | Design Decision | Rationale |
 |----|-------|-----------------|-----------|
+| **SC-01** | **V8→V9 storage layout incompatibility — UUPS upgrade will corrupt state** | **Fresh deployment + migration (DOCUMENTED)** | **See detailed analysis below** |
 | H-02 | Simple interest, not compound | Intentional | Gas efficiency, predictable for users |
 | H-09 | BLEBridgeV9 incompatible with V8 storage | Fresh deployment + migration | Clean slate for improved design |
 | 5C-M05 | Interest rate changes apply prospectively | Intentional | Existing positions stable |
 | S-M02 | No timelock on admin operations | Intentional for emergency response | Consider adding for production |
+
+---
+
+### SC-01 — HIGH: V8→V9 Storage Layout Incompatibility (DOCUMENTED — migration required)
+
+**Severity:** HIGH  
+**Status:** DOCUMENTED — mitigated via fresh proxy deployment with state migration  
+**Affected Contract:** `BLEBridgeV9.sol` (upgrade path from archived `BLEBridgeV8.sol`)
+
+#### Root Cause
+
+BLEBridgeV9 introduces `collateralRatioBps` at storage slot 2 (previously `currentNonce` in V8) and removes the NAV oracle fields (`navOracle`, `maxNavDeviationBps`, `navOracleEnabled`). This shifts every subsequent state variable by 1–2 slots, making the layouts incompatible:
+
+```
+Slot │ V8 Variable           │ V9 Variable             │ Collision
+─────┼───────────────────────┼─────────────────────────┼──────────
+  0  │ musdToken             │ musdToken               │ ✅ OK
+  1  │ totalCantonAssets     │ attestedCantonAssets     │ ✅ Rename only
+  2  │ currentNonce          │ collateralRatioBps      │ ❌ CORRUPT
+  3  │ minSignatures         │ currentNonce            │ ❌ CORRUPT
+  4  │ dailyMintLimit        │ minSignatures           │ ❌ CORRUPT
+  5  │ dailyMinted           │ lastAttestationTime     │ ❌ CORRUPT
+  6  │ dailyBurned           │ lastRatioChangeTime     │ ❌ CORRUPT
+  7  │ lastReset             │ dailyCapIncreaseLimit   │ ❌ CORRUPT
+  8  │ navOracle (address)   │ dailyCapIncreased       │ ❌ CORRUPT
+  9  │ maxNavDeviationBps    │ dailyCapDecreased       │ ❌ CORRUPT
+ 10  │ navOracleEnabled      │ lastRateLimitReset      │ ❌ CORRUPT
+ 11  │ unpauseRequestTime    │ unpauseRequestTime      │ ✅ OK (added in V9)
+ 12+ │ usedAttestationIds    │ usedAttestationIds      │ ❌ BASE SLOT SHIFTED
+```
+
+#### Impact if UUPS `upgradeToAndCall()` Were Used Directly
+
+1. **`collateralRatioBps`** would read the old `currentNonce` — e.g. ratio of `47` bps instead of `11000`
+2. **`currentNonce`** would read old `minSignatures` — e.g. nonce of `3`, breaking attestation sequencing
+3. **`minSignatures`** would read old `dailyMintLimit` — could be `1,000,000e18`, effectively removing multi-sig protection
+4. **`usedAttestationIds` mapping base slot shifts** — all prior attestation replay protection is lost, enabling replay attacks
+5. **Supply cap calculation**: `(assets × 10000) / 47` instead of `/ 11000` → would produce a wildly inflated cap
+
+**Net effect: total protocol compromise — unlimited minting, replay attacks, and loss of access control.**
+
+#### Mitigation (Already Implemented)
+
+| Control | Location |
+|---------|----------|
+| In-source warning banner | [contracts/BLEBridgeV9.sol](contracts/BLEBridgeV9.sol) lines 6–22 |
+| Migration guide | [docs/MIGRATION_V8_TO_V9.md](docs/MIGRATION_V8_TO_V9.md) |
+| Migration script | [scripts/migrate-v8-to-v9.ts](scripts/migrate-v8-to-v9.ts) |
+| Appendix storage warning | Section A.2 below |
+| V8 archived | [archive/contracts/BLEBridgeV8.sol](archive/contracts/BLEBridgeV8.sol) |
+
+**Migration procedure (summary):**
+1. Deploy a **fresh** V9 proxy (new address, clean storage)
+2. Pause V8 bridge
+3. Migrate validator roles, attestation IDs, and nonce state to V9
+4. Grant V9 `CAP_MANAGER_ROLE` on MUSD, revoke V8 `BRIDGE_ROLE`
+5. Submit initial attestation to V9, verify supply cap
+6. Monitor 24–48 h, then deprecate V8
+
+**Rollback:** Re-enable V8 by reversing role grants and unpausing.
+
+> **Conclusion:** A direct UUPS upgrade is explicitly blocked by documentation, migration tooling, and the architectural decision to use a fresh proxy. No code-level guard prevents calling `upgradeToAndCall()` on the V8 proxy with the V9 implementation, so operational discipline and the migration script are the controls. This is accepted as a known limitation.
+
+---
 
 **⚠️ H-09 Migration Plan:** See [docs/MIGRATION_V8_TO_V9.md](docs/MIGRATION_V8_TO_V9.md) for:
 - Storage layout comparison
