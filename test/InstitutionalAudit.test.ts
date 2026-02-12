@@ -308,10 +308,13 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       expect(price).to.equal(ethers.parseEther("2600"));
     });
 
-    it("should still enforce staleness check", async function () {
+    it("should allow stale prices (FIX CORE-H-01: liquidations during outages)", async function () {
+      // FIX CORE-H-01: Unsafe variants no longer revert on stale prices.
+      // Liquidations must proceed during feed outages using last available price.
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
-      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("STALE_PRICE");
+      const price = await oracle.getPriceUnsafe(WETH);
+      expect(price).to.be.gt(0);
     });
 
     it("should still enforce valid price check", async function () {
@@ -356,11 +359,13 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       expect(value).to.equal(ethers.parseEther("50000"));
     });
 
-    it("should reject stale price", async function () {
+    it("should allow stale prices (FIX CORE-H-01: liquidations during outages)", async function () {
+      // FIX CORE-H-01: Unsafe variants no longer revert on stale prices.
+      // Liquidations must proceed during feed outages using last available price.
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
-      await expect(oracle.getValueUsdUnsafe(WETH, ethers.parseEther("1")))
-        .to.be.revertedWith("STALE_PRICE");
+      const value = await oracle.getValueUsdUnsafe(WETH, ethers.parseEther("1"));
+      expect(value).to.be.gt(0);
     });
   });
 
