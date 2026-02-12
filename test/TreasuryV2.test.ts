@@ -8,7 +8,6 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { TreasuryV2, MockERC20, MockStrategy } from "../typechain-types";
-import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps } from "./helpers/timelock";
 
 describe("TreasuryV2", function () {
@@ -47,6 +46,7 @@ describe("TreasuryV2", function () {
       vault.address,
       admin.address,
       feeRecipient.address,
+      admin.address
     ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
@@ -89,6 +89,7 @@ describe("TreasuryV2", function () {
           vault.address,
           admin.address,
           feeRecipient.address,
+          admin.address
         ])
       ).to.be.revertedWithCustomError(treasury, "ZeroAddress");
     });
@@ -127,17 +128,14 @@ describe("TreasuryV2", function () {
       await timelockAddStrategy(treasury, admin, addr, 4000, 2000, 5000, true);
 
       await expect(
-        treasury.requestAddStrategy(addr, 3000, 1000, 4000, true)
+        treasury.addStrategy(addr, 3000, 1000, 4000, true)
       ).to.be.revertedWithCustomError(treasury, "StrategyExists");
     });
 
     it("Should reject allocation exceeding 100%", async function () {
       // reserveBps = 1000 (10%), try adding 9500 (95%) → 105% total
-      // Request goes through, but execute validates total allocation
-      await treasury.requestAddStrategy(await strategyA.getAddress(), 9500, 1000, 10000, true);
-      await time.increase(48 * 3600);
       await expect(
-        treasury.executeAddStrategy()
+        treasury.addStrategy(await strategyA.getAddress(), 9500, 1000, 10000, true)
       ).to.be.revertedWithCustomError(treasury, "TotalAllocationInvalid");
     });
 
@@ -152,7 +150,7 @@ describe("TreasuryV2", function () {
       const extraStrat = await Factory.deploy(await usdc.getAddress(), await treasury.getAddress());
       await extraStrat.waitForDeployment();
       await expect(
-        treasury.requestAddStrategy(await extraStrat.getAddress(), 100, 0, 500, true)
+        treasury.addStrategy(await extraStrat.getAddress(), 100, 0, 500, true)
       ).to.be.revertedWithCustomError(treasury, "MaxStrategiesReached");
     });
 
@@ -485,7 +483,7 @@ describe("TreasuryV2", function () {
 
     it("Should reject fee too high", async function () {
       await expect(
-        treasury.requestFeeConfig(6000, feeRecipient.address) // 60% > 50% max
+        treasury.setFeeConfig(6000, feeRecipient.address) // 60% > 50% max
       ).to.be.revertedWith("Fee too high");
     });
 
@@ -496,35 +494,22 @@ describe("TreasuryV2", function () {
 
     it("Should reject reserve too high", async function () {
       await expect(
-        treasury.requestReserveBps(4000) // 40% > 30% max
+        treasury.setReserveBps(4000) // 40% > 30% max
       ).to.be.revertedWith("Reserve too high");
     });
 
     it("Should update vault address via timelock", async function () {
       const newVault = user;
-      // Request vault change
-      await treasury.requestVaultChange(newVault.address);
-      expect(await treasury.pendingVault()).to.equal(newVault.address);
-      
-      // Cannot execute before timelock expires
-      await expect(
-        treasury.executeVaultChange()
-      ).to.be.revertedWith("VAULT_TIMELOCK_ACTIVE");
-      
-      // Advance time past 48h timelock
-      await ethers.provider.send("evm_increaseTime", [48 * 3600 + 1]);
-      await ethers.provider.send("evm_mine", []);
-      
-      // Execute vault change
-      await treasury.executeVaultChange();
+      // setVault is now gated by onlyTimelock — deployer IS the timelock in tests
+      await treasury.setVault(newVault.address);
       expect(await treasury.vault()).to.equal(newVault.address);
     });
 
-    it("Should cancel pending vault change", async function () {
+    it("Should reject vault change from non-timelock", async function () {
       const newVault = user;
-      await treasury.requestVaultChange(newVault.address);
-      await treasury.cancelVaultChange();
-      expect(await treasury.pendingVault()).to.equal(ethers.ZeroAddress);
+      await expect(
+        treasury.connect(user).setVault(newVault.address)
+      ).to.be.revertedWithCustomError(treasury, "OnlyTimelock");
     });
 
     it("Should update min auto-allocate", async function () {
@@ -650,9 +635,7 @@ describe("TreasuryV2", function () {
       await strategyA.setWithdrawShouldFail(true);
 
       // Remove should still succeed (strategy is force-deactivated)
-      await treasury.requestRemoveStrategy(await strategyA.getAddress());
-      await time.increase(48 * 3600);
-      await expect(treasury.executeRemoveStrategy())
+      await expect(treasury.removeStrategy(await strategyA.getAddress()))
         .to.emit(treasury, "StrategyForceDeactivated");
 
       // Strategy should be deactivated despite withdraw failure

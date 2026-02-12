@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Collateral Vault
 // Accepts ERC-20 collateral deposits (WETH, WBTC, etc.) for overcollateralized borrowing
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // Minted mUSD Protocol - sMUSD Price Adapter
 // Chainlink-compatible price feed for sMUSD (ERC-4626 vault token)
 // Reports the USD value of 1 sMUSD based on the vault's share price

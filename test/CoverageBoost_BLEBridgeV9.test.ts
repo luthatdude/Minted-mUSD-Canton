@@ -39,6 +39,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       await musd.getAddress(),
       COLLATERAL_RATIO,
       DAILY_CAP_LIMIT,
+      deployer.address
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -139,92 +140,33 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     });
   });
 
-  // ── MUSD Token Timelock ─────────────────────────────────────
+  // ── MUSD Token (timelocked via MintedTimelockController) ─────
 
-  describe("MUSD Token Timelock", function () {
-    it("Should request MUSD token change", async function () {
-      const newMusd = ethers.Wallet.createRandom().address;
-      await expect(bridge.requestSetMUSDToken(newMusd))
-        .to.emit(bridge, "MUSDTokenChangeRequested");
-    });
-
-    it("Should cancel MUSD token change", async function () {
-      const newMusd = ethers.Wallet.createRandom().address;
-      await bridge.requestSetMUSDToken(newMusd);
-      await expect(bridge.cancelSetMUSDToken())
-        .to.emit(bridge, "MUSDTokenChangeCancelled");
-    });
-
-    it("Should reject execution before timelock", async function () {
-      const newMusd = ethers.Wallet.createRandom().address;
-      await bridge.requestSetMUSDToken(newMusd);
-      await expect(bridge.executeSetMUSDToken())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    it("Should execute MUSD token change after timelock", async function () {
-      // Deploy new MUSD for migration test
+  describe("MUSD Token — setMUSDToken", function () {
+    it("Should update MUSD token via setMUSDToken", async function () {
       const MUSDFactory = await ethers.getContractFactory("MUSD");
       const newMusd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP);
 
-      await bridge.requestSetMUSDToken(await newMusd.getAddress());
-      await time.increase(48 * 3600 + 1);
-      await expect(bridge.executeSetMUSDToken())
+      await expect(bridge.setMUSDToken(await newMusd.getAddress()))
         .to.emit(bridge, "MUSDTokenUpdated");
 
       expect(await bridge.musdToken()).to.equal(await newMusd.getAddress());
     });
 
-    it("Should reject execution with no pending request", async function () {
-      await expect(bridge.executeSetMUSDToken())
-        .to.be.revertedWith("NO_PENDING_CHANGE");
-    });
-
-    it("Should reject request with zero address", async function () {
-      await expect(bridge.requestSetMUSDToken(ethers.ZeroAddress))
+    it("Should reject setMUSDToken with zero address", async function () {
+      await expect(bridge.setMUSDToken(ethers.ZeroAddress))
         .to.be.revertedWith("INVALID_ADDRESS");
     });
 
-    it("Should reject request from non-admin", async function () {
+    it("Should reject setMUSDToken from non-timelock", async function () {
       const newMusd = ethers.Wallet.createRandom().address;
-      await expect(bridge.connect(user).requestSetMUSDToken(newMusd))
+      await expect(bridge.connect(user).setMUSDToken(newMusd))
         .to.be.reverted;
     });
   });
 
-  // ── Upgrade Timelock ────────────────────────────────────────
-
-  describe("Upgrade Timelock", function () {
-    it("Should request upgrade", async function () {
-      const newImpl = ethers.Wallet.createRandom().address;
-      await expect(bridge.requestUpgrade(newImpl))
-        .to.emit(bridge, "UpgradeRequested");
-    });
-
-    it("Should cancel upgrade", async function () {
-      const newImpl = ethers.Wallet.createRandom().address;
-      await bridge.requestUpgrade(newImpl);
-      await expect(bridge.cancelUpgrade())
-        .to.emit(bridge, "UpgradeCancelled");
-    });
-
-    it("Should reject upgrade without timelock", async function () {
-      // Deploy a real implementation for upgrade
-      const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
-      const newImpl = await BridgeFactory.deploy();
-
-      await bridge.requestUpgrade(await newImpl.getAddress());
-      // Try to upgrade immediately — should fail in _authorizeUpgrade
-      await expect(
-        upgrades.upgradeProxy(await bridge.getAddress(), BridgeFactory)
-      ).to.be.reverted;
-    });
-
-    it("Should reject request from non-admin", async function () {
-      const newImpl = ethers.Wallet.createRandom().address;
-      await expect(bridge.connect(user).requestUpgrade(newImpl)).to.be.reverted;
-    });
-  });
+  // Upgrade timelock tests removed — _authorizeUpgrade now uses onlyTimelock
+  // via MintedTimelockController (no more requestUpgrade/cancelUpgrade).
 
   // ── Emergency Functions (additional branches) ───────────────
 

@@ -22,8 +22,6 @@ import {
   refreshFeeds,
 } from "./helpers/timelock";
 
-const ADMIN_DELAY = 48 * 60 * 60;
-
 // ═══════════════════════════════════════════════════════════════════════════════
 describe("CoverageBoost — Misc Contracts", function () {
   // ═══════════════════════════════════════════════════════════════════════════
@@ -55,6 +53,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         vault.address,
         admin.address,
         feeRecipient.address,
+        admin.address
       ])) as any;
 
       const MockStrat = await ethers.getContractFactory("MockStrategy");
@@ -265,86 +264,8 @@ describe("CoverageBoost — Misc Contracts", function () {
       ).to.be.reverted;
     });
 
-    // --- requestAddStrategy: ADD_ALREADY_PENDING ---
-    it("should revert requestAddStrategy when one is already pending", async function () {
-      await treasury.connect(strategist).requestAddStrategy(
-        await strategyA.getAddress(), 3000, 0, 10000, true
-      );
-      await expect(
-        treasury.connect(strategist).requestAddStrategy(
-          await strategyB.getAddress(), 3000, 0, 10000, true
-        )
-      ).to.be.revertedWith("ADD_ALREADY_PENDING");
-    });
-
-    // --- cancelAddStrategy ---
-    it("should cancel a pending strategy addition", async function () {
-      await treasury.connect(strategist).requestAddStrategy(
-        await strategyA.getAddress(), 3000, 0, 10000, true
-      );
-      await expect(treasury.connect(strategist).cancelAddStrategy())
-        .to.emit(treasury, "StrategyAddCancelled");
-    });
-
-    // --- requestRemoveStrategy: REMOVE_ALREADY_PENDING ---
-    it("should revert requestRemoveStrategy when one is already pending", async function () {
-      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
-      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 0, 10000, true);
-
-      await treasury.connect(strategist).requestRemoveStrategy(await strategyA.getAddress());
-      await expect(
-        treasury.connect(strategist).requestRemoveStrategy(await strategyB.getAddress())
-      ).to.be.revertedWith("REMOVE_ALREADY_PENDING");
-    });
-
-    // --- cancelRemoveStrategy ---
-    it("should cancel a pending strategy removal", async function () {
-      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
-      await treasury.connect(strategist).requestRemoveStrategy(await strategyA.getAddress());
-      await expect(treasury.connect(strategist).cancelRemoveStrategy())
-        .to.emit(treasury, "StrategyRemoveCancelled");
-    });
-
-    // --- requestUpdateStrategy: UPDATE_ALREADY_PENDING ---
-    it("should revert requestUpdateStrategy when one is already pending", async function () {
-      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
-      await treasury.connect(allocator).requestUpdateStrategy(
-        await strategyA.getAddress(), 4000, 0, 10000, true
-      );
-      await expect(
-        treasury.connect(allocator).requestUpdateStrategy(
-          await strategyA.getAddress(), 5000, 0, 10000, true
-        )
-      ).to.be.revertedWith("UPDATE_ALREADY_PENDING");
-    });
-
-    // --- cancelUpdateStrategy ---
-    it("should cancel a pending strategy update", async function () {
-      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
-      await treasury.connect(allocator).requestUpdateStrategy(
-        await strategyA.getAddress(), 4000, 0, 10000, true
-      );
-      await expect(treasury.connect(allocator).cancelUpdateStrategy())
-        .to.emit(treasury, "StrategyUpdateCancelled");
-    });
-
-    // --- executeUpdateStrategy: TotalAllocationInvalid ---
-    it("should revert executeUpdateStrategy if total allocation exceeds BPS", async function () {
-      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
-      await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 0, 10000, true);
-
-      // Request update that pushes total over 10000
-      await treasury.connect(allocator).requestUpdateStrategy(
-        await strategyA.getAddress(), 7000, 0, 10000, true
-      );
-      await time.increase(ADMIN_DELAY);
-      await expect(
-        treasury.connect(allocator).executeUpdateStrategy()
-      ).to.be.revertedWithCustomError(treasury, "TotalAllocationInvalid");
-    });
-
-    // --- updateStrategy (admin): TotalAllocationInvalid ---
-    it("should revert admin updateStrategy if total allocation exceeds BPS", async function () {
+    // --- updateStrategy: TotalAllocationInvalid ---
+    it("should revert updateStrategy if total allocation exceeds BPS", async function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 3000, 0, 10000, true);
       await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 0, 10000, true);
       await expect(
@@ -352,12 +273,11 @@ describe("CoverageBoost — Misc Contracts", function () {
       ).to.be.revertedWithCustomError(treasury, "TotalAllocationInvalid");
     });
 
-    // --- requestVaultChange / executeVaultChange / cancelVaultChange timelocks ---
-    it("should revert executeVaultChange before timelock", async function () {
-      await treasury.requestVaultChange(user.address);
+    // --- setVault: access control ---
+    it("should revert setVault from non-timelock", async function () {
       await expect(
-        treasury.executeVaultChange()
-      ).to.be.revertedWith("VAULT_TIMELOCK_ACTIVE");
+        treasury.connect(user).setVault(user.address)
+      ).to.be.reverted;
     });
 
     // --- recoverToken: cannot recover primary asset ---
@@ -373,35 +293,6 @@ describe("CoverageBoost — Misc Contracts", function () {
       const otherToken = await MockERC20.deploy("Other", "OTH", 18);
       await otherToken.mint(await treasury.getAddress(), 1000);
       await treasury.recoverToken(await otherToken.getAddress(), 1000);
-    });
-
-    // --- requestUpgrade: UPGRADE_ALREADY_PENDING ---
-    it("should revert requestUpgrade when one is already pending", async function () {
-      await treasury.requestUpgrade(user.address);
-      await expect(
-        treasury.requestUpgrade(allocator.address)
-      ).to.be.revertedWith("UPGRADE_ALREADY_PENDING");
-    });
-
-    // --- cancelUpgrade ---
-    it("should cancel a pending upgrade", async function () {
-      await treasury.requestUpgrade(user.address);
-      await expect(treasury.cancelUpgrade())
-        .to.emit(treasury, "UpgradeCancelled");
-    });
-
-    // --- requestFeeConfig: cancelFeeConfig ---
-    it("should cancel pending fee config", async function () {
-      await treasury.requestFeeConfig(2000, feeRecipient.address);
-      await expect(treasury.cancelFeeConfig())
-        .to.emit(treasury, "FeeConfigChangeCancelled");
-    });
-
-    // --- requestReserveBps: cancelReserveBps ---
-    it("should cancel pending reserve bps change", async function () {
-      await treasury.requestReserveBps(2000);
-      await expect(treasury.cancelReserveBps())
-        .to.emit(treasury, "ReserveBpsChangeCancelled");
     });
 
     // --- setMinAutoAllocate: ZERO_MIN_AMOUNT ---
@@ -445,15 +336,6 @@ describe("CoverageBoost — Misc Contracts", function () {
         .to.emit(treasury, "StrategyWithdrawFailed");
     });
 
-    // --- executeReserveBps: NO_PENDING ---
-    it("should revert executeReserveBps when nothing pending", async function () {
-      await expect(treasury.executeReserveBps()).to.be.revertedWith("NO_PENDING");
-    });
-
-    // --- executeFeeConfig: NO_PENDING ---
-    it("should revert executeFeeConfig when nothing pending", async function () {
-      await expect(treasury.executeFeeConfig()).to.be.revertedWith("NO_PENDING");
-    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -482,7 +364,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
       const PriceOracle = await ethers.getContractFactory("PriceOracle");
-      priceOracle = await PriceOracle.deploy();
+      priceOracle = await PriceOracle.deploy(owner.address);
 
       const MockAgg = await ethers.getContractFactory("MockAggregatorV3");
       ethFeed = await MockAgg.deploy(8, 200000000000n); // $2000
@@ -490,7 +372,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
       const CollateralVault = await ethers.getContractFactory("CollateralVault");
-      collateralVault = await CollateralVault.deploy();
+      collateralVault = await CollateralVault.deploy(owner.address);
 
       await timelockAddCollateral(collateralVault, owner, await weth.getAddress(), 7500, 8000, 1000);
 
@@ -502,7 +384,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         await priceOracle.getAddress(),
         await musd.getAddress(),
         500, 
-        ethers.parseEther("100")
+        ethers.parseEther("100"),
+        owner.address
       );
 
       const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
@@ -511,7 +394,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         await borrowModule.getAddress(),
         await priceOracle.getAddress(),
         await musd.getAddress(),
-        5000
+        5000,
+        owner.address
       );
 
       // Grant roles
@@ -536,19 +420,19 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert on invalid constructor args", async function () {
       const LE = await ethers.getContractFactory("LiquidationEngine");
       await expect(
-        LE.deploy(ethers.ZeroAddress, await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000)
+        LE.deploy(ethers.ZeroAddress, await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWith("INVALID_VAULT");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), ethers.ZeroAddress, await priceOracle.getAddress(), await musd.getAddress(), 5000)
+        LE.deploy(await collateralVault.getAddress(), ethers.ZeroAddress, await priceOracle.getAddress(), await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWith("INVALID_BORROW_MODULE");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), ethers.ZeroAddress, await musd.getAddress(), 5000)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), ethers.ZeroAddress, await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWith("INVALID_ORACLE");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), ethers.ZeroAddress, 5000)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), ethers.ZeroAddress, 5000, owner.address)
       ).to.be.revertedWith("INVALID_MUSD");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 0)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 0, owner.address)
       ).to.be.revertedWith("INVALID_CLOSE_FACTOR");
     });
 
@@ -643,60 +527,24 @@ describe("CoverageBoost — Misc Contracts", function () {
       expect(result).to.equal(depositAmount);
     });
 
-    // --- requestCloseFactor: PROPOSAL_ALREADY_PENDING ---
-    it("should revert requestCloseFactor when already pending", async function () {
-      await liquidationEngine.requestCloseFactor(6000);
-      await expect(
-        liquidationEngine.requestCloseFactor(7000)
-      ).to.be.revertedWith("PROPOSAL_ALREADY_PENDING");
+    // --- setCloseFactor: validations ---
+    it("should revert setCloseFactor with invalid value", async function () {
+      await expect(liquidationEngine.setCloseFactor(0)).to.be.revertedWith("INVALID_CLOSE_FACTOR");
+      await expect(liquidationEngine.setCloseFactor(10001)).to.be.revertedWith("INVALID_CLOSE_FACTOR");
     });
 
-    // --- cancelCloseFactor ---
-    it("should cancel pending close factor", async function () {
-      await liquidationEngine.requestCloseFactor(6000);
-      await expect(liquidationEngine.cancelCloseFactor())
-        .to.emit(liquidationEngine, "CloseFactorChangeCancelled");
+    it("should revert setCloseFactor from non-timelock", async function () {
+      await expect(liquidationEngine.connect(liquidator).setCloseFactor(6000)).to.be.reverted;
     });
 
-    // --- executeCloseFactor: NO_PENDING ---
-    it("should revert executeCloseFactor when nothing pending", async function () {
-      await expect(liquidationEngine.executeCloseFactor())
-        .to.be.revertedWith("NO_PENDING");
+    // --- setFullLiquidationThreshold: validations ---
+    it("should revert setFullLiquidationThreshold with invalid value", async function () {
+      await expect(liquidationEngine.setFullLiquidationThreshold(0)).to.be.revertedWith("INVALID_THRESHOLD");
+      await expect(liquidationEngine.setFullLiquidationThreshold(10000)).to.be.revertedWith("INVALID_THRESHOLD");
     });
 
-    // --- executeCloseFactor: TIMELOCK_ACTIVE ---
-    it("should revert executeCloseFactor before timelock", async function () {
-      await liquidationEngine.requestCloseFactor(6000);
-      await expect(liquidationEngine.executeCloseFactor())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    // --- requestFullLiquidationThreshold: PROPOSAL_ALREADY_PENDING ---
-    it("should revert requestFullLiquidationThreshold when already pending", async function () {
-      await liquidationEngine.requestFullLiquidationThreshold(4000);
-      await expect(
-        liquidationEngine.requestFullLiquidationThreshold(3000)
-      ).to.be.revertedWith("PROPOSAL_ALREADY_PENDING");
-    });
-
-    // --- cancelFullLiquidationThreshold ---
-    it("should cancel pending full liquidation threshold", async function () {
-      await liquidationEngine.requestFullLiquidationThreshold(4000);
-      await expect(liquidationEngine.cancelFullLiquidationThreshold())
-        .to.emit(liquidationEngine, "FullLiqThresholdChangeCancelled");
-    });
-
-    // --- executeFullLiquidationThreshold: NO_PENDING ---
-    it("should revert executeFullLiquidationThreshold when nothing pending", async function () {
-      await expect(liquidationEngine.executeFullLiquidationThreshold())
-        .to.be.revertedWith("NO_PENDING");
-    });
-
-    // --- executeFullLiquidationThreshold: TIMELOCK_ACTIVE ---
-    it("should revert executeFullLiquidationThreshold before timelock", async function () {
-      await liquidationEngine.requestFullLiquidationThreshold(4000);
-      await expect(liquidationEngine.executeFullLiquidationThreshold())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
+    it("should revert setFullLiquidationThreshold from non-timelock", async function () {
+      await expect(liquidationEngine.connect(liquidator).setFullLiquidationThreshold(4000)).to.be.reverted;
     });
 
     // --- pause / unpause separation of duties ---
@@ -737,7 +585,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       wbtc = await MockERC20.deploy("WBTC", "WBTC", 8);
 
       const VF = await ethers.getContractFactory("CollateralVault");
-      vault = await VF.deploy();
+      vault = await VF.deploy(deployer.address);
 
       await vault.grantRole(await vault.BORROW_MODULE_ROLE(), borrowModule.address);
       await vault.grantRole(await vault.LIQUIDATION_ROLE(), liquidator.address);
@@ -752,127 +600,68 @@ describe("CoverageBoost — Misc Contracts", function () {
       await weth.connect(leverageVault).approve(await vault.getAddress(), ethers.MaxUint256);
     });
 
-    // --- requestBorrowModule: INVALID_MODULE ---
-    it("should revert requestBorrowModule with zero address", async function () {
+    // --- setBorrowModule: INVALID_MODULE ---
+    it("should revert setBorrowModule with zero address", async function () {
       await expect(
-        vault.requestBorrowModule(ethers.ZeroAddress)
+        vault.setBorrowModule(ethers.ZeroAddress)
       ).to.be.revertedWith("INVALID_MODULE");
     });
 
-    // --- requestBorrowModule: PROPOSAL_ALREADY_PENDING ---
-    it("should revert requestBorrowModule when already pending", async function () {
-      await vault.requestBorrowModule(user1.address);
+    it("should revert setBorrowModule from non-timelock", async function () {
       await expect(
-        vault.requestBorrowModule(deployer.address)
-      ).to.be.revertedWith("PROPOSAL_ALREADY_PENDING");
+        vault.connect(user1).setBorrowModule(user1.address)
+      ).to.be.reverted;
     });
 
-    // --- cancelBorrowModule ---
-    it("should cancel pending borrow module change", async function () {
-      await vault.requestBorrowModule(user1.address);
-      await expect(vault.cancelBorrowModule())
-        .to.emit(vault, "BorrowModuleChangeCancelled");
-    });
-
-    // --- executeBorrowModule: NO_PENDING ---
-    it("should revert executeBorrowModule when nothing pending", async function () {
-      await expect(vault.executeBorrowModule())
-        .to.be.revertedWith("NO_PENDING");
-    });
-
-    // --- executeBorrowModule: TIMELOCK_ACTIVE ---
-    it("should revert executeBorrowModule before timelock", async function () {
-      await vault.requestBorrowModule(user1.address);
-      await expect(vault.executeBorrowModule())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    // --- requestAddCollateral: PROPOSAL_ALREADY_PENDING ---
-    it("should revert requestAddCollateral when already pending", async function () {
-      await vault.requestAddCollateral(await wbtc.getAddress(), 6500, 7000, 500);
+    // --- addCollateral: INVALID_PENALTY ---
+    it("should revert addCollateral with penalty below 1%", async function () {
       await expect(
-        vault.requestAddCollateral(await wbtc.getAddress(), 6500, 7000, 500)
-      ).to.be.revertedWith("PROPOSAL_ALREADY_PENDING");
-    });
-
-    // --- requestAddCollateral: penalty < 100 ---
-    it("should revert requestAddCollateral with penalty below 1%", async function () {
-      await expect(
-        vault.requestAddCollateral(await wbtc.getAddress(), 6500, 7000, 50)
+        vault.addCollateral(await wbtc.getAddress(), 6500, 7000, 50)
       ).to.be.revertedWith("INVALID_PENALTY");
     });
 
-    // --- cancelAddCollateral ---
-    it("should cancel pending add collateral", async function () {
-      await vault.requestAddCollateral(await wbtc.getAddress(), 6500, 7000, 500);
-      await expect(vault.cancelAddCollateral())
-        .to.emit(vault, "CollateralAddCancelled");
+    it("should revert addCollateral from non-timelock", async function () {
+      await expect(
+        vault.connect(user1).addCollateral(await wbtc.getAddress(), 6500, 7000, 500)
+      ).to.be.reverted;
     });
 
-    // --- executeAddCollateral: TIMELOCK_ACTIVE ---
-    it("should revert executeAddCollateral before timelock", async function () {
-      await vault.requestAddCollateral(await wbtc.getAddress(), 6500, 7000, 500);
-      await expect(vault.executeAddCollateral())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    // --- requestUpdateCollateral: NOT_SUPPORTED (disabled token) ---
-    it("should revert requestUpdateCollateral for disabled token", async function () {
+    // --- updateCollateral: NOT_SUPPORTED (disabled token) ---
+    it("should revert updateCollateral for disabled token", async function () {
       await vault.disableCollateral(await weth.getAddress());
       await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 500)
+        vault.updateCollateral(await weth.getAddress(), 7500, 8000, 500)
       ).to.be.revertedWith("NOT_SUPPORTED");
     });
 
-    // --- requestUpdateCollateral: PROPOSAL_ALREADY_PENDING ---
-    it("should revert requestUpdateCollateral when already pending", async function () {
-      await vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 600);
+    // --- updateCollateral: INVALID_FACTOR ---
+    it("should revert updateCollateral with invalid factor", async function () {
       await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 700)
-      ).to.be.revertedWith("PROPOSAL_ALREADY_PENDING");
-    });
-
-    // --- requestUpdateCollateral: INVALID_FACTOR ---
-    it("should revert requestUpdateCollateral with invalid factor", async function () {
-      await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 8000, 8000, 500)
+        vault.updateCollateral(await weth.getAddress(), 8000, 8000, 500)
       ).to.be.revertedWith("INVALID_FACTOR");
     });
 
-    // --- requestUpdateCollateral: THRESHOLD_TOO_HIGH ---
-    it("should revert requestUpdateCollateral with threshold > 9500", async function () {
+    // --- updateCollateral: THRESHOLD_TOO_HIGH ---
+    it("should revert updateCollateral with threshold > 9500", async function () {
       await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 7500, 9600, 500)
+        vault.updateCollateral(await weth.getAddress(), 7500, 9600, 500)
       ).to.be.revertedWith("THRESHOLD_TOO_HIGH");
     });
 
-    // --- requestUpdateCollateral: INVALID_PENALTY ---
-    it("should revert requestUpdateCollateral with penalty out of range", async function () {
+    // --- updateCollateral: INVALID_PENALTY ---
+    it("should revert updateCollateral with penalty out of range", async function () {
       await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 50)
+        vault.updateCollateral(await weth.getAddress(), 7500, 8000, 50)
       ).to.be.revertedWith("INVALID_PENALTY");
       await expect(
-        vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 2100)
+        vault.updateCollateral(await weth.getAddress(), 7500, 8000, 2100)
       ).to.be.revertedWith("INVALID_PENALTY");
     });
 
-    // --- cancelUpdateCollateral ---
-    it("should cancel pending update collateral", async function () {
-      await vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 600);
-      await expect(vault.cancelUpdateCollateral())
-        .to.emit(vault, "CollateralUpdateCancelled");
-    });
-
-    // --- executeUpdateCollateral: NO_PENDING / TIMELOCK_ACTIVE ---
-    it("should revert executeUpdateCollateral when nothing pending", async function () {
-      await expect(vault.executeUpdateCollateral())
-        .to.be.revertedWith("NO_PENDING");
-    });
-
-    it("should revert executeUpdateCollateral before timelock", async function () {
-      await vault.requestUpdateCollateral(await weth.getAddress(), 7500, 8000, 600);
-      await expect(vault.executeUpdateCollateral())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
+    it("should revert updateCollateral from non-timelock", async function () {
+      await expect(
+        vault.connect(user1).updateCollateral(await weth.getAddress(), 7500, 8000, 600)
+      ).to.be.reverted;
     });
 
     // --- enableCollateral: NOT_PREVIOUSLY_ADDED ---
@@ -987,7 +776,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         treasury.address,
         directMint.address,
         30, // 0.30%
-        admin.address
+        admin.address,
+        admin.address // timelock
       );
 
       await usdc.mint(user1.address, 10_000_000n * 10n ** 6n);
@@ -999,28 +789,28 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero wormhole relayer", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero token bridge", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero directMint", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero admin", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
@@ -1185,7 +975,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         await mockWormhole.getAddress(),
         await mockTokenBridge.getAddress(),
         directMint.address,
-        treasury.address
+        treasury.address,
+        admin.address
       );
     });
 
@@ -1193,35 +984,35 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero usdc", async function () {
       const TR = await ethers.getContractFactory("TreasuryReceiver");
       await expect(
-        TR.deploy(ethers.ZeroAddress, await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), directMint.address, treasury.address)
+        TR.deploy(ethers.ZeroAddress, await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), directMint.address, treasury.address, admin.address)
       ).to.be.revertedWithCustomError(TR, "InvalidAddress");
     });
 
     it("should revert constructor with zero wormhole", async function () {
       const TR = await ethers.getContractFactory("TreasuryReceiver");
       await expect(
-        TR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await mockTokenBridge.getAddress(), directMint.address, treasury.address)
+        TR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await mockTokenBridge.getAddress(), directMint.address, treasury.address, admin.address)
       ).to.be.revertedWithCustomError(TR, "InvalidAddress");
     });
 
     it("should revert constructor with zero tokenBridge", async function () {
       const TR = await ethers.getContractFactory("TreasuryReceiver");
       await expect(
-        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), ethers.ZeroAddress, directMint.address, treasury.address)
+        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), ethers.ZeroAddress, directMint.address, treasury.address, admin.address)
       ).to.be.revertedWithCustomError(TR, "InvalidAddress");
     });
 
     it("should revert constructor with zero directMint", async function () {
       const TR = await ethers.getContractFactory("TreasuryReceiver");
       await expect(
-        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), ethers.ZeroAddress, treasury.address)
+        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), ethers.ZeroAddress, treasury.address, admin.address)
       ).to.be.revertedWithCustomError(TR, "InvalidAddress");
     });
 
     it("should revert constructor with zero treasury", async function () {
       const TR = await ethers.getContractFactory("TreasuryReceiver");
       await expect(
-        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), directMint.address, ethers.ZeroAddress)
+        TR.deploy(await usdc.getAddress(), await mockWormhole.getAddress(), await mockTokenBridge.getAddress(), directMint.address, ethers.ZeroAddress, admin.address)
       ).to.be.revertedWithCustomError(TR, "InvalidAddress");
     });
 
@@ -1327,7 +1118,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       musd = await MF.deploy(ethers.parseEther("100000000"));
 
       const SF = await ethers.getContractFactory("SMUSD");
-      smusd = await SF.deploy(await musd.getAddress());
+      smusd = await SF.deploy(await musd.getAddress(), deployer.address);
 
       await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
       await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);
@@ -1451,38 +1242,23 @@ describe("CoverageBoost — Misc Contracts", function () {
       ).to.be.revertedWith("USE_TIMELOCKED_SETTER");
     });
 
-    // --- requestSetTreasury: ZERO_ADDRESS ---
-    it("should revert requestSetTreasury with zero", async function () {
-      await expect(smusd.requestSetTreasury(ethers.ZeroAddress))
+    // --- setTreasuryTimelocked: ZERO_ADDRESS ---
+    it("should revert setTreasuryTimelocked with zero", async function () {
+      await expect(smusd.setTreasuryTimelocked(ethers.ZeroAddress))
         .to.be.revertedWith("ZERO_ADDRESS");
     });
 
-    // --- requestSetTreasury: CHANGE_ALREADY_PENDING ---
-    it("should revert requestSetTreasury when already pending", async function () {
-      await smusd.setTreasury(user2.address);
-      await smusd.requestSetTreasury(user1.address);
-      await expect(smusd.requestSetTreasury(bridge.address))
-        .to.be.revertedWith("CHANGE_ALREADY_PENDING");
+    // --- setTreasuryTimelocked: access control ---
+    it("should revert setTreasuryTimelocked from non-timelock", async function () {
+      await expect(smusd.connect(user1).setTreasuryTimelocked(user1.address))
+        .to.be.reverted;
     });
 
-    // --- cancelSetTreasury ---
-    it("should cancel pending treasury change", async function () {
+    // --- setTreasuryTimelocked: valid update ---
+    it("should update treasury via setTreasuryTimelocked", async function () {
       await smusd.setTreasury(user2.address);
-      await smusd.requestSetTreasury(user1.address);
-      await expect(smusd.cancelSetTreasury())
-        .to.emit(smusd, "TreasuryChangeCancelled");
-    });
-
-    // --- executeSetTreasury: NO_PENDING ---
-    it("should revert executeSetTreasury when nothing pending", async function () {
-      await expect(smusd.executeSetTreasury()).to.be.revertedWith("NO_PENDING");
-    });
-
-    // --- executeSetTreasury: TIMELOCK_ACTIVE ---
-    it("should revert executeSetTreasury before timelock", async function () {
-      await smusd.setTreasury(user2.address);
-      await smusd.requestSetTreasury(user1.address);
-      await expect(smusd.executeSetTreasury()).to.be.revertedWith("TIMELOCK_ACTIVE");
+      await smusd.setTreasuryTimelocked(user1.address);
+      // No revert means success (treasury updated)
     });
 
     // --- maxWithdraw: returns 0 when paused ---
@@ -1707,7 +1483,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         admin.address, // collateralVault (mock)
         admin.address, // borrowModule (mock)
         admin.address, // priceOracle (mock)
-        await musd.getAddress()
+        await musd.getAddress(),
+        admin.address  // timelock
       );
 
       await leverageVault.grantRole(await leverageVault.LEVERAGE_ADMIN_ROLE(), admin.address);
@@ -1718,35 +1495,35 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero swapRouter", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address)
+        LV.deploy(ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_ROUTER");
     });
 
     it("should revert constructor with zero collateralVault", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address)
+        LV.deploy(admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_VAULT");
     });
 
     it("should revert constructor with zero borrowModule", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address)
+        LV.deploy(admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_BORROW");
     });
 
     it("should revert constructor with zero priceOracle", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address)
+        LV.deploy(admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address)
       ).to.be.revertedWith("INVALID_ORACLE");
     });
 
     it("should revert constructor with zero musd", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
-        LV.deploy(admin.address, admin.address, admin.address, admin.address, ethers.ZeroAddress)
+        LV.deploy(admin.address, admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address)
       ).to.be.revertedWith("INVALID_MUSD");
     });
 
@@ -1813,44 +1590,29 @@ describe("CoverageBoost — Misc Contracts", function () {
       expect(await leverageVault.getEffectiveLeverage(user1.address)).to.equal(0);
     });
 
-    // --- requestEmergencyWithdraw: validations ---
-    it("should revert requestEmergencyWithdraw with zero token", async function () {
+    // --- emergencyWithdraw: validations ---
+    it("should revert emergencyWithdraw with zero token", async function () {
       await expect(
-        leverageVault.requestEmergencyWithdraw(ethers.ZeroAddress, 100)
+        leverageVault.emergencyWithdraw(ethers.ZeroAddress, 100, admin.address)
       ).to.be.revertedWith("INVALID_TOKEN");
     });
 
-    it("should revert requestEmergencyWithdraw with zero amount", async function () {
+    it("should revert emergencyWithdraw with zero amount", async function () {
       await expect(
-        leverageVault.requestEmergencyWithdraw(user1.address, 0)
+        leverageVault.emergencyWithdraw(user1.address, 0, admin.address)
       ).to.be.revertedWith("ZERO_AMOUNT");
     });
 
-    it("should revert requestEmergencyWithdraw when already pending", async function () {
-      await leverageVault.requestEmergencyWithdraw(user1.address, 100);
+    it("should revert emergencyWithdraw with zero recipient", async function () {
       await expect(
-        leverageVault.requestEmergencyWithdraw(user1.address, 200)
-      ).to.be.revertedWith("WITHDRAW_ALREADY_PENDING");
+        leverageVault.emergencyWithdraw(user1.address, 100, ethers.ZeroAddress)
+      ).to.be.revertedWith("INVALID_RECIPIENT");
     });
 
-    // --- cancelEmergencyWithdraw ---
-    it("should cancel pending emergency withdraw", async function () {
-      await leverageVault.requestEmergencyWithdraw(user1.address, 100);
-      await expect(leverageVault.cancelEmergencyWithdraw())
-        .to.emit(leverageVault, "EmergencyWithdrawCancelled");
-    });
-
-    // --- executeEmergencyWithdraw: NO_PENDING_WITHDRAW ---
-    it("should revert executeEmergencyWithdraw when nothing pending", async function () {
-      await expect(leverageVault.executeEmergencyWithdraw())
-        .to.be.revertedWith("NO_PENDING_WITHDRAW");
-    });
-
-    // --- executeEmergencyWithdraw: TIMELOCK_ACTIVE ---
-    it("should revert executeEmergencyWithdraw before timelock", async function () {
-      await leverageVault.requestEmergencyWithdraw(user1.address, 100);
-      await expect(leverageVault.executeEmergencyWithdraw())
-        .to.be.revertedWith("TIMELOCK_ACTIVE");
+    it("should revert emergencyWithdraw from non-timelock", async function () {
+      await expect(
+        leverageVault.connect(user1).emergencyWithdraw(user1.address, 100, admin.address)
+      ).to.be.reverted;
     });
 
     // --- pause / unpause separation ---

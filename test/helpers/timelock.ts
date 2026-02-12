@@ -1,17 +1,14 @@
 /**
- * Timelock Helper — wraps the propose→advance→execute pattern for test convenience.
- * All admin operations require a 48h timelock. These helpers let tests call the
- * 3-step pattern in a single line.
+ * Timelock Helper — direct admin calls for test convenience.
  *
- * NOTE: Each helper advances block time by 48h. After calling multiple helpers
- * in a fixture, call refreshFeeds() to update mock Chainlink feed timestamps
- * so price lookups don't revert with STALE_PRICE.
+ * After the TimelockGoverned refactor, all admin setters are gated by
+ * `onlyTimelock`.  In tests the deployer address IS the timelock, so
+ * these helpers simply call the setter directly — no 3-step pattern.
+ *
+ * NOTE: refreshFeeds() is still needed after time-advancing operations.
  */
 
-import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-
-const ADMIN_DELAY = 48 * 60 * 60; // 48 hours in seconds
 
 /**
  * Refresh mock Chainlink feeds so their updatedAt equals the current block time.
@@ -31,27 +28,19 @@ export async function timelockSetFeed(
   oracle: any, admin: HardhatEthersSigner,
   token: string, feed: string, stalePeriod: number, tokenDecimals: number
 ) {
-  await oracle.connect(admin).requestSetFeed(token, feed, stalePeriod, tokenDecimals);
-  await time.increase(ADMIN_DELAY);
-  await oracle.connect(admin).executeSetFeed();
+  await oracle.connect(admin).setFeed(token, feed, stalePeriod, tokenDecimals);
 }
 
 export async function timelockRemoveFeed(oracle: any, admin: HardhatEthersSigner, token: string) {
-  await oracle.connect(admin).requestRemoveFeed(token);
-  await time.increase(ADMIN_DELAY);
-  await oracle.connect(admin).executeRemoveFeed();
+  await oracle.connect(admin).removeFeed(token);
 }
 
 export async function timelockSetMaxDeviation(oracle: any, admin: HardhatEthersSigner, bps: number) {
-  await oracle.connect(admin).requestSetMaxDeviation(bps);
-  await time.increase(ADMIN_DELAY);
-  await oracle.connect(admin).executeSetMaxDeviation();
+  await oracle.connect(admin).setMaxDeviation(bps);
 }
 
 export async function timelockSetCircuitBreakerEnabled(oracle: any, admin: HardhatEthersSigner, enabled: boolean) {
-  await oracle.connect(admin).requestSetCircuitBreakerEnabled(enabled);
-  await time.increase(ADMIN_DELAY);
-  await oracle.connect(admin).executeSetCircuitBreakerEnabled();
+  await oracle.connect(admin).setCircuitBreakerEnabled(enabled);
 }
 
 // ─── CollateralVault ─────────────────────────────────────────
@@ -60,70 +49,50 @@ export async function timelockAddCollateral(
   vault: any, admin: HardhatEthersSigner,
   token: string, factorBps: number, liqThresholdBps: number, liqPenaltyBps: number
 ) {
-  await vault.connect(admin).requestAddCollateral(token, factorBps, liqThresholdBps, liqPenaltyBps);
-  await time.increase(ADMIN_DELAY);
-  await vault.connect(admin).executeAddCollateral();
+  await vault.connect(admin).addCollateral(token, factorBps, liqThresholdBps, liqPenaltyBps);
 }
 
 export async function timelockUpdateCollateral(
   vault: any, admin: HardhatEthersSigner,
   token: string, factorBps: number, liqThresholdBps: number, liqPenaltyBps: number
 ) {
-  await vault.connect(admin).requestUpdateCollateral(token, factorBps, liqThresholdBps, liqPenaltyBps);
-  await time.increase(ADMIN_DELAY);
-  await vault.connect(admin).executeUpdateCollateral();
+  await vault.connect(admin).updateCollateral(token, factorBps, liqThresholdBps, liqPenaltyBps);
 }
 
 export async function timelockSetBorrowModule(vault: any, admin: HardhatEthersSigner, module: string) {
-  await vault.connect(admin).requestBorrowModule(module);
-  await time.increase(ADMIN_DELAY);
-  await vault.connect(admin).executeBorrowModule();
+  await vault.connect(admin).setBorrowModule(module);
 }
 
 // ─── BorrowModule ────────────────────────────────────────────
 
 export async function timelockSetInterestRateModel(bm: any, admin: HardhatEthersSigner, model: string) {
-  await bm.connect(admin).requestInterestRateModel(model);
-  await time.increase(ADMIN_DELAY);
-  await bm.connect(admin).executeInterestRateModel();
+  await bm.connect(admin).setInterestRateModel(model);
 }
 
 export async function timelockSetSMUSD(bm: any, admin: HardhatEthersSigner, smusd: string) {
-  await bm.connect(admin).requestSMUSD(smusd);
-  await time.increase(ADMIN_DELAY);
-  await bm.connect(admin).executeSMUSD();
+  await bm.connect(admin).setSMUSD(smusd);
 }
 
 export async function timelockSetTreasury(bm: any, admin: HardhatEthersSigner, treasury: string) {
-  await bm.connect(admin).requestTreasury(treasury);
-  await time.increase(ADMIN_DELAY);
-  await bm.connect(admin).executeTreasury();
+  await bm.connect(admin).setTreasury(treasury);
 }
 
 export async function timelockSetInterestRate(bm: any, admin: HardhatEthersSigner, rateBps: number) {
-  await bm.connect(admin).requestInterestRate(rateBps);
-  await time.increase(ADMIN_DELAY);
-  await bm.connect(admin).executeInterestRate();
+  await bm.connect(admin).setInterestRate(rateBps);
 }
 
 export async function timelockSetMinDebt(bm: any, admin: HardhatEthersSigner, minDebt: bigint) {
-  await bm.connect(admin).requestMinDebt(minDebt);
-  await time.increase(ADMIN_DELAY);
-  await bm.connect(admin).executeMinDebt();
+  await bm.connect(admin).setMinDebt(minDebt);
 }
 
 // ─── LiquidationEngine ──────────────────────────────────────
 
 export async function timelockSetCloseFactor(engine: any, admin: HardhatEthersSigner, bps: number) {
-  await engine.connect(admin).requestCloseFactor(bps);
-  await time.increase(ADMIN_DELAY);
-  await engine.connect(admin).executeCloseFactor();
+  await engine.connect(admin).setCloseFactor(bps);
 }
 
 export async function timelockSetFullLiquidationThreshold(engine: any, admin: HardhatEthersSigner, bps: number) {
-  await engine.connect(admin).requestFullLiquidationThreshold(bps);
-  await time.increase(ADMIN_DELAY);
-  await engine.connect(admin).executeFullLiquidationThreshold();
+  await engine.connect(admin).setFullLiquidationThreshold(bps);
 }
 
 // ─── TreasuryV2 ──────────────────────────────────────────────
@@ -132,43 +101,31 @@ export async function timelockAddStrategy(
   treasury: any, admin: HardhatEthersSigner,
   strategy: string, targetBps: number, minBps: number, maxBps: number, autoAllocate: boolean
 ) {
-  await treasury.connect(admin).requestAddStrategy(strategy, targetBps, minBps, maxBps, autoAllocate);
-  await time.increase(ADMIN_DELAY);
-  await treasury.connect(admin).executeAddStrategy();
+  await treasury.connect(admin).addStrategy(strategy, targetBps, minBps, maxBps, autoAllocate);
 }
 
 export async function timelockRemoveStrategy(treasury: any, admin: HardhatEthersSigner, strategy: string) {
-  await treasury.connect(admin).requestRemoveStrategy(strategy);
-  await time.increase(ADMIN_DELAY);
-  await treasury.connect(admin).executeRemoveStrategy();
+  await treasury.connect(admin).removeStrategy(strategy);
 }
 
 export async function timelockSetFeeConfig(
   treasury: any, admin: HardhatEthersSigner, feeBps: number, recipient: string
 ) {
-  await treasury.connect(admin).requestFeeConfig(feeBps, recipient);
-  await time.increase(ADMIN_DELAY);
-  await treasury.connect(admin).executeFeeConfig();
+  await treasury.connect(admin).setFeeConfig(feeBps, recipient);
 }
 
 export async function timelockSetReserveBps(treasury: any, admin: HardhatEthersSigner, bps: number) {
-  await treasury.connect(admin).requestReserveBps(bps);
-  await time.increase(ADMIN_DELAY);
-  await treasury.connect(admin).executeReserveBps();
+  await treasury.connect(admin).setReserveBps(bps);
 }
 
 // ─── DirectMintV2 ────────────────────────────────────────────
 
 export async function timelockSetFees(dm: any, admin: HardhatEthersSigner, mintBps: number, redeemBps: number) {
-  await dm.connect(admin).requestFees(mintBps, redeemBps);
-  await time.increase(ADMIN_DELAY);
-  await dm.connect(admin).executeFees();
+  await dm.connect(admin).setFees(mintBps, redeemBps);
 }
 
 export async function timelockSetFeeRecipient(dm: any, admin: HardhatEthersSigner, recipient: string) {
-  await dm.connect(admin).requestFeeRecipient(recipient);
-  await time.increase(ADMIN_DELAY);
-  await dm.connect(admin).executeFeeRecipient();
+  await dm.connect(admin).setFeeRecipient(recipient);
 }
 
 export async function timelockSetLimits(
@@ -176,9 +133,7 @@ export async function timelockSetLimits(
   minMint: bigint | number, maxMint: bigint | number,
   minRedeem: bigint | number, maxRedeem: bigint | number
 ) {
-  await dm.connect(admin).requestLimits(minMint, maxMint, minRedeem, maxRedeem);
-  await time.increase(ADMIN_DELAY);
-  await dm.connect(admin).executeLimits();
+  await dm.connect(admin).setLimits(minMint, maxMint, minRedeem, maxRedeem);
 }
 
 // ─── InterestRateModel ───────────────────────────────────────
@@ -188,7 +143,5 @@ export async function timelockSetIRMParams(
   baseRate: number, multiplier: number, kink: number,
   jumpMultiplier: number, reserveFactor: number
 ) {
-  await irm.connect(admin).requestSetParams(baseRate, multiplier, kink, jumpMultiplier, reserveFactor);
-  await time.increase(ADMIN_DELAY);
-  await irm.connect(admin).executeSetParams();
+  await irm.connect(admin).setParams(baseRate, multiplier, kink, jumpMultiplier, reserveFactor);
 }

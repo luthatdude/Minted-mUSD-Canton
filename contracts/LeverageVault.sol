@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Leverage Vault
 // Automatic multi-loop leverage with Uniswap V3 integration
 

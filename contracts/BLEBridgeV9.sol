@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - V9
 // Refactored: Canton attestations update supply cap, not mint directly
 // ╔═══════════════════════════════════════════════════════════════════════════════╗
@@ -148,14 +148,14 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  // Emit event for admin parameter change
  // Enforce minimum signature threshold of 2 to prevent single-point compromise
  // Add upper bound to prevent bridge lockup
- function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setMinSignatures(uint256 _minSigs) external onlyTimelock {
  require(_minSigs >= 2, "MIN_SIGS_TOO_LOW"); // At least 2 required
  require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH"); // Max 10 to prevent lockup
  emit MinSignaturesUpdated(minSignatures, _minSigs);
  minSignatures = _minSigs;
  }
 
- function setDailyCapIncreaseLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setDailyCapIncreaseLimit(uint256 _limit) external onlyTimelock {
  require(_limit > 0, "INVALID_LIMIT");
  emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
  dailyCapIncreaseLimit = _limit;
@@ -168,7 +168,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
  function migrateUsedAttestations(
  bytes32[] calldata attestationIds, 
  address previousBridge
- ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ ) external onlyTimelock {
  require(previousBridge != address(0), "INVALID_PREVIOUS_BRIDGE");
  for (uint256 i = 0; i < attestationIds.length; i++) {
  usedAttestationIds[attestationIds[i]] = true;
@@ -178,7 +178,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
  // Ratio changes are applied immediately but emit event for monitoring.
  // For production, this should be behind a timelock contract.
- function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function setCollateralRatio(uint256 _ratioBps) external onlyTimelock {
  // Rate-limit ratio changes to once per day
  require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
  require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");

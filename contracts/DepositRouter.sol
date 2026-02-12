@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./interfaces/IWormholeRelayer.sol";
 import "./interfaces/IWormholeTokenBridge.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title DepositRouter
@@ -15,7 +16,7 @@ import "./interfaces/IWormholeTokenBridge.sol";
  * @dev Deploy this on Base, Arbitrum, and other L2s to accept deposits
  * @dev Migrated from Ownable to AccessControl for role separation
  */
-contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
+contract DepositRouter is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
 
  // ============ Roles ============
@@ -112,7 +113,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  address _treasuryAddress,
  address _directMintAddress,
  uint256 _feeBps,
- address _admin
+ address _admin,
+ address _timelock
  ) {
  if (_usdc == address(0)) revert InvalidAddress();
  if (_wormholeRelayer == address(0)) revert InvalidAddress();
@@ -122,6 +124,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  if (_admin == address(0)) revert InvalidAddress();
  if (_feeBps > 500) revert FeeTooHigh(); // Max 5%
  
+ _setTimelock(_timelock);
  usdc = IERC20(_usdc);
  wormholeRelayer = IWormholeRelayer(_wormholeRelayer);
  tokenBridge = IWormholeTokenBridge(_tokenBridge);
@@ -234,7 +237,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  * @notice Update the treasury address
  * @param newTreasury New treasury address on Ethereum
  */
- function setTreasury(address newTreasury) external onlyRole(ROUTER_ADMIN_ROLE) {
+ function setTreasury(address newTreasury) external onlyTimelock {
  if (newTreasury == address(0)) revert InvalidAddress();
  address old = treasuryAddress;
  treasuryAddress = newTreasury;
@@ -245,7 +248,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  * @notice Update the DirectMint address
  * @param newDirectMint New DirectMint address on Ethereum
  */
- function setDirectMint(address newDirectMint) external onlyRole(ROUTER_ADMIN_ROLE) {
+ function setDirectMint(address newDirectMint) external onlyTimelock {
  if (newDirectMint == address(0)) revert InvalidAddress();
  address old = directMintAddress;
  directMintAddress = newDirectMint;
@@ -256,7 +259,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  * @notice Update the protocol fee
  * @param newFeeBps New fee in basis points
  */
- function setFee(uint256 newFeeBps) external onlyRole(ROUTER_ADMIN_ROLE) {
+ function setFee(uint256 newFeeBps) external onlyTimelock {
  if (newFeeBps > 500) revert FeeTooHigh();
  uint256 old = feeBps;
  feeBps = newFeeBps;
@@ -299,7 +302,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
  */
  event EmergencyWithdrawal(address indexed token, address indexed to, uint256 amount);
 
- function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ function emergencyWithdraw(address token, address to, uint256 amount) external onlyTimelock {
  if (to == address(0)) revert InvalidAddress();
  // Block USDC withdrawal unless contract is paused (true emergency).
  // Prevents admin from draining in-flight user deposits during normal operation.

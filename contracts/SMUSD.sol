@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Fixed Version with Unified Cross-Chain Yield
 // Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
 // S-03 (Donation attack mitigation), S-04 (SafeERC20)
@@ -14,6 +14,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/ITreasuryV2.sol";
 import "./TimelockGoverned.sol";
+import "./interfaces/IMUSD.sol";
 
 contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
  using SafeERC20 for IERC20;
@@ -424,17 +425,26 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, TimelockGov
  }
 
  /// @notice Max depositable assets
- /// @dev Returns 0 when paused, otherwise type(uint256).max (no cap)
+ /// @dev Returns 0 when paused; otherwise capped by remaining mUSD supply headroom
+ /// to comply with ERC-4626 (depositor should never succeed for more than maxDeposit)
  function maxDeposit(address) public view override returns (uint256) {
  if (paused()) return 0;
- return type(uint256).max;
+ IMUSD musd = IMUSD(asset());
+ uint256 cap = musd.supplyCap();
+ uint256 supply = musd.totalSupply();
+ if (supply >= cap) return 0;
+ return cap - supply;
  }
 
  /// @notice Max mintable shares
- /// @dev Returns 0 when paused, otherwise type(uint256).max (no cap)
+ /// @dev Returns 0 when paused; otherwise converts remaining mUSD headroom to shares
  function maxMint(address) public view override returns (uint256) {
  if (paused()) return 0;
- return type(uint256).max;
+ IMUSD musd = IMUSD(asset());
+ uint256 cap = musd.supplyCap();
+ uint256 supply = musd.totalSupply();
+ if (supply >= cap) return 0;
+ return convertToShares(cap - supply);
  }
 
  // ============================================================

@@ -19,8 +19,6 @@ import {
   timelockSetLimits,
 } from "./helpers/timelock";
 
-const ADMIN_DELAY = 48 * 60 * 60; // 48 hours
-
 describe("CoverageBoost — DirectMintV2", function () {
   let directMint: DirectMintV2;
   let musd: MUSD;
@@ -56,6 +54,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       deployer.address, // vault placeholder
       deployer.address, // admin
       feeRecipient.address,
+      deployer.address, // timelock
     ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
@@ -66,6 +65,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       await musd.getAddress(),
       await treasury.getAddress(),
       feeRecipient.address,
+      deployer.address, // timelock
     );
     await directMint.waitForDeployment();
 
@@ -97,14 +97,14 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("Should revert when treasury is zero address", async function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
-        F.deploy(await usdc.getAddress(), await musd.getAddress(), ethers.ZeroAddress, feeRecipient.address),
+        F.deploy(await usdc.getAddress(), await musd.getAddress(), ethers.ZeroAddress, feeRecipient.address, deployer.address),
       ).to.be.revertedWith("INVALID_TREASURY");
     });
 
     it("Should revert when feeRecipient is zero address", async function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
-        F.deploy(await usdc.getAddress(), await musd.getAddress(), await treasury.getAddress(), ethers.ZeroAddress),
+        F.deploy(await usdc.getAddress(), await musd.getAddress(), await treasury.getAddress(), ethers.ZeroAddress, deployer.address),
       ).to.be.revertedWith("INVALID_FEE_RECIPIENT");
     });
   });
@@ -380,158 +380,64 @@ describe("CoverageBoost — DirectMintV2", function () {
   });
 
   // ================================================================
-  // TIMELOCK — Fees: cancel, early-execute, no-pending
+  // setFees — validation branches
   // ================================================================
 
-  describe("Fees Timelock — uncovered branches", function () {
-    it("cancelFees — should clear pending state", async function () {
-      await directMint.requestFees(200, 300);
-      await expect(directMint.cancelFees()).to.emit(directMint, "FeesChangeCancelled");
-
-      expect(await directMint.pendingFeesSet()).to.be.false;
-      expect(await directMint.pendingMintFeeBps()).to.equal(0);
-      expect(await directMint.pendingRedeemFeeBps()).to.equal(0);
+  describe("setFees — validation branches", function () {
+    it("setFees — should revert REDEEM_FEE_TOO_HIGH", async function () {
+      await expect(directMint.setFees(0, 600)).to.be.revertedWith("REDEEM_FEE_TOO_HIGH");
     });
 
-    it("executeFees — should revert with NO_PENDING when nothing requested", async function () {
-      await expect(directMint.executeFees()).to.be.revertedWith("NO_PENDING");
+    it("setFees — both at max should succeed", async function () {
+      await directMint.setFees(500, 500);
+      expect(await directMint.mintFeeBps()).to.equal(500);
+      expect(await directMint.redeemFeeBps()).to.equal(500);
     });
 
-    it("executeFees — should revert with TIMELOCK_ACTIVE before 48h", async function () {
-      await directMint.requestFees(50, 50);
-      // Try to execute immediately
-      await expect(directMint.executeFees()).to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    it("requestFees — should revert REDEEM_FEE_TOO_HIGH", async function () {
-      await expect(directMint.requestFees(0, 600)).to.be.revertedWith("REDEEM_FEE_TOO_HIGH");
-    });
-
-    it("requestFees — both at max should succeed", async function () {
-      await directMint.requestFees(500, 500);
-      expect(await directMint.pendingFeesSet()).to.be.true;
-    });
-
-    it("requestFees — should emit FeesChangeRequested", async function () {
-      await expect(directMint.requestFees(200, 300))
-        .to.emit(directMint, "FeesChangeRequested");
-    });
-
-    it("cancelFees — access control (non-FEE_MANAGER reverts)", async function () {
-      await directMint.requestFees(100, 100);
-      await expect(directMint.connect(other).cancelFees()).to.be.reverted;
-    });
-
-    it("executeFees — access control (non-FEE_MANAGER reverts)", async function () {
-      await directMint.requestFees(100, 100);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.connect(other).executeFees()).to.be.reverted;
-    });
-
-    it("requestFees — access control (non-FEE_MANAGER reverts)", async function () {
-      await expect(directMint.connect(other).requestFees(10, 10)).to.be.reverted;
+    it("setFees — access control (non-timelock reverts)", async function () {
+      await expect(directMint.connect(other).setFees(10, 10)).to.be.reverted;
     });
   });
 
   // ================================================================
-  // TIMELOCK — Fee Recipient: cancel, early-execute, no-pending, zero
+  // setFeeRecipient — validation branches
   // ================================================================
 
-  describe("FeeRecipient Timelock — uncovered branches", function () {
-    it("requestFeeRecipient — should revert with zero address", async function () {
+  describe("setFeeRecipient — validation branches", function () {
+    it("setFeeRecipient — should revert with zero address", async function () {
       await expect(
-        directMint.requestFeeRecipient(ethers.ZeroAddress),
+        directMint.setFeeRecipient(ethers.ZeroAddress),
       ).to.be.revertedWith("INVALID_RECIPIENT");
     });
 
-    it("requestFeeRecipient — should emit FeeRecipientChangeRequested", async function () {
-      await expect(directMint.requestFeeRecipient(other.address))
-        .to.emit(directMint, "FeeRecipientChangeRequested")
-        .withArgs(other.address, (await time.latest()) + ADMIN_DELAY + 1);
+    it("setFeeRecipient — should update feeRecipient", async function () {
+      await directMint.setFeeRecipient(other.address);
+      expect(await directMint.feeRecipient()).to.equal(other.address);
     });
 
-    it("cancelFeeRecipient — should clear pending and emit", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await expect(directMint.cancelFeeRecipient())
-        .to.emit(directMint, "FeeRecipientChangeCancelled")
-        .withArgs(other.address);
-
-      expect(await directMint.pendingFeeRecipient()).to.equal(ethers.ZeroAddress);
-    });
-
-    it("executeFeeRecipient — should revert NO_PENDING when nothing requested", async function () {
-      await expect(directMint.executeFeeRecipient()).to.be.revertedWith("NO_PENDING");
-    });
-
-    it("executeFeeRecipient — should revert TIMELOCK_ACTIVE before 48h", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await expect(directMint.executeFeeRecipient()).to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    it("cancelFeeRecipient — access control (non-admin reverts)", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await expect(directMint.connect(other).cancelFeeRecipient()).to.be.reverted;
-    });
-
-    it("executeFeeRecipient — access control (non-admin reverts)", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.connect(other).executeFeeRecipient()).to.be.reverted;
-    });
-
-    it("requestFeeRecipient — access control (non-admin reverts)", async function () {
-      await expect(directMint.connect(other).requestFeeRecipient(other.address)).to.be.reverted;
+    it("setFeeRecipient — access control (non-timelock reverts)", async function () {
+      await expect(directMint.connect(other).setFeeRecipient(other.address)).to.be.reverted;
     });
   });
 
   // ================================================================
-  // TIMELOCK — Limits: cancel, early-execute, no-pending, invalid
+  // setLimits — validation branches
   // ================================================================
 
-  describe("Limits Timelock — uncovered branches", function () {
-    it("requestLimits — should revert INVALID_REDEEM_LIMITS (min > max)", async function () {
+  describe("setLimits — validation branches", function () {
+    it("setLimits — should revert INVALID_REDEEM_LIMITS (min > max)", async function () {
       await expect(
-        directMint.requestLimits(1, 1000, 1000, 100), // minRedeem > maxRedeem
+        directMint.setLimits(1, 1000, 1000, 100),
       ).to.be.revertedWith("INVALID_REDEEM_LIMITS");
     });
 
-    it("requestLimits — should emit LimitsChangeRequested", async function () {
-      await expect(directMint.requestLimits(10, 500, 10, 500))
-        .to.emit(directMint, "LimitsChangeRequested");
-    });
-
-    it("cancelLimits — should clear pending and emit", async function () {
-      await directMint.requestLimits(10, 500, 10, 500);
-      await expect(directMint.cancelLimits()).to.emit(directMint, "LimitsChangeCancelled");
-
-      const pending = await directMint.pendingLimits();
-      expect(pending.pending).to.be.false;
-    });
-
-    it("cancelLimits — should revert NO_PENDING when nothing pending", async function () {
-      await expect(directMint.cancelLimits()).to.be.revertedWith("NO_PENDING");
-    });
-
-    it("executeLimits — should revert NO_PENDING when nothing pending", async function () {
-      await expect(directMint.executeLimits()).to.be.revertedWith("NO_PENDING");
-    });
-
-    it("executeLimits — should revert TIMELOCK_ACTIVE before 48h", async function () {
-      await directMint.requestLimits(10, 500, 10, 500);
-      await expect(directMint.executeLimits()).to.be.revertedWith("TIMELOCK_ACTIVE");
-    });
-
-    it("executeLimits — should apply limits after 48h delay", async function () {
+    it("setLimits — should apply limits directly", async function () {
       const minM = BigInt(5e6);
       const maxM = BigInt(500_000e6);
       const minR = BigInt(5e6);
       const maxR = BigInt(500_000e6);
 
-      await directMint.requestLimits(minM, maxM, minR, maxR);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.executeLimits())
-        .to.emit(directMint, "LimitsUpdated")
-        .withArgs(minM, maxM, minR, maxR);
+      await directMint.setLimits(minM, maxM, minR, maxR);
 
       expect(await directMint.minMintAmount()).to.equal(minM);
       expect(await directMint.maxMintAmount()).to.equal(maxM);
@@ -539,25 +445,14 @@ describe("CoverageBoost — DirectMintV2", function () {
       expect(await directMint.maxRedeemAmount()).to.equal(maxR);
     });
 
-    it("requestLimits — access control (non-admin reverts)", async function () {
-      await expect(directMint.connect(other).requestLimits(1, 100, 1, 100)).to.be.reverted;
+    it("setLimits — both pairs at boundary (min == max) should succeed", async function () {
+      await directMint.setLimits(100, 100, 200, 200);
+      expect(await directMint.minMintAmount()).to.equal(100);
+      expect(await directMint.maxMintAmount()).to.equal(100);
     });
 
-    it("cancelLimits — access control (non-admin reverts)", async function () {
-      await directMint.requestLimits(1, 100, 1, 100);
-      await expect(directMint.connect(other).cancelLimits()).to.be.reverted;
-    });
-
-    it("executeLimits — access control (non-admin reverts)", async function () {
-      await directMint.requestLimits(1, 100, 1, 100);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.connect(other).executeLimits()).to.be.reverted;
-    });
-
-    it("requestLimits — both pairs at boundary (min == max) should succeed", async function () {
-      await directMint.requestLimits(100, 100, 200, 200);
-      const pending = await directMint.pendingLimits();
-      expect(pending.pending).to.be.true;
+    it("setLimits — access control (non-timelock reverts)", async function () {
+      await expect(directMint.connect(other).setLimits(1, 100, 1, 100)).to.be.reverted;
     });
   });
 
@@ -686,34 +581,12 @@ describe("CoverageBoost — DirectMintV2", function () {
   // ================================================================
 
   describe("Access Control — exhaustive role checks", function () {
-    it("requestLimits — only DEFAULT_ADMIN_ROLE", async function () {
-      await expect(directMint.connect(user).requestLimits(1, 100, 1, 100)).to.be.reverted;
+    it("setLimits — only timelock", async function () {
+      await expect(directMint.connect(user).setLimits(1, 100, 1, 100)).to.be.reverted;
     });
 
-    it("cancelLimits — only DEFAULT_ADMIN_ROLE", async function () {
-      await directMint.requestLimits(1, 100, 1, 100);
-      await expect(directMint.connect(user).cancelLimits()).to.be.reverted;
-    });
-
-    it("executeLimits — only DEFAULT_ADMIN_ROLE", async function () {
-      await directMint.requestLimits(1, 100, 1, 100);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.connect(user).executeLimits()).to.be.reverted;
-    });
-
-    it("requestFeeRecipient — only DEFAULT_ADMIN_ROLE", async function () {
-      await expect(directMint.connect(user).requestFeeRecipient(user.address)).to.be.reverted;
-    });
-
-    it("cancelFeeRecipient — only DEFAULT_ADMIN_ROLE", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await expect(directMint.connect(user).cancelFeeRecipient()).to.be.reverted;
-    });
-
-    it("executeFeeRecipient — only DEFAULT_ADMIN_ROLE", async function () {
-      await directMint.requestFeeRecipient(other.address);
-      await time.increase(ADMIN_DELAY);
-      await expect(directMint.connect(user).executeFeeRecipient()).to.be.reverted;
+    it("setFeeRecipient — only timelock", async function () {
+      await expect(directMint.connect(user).setFeeRecipient(user.address)).to.be.reverted;
     });
 
     it("recoverToken — only DEFAULT_ADMIN_ROLE", async function () {
@@ -774,26 +647,8 @@ describe("CoverageBoost — DirectMintV2", function () {
       expect(await directMint.mintFees()).to.equal(expectedFees);
     });
 
-    it("pendingLimits struct returns correct values", async function () {
-      const minM = BigInt(2e6);
-      const maxM = BigInt(100_000e6);
-      const minR = BigInt(3e6);
-      const maxR = BigInt(200_000e6);
-
-      await directMint.requestLimits(minM, maxM, minR, maxR);
-      const p = await directMint.pendingLimits();
-
-      expect(p.minMint).to.equal(minM);
-      expect(p.maxMint).to.equal(maxM);
-      expect(p.minRedeem).to.equal(minR);
-      expect(p.maxRedeem).to.equal(maxR);
-      expect(p.pending).to.be.true;
-      expect(p.requestTime).to.be.gt(0);
-    });
-
     it("Constants are correct", async function () {
       expect(await directMint.MAX_FEE_BPS()).to.equal(500);
-      expect(await directMint.ADMIN_DELAY()).to.equal(48 * 3600);
       expect(await directMint.PAUSER_ROLE()).to.equal(
         ethers.keccak256(ethers.toUtf8Bytes("PAUSER_ROLE")),
       );
