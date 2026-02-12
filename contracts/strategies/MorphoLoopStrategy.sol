@@ -746,6 +746,8 @@ contract MorphoLoopStrategy is
         // Validate LTV is reasonable (max 85% to stay below typical 86% LLTV)
         if (_targetLtvBps > 8500 || _targetLtvBps < 5000) revert InvalidLTV();
         if (_targetLoops > MAX_LOOPS) revert ExcessiveLoops();
+        // FIX V3-AUDIT CR-12: Prevent underflow in _maxWithdrawable() if buffer >= LTV
+        require(_targetLtvBps > safetyBufferBps, "LTV_MUST_EXCEED_BUFFER");
 
         targetLtvBps = _targetLtvBps;
         targetLoops = _targetLoops;
@@ -758,6 +760,8 @@ contract MorphoLoopStrategy is
      */
     function setSafetyBuffer(uint256 _safetyBufferBps) external onlyRole(STRATEGIST_ROLE) {
         require(_safetyBufferBps >= 200 && _safetyBufferBps <= 2000, "Invalid buffer");
+        // FIX V3-AUDIT CR-12: Prevent underflow in _maxWithdrawable() if buffer >= LTV
+        require(targetLtvBps > _safetyBufferBps, "BUFFER_MUST_BE_BELOW_LTV");
         safetyBufferBps = _safetyBufferBps;
         emit SafetyBufferUpdated(_safetyBufferBps);
     }
