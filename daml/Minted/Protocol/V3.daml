@@ -1053,6 +1053,9 @@ template CantonDirectMint
 data SmUSDConfig = SmUSDConfig with
     cooldownSeconds : Int
     maxTotalDeposits : Money
+    -- DAML-H-06: Yield bound parameters to prevent unbounded yield injection
+    maxYieldBps : Int          -- Max yield per epoch as bps of totalAssets (default 500 = 5%)
+    maxEpochGap : Int          -- Max epochs between syncs (default 100)
   deriving (Eq, Show)
 
 -- | CantonSMUSD - Yield vault synced from Ethereum attestations.
@@ -1165,6 +1168,7 @@ template CantonSMUSD
         return (newService, musdCid)
 
     -- | Sync yield from Ethereum via attestation
+    -- DAML-H-06: Added yield bounds and epoch gap limit
     choice SMUSD_SyncYield : ContractId CantonSMUSD
       with
         yieldAccrued : Money
@@ -1173,6 +1177,10 @@ template CantonSMUSD
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
         assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+        -- DAML-H-06: Prevent unbounded yield injection
+        let maxYield = totalAssets * intToNumeric config.maxYieldBps / 10000.0
+        assertMsg "YIELD_EXCEEDS_MAX_PER_EPOCH" (yieldAccrued <= maxYield)
+        assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastYieldEpoch + config.maxEpochGap)
         create this with
           totalAssets = totalAssets + yieldAccrued
           lastYieldEpoch = epochNumber

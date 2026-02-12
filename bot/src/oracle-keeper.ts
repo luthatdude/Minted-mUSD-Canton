@@ -13,11 +13,18 @@
  */
 
 import { ethers, Wallet } from "ethers";
-import * as dotenv from "dotenv";
+// INFRA-H-02: Removed dotenv - never load .env files that may contain
+// NODE_TLS_REJECT_UNAUTHORIZED=0 or private keys. Use Docker secrets or env vars.
 import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 
-dotenv.config();
+// INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
+if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+  }
+}
 
 // Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {

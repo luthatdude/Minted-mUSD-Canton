@@ -12,19 +12,10 @@
  */
 
 import { ethers } from "ethers";
-import { readSecret, readAndValidatePrivateKey } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 
-// Handle unhandled promise rejections to prevent silent failures
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('FATAL: Unhandled promise rejection:', reason);
-  process.exit(1);
-});
-
-// Handle uncaught exceptions to prevent silent crashes
-process.on('uncaughtException', (error) => {
-  console.error('FATAL: Uncaught exception:', error);
-  process.exit(1);
-});
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -40,28 +31,19 @@ interface KeeperConfig {
 }
 
 const DEFAULT_CONFIG: KeeperConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01: No insecure fallback — require explicit RPC URL
+  ethereumRpcUrl: (() => {
+    const url = process.env.ETHEREUM_RPC_URL;
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required (no insecure default)");
+    requireHTTPS(url, "ETHEREUM_RPC_URL");
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
-  // Validate private key is in valid secp256k1 range
-  keeperPrivateKey: readAndValidatePrivateKey("keeper_private_key", "KEEPER_PRIVATE_KEY"),
+  keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
   minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
 };
-
-// Warn if using insecure HTTP transport for Ethereum RPC
-if (DEFAULT_CONFIG.ethereumRpcUrl && DEFAULT_CONFIG.ethereumRpcUrl.startsWith('http://') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('localhost') && !DEFAULT_CONFIG.ethereumRpcUrl.includes('127.0.0.1')) {
-  console.warn('WARNING: Using insecure HTTP transport for Ethereum RPC. Use HTTPS in production.');
-}
-// Reject insecure HTTP transport in production
-if (process.env.NODE_ENV === 'production' && DEFAULT_CONFIG.ethereumRpcUrl && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('https://') && !DEFAULT_CONFIG.ethereumRpcUrl.startsWith('wss://')) {
-  throw new Error('Insecure RPC transport in production. ETHEREUM_RPC_URL must use https:// or wss://');
-}
-
-// Validate Treasury address at startup
-if (DEFAULT_CONFIG.treasuryAddress && !ethers.isAddress(DEFAULT_CONFIG.treasuryAddress)) {
-  throw new Error(`Invalid TREASURY_ADDRESS: ${DEFAULT_CONFIG.treasuryAddress}`);
-}
 
 // ============================================================
 //                     TREASURY ABI
@@ -238,9 +220,8 @@ class YieldKeeper {
       const gasCostWei = gasEstimate * gasPrice;
       const gasCostEth = Number(gasCostWei) / 1e18;
 
-      // Use env-driven ETH price instead of hardcoded constant
-      const ethPriceUsd = parseFloat(process.env.ETH_PRICE_USD || "2000");
-      const gasCostUsd = gasCostEth * ethPriceUsd;
+      // Rough ETH price assumption ($2000) - in production, fetch from oracle
+      const gasCostUsd = gasCostEth * 2000;
 
       // Estimate daily yield on deployed amount (assume 10% APY)
       const deployableUsd = Number(deployable) / 1e6;

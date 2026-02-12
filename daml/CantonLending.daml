@@ -27,9 +27,10 @@ module CantonLending where
 import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, CantonDirectMintService(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
@@ -397,6 +398,56 @@ template CantonDebtPosition
         create this with interestRateBps = newRateBps
 
 -- ============================================================
+--                     SECTION 4B: COLLATERAL AGGREGATE
+-- ============================================================
+
+-- | DAML-H-03: On-ledger aggregate tracking total collateral deposited per type.
+-- Updated by deposit/withdraw choices to provide a protocol-wide view of locked collateral.
+-- Keyed by (operator, collateralType) for efficient lookup.
+template LendingCollateralAggregate
+  with
+    operator       : Party
+    collateralType : CollateralType
+    totalDeposited : Money    -- Sum of all escrowed amounts for this type
+    depositCount   : Int      -- Number of active escrow positions
+    lastUpdatedAt  : Time
+  where
+    signatory operator
+
+    key (operator, collateralType) : (Party, CollateralType)
+    maintainer key._1
+
+    ensure totalDeposited >= 0.0 && depositCount >= 0
+
+    -- | Increment on deposit
+    choice Aggregate_AddDeposit : ContractId LendingCollateralAggregate
+      with
+        amount : Money
+        isNewPosition : Bool  -- Only increment depositCount for new escrow positions
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalDeposited = totalDeposited + amount
+          depositCount = if isNewPosition then depositCount + 1 else depositCount
+          lastUpdatedAt = now
+
+    -- | Decrement on withdrawal
+    choice Aggregate_RemoveDeposit : ContractId LendingCollateralAggregate
+      with
+        amount : Money
+        isFullWithdrawal : Bool  -- Only decrement depositCount on full position close
+      controller operator
+      do
+        now <- getTime
+        let newTotal = if amount >= totalDeposited then 0.0 else totalDeposited - amount
+        let newCount = if isFullWithdrawal && depositCount > 0 then depositCount - 1 else depositCount
+        create this with
+          totalDeposited = newTotal
+          depositCount = newCount
+          lastUpdatedAt = now
+
+-- ============================================================
 --                     SECTION 5: LENDING SERVICE
 -- ============================================================
 
@@ -404,6 +455,7 @@ template CantonDebtPosition
 -- Manages collateral configs, orchestrates deposits/borrows/liquidations.
 -- Operator syncs prices from Tradecraft (primary) / Temple (fallback) DEX APIs.
 -- DAML-H-02: Added supply-cap tracking for Canton-side mUSD minting coordination
+-- DAML-H-04: Mandatory compliance registry for blacklist/freeze enforcement
 template CantonLendingService
   with
     operator           : Party
@@ -415,9 +467,15 @@ template CantonLendingService
     minBorrow          : Money                  -- Minimum borrow amount (anti-dust)
     closeFactorBps     : Bps                    -- Max % of debt liquidatable per call
     paused             : Bool
-    -- DAML-H-02: Supply cap tracking
+    -- DAML-H-02: Supply cap tracking with cross-module coordination
     cantonSupplyCap    : Money                  -- Maximum mUSD mintable via Canton lending
     cantonCurrentSupply : Money                 -- Current mUSD minted via Canton lending
+    -- DAML-H-02: Cross-module supply coordination
+    -- The DirectMint service name allows verifying combined supply at borrow time
+    directMintServiceName : Text                -- Key to look up CantonDirectMintService
+    globalMintCap      : Money                  -- Hard ceiling: lending + directMint combined
+    -- DAML-H-04: Mandatory compliance check on all borrowers
+    complianceRegistryCid : ContractId ComplianceRegistry
     -- Master Participation Agreement (for minted mUSD)
     mpaHash            : Text
     mpaUri             : Text
@@ -475,6 +533,24 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_Coin)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = coin.amount
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_Coin
+              totalDeposited = coin.amount
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
         return (self, escrowCid)
 
     -- | Deposit CantonUSDC as collateral
@@ -509,6 +585,24 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDC)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = usdc.amount
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_USDC
+              totalDeposited = usdc.amount
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
         return (self, escrowCid)
 
     -- | Deposit USDCx as collateral
@@ -542,6 +636,24 @@ template CantonLendingService
             depositedAt = now
             lastUpdatedAt = now
             privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDCx)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = usdcx.amount
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_USDCx
+              totalDeposited = usdcx.amount
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
 
         return (self, escrowCid)
 
@@ -578,6 +690,24 @@ template CantonLendingService
             lastUpdatedAt = now
             privacyObservers = userObs
 
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSD)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = smusd.shares
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_SMUSD
+              totalDeposited = smusd.shares
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
         return (self, escrowCid)
 
     -- ──────────────────────────────────────────────────────
@@ -598,8 +728,21 @@ template CantonLendingService
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
-        -- DAML-H-02: Supply cap check — prevents unbounded Canton-side mUSD minting
+        -- DAML-H-02: Module-level supply cap check
         assertMsg "EXCEEDS_CANTON_SUPPLY_CAP" (cantonCurrentSupply + borrowAmount <= cantonSupplyCap)
+
+        -- DAML-H-02: Cross-module supply coordination
+        -- Verify combined minting across DirectMint + Lending doesn't exceed global cap
+        directMintOpt <- lookupByKey @CantonDirectMintService (operator, directMintServiceName)
+        case directMintOpt of
+          Some dmCid -> do
+            dm <- fetch dmCid
+            let combinedSupply = dm.currentSupply + cantonCurrentSupply + borrowAmount
+            assertMsg "EXCEEDS_GLOBAL_MINT_CAP" (combinedSupply <= globalMintCap)
+          None -> pure () -- DirectMint not deployed yet; rely on module-level cap
+
+        -- DAML-H-04: Mandatory compliance check — borrower must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         -- Calculate total collateral value (weighted by collateralFactorBps)
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
@@ -746,6 +889,17 @@ template CantonLendingService
           amount = withdrawAmount
           privacyObservers = userObs
 
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_Coin)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
         return (self, coinCid)
 
     -- ──────────────────────────────────────────────────────
@@ -797,6 +951,17 @@ template CantonLendingService
           amount = withdrawAmount
           privacyObservers = userObs
 
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDC)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
         return (self, usdcCid)
 
     -- | Withdraw USDCx collateral.
@@ -846,6 +1011,17 @@ template CantonLendingService
           sourceChain = "canton-lending-withdrawal"
           cctpNonce = 0
           privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDCx)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
 
         return (self, usdcxCid)
 
@@ -897,6 +1073,17 @@ template CantonLendingService
           entrySharePrice = 1.0  -- Placeholder; real share price is tracked by CantonStakingService
           stakedAt = escrow.depositedAt
           privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSD)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
 
         return (self, smusdCid)
 
@@ -1113,6 +1300,13 @@ template CantonLendingService
         newService <- create this with
           protocolReserves = protocolReserves - amount
         return (newService, musdCid)
+
+    -- | DAML-H-04: Update compliance registry reference
+    choice Lending_SetComplianceRegistry : ContractId CantonLendingService
+      with
+        newRegistryCid : ContractId ComplianceRegistry
+      controller operator
+      do create this with complianceRegistryCid = newRegistryCid
 
 -- ============================================================
 --                     SECTION 6: LIQUIDATION RECEIPT

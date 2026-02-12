@@ -26,6 +26,7 @@ import DA.Time
 import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import UserPrivacySettings (lookupUserObservers)
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: CANTON COIN TOKEN
@@ -223,6 +224,8 @@ template CantonBoostPoolService
     cantonCapRatio         : Money      -- Max Canton value as ratio of sMUSD value (default 0.25 = 20/80)
     cooldownSeconds        : Int        -- Minimum lock before withdrawal
     paused                 : Bool
+    -- DAML-H-04: Mandatory compliance — all depositors must pass blacklist/freeze checks
+    complianceRegistryCid  : ContractId ComplianceRegistry
     serviceName            : Text
     observers              : [Party]
   where
@@ -255,6 +258,9 @@ template CantonBoostPoolService
       controller user
       do
         assertMsg "POOL_PAUSED" (not paused)
+
+        -- DAML-H-04: Mandatory compliance check — depositor must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         canton <- fetch cantonCid
         assertMsg "CANTON_ISSUER_MISMATCH" (canton.issuer == operator)
@@ -340,6 +346,9 @@ template CantonBoostPoolService
         lpCid : ContractId BoostPoolLP
       controller user
       do
+
+        -- DAML-H-04: Mandatory compliance check — withdrawer must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
 
         lp <- fetch lpCid
         assertMsg "LP_OWNER_MISMATCH" (lp.owner == user)
