@@ -1248,9 +1248,15 @@ template CantonLendingService
           timestamp = now
 
         let repayFromBorrows = min actualRepay totalBorrows
+        -- FIX C-01: Decrement cantonCurrentSupply on liquidation.
+        -- The mUSD is burned during liquidation (lines 1183-1190) so the supply
+        -- counter must be decremented to match, preventing progressive inflation
+        -- of supply tracking that could overstate bridge attestation values.
+        let repayFromSupply = min actualRepay cantonCurrentSupply
         newService <- create this with
           totalBorrows = totalBorrows - repayFromBorrows
           protocolReserves = protocolReserves + protocolFee
+          cantonCurrentSupply = cantonCurrentSupply - repayFromSupply
 
         return (newService, receiptCid)
 
