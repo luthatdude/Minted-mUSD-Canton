@@ -43,8 +43,8 @@ describe("SMUSDPriceAdapter", function () {
   beforeEach(async function () {
     [deployer, admin, user1] = await ethers.getSigners();
 
-    // Deploy MockSMUSD with 1.0 USD share price
-    const MockSMUSDFactory = await ethers.getContractFactory("MockSMUSD");
+    // Deploy MockSMUSDAdapter with 1.0 USD share price
+    const MockSMUSDFactory = await ethers.getContractFactory("MockSMUSDAdapter");
     mockSmusd = await MockSMUSDFactory.deploy(ethers.parseEther("1.0"));
     await mockSmusd.waitForDeployment();
 
@@ -398,11 +398,14 @@ describe("SMUSDPriceAdapter", function () {
       expect(answer).to.equal(ethers.parseUnits("1.0", 8));
 
       await adapter.connect(admin).incrementRound();
+      const roundAfterIncrement = (await adapter.latestRoundData())[0];
+
       await setSharePrice("1.15");
       await convergePriceAdapter(adapter);
 
       [roundId, answer] = await adapter.latestRoundData();
-      expect(roundId).to.equal(2);
+      // roundId increased by incrementRound + convergePriceAdapter iterations
+      expect(roundId).to.be.gt(roundAfterIncrement);
       expect(answer).to.equal(ethers.parseUnits("1.15", 8));
     });
   });

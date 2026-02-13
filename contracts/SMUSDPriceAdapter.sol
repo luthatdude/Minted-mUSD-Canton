@@ -63,8 +63,11 @@ contract SMUSDPriceAdapter is AccessControl {
     /// @notice Cached price from the last query (for rate limiting)
     uint256 private _lastPrice;
 
-    /// @notice Block number of the last query
+    /// @notice Block number of the last query (used for rate limiting)
     uint256 private _lastPriceBlock;
+
+    /// @notice Timestamp of the last cache update (used for Chainlink output)
+    uint256 private _lastPriceTimestamp;
 
     /// @notice Internal round tracking
     uint80 private _roundId;
@@ -123,8 +126,8 @@ contract SMUSDPriceAdapter is AccessControl {
         uint256 price = _getSharePriceUsd();
 
         // Return cached timestamp so downstream staleness checks work correctly.
-        // If _lastPriceBlock is 0 (never cached), return current timestamp as fallback.
-        uint256 cachedTimestamp = _lastPriceBlock > 0 ? _lastPriceBlock : block.number;
+        // If never cached, return current block.timestamp as fallback.
+        uint256 cachedTimestamp = _lastPriceTimestamp > 0 ? _lastPriceTimestamp : block.timestamp;
         
         return (
             _roundId,
@@ -214,6 +217,7 @@ contract SMUSDPriceAdapter is AccessControl {
         uint256 price = _getSharePriceUsd();
         _lastPrice = price;
         _lastPriceBlock = block.number;
+        _lastPriceTimestamp = block.timestamp;
         _roundId++;
     }
 
