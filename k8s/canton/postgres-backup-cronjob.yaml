@@ -78,6 +78,10 @@ spec:
                 - |
                   set -euo pipefail
 
+                  # INFRA-H-05: Read DB credentials from volume-mounted secret files
+                  export PGUSER="$(cat /run/secrets/db-username)"
+                  export PGPASSWORD="$(cat /run/secrets/db-password)"
+
                   TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
                   BACKUP_FILE="/backups/canton_backup_${TIMESTAMP}.sql.gz"
 
@@ -116,16 +120,8 @@ spec:
                   value: "5432"
                 - name: PGDATABASE
                   value: canton
-                - name: PGUSER
-                  valueFrom:
-                    secretKeyRef:
-                      name: postgres-credentials
-                      key: username
-                - name: PGPASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: postgres-credentials
-                      key: password
+                # INFRA-H-05: DB credentials read from volume-mounted secrets at /run/secrets/
+                # PGUSER and PGPASSWORD are set from files by the entrypoint script below
               resources:
                 requests:
                   cpu: 100m
@@ -145,6 +141,15 @@ spec:
                   mountPath: /backups
                 - name: tmp
                   mountPath: /tmp
+                # INFRA-H-05: Mount DB credentials as files instead of env vars
+                - name: db-credentials
+                  mountPath: /run/secrets/db-username
+                  subPath: username
+                  readOnly: true
+                - name: db-credentials
+                  mountPath: /run/secrets/db-password
+                  subPath: password
+                  readOnly: true
           volumes:
             - name: backups
               persistentVolumeClaim:
@@ -152,3 +157,7 @@ spec:
             - name: tmp
               emptyDir:
                 sizeLimit: 256Mi
+            # INFRA-H-05: DB credentials mounted as files (read from /run/secrets/)
+            - name: db-credentials
+              secret:
+                secretName: postgres-credentials
