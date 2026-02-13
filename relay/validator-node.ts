@@ -4,7 +4,7 @@
  * @deprecated Use validator-node-v2.ts instead.
  *
  * ╔═══════════════════════════════════════════════════════════════════════════════╗
- * ║  FIX H-07: DEPRECATED — Use validator-node-v2.ts for all new deployments.   ║
+ * ║  DEPRECATED — Use validator-node-v2.ts for all new deployments.        ║
  * ║                                                                             ║
  * ║  V1 message hash has 7 parameters; V2 has 8 (adds cantonStateHash).         ║
  * ║  V1 attestation ID uses ethers.id() (keccak256 of UTF-8 string);            ║
@@ -40,7 +40,7 @@ import * as fs from "fs";
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
 
-// FIX H-07: Warn operators that V1 is deprecated and incompatible with V2 signatures
+// Warn operators that V1 is deprecated and incompatible with V2 signatures
 console.warn(
   "[DEPRECATED] validator-node.ts (V1) uses a 7-parameter message hash WITHOUT cantonStateHash. " +
   "V2 uses 8 parameters. Mixed V1/V2 validators will produce incompatible signatures. " +
@@ -435,7 +435,7 @@ class ValidatorNode {
     const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
     const timestamp = Math.max(1, rawTimestamp);
 
-    // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
+    // Include entropy in hash (matches BLEBridgeV9 signature verification)
     const entropy = (payload as any).entropy
       ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
       : ethers.ZeroHash;
@@ -537,7 +537,7 @@ async function main(): Promise<void> {
     throw new Error("CANTON_TOKEN not set");
   }
 
-  // FIX H-07: Runtime deprecation warning — V1 signatures are incompatible with V2 on-chain verification.
+  // Runtime deprecation warning — V1 signatures are incompatible with V2 on-chain verification.
   console.warn("╔══════════════════════════════════════════════════════════════════════════════╗");
   console.warn("║  ⚠️  DEPRECATION WARNING: validator-node.ts (V1) is DEPRECATED.             ║");
   console.warn("║  V1 message hash has 7 parameters; BLEBridgeV9 V2 expects 8.               ║");

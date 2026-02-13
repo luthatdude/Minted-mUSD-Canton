@@ -1,5 +1,5 @@
 // useCantonBoostPool — hook for Canton Network liquidity boost pool interactions
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import { useState, useEffect, useCallback } from "react";
 import { useLoopWallet, LoopContract } from "./useLoopWallet";

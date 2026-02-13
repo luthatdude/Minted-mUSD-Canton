@@ -27,7 +27,7 @@ interface DashboardData {
   interestRateBps: bigint;
 }
 
-// FIX FE-H06: Type-safe PromiseSettledResult value extractor
+// Type-safe PromiseSettledResult value extractor
 function settledValue<T>(result: PromiseSettledResult<T>, fallback: T): T {
   return result.status === "fulfilled" ? result.value : fallback;
 }
@@ -87,7 +87,7 @@ export function DashboardPage() {
           borrow?.interestRateBps() ?? 0n,
         ]);
 
-        // FIX FE-H06: Use type-safe settledValue instead of `as any`
+        // Use type-safe settledValue instead of `as any`
         setData({
           musdSupply: settledValue(results[0], 0n),
           supplyCap: settledValue(results[1], 0n),

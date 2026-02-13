@@ -32,7 +32,7 @@ contract PriceOracle is AccessControl {
         uint256 stalePeriod;  // Max age in seconds before data is considered stale
         uint8 tokenDecimals;  // Decimals of the collateral token (e.g., 18 for ETH, 8 for WBTC)
         bool enabled;
-        uint256 maxDeviationBps; // FIX S-L-05: Per-asset circuit breaker threshold (0 = use global)
+        uint256 maxDeviationBps; // Per-asset circuit breaker threshold (0 = use global)
     }
 
     // collateral token address => feed config
@@ -110,7 +110,7 @@ contract PriceOracle is AccessControl {
     /// @param feed The Chainlink aggregator address
     /// @param stalePeriod Maximum acceptable age of price data in seconds
     /// @param tokenDecimals The number of decimals the collateral token uses
-    /// @param assetMaxDeviationBps FIX S-L-05: Per-asset circuit breaker threshold (0 = use global)
+    /// @param assetMaxDeviationBps Per-asset circuit breaker threshold (0 = use global)
     function setFeed(
         address token,
         address feed,
@@ -191,7 +191,7 @@ contract PriceOracle is AccessControl {
         // Normalize to 18 decimals
         price = uint256(answer) * (10 ** (18 - feedDecimals));
 
-        // FIX HIGH-05 + S-L-05: Anchor spot price against lastKnownPrice to mitigate
+        // Anchor spot price against lastKnownPrice to mitigate
         // flash loan manipulation. Per-asset deviation thresholds allow tighter bounds
         // for stablecoins vs volatile assets (e.g., 500bps for WBTC, 2000bps for ETH).
         if (circuitBreakerEnabled && lastKnownPrice[token] > 0) {
@@ -206,7 +206,7 @@ contract PriceOracle is AccessControl {
                     // Auto-recovery: cooldown elapsed from formal trip time
                 } else if (circuitBreakerTrippedAt[token] == 0 &&
                            block.timestamp >= updatedAt + circuitBreakerCooldown) {
-                    // FIX P1-CODEX: Auto-recovery when circuit breaker was never formally
+                    // Auto-recovery when circuit breaker was never formally
                     // tripped by updatePrice() but the Chainlink feed has been at the new
                     // level for >cooldown. Without this, getPrice() permanently reverts
                     // if no keeper calls updatePrice() after a legitimate large price move.
@@ -234,15 +234,15 @@ contract PriceOracle is AccessControl {
         if (oldPrice > 0) {
             uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
             uint256 deviationBps = (diff * 10000) / oldPrice;
-            // FIX S-L-05: Use per-asset deviation threshold with global fallback
+            // Use per-asset deviation threshold with global fallback
             uint256 effectiveDevUp = config.maxDeviationBps > 0 ? config.maxDeviationBps : maxDeviationBps;
             emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
             if (deviationBps > effectiveDevUp) {
-                // FIX C-03: Only set the circuit breaker when deviation exceeds threshold.
+                // Only set the circuit breaker when deviation exceeds threshold.
                 if (circuitBreakerTrippedAt[token] == 0) {
                     circuitBreakerTrippedAt[token] = block.timestamp;
                 }
-                // FIX C-03: Do NOT clear — the circuit breaker must persist until
+                // Do NOT clear — the circuit breaker must persist until
                 // manually reset by an admin after verifying the price move is legitimate.
                 lastKnownPrice[token] = newPrice;
                 return;
@@ -250,7 +250,7 @@ contract PriceOracle is AccessControl {
         }
         
         lastKnownPrice[token] = newPrice;
-        // FIX C-03: Only clear circuit breaker when price is within bounds
+        // Only clear circuit breaker when price is within bounds
         circuitBreakerTrippedAt[token] = 0;
     }
 

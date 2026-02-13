@@ -66,7 +66,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    /// @notice FIX H-03: TIMELOCK_ROLE for critical parameter changes
+    /// @notice TIMELOCK_ROLE for critical parameter changes
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     ICollateralVault public immutable vault;
@@ -98,7 +98,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Total interest paid to suppliers (for analytics)
     uint256 public totalInterestPaidToSuppliers;
 
-    /// @notice FIX S-M-01: Buffered interest that failed to route to SMUSD
+    /// @notice Buffered interest that failed to route to SMUSD
     /// Retried on next accrual to prevent phantom debt accumulation
     uint256 public pendingInterest;
     
@@ -260,7 +260,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
-        // FIX S-L-06: Auto-close dust positions. If remaining debt would be
+        // Auto-close dust positions. If remaining debt would be
         // below minDebt, force full repayment to prevent uneconomical dust.
         uint256 remaining = total - repayAmount;
         if (remaining > 0 && remaining < minDebt) {
@@ -310,7 +310,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
-        // FIX S-L-06: Auto-close dust positions in repayFor (same as repay)
+        // Auto-close dust positions in repayFor (same as repay)
         uint256 remaining = total - repayAmount;
         if (remaining > 0 && remaining < minDebt) {
             repayAmount = total;
@@ -454,13 +454,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Add reserves to protocol
             protocolReserves += reserveAmount;
 
-            // FIX S-M-01: Route supplier portion to SMUSD. Buffer unrouted interest
+            // Route supplier portion to SMUSD. Buffer unrouted interest
             // so totalBorrows only increases when routing succeeds, preventing phantom debt.
             bool routingSucceeded = false;
             if (supplierAmount > 0 && address(smusd) != address(0)) {
                 uint256 toRoute = supplierAmount + pendingInterest;
                 try musd.mint(address(this), toRoute) {
-                    // FIX S-L-01: Use forceApprove instead of raw approve
+                    // Use forceApprove instead of raw approve
                     IERC20(address(musd)).forceApprove(address(smusd), toRoute);
                     try smusd.receiveInterest(toRoute) {
                         totalInterestPaidToSuppliers += toRoute;
@@ -482,7 +482,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                 routingSucceeded = true; // No routing needed
             }
 
-            // FIX S-M-01: Only increase totalBorrows when interest is successfully routed
+            // Only increase totalBorrows when interest is successfully routed
             // This prevents phantom debt from inflating utilization rates
             if (routingSucceeded) {
                 totalBorrows += interest;
@@ -501,7 +501,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Accrue interest on a user's debt
     /// @dev Uses dynamic rate from InterestRateModel if set, otherwise fixed rate.
     ///      Uses SIMPLE INTEREST model (not compound) for gas efficiency.
-    ///      H-02: DOCUMENTED DESIGN DECISION - simple interest is intentional.
+    ///      Simple interest is intentional (documented design decision).
     function _accrueInterest(address user) internal {
         // First accrue global interest (for routing to suppliers)
         _accrueGlobalInterest();
@@ -829,7 +829,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //          FIX HIGH-02 (Re-audit): DRAIN PENDING INTEREST
+    //          DRAIN PENDING INTEREST
     // ============================================================
 
     event PendingInterestDrained(uint256 amount, uint256 adjustedTotalBorrows);

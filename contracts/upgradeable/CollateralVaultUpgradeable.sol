@@ -97,9 +97,8 @@ contract CollateralVaultUpgradeable is
     // ══════════════════════════════════════════════════════════════════════
 
     /// @notice Add a new collateral token — must be called through MintedTimelockController
-    /// @dev FIX MED-04 (Re-audit): Added supportedTokens length cap (max 50) to prevent
+    /// @dev Enforces supportedTokens length cap (max 50) to prevent
     ///      gas DoS in BorrowModule's _weightedCollateralValue() which iterates all supported tokens.
-    ///      The non-upgradeable CollateralVault has this check; this version was missing it.
     function addCollateral(
         address token,
         uint256 collateralFactorBps,
@@ -151,7 +150,7 @@ contract CollateralVaultUpgradeable is
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // FIX H-05: ADMIN — disableCollateral / enableCollateral
+    // ADMIN — disableCollateral / enableCollateral
     // ══════════════════════════════════════════════════════════════════════
 
     /// @notice Disable an existing collateral token — must be called through MintedTimelockController
@@ -276,10 +275,8 @@ contract CollateralVaultUpgradeable is
     // ══════════════════════════════════════════════════════════════════════
 
     /// from permanently blocking withdrawals during extreme price moves
-    /// @dev FIX P1-CODEX: Fail-CLOSED when both oracle paths revert.
-    ///      Previously allowed withdrawal when both healthFactor() and healthFactorUnsafe()
-    ///      reverted, enabling users with debt to extract all collateral — creating unbacked mUSD.
-    ///      Now reverts with ORACLE_UNAVAILABLE, blocking withdrawal until oracle recovers.
+    /// @dev Fail-CLOSED when both oracle paths revert.
+    ///      Reverts with HEALTH_CHECK_FAILED, blocking withdrawal until oracle recovers.
     function _checkHealthFactor(address user) internal view {
         if (borrowModule != address(0)) {
             uint256 debt = IBorrowModule(borrowModule).totalDebt(user);
@@ -291,10 +288,7 @@ contract CollateralVaultUpgradeable is
                     try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
                         require(hfUnsafe >= 10000, "HEALTH_FACTOR_TOO_LOW");
                     } catch {
-                        // FIX C-04: Both safe and unsafe oracles failed — REVERT.
-                        // Previously this was an empty catch{} that silently allowed
-                        // withdrawal, enabling borrowers to drain collateral while
-                        // keeping outstanding debt, creating unbacked mUSD.
+                        // Both safe and unsafe oracles failed — REVERT.
                         revert("HEALTH_CHECK_FAILED");
                     }
                 }

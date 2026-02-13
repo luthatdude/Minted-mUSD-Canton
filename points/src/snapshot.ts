@@ -1,5 +1,5 @@
 // Points snapshot — periodic snapshot of user points balances
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import { calculatePoints, DEFAULT_CONFIG, PointsConfig } from "./calculator";
 

@@ -269,7 +269,6 @@ contract MorphoLoopStrategy is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // FIX C-05: Removed infinite approval (type(uint256).max) to Morpho.
         // Per-operation approvals are now set before each supply/borrow/repay
         // call in _loop(), _deleverage(), and _fullDeleverage() to limit
         // exposure if Morpho Blue is compromised or upgraded maliciously.
@@ -482,7 +481,7 @@ contract MorphoLoopStrategy is
             // This protects against paying high borrow interest with 0% supply yield
             emit LoopingSkipped(borrowRate, maxBorrowRateForProfit, "Borrow rate too high");
 
-            // FIX HIGH-07: Per-operation approval for Morpho supplyCollateral
+            // Per-operation approval for Morpho supplyCollateral
             usdc.forceApprove(address(morpho), initialAmount);
             // Just supply the initial amount without looping
             morpho.supplyCollateral(marketParams, initialAmount, address(this), "");
@@ -490,7 +489,7 @@ contract MorphoLoopStrategy is
         }
 
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
-            // FIX C-05: Per-operation approval before each Morpho interaction
+            // Per-operation approval before each Morpho interaction
             usdc.forceApprove(address(morpho), amountToSupply);
             // Supply USDC as collateral
             morpho.supplyCollateral(marketParams, amountToSupply, address(this), "");
@@ -550,7 +549,7 @@ contract MorphoLoopStrategy is
                 // Only use newly withdrawn funds for repayment
                 uint256 available = balance - startingBalance;
                 uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
-                // FIX C-05: Per-operation approval before repay
+                // Per-operation approval before repay
                 usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
@@ -602,7 +601,7 @@ contract MorphoLoopStrategy is
             uint256 balance = usdc.balanceOf(address(this));
             if (balance > 0) {
                 uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
-                // FIX C-05: Per-operation approval before repay
+                // Per-operation approval before repay
                 usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }
@@ -816,6 +815,6 @@ contract MorphoLoopStrategy is
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    /// @notice Only MintedTimelockController can authorize upgrades (48h delay enforced)
     function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {}
 }

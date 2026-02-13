@@ -1,5 +1,5 @@
 # ── Minted mUSD Protocol Subgraph Manifest ─────────────────────────
-# FIX C-10: Provides on-chain observability for critical protocol events.
+# Provides on-chain observability for critical protocol events.
 # Contract addresses below are placeholders — replace with deployed addresses.
 # Network: sepolia (chainId 11155111). Change to mainnet for production.
 

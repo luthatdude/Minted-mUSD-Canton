@@ -24,7 +24,7 @@ export function LiquidationsPage() {
 
   const { liquidation, borrow, musd } = contracts;
 
-  // FIX FE-H02: Validate addresses before use
+  // Validate addresses before use
   const isValidBorrower = useMemo(() => {
     return borrower.length > 0 && ethers.isAddress(borrower);
   }, [borrower]);
@@ -37,7 +37,7 @@ export function LiquidationsPage() {
   const collateralError = collateralToken.length > 0 && !isValidCollateral ? "Invalid address format" : null;
 
   async function handleCheck() {
-    // FIX FE-H02: Validate addresses before contract calls
+    // Validate addresses before contract calls
     if (!liquidation || !borrow || !isValidBorrower) {
       return;
     }
@@ -58,13 +58,13 @@ export function LiquidationsPage() {
   }
 
   async function handleLiquidate() {
-    // FIX FE-H02: Validate all addresses before contract calls
+    // Validate all addresses before contract calls
     if (!liquidation || !musd || !address || !isValidBorrower || !isValidCollateral) {
       return;
     }
     const parsed = ethers.parseUnits(debtAmount, MUSD_DECIMALS);
     
-    // FIX FE-H01: Use simulation before actual transaction
+    // Use simulation before actual transaction
     await tx.send(
       async () => {
         const allowance = await musd.allowance(address, CONTRACTS.LiquidationEngine);

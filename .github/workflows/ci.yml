@@ -18,7 +18,7 @@ jobs:
     name: Solidity Build & Test
     runs-on: ubuntu-latest
     steps:
-      # FIX HIGH-001 (Re-audit): SHA-pinned all Actions to prevent supply-chain attacks
+      # SHA-pinned all Actions to prevent supply-chain attacks
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
@@ -394,7 +394,7 @@ jobs:
         # GHSA-37qj-frw5-hhjh allowlisted (mitigated via npm override)
 
   # ============================================================
-  #  FIX HIGH-003 (Re-audit): CERTORA FORMAL VERIFICATION
+  #  CERTORA FORMAL VERIFICATION
   # ============================================================
   certora:
     name: Certora Formal Verification
@@ -439,7 +439,7 @@ jobs:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
   # ============================================================
-  #  FIX MED-005 (Re-audit): SECRET SCANNING
+  #  SECRET SCANNING
   # ============================================================
   secret-scan:
     name: Secret Scanning (gitleaks)

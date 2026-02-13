@@ -11,7 +11,7 @@
  *  3. SMUSD: ERC-4626 compliance (convertToShares/convertToAssets consistency)
  *  4. Cross-contract integration paths
  *
- *  FIX AUDIT-01: SMUSD convertToShares/convertToAssets now delegates to
+ *  SMUSD convertToShares/convertToAssets now delegates to
  *  internal _convertToShares/_convertToAssets for ERC-4626 spec compliance.
  */
 
@@ -1117,7 +1117,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECTION 3: SMUSD — ERC-4626 Compliance (FIX AUDIT-01)
+//  SECTION 3: SMUSD — ERC-4626 Compliance
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
@@ -1146,7 +1146,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
   }
 
   describe("convertToShares / convertToAssets consistency", function () {
-    it("convertToShares should match deposit result (FIX AUDIT-01)", async function () {
+    it("convertToShares should match deposit result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // First user deposits to create a non-trivial share price
@@ -1168,13 +1168,13 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       // The key check: previewDeposit should also match
       const previewDeposit = await smusd.previewDeposit(depositAmount);
 
-      // With FIX AUDIT-01, these should be consistent (within rounding)
+      // These should be consistent (within rounding)
       // previewDeposit uses _convertToShares with Floor rounding
       // convertToShares now also delegates to _convertToShares with Floor rounding
       expect(previewShares).to.equal(previewDeposit);
     });
 
-    it("convertToAssets should match redeem result (FIX AUDIT-01)", async function () {
+    it("convertToAssets should match redeem result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // Deposit
@@ -1190,7 +1190,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       const previewAssets = await smusd.convertToAssets(shares);
       const previewRedeem = await smusd.previewRedeem(shares);
 
-      // With FIX AUDIT-01, these should be consistent
+      // These should be consistent
       expect(previewAssets).to.equal(previewRedeem);
     });
 
@@ -1598,7 +1598,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     return { directMint, musd, usdc, treasury, deployer, user1 };
   }
 
-  describe("Minimum fee enforcement (FIX S-M08)", function () {
+  describe("Minimum fee enforcement", function () {
     it("should charge minimum 1 wei USDC fee even on tiny redemptions", async function () {
       const { directMint, musd, usdc, user1 } = await loadFixture(deployMintFixture);
 

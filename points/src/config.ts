@@ -1,5 +1,5 @@
 // Points config — environment and chain configuration
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 export interface PointsEnvConfig {
   /** Dune Analytics API key for on-chain data queries */

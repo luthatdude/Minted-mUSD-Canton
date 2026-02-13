@@ -1,5 +1,5 @@
 // Points Page — displays user points, leaderboard, and referral system
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";

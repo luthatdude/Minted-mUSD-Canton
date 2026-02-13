@@ -1,5 +1,5 @@
 // Dashboard Mint Page — combines Ethereum and Canton minting views
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import React from "react";
 import { PageHeader } from "@/components/PageHeader";
