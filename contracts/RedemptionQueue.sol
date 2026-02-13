@@ -18,6 +18,16 @@ interface IMUSDBurnable {
 ///         is available. This prevents a rush to redeem from causing a liquidity
 ///         crisis in the Treasury.
 /// @dev FIX C-1: Burns mUSD after fulfillment to prevent permanent supply inflation.
+///
+/// @dev FIX MED-02 (Re-audit): DEPLOYMENT DEPENDENCY — This contract's `processBatch()`
+///      calls `musdBurnable.burn(address(this), ...)` which requires the RedemptionQueue
+///      address to hold BRIDGE_ROLE or LIQUIDATOR_ROLE on the MUSD contract.
+///      Without this role grant, ALL redemption fulfillments will revert, permanently
+///      locking users' mUSD in the queue. Deployment scripts MUST include:
+///
+///          musd.grantRole(musd.BRIDGE_ROLE(), redemptionQueueAddress);
+///
+///      See also: scripts/deploy.ts and scripts/verify-deployment.ts for the grant step.
 contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 

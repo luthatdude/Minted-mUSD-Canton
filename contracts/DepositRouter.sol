@@ -139,6 +139,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event FeeUpdated(uint256 oldFee, uint256 newFee);
     event FeesWithdrawn(address indexed to, uint256 amount);
+    /// @dev FIX LOW-02 (Re-audit): Dedicated event for failed native token refunds.
+    ///      Previously reused FeesWithdrawn(sender, 0) which was ambiguous in monitoring.
+    event RefundFailed(address indexed recipient, uint256 amount);
 
     // ============ Errors ============
     
@@ -411,7 +414,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
             // If refund fails, excess stays in contract for admin recovery
             // via emergencyWithdraw() rather than reverting the entire deposit
             if (!success) {
-                emit FeesWithdrawn(msg.sender, 0); // Signal failed refund for monitoring
+                // FIX LOW-02 (Re-audit): Emit dedicated RefundFailed event with amount
+                // so monitoring can detect stuck native tokens for admin recovery
+                emit RefundFailed(msg.sender, msg.value - bridgeCost);
             }
         }
     }
