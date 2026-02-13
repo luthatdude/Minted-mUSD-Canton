@@ -5,10 +5,10 @@
 # INFRA-H-05: Pin to SHA256 digest for supply-chain security
 # To update, run:
 #   docker pull node:20-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:20-alpine
-# Last verified: node:20-alpine = 20.19.2-alpine3.21
+# Last verified: node:20-alpine = 20.20-alpine3.23
 
 # Build stage
-FROM node:20-alpine@sha256:2d07b7c085e1dcbee344e12f4e93a5dab2e85e567a4386edbe3ce24a06e3b96c AS builder
+FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS builder
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ COPY tsconfig.json* ./
 RUN npm run build
 
 # Production stage — same pinned digest as builder
-FROM node:20-alpine@sha256:2d07b7c085e1dcbee344e12f4e93a5dab2e85e567a4386edbe3ce24a06e3b96c AS production
+FROM node:20-alpine@sha256:09e2b3d9726018aecf269bd35325f46bf75046a643a66d28360ec71132750ec8 AS production
 
 # Security: run as non-root user
 RUN addgroup -g 1001 -S appgroup && \
