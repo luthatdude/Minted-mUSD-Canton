@@ -1,4 +1,6 @@
 # Pod Disruption Budgets — ensure availability during node maintenance
+# INFRA-H-03 FIX: Changed from minAvailable:1 to maxUnavailable:1
+# minAvailable:1 on single-replica blocks kubectl drain entirely
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -6,7 +8,7 @@ metadata:
   name: canton-participant-pdb
   namespace: musd-canton
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: canton-participant
@@ -17,7 +19,7 @@ metadata:
   name: postgres-pdb
   namespace: musd-canton
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: postgres

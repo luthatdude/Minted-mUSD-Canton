@@ -75,8 +75,18 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
   // INFRA-H-06: Validated below — requireHTTPS(tradecraftBaseUrl)
 
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "15000", 10),  // 15s
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "5.0"),
-  maxSlippagePct: parseFloat(process.env.MAX_SLIPPAGE_PCT || "3.0"),
+  // TS-H-01 FIX: Use Number() + validation instead of parseFloat for financial values
+  // parseFloat silently accepts garbage like "5.0abc" → 5.0, risking misconfiguration
+  minProfitUsd: (() => {
+    const v = Number(process.env.MIN_PROFIT_USD || "5.0");
+    if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+    return v;
+  })(),
+  maxSlippagePct: (() => {
+    const v = Number(process.env.MAX_SLIPPAGE_PCT || "3.0");
+    if (Number.isNaN(v) || v < 0 || v > 100) throw new Error("MAX_SLIPPAGE_PCT must be 0-100");
+    return v;
+  })(),
   maxConcurrentLiquidations: parseInt(process.env.MAX_CONCURRENT_LIQ || "3", 10),
   cooldownBetweenLiqMs: parseInt(process.env.LIQ_COOLDOWN_MS || "5000", 10),
 
@@ -88,7 +98,12 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
   },
 
   // Read sMUSD price from env (production: synced from yield-sync-service)
-  smusdPrice: parseFloat(process.env.SMUSD_PRICE || "1.05"),
+  // TS-H-01 FIX: Strict numeric validation
+  smusdPrice: (() => {
+    const v = Number(process.env.SMUSD_PRICE || "1.05");
+    if (Number.isNaN(v) || v <= 0) throw new Error("SMUSD_PRICE must be a positive number");
+    return v;
+  })(),
 };
 
 // INFRA-H-06: Enforce HTTPS for external API endpoints in production

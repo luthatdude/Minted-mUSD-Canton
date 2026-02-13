@@ -166,7 +166,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Set the interest rate model (enables dynamic rates)
-    function setInterestRateModel(address _model) external onlyRole(BORROW_ADMIN_ROLE) {
+    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setInterestRateModel(address _model) external onlyRole(TIMELOCK_ROLE) {
         require(_model != address(0), "ZERO_ADDRESS");
         address old = address(interestRateModel);
         interestRateModel = IInterestRateModel(_model);
@@ -174,7 +175,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Set the SMUSD vault for interest routing
-    function setSMUSD(address _smusd) external onlyRole(BORROW_ADMIN_ROLE) {
+    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setSMUSD(address _smusd) external onlyRole(TIMELOCK_ROLE) {
         require(_smusd != address(0), "ZERO_ADDRESS");
         address old = address(smusd);
         smusd = ISMUSD(_smusd);
@@ -182,7 +184,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Set the Treasury for supply calculation
-    function setTreasury(address _treasury) external onlyRole(BORROW_ADMIN_ROLE) {
+    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setTreasury(address _treasury) external onlyRole(TIMELOCK_ROLE) {
         require(_treasury != address(0), "ZERO_ADDRESS");
         address old = address(treasury);
         treasury = ITreasury(_treasury);

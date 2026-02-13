@@ -343,6 +343,11 @@ class LiquidationBot {
   stop(): void {
     logger.info("Stopping bot...");
     this.isRunning = false;
+    // TS-H-03 FIX: Remove all event listeners to prevent memory leaks on restart
+    this.borrowModule.removeAllListeners();
+    this.collateralVault.removeAllListeners();
+    this.liquidationEngine.removeAllListeners();
+    logger.info("Event listeners removed");
   }
 
   private async checkAndLiquidate(): Promise<void> {
