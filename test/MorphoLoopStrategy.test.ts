@@ -6,7 +6,7 @@ describe("MorphoLoopStrategy", function () {
   const MARKET_ID = ethers.keccak256(ethers.toUtf8Bytes("USDC-USDC-market"));
 
   async function deployFixture() {
-    const [admin, treasury, strategist, guardian, user1] = await ethers.getSigners();
+    const [admin, treasury, strategist, guardian, user1, timelockSigner] = await ethers.getSigners();
 
     // Deploy MockERC20 for USDC
     const MockERC20 = await ethers.getContractFactory("MockERC20");
@@ -41,6 +41,7 @@ describe("MorphoLoopStrategy", function () {
         MARKET_ID,
         treasury.address,
         admin.address,
+        timelockSigner.address,
       ],
       {
         kind: "uups",
@@ -60,7 +61,7 @@ describe("MorphoLoopStrategy", function () {
     await usdc.mint(treasury.address, ethers.parseUnits("1000000", 6));
     await usdc.connect(treasury).approve(await strategy.getAddress(), ethers.MaxUint256);
 
-    return { strategy, usdc, morpho, admin, treasury, strategist, guardian, user1 };
+    return { strategy, usdc, morpho, admin, treasury, strategist, guardian, user1, timelockSigner };
   }
 
   describe("Initialization", function () {
@@ -95,6 +96,7 @@ describe("MorphoLoopStrategy", function () {
           await morpho.getAddress(),
           MARKET_ID,
           treasury.address,
+          admin.address,
           admin.address
         )
       ).to.be.reverted;
@@ -297,10 +299,10 @@ describe("MorphoLoopStrategy", function () {
   });
 
   describe("Upgradeability", function () {
-    it("Should be upgradeable by admin", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
+    it("Should be upgradeable by timelock", async function () {
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
-      const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy");
+      const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy", timelockSigner);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), MorphoLoopStrategyV2);
       
       expect(await upgraded.getAddress()).to.equal(await strategy.getAddress());
@@ -317,14 +319,14 @@ describe("MorphoLoopStrategy", function () {
     });
 
     it("Should preserve state after upgrade", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, strategist, timelockSigner } = await loadFixture(deployFixture);
 
       // Set some state
       await strategy.connect(strategist).setParameters(6500, 5);
       expect(await strategy.targetLtvBps()).to.equal(6500);
 
       // Upgrade
-      const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy");
+      const MorphoLoopStrategyV2 = await ethers.getContractFactory("MorphoLoopStrategy", timelockSigner);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), MorphoLoopStrategyV2);
 
       // Check state preserved
