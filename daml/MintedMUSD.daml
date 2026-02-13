@@ -77,7 +77,7 @@ template MUSD_Locked
     -- DAML-CRIT-02: Dual signatory prevents provider from locking/unlocking
     -- without owner's original consent (carried from the MUSD contract's Lock choice)
     signatory usd.provider, usd.owner
-    observer []
+    observer ([] : [Party])
     choice MUSD_Unlock : ContractId MUSD
       controller usd.provider
       do create usd
