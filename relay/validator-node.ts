@@ -117,6 +117,9 @@ class ValidatorNode {
 
     // Default to TLS for Canton ledger connections (opt-out instead of opt-in)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error("[Validator] CANTON_USE_TLS=false is not allowed in production");
+    }
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonToken,
@@ -137,7 +140,7 @@ class ValidatorNode {
     console.log(`[Validator] Initialized`);
     console.log(`[Validator] Party: ${config.validatorParty}`);
     console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
-    console.log(`[Validator] KMS Key: ${config.kmsKeyId}`);
+    console.log(`[Validator] KMS Key: ${config.kmsKeyId ? "***..." + config.kmsKeyId.slice(-8) : "none"}`);
   }
 
   /**
