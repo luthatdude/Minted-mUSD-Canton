@@ -1,0 +1,386 @@
+-- | GovernanceExtendedTest.daml
+-- Extended governance tests covering proposal rejection/cancellation,
+-- MinterRegistry lifecycle, and EmergencyPauseState multi-guardian flow.
+
+module GovernanceExtendedTest where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import DA.Optional (fromSome)
+import DA.Set qualified as Set
+import Governance
+
+-- ============================================================
+--                     TEST HELPERS
+-- ============================================================
+
+hash64 : Text
+hash64 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+data GovSetup = GovSetup with
+  operator   : Party
+  governor1  : Party
+  governor2  : Party
+  governor3  : Party
+  attacker   : Party
+
+setupGov : Script GovSetup
+setupGov = do
+  operator  <- allocateParty "Operator"
+  governor1 <- allocateParty "Governor1"
+  governor2 <- allocateParty "Governor2"
+  governor3 <- allocateParty "Governor3"
+  attacker  <- allocateParty "Attacker"
+  setTime (datetime 2026 Feb 10 12 0 0)
+  return GovSetup with ..
+
+-- Helper to create governance config (needed for Proposal_Approve threshold lookups)
+createGovConfig : Party -> [(Party, GovernorRole)] -> Script (ContractId GovernanceConfig)
+createGovConfig operator governors =
+  submit operator do
+    createCmd GovernanceConfig with
+      operator
+      governors
+      standardThreshold = 2
+      elevatedThreshold = 3
+      timelockDuration = hours 24
+      proposalExpiry = hours 168
+      maxActiveProposals = 10
+      activeProposalCount = 0
+      observers = []
+
+createGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator governor actionType desc = do
+  now <- getTime
+  submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-" <> desc
+      actionType
+      targetModule = "test"
+      description = desc
+      payload = ""
+      payloadHash = ""
+      approvers = [governor]
+      executedBy = governor
+      executedAt = now
+
+-- ============================================================
+--       1. PROPOSAL REJECTION AND CANCELLATION
+-- ============================================================
+
+testProposalReject : Script ()
+testProposalReject = do
+  setup <- setupGov
+  now <- getTime
+  let governors = [setup.governor1, setup.governor2, setup.governor3]
+
+  proposalCid <- submitMulti [setup.operator, setup.governor1] [] do
+    createCmd MultiSigProposal with
+      operator = setup.operator
+      proposalId = "reject-test"
+      proposer = setup.governor1
+      description = "Test proposal to reject"
+      actionType = ParameterUpdate
+      targetModule = "InterestRate"
+      payload = "newRate=500"
+      payloadHash = hash64
+      requiredApprovals = 2
+      approvals = Set.singleton setup.governor1
+      rejections = Set.empty
+      status = Pending
+      proposedAt = now
+      expiresAt = addRelTime now (hours 168)
+      timelockEndsAt = None
+      timelockDuration = hours 24
+      governors
+      observers = []
+
+  resultCid <- submitMulti [setup.governor2] [setup.operator] do
+    exerciseCmd proposalCid Proposal_Reject with
+      rejector = setup.governor2
+      reason = "Disagree with rate change"
+  debug "✅ 1. Proposal rejected"
+
+testProposalCancel : Script ()
+testProposalCancel = do
+  setup <- setupGov
+  now <- getTime
+  let governors = [setup.governor1, setup.governor2, setup.governor3]
+
+  proposalCid <- submitMulti [setup.operator, setup.governor1] [] do
+    createCmd MultiSigProposal with
+      operator = setup.operator
+      proposalId = "cancel-test"
+      proposer = setup.governor1
+      description = "Test proposal to cancel"
+      actionType = ParameterUpdate
+      targetModule = "InterestRate"
+      payload = "newRate=500"
+      payloadHash = hash64
+      requiredApprovals = 2
+      approvals = Set.singleton setup.governor1
+      rejections = Set.empty
+      status = Pending
+      proposedAt = now
+      expiresAt = addRelTime now (hours 168)
+      timelockEndsAt = None
+      timelockDuration = hours 24
+      governors
+      observers = []
+
+  submitMulti [setup.governor1] [setup.operator] do
+    exerciseCmd proposalCid Proposal_Cancel with
+      reason = "No longer needed"
+  debug "✅ 2. Proposal cancelled"
+
+testNonGovernorCannotApprove : Script ()
+testNonGovernorCannotApprove = do
+  setup <- setupGov
+  now <- getTime
+  let governors = [setup.governor1, setup.governor2, setup.governor3]
+
+  proposalCid <- submitMulti [setup.operator, setup.governor1] [] do
+    createCmd MultiSigProposal with
+      operator = setup.operator
+      proposalId = "auth-test"
+      proposer = setup.governor1
+      description = "Test proposal"
+      actionType = ParameterUpdate
+      targetModule = "InterestRate"
+      payload = "newRate=500"
+      payloadHash = hash64
+      requiredApprovals = 2
+      approvals = Set.singleton setup.governor1
+      rejections = Set.empty
+      status = Pending
+      proposedAt = now
+      expiresAt = addRelTime now (hours 168)
+      timelockEndsAt = None
+      timelockDuration = hours 24
+      governors
+      observers = [setup.attacker]
+
+  submitMultiMustFail [setup.attacker] [setup.operator] do
+    exerciseCmd proposalCid Proposal_Approve with
+      approver = setup.attacker
+  debug "✅ 3. Non-governor cannot approve"
+
+testDuplicateApprovalFails : Script ()
+testDuplicateApprovalFails = do
+  setup <- setupGov
+  now <- getTime
+  let governors = [setup.governor1, setup.governor2, setup.governor3]
+
+  proposalCid <- submitMulti [setup.operator, setup.governor1] [] do
+    createCmd MultiSigProposal with
+      operator = setup.operator
+      proposalId = "dup-test"
+      proposer = setup.governor1
+      description = "Test proposal"
+      actionType = ParameterUpdate
+      targetModule = "InterestRate"
+      payload = "newRate=500"
+      payloadHash = hash64
+      requiredApprovals = 2
+      approvals = Set.singleton setup.governor1
+      rejections = Set.empty
+      status = Pending
+      proposedAt = now
+      expiresAt = addRelTime now (hours 168)
+      timelockEndsAt = None
+      timelockDuration = hours 24
+      governors
+      observers = []
+
+  submitMultiMustFail [setup.governor1] [setup.operator] do
+    exerciseCmd proposalCid Proposal_Approve with
+      approver = setup.governor1
+  debug "✅ 4. Duplicate approval rejected"
+
+-- ============================================================
+--       2. MINTER REGISTRY
+-- ============================================================
+
+testAddMinter : Script ()
+testAddMinter = do
+  setup <- setupGov
+
+  registryCid <- submit setup.operator do
+    createCmd MinterRegistry with
+      operator = setup.operator
+      governance = setup.governor1
+      minters = []
+      defaultQuota = 100000.0
+      totalMinted = 0.0
+      observers = []
+
+  proofCid <- createGovProof setup.operator setup.governor1 MinterAuthorization "add-minter"
+
+  newCid <- submit setup.operator do
+    exerciseCmd registryCid MinterRegistry_AddMinter with
+      newMinter = setup.governor2
+      quota = 50000.0
+      governanceProofCid = proofCid
+  debug "✅ 5. Add minter"
+
+testUseMintQuota : Script ()
+testUseMintQuota = do
+  setup <- setupGov
+
+  registryCid <- submit setup.operator do
+    createCmd MinterRegistry with
+      operator = setup.operator
+      governance = setup.governor1
+      minters = [(setup.governor2, 50000.0)]
+      defaultQuota = 100000.0
+      totalMinted = 0.0
+      observers = []
+
+  newCid <- submit setup.operator do
+    exerciseCmd registryCid MinterRegistry_UseMintQuota with
+      minter = setup.governor2
+      amount = 10000.0
+
+  registry <- queryContractId setup.operator newCid
+  case registry of
+    None -> abort "Registry not found"
+    Some r -> assertMsg "Total minted updated" (r.totalMinted == 10000.0)
+  debug "✅ 6. Use mint quota"
+
+testRemoveMinter : Script ()
+testRemoveMinter = do
+  setup <- setupGov
+
+  registryCid <- submit setup.operator do
+    createCmd MinterRegistry with
+      operator = setup.operator
+      governance = setup.governor1
+      minters = [(setup.governor2, 50000.0)]
+      defaultQuota = 100000.0
+      totalMinted = 0.0
+      observers = []
+
+  proofCid <- createGovProof setup.operator setup.governor1 MinterAuthorization "remove-minter"
+
+  newCid <- submit setup.operator do
+    exerciseCmd registryCid MinterRegistry_RemoveMinter with
+      minterToRemove = setup.governor2
+      governanceProofCid = proofCid
+  debug "✅ 7. Remove minter"
+
+-- ============================================================
+--       3. EMERGENCY PAUSE STATE
+-- ============================================================
+
+testEmergencyPauseTrigger : Script ()
+testEmergencyPauseTrigger = do
+  setup <- setupGov
+
+  pauseCid <- submit setup.operator do
+    createCmd EmergencyPauseState with
+      operator = setup.operator
+      guardians = [setup.governor1, setup.governor2, setup.governor3]
+      isPaused = False
+      pausedAt = None
+      pausedBy = None
+      pauseReason = None
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+      pauseThreshold = 2
+      pauseApprovals = Set.empty
+
+  -- First guardian
+  pauseCid2 <- submitMulti [setup.governor1] [setup.operator] do
+    exerciseCmd pauseCid EmergencyPause_Trigger with
+      guardian = setup.governor1
+      reason = "Exploit detected"
+
+  state1 <- queryContractId setup.operator pauseCid2
+  case state1 of
+    None -> abort "State not found"
+    Some s -> assertMsg "NOT paused yet (1 of 2)" (not s.isPaused)
+
+  -- Second guardian → threshold met
+  pauseCid3 <- submitMulti [setup.governor2] [setup.operator] do
+    exerciseCmd pauseCid2 EmergencyPause_Trigger with
+      guardian = setup.governor2
+      reason = "Confirming exploit"
+
+  state2 <- queryContractId setup.operator pauseCid3
+  case state2 of
+    None -> abort "State not found"
+    Some s -> assertMsg "Paused now (2 of 2)" s.isPaused
+  debug "✅ 8. Multi-guardian emergency pause"
+
+testEmergencyResume : Script ()
+testEmergencyResume = do
+  setup <- setupGov
+
+  pauseCid <- submit setup.operator do
+    createCmd EmergencyPauseState with
+      operator = setup.operator
+      guardians = [setup.governor1]
+      isPaused = True
+      pausedAt = Some (datetime 2026 Feb 10 12 0 0)
+      pausedBy = Some setup.governor1
+      pauseReason = Some "Exploit"
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+      pauseThreshold = 1
+      pauseApprovals = Set.singleton setup.governor1
+
+  proofCid <- createGovProof setup.operator setup.governor1 EmergencyPause "resume"
+
+  resumedCid <- submit setup.operator do
+    exerciseCmd pauseCid EmergencyPause_Resume with
+      governanceProofCid = proofCid
+
+  state <- queryContractId setup.operator resumedCid
+  case state of
+    None -> abort "State not found"
+    Some s -> assertMsg "Should be unpaused" (not s.isPaused)
+  debug "✅ 9. Emergency resume"
+
+testNonGuardianCannotPause : Script ()
+testNonGuardianCannotPause = do
+  setup <- setupGov
+
+  pauseCid <- submit setup.operator do
+    createCmd EmergencyPauseState with
+      operator = setup.operator
+      guardians = [setup.governor1, setup.governor2]
+      isPaused = False
+      pausedAt = None
+      pausedBy = None
+      pauseReason = None
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+      pauseThreshold = 1
+      pauseApprovals = Set.empty
+
+  submitMultiMustFail [setup.attacker] [setup.operator] do
+    exerciseCmd pauseCid EmergencyPause_Trigger with
+      guardian = setup.attacker
+      reason = "Unauthorized"
+  debug "✅ 10. Non-guardian cannot trigger pause"
+
+testIsPausedQuery : Script ()
+testIsPausedQuery = do
+  setup <- setupGov
+
+  pauseCid <- submit setup.operator do
+    createCmd EmergencyPauseState with
+      operator = setup.operator
+      guardians = [setup.governor1]
+      isPaused = False
+      pausedAt = None
+      pausedBy = None
+      pauseReason = None
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+      pauseThreshold = 1
+      pauseApprovals = Set.empty
+
+  result <- submitMulti [setup.governor1] [setup.operator] do
+    exerciseCmd pauseCid EmergencyPause_IsPaused with
+      requester = setup.governor1
+  assertMsg "Should not be paused" (not result)
+  debug "✅ 11. IsPaused query"

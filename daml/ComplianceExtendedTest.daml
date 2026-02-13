@@ -1,0 +1,276 @@
+-- | ComplianceExtendedTest.daml
+-- Extended compliance tests covering freeze/unfreeze, bulk blacklist,
+-- remove from blacklist, and IsCompliant query.
+
+module ComplianceExtendedTest where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import DA.Set qualified as Set
+import Compliance
+
+-- ============================================================
+--                     TEST HELPERS
+-- ============================================================
+
+data ComplianceSetup = ComplianceSetup with
+  regulator   : Party
+  operator    : Party
+  alice       : Party
+  bob         : Party
+  charlie     : Party
+  registryCid : ContractId ComplianceRegistry
+
+setupCompliance : Script ComplianceSetup
+setupCompliance = do
+  regulator <- allocateParty "Regulator"
+  operator  <- allocateParty "Operator"
+  alice     <- allocateParty "Alice"
+  bob       <- allocateParty "Bob"
+  charlie   <- allocateParty "Charlie"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  registryCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+
+  return ComplianceSetup with ..
+
+-- ============================================================
+--       1. FREEZE / UNFREEZE LIFECYCLE
+-- ============================================================
+
+testFreezeUser : Script ()
+testFreezeUser = do
+  s <- setupCompliance
+  newCid <- submit s.regulator do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "Suspicious activity"
+  reg <- queryContractId s.regulator newCid
+  case reg of
+    None -> abort "Registry not found"
+    Some r -> assertMsg "Alice should be frozen" (Set.member s.alice r.frozen)
+  debug "✅ 1. Freeze user"
+
+testUnfreezeUser : Script ()
+testUnfreezeUser = do
+  s <- setupCompliance
+  frozenCid <- submit s.regulator do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "Suspicious activity"
+  unfrozenCid <- submit s.regulator do
+    exerciseCmd frozenCid UnfreezeUser with
+      userToUnfreeze = s.alice
+      reason = "Cleared"
+  reg <- queryContractId s.regulator unfrozenCid
+  case reg of
+    None -> abort "Registry not found"
+    Some r -> assertMsg "Alice should not be frozen" (not (Set.member s.alice r.frozen))
+  debug "✅ 2. Unfreeze user"
+
+testFreezeAlreadyFrozen : Script ()
+testFreezeAlreadyFrozen = do
+  s <- setupCompliance
+  frozenCid <- submit s.regulator do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "First freeze"
+  submitMustFail s.regulator do
+    exerciseCmd frozenCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "Second freeze"
+  debug "✅ 3. Cannot freeze already-frozen user"
+
+testUnfreezeNotFrozen : Script ()
+testUnfreezeNotFrozen = do
+  s <- setupCompliance
+  submitMustFail s.regulator do
+    exerciseCmd s.registryCid UnfreezeUser with
+      userToUnfreeze = s.alice
+      reason = "Not frozen"
+  debug "✅ 4. Cannot unfreeze non-frozen user"
+
+-- ============================================================
+--       2. BULK BLACKLIST
+-- ============================================================
+
+testBulkBlacklist : Script ()
+testBulkBlacklist = do
+  s <- setupCompliance
+  newCid <- submit s.regulator do
+    exerciseCmd s.registryCid BulkBlacklist with
+      usersToBlock = [s.alice, s.bob, s.charlie]
+      reason = "Sanctions batch"
+  reg <- queryContractId s.regulator newCid
+  case reg of
+    None -> abort "Registry not found"
+    Some r -> do
+      assertMsg "Alice blacklisted" (Set.member s.alice r.blacklisted)
+      assertMsg "Bob blacklisted" (Set.member s.bob r.blacklisted)
+      assertMsg "Charlie blacklisted" (Set.member s.charlie r.blacklisted)
+  debug "✅ 5. Bulk blacklist"
+
+testBulkBlacklistEmpty : Script ()
+testBulkBlacklistEmpty = do
+  s <- setupCompliance
+  submitMustFail s.regulator do
+    exerciseCmd s.registryCid BulkBlacklist with
+      usersToBlock = []
+      reason = "Empty batch"
+  debug "✅ 6. Bulk blacklist rejects empty list"
+
+-- ============================================================
+--       3. REMOVE FROM BLACKLIST
+-- ============================================================
+
+testRemoveFromBlacklist : Script ()
+testRemoveFromBlacklist = do
+  s <- setupCompliance
+  blCid <- submit s.regulator do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.alice
+      reason = "Sanctions"
+  removedCid <- submit s.regulator do
+    exerciseCmd blCid RemoveFromBlacklist with
+      userToUnblock = s.alice
+      reason = "Cleared by compliance"
+  reg <- queryContractId s.regulator removedCid
+  case reg of
+    None -> abort "Registry not found"
+    Some r -> assertMsg "Alice not blacklisted" (not (Set.member s.alice r.blacklisted))
+  debug "✅ 7. Remove from blacklist"
+
+testRemoveNonBlacklisted : Script ()
+testRemoveNonBlacklisted = do
+  s <- setupCompliance
+  submitMustFail s.regulator do
+    exerciseCmd s.registryCid RemoveFromBlacklist with
+      userToUnblock = s.alice
+      reason = "Not blacklisted"
+  debug "✅ 8. Cannot remove non-blacklisted user"
+
+-- ============================================================
+--       4. IsCompliant CHECKS
+-- ============================================================
+
+testIsCompliantClean : Script ()
+testIsCompliantClean = do
+  s <- setupCompliance
+  result <- submit s.regulator do
+    exerciseCmd s.registryCid IsCompliant with
+      party = s.alice
+      caller = s.regulator
+  assertMsg "Clean user should be compliant" result
+  debug "✅ 9. IsCompliant for clean user"
+
+testIsCompliantBlacklisted : Script ()
+testIsCompliantBlacklisted = do
+  s <- setupCompliance
+  blCid <- submit s.regulator do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.alice
+      reason = "Sanctions"
+  result <- submit s.regulator do
+    exerciseCmd blCid IsCompliant with
+      party = s.alice
+      caller = s.regulator
+  assertMsg "Blacklisted user should not be compliant" (not result)
+  debug "✅ 10. IsCompliant for blacklisted user"
+
+testIsCompliantFrozen : Script ()
+testIsCompliantFrozen = do
+  s <- setupCompliance
+  frozenCid <- submit s.regulator do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "Under investigation"
+  result <- submit s.regulator do
+    exerciseCmd frozenCid IsCompliant with
+      party = s.alice
+      caller = s.regulator
+  assertMsg "Frozen user should not be compliant" (not result)
+  debug "✅ 11. IsCompliant for frozen user"
+
+-- ============================================================
+--       5. VALIDATE OPERATIONS
+-- ============================================================
+
+testValidateMintClean : Script ()
+testValidateMintClean = do
+  s <- setupCompliance
+  submitMulti [s.operator] [s.regulator] do
+    exerciseCmd s.registryCid ValidateMint with
+      minter = s.alice
+  debug "✅ 12. ValidateMint for clean user"
+
+testValidateMintBlacklisted : Script ()
+testValidateMintBlacklisted = do
+  s <- setupCompliance
+  blCid <- submit s.regulator do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.alice
+      reason = "Sanctions"
+  submitMultiMustFail [s.operator] [s.regulator] do
+    exerciseCmd blCid ValidateMint with
+      minter = s.alice
+  debug "✅ 13. ValidateMint fails for blacklisted"
+
+testValidateTransferClean : Script ()
+testValidateTransferClean = do
+  s <- setupCompliance
+  submitMulti [s.operator] [s.regulator] do
+    exerciseCmd s.registryCid ValidateTransfer with
+      sender = s.alice
+      receiver = s.bob
+  debug "✅ 14. ValidateTransfer for clean parties"
+
+testValidateTransferFrozenSender : Script ()
+testValidateTransferFrozenSender = do
+  s <- setupCompliance
+  frozenCid <- submit s.regulator do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.alice
+      reason = "Frozen"
+  submitMultiMustFail [s.operator] [s.regulator] do
+    exerciseCmd frozenCid ValidateTransfer with
+      sender = s.alice
+      receiver = s.bob
+  debug "✅ 15. ValidateTransfer fails for frozen sender"
+
+-- ============================================================
+--       6. AUTHORIZATION NEGATIVE TESTS
+-- ============================================================
+
+testNonRegulatorCannotBlacklist : Script ()
+testNonRegulatorCannotBlacklist = do
+  s <- setupCompliance
+  submitMustFail s.alice do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.bob
+      reason = "Unauthorized"
+  debug "✅ 16. Non-regulator cannot blacklist"
+
+testNonRegulatorCannotFreeze : Script ()
+testNonRegulatorCannotFreeze = do
+  s <- setupCompliance
+  submitMustFail s.alice do
+    exerciseCmd s.registryCid FreezeUser with
+      userToFreeze = s.bob
+      reason = "Unauthorized"
+  debug "✅ 17. Non-regulator cannot freeze"
+
+testBlacklistEmptyReason : Script ()
+testBlacklistEmptyReason = do
+  s <- setupCompliance
+  submitMustFail s.regulator do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.alice
+      reason = ""
+  debug "✅ 18. Blacklist rejects empty reason"
