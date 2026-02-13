@@ -20,14 +20,13 @@ import { ERC20_ABI } from '@/abis/ERC20';
 
 // Deposit Router ABI (simplified - deploy actual contract)
 const DEPOSIT_ROUTER_ABI = [
-  'function deposit(uint256 amount) external',
-  'function depositFor(address recipient, uint256 amount) external',
-  'function depositWithBridge(uint256 amount, bytes32 destinationChain) external',
-  'function previewDeposit(uint256 amount) external view returns (uint256 mUSDAmount, uint256 fee)',
-  'function getDepositFee() external view returns (uint256)',
-  'function isPaused() external view returns (bool)',
-  'event Deposited(address indexed depositor, uint256 amount, uint256 mUSDAmount)',
-  'event BridgeInitiated(address indexed depositor, uint256 amount, bytes32 destinationChain, bytes32 messageId)',
+  'function deposit(uint256 amount) external payable returns (uint64)',
+  'function depositFor(address recipient, uint256 amount) external payable returns (uint64)',
+  'function previewDeposit(uint256 amount) external view returns (uint256 netAmount, uint256 fee)',
+  'function quoteBridgeCost() external view returns (uint256)',
+  'function paused() external view returns (bool)',
+  'event DepositInitiated(uint64 indexed sequence, address indexed depositor, address indexed recipient, uint256 grossAmount, uint256 netAmount, uint256 fee)',
+  'event DepositCompleted(uint64 indexed sequence, bool success, bytes32 vaaHash)',
 ];
 
 export interface DepositQuote {
@@ -247,7 +246,7 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
       }
 
       const router = new Contract(depositRouter, DEPOSIT_ROUTER_ABI, provider);
-      const [mUSDAmount, routerFee] = await router.previewDeposit(amount);
+      const [mUSDAmount] = await router.previewDeposit(amount);
       
       const totalFee = amount - mUSDAmount;
       const feePercentage = Number(totalFee * 10000n / amount) / 100;
@@ -306,9 +305,9 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
       
       let tx;
       if (requiresBridging(selectedChain)) {
-        // Cross-chain deposit - will bridge to ETH treasury
-        const ethChainBytes = ethers.zeroPadValue(ethers.toBeHex(1), 32); // ETH mainnet
-        tx = await router.depositWithBridge(amount, ethChainBytes);
+        // Cross-chain deposits require native gas for Wormhole delivery.
+        const bridgeCost: bigint = await router.quoteBridgeCost();
+        tx = await router.deposit(amount, { value: bridgeCost });
       } else {
         // Direct deposit on treasury chain
         tx = await router.deposit(amount);
@@ -373,7 +372,9 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
       }
 
       const router = new Contract(depositRouter, DEPOSIT_ROUTER_ABI, signer);
-      const tx = await router.depositFor(recipient, amount);
+      const tx = requiresBridging(selectedChain)
+        ? await router.depositFor(recipient, amount, { value: await router.quoteBridgeCost() })
+        : await router.depositFor(recipient, amount);
       const receipt = await tx.wait();
 
       return receipt.hash;

@@ -4,16 +4,6 @@
 import { ethers, Wallet } from "ethers";
 import { createLogger, format, transports } from "winston";
 
-// Crash handlers to prevent silent failures
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('FATAL: Unhandled promise rejection:', reason);
-  process.exit(1);
-});
-process.on('uncaughtException', (error) => {
-  console.error('FATAL: Uncaught exception:', error);
-  process.exit(1);
-});
-
 const logger = createLogger({
   level: "info",
   format: format.combine(
@@ -56,6 +46,15 @@ interface FlashbotsSimulation {
   }[];
 }
 
+interface JsonRpcError {
+  message?: string;
+}
+
+interface JsonRpcResponse<T> {
+  result?: T;
+  error?: JsonRpcError;
+}
+
 export class FlashbotsProvider {
   private provider: ethers.JsonRpcProvider;
   private authSigner: Wallet;
@@ -87,7 +86,7 @@ export class FlashbotsProvider {
   /**
    * Send a request to the Flashbots relay
    */
-  private async sendRequest(method: string, params: any[]): Promise<any> {
+  private async sendRequest<T = any>(method: string, params: any[]): Promise<T> {
     const body = JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -106,10 +105,14 @@ export class FlashbotsProvider {
       body,
     });
 
-    const json: any = await response.json();
+    const json = (await response.json()) as JsonRpcResponse<T>;
 
     if (json.error) {
-      throw new Error(`Flashbots error: ${json.error.message}`);
+      throw new Error(`Flashbots error: ${json.error.message || "unknown error"}`);
+    }
+
+    if (json.result === undefined) {
+      throw new Error("Flashbots error: missing result");
     }
 
     return json.result;

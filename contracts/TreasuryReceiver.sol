@@ -84,11 +84,20 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     /// @notice Mapping of processed VAAs (to prevent replay)
     mapping(bytes32 => bool) public processedVAAs;
 
+    struct PendingMint {
+        address recipient;
+        uint256 usdcAmount;
+        bool claimed;
+    }
+
+    /// @notice Pending mints keyed by VAA hash when DirectMint fails.
+    mapping(bytes32 => PendingMint) public pendingMints;
+
+    /// @notice Aggregate pending USDC amount per recipient.
+    mapping(address => uint256) public pendingCredits;
+
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
-
-    /// @notice FIX CX-H-01: Claimable USDC for users whose mintFor failed
-    mapping(address => uint256) public pendingClaims;
     
     /// @notice Wormhole chain IDs
     uint16 public constant BASE_CHAIN_ID = 30;
@@ -111,7 +120,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     event TreasuryUpdated(address oldTreasury, address newTreasury);
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
-    event FallbackClaimed(address indexed recipient, uint256 amount);
+    event MintQueued(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event PendingMintClaimed(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
 
     // ============ Errors ============
     
@@ -120,6 +130,9 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     error VAAAlreadyProcessed();
     error UnauthorizedRouter();
     error MintFailed();
+    error NoPendingMint();
+    error PendingMintAlreadyClaimed();
+    error UnauthorizedClaim();
 
     // ============ Constructor ============
     
@@ -199,13 +212,17 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
             processedVAAs[vm.hash] = true;
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
-            // FIX CX-H-01: If minting fails, credit recipient's claimable balance
-            // instead of sending to treasury (which permanently orphans user funds).
-            // User can later call claimFallbackFunds() to retrieve their USDC.
+            // Queue the mint for deterministic retry instead of forwarding to treasury.
+            // This preserves user attribution and avoids orphaned cross-chain credits.
             usdc.forceApprove(directMint, 0);
-            pendingClaims[recipient] += received;
             processedVAAs[vm.hash] = true;
-            emit MintFallbackToTreasury(recipient, received, vm.hash);
+            pendingMints[vm.hash] = PendingMint({
+                recipient: recipient,
+                usdcAmount: received,
+                claimed: false
+            });
+            pendingCredits[recipient] += received;
+            emit MintQueued(recipient, received, vm.hash);
         }
         
         emit DepositReceived(
@@ -226,18 +243,31 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
         return processedVAAs[vaaHash];
     }
 
-    // ============ FIX CX-H-01: User Claim for Fallback Funds ============
-
     /**
-     * @notice Claim USDC that was credited when mintFor failed
-     * @dev Follows CEI pattern — zeroes balance before transfer
+     * @notice Retry minting for a previously queued VAA.
+     * @dev Callable by the intended recipient or admin.
      */
-    function claimFallbackFunds() external nonReentrant {
-        uint256 amount = pendingClaims[msg.sender];
-        require(amount > 0, "NO_PENDING_CLAIM");
-        pendingClaims[msg.sender] = 0;
-        usdc.safeTransfer(msg.sender, amount);
-        emit FallbackClaimed(msg.sender, amount);
+    function claimPendingMint(bytes32 vaaHash) external nonReentrant whenNotPaused returns (uint256 musdMinted) {
+        PendingMint storage pending = pendingMints[vaaHash];
+        if (pending.recipient == address(0)) revert NoPendingMint();
+        if (pending.claimed) revert PendingMintAlreadyClaimed();
+        if (msg.sender != pending.recipient && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            revert UnauthorizedClaim();
+        }
+
+        uint256 amount = pending.usdcAmount;
+        usdc.forceApprove(directMint, amount);
+
+        try IDirectMint(directMint).mintFor(pending.recipient, amount) returns (uint256 minted) {
+            pending.claimed = true;
+            pendingCredits[pending.recipient] -= amount;
+            emit PendingMintClaimed(pending.recipient, amount, minted, vaaHash);
+            emit MUSDMinted(pending.recipient, amount, minted, vaaHash);
+            return minted;
+        } catch {
+            usdc.forceApprove(directMint, 0);
+            revert MintFailed();
+        }
     }
 
     // ============ Admin Functions ============
