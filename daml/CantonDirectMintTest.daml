@@ -1,0 +1,491 @@
+-- | CantonDirectMintTest.daml
+-- Tests for CantonDirectMintService lifecycle.
+-- Uses correct choice parameter names to avoid field ambiguity.
+
+module CantonDirectMintTest where
+
+import Daml.Script
+import DA.Time
+import DA.Date
+import DA.Set qualified as Set
+import DA.Optional (fromSome)
+import CantonDirectMint
+import Compliance (ComplianceRegistry(..), BlacklistUser(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
+
+-- ============================================================
+--                     TEST HELPERS
+-- ============================================================
+
+data MintSetup = MintSetup with
+  operator    : Party
+  governance  : Party
+  alice       : Party
+  attacker    : Party
+  serviceCid  : ContractId CantonDirectMintService
+  registryCid : ContractId ComplianceRegistry
+
+setupMint : Script MintSetup
+setupMint = do
+  operator   <- allocateParty "Operator"
+  governance <- allocateParty "Governance"
+  alice      <- allocateParty "Alice"
+  attacker   <- allocateParty "Attacker"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  registryCid <- submit governance do
+    createCmd ComplianceRegistry with
+      regulator = governance
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+
+  serviceCid <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer = operator
+      usdcxIssuer = None
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 100.0
+      maxAmount = 1000000.0
+      supplyCap = 10000000.0
+      currentSupply = 0.0
+      accumulatedFees = 0.0
+      paused = False
+      validators = [governance]
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nextNonce = 1
+      dailyMintLimit = 1000000.0
+      dailyMinted = 0.0
+      dailyBurned = 0.0
+      lastRateLimitReset = datetime 2026 Feb 10 0 0 0
+      complianceRegistryCid = registryCid
+      mpaHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      mpaUri = "https://minted.app/mpa"
+      authorizedMinters = [alice, governance]
+      serviceName = "MainMint"
+
+  return MintSetup with ..
+
+mkGovProof : Party -> Party -> ActionType -> Text -> Script (ContractId GovernanceActionLog)
+mkGovProof operator governor actionType desc = do
+  now <- getTime
+  submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-" <> desc
+      actionType
+      targetModule = "CantonDirectMint"
+      description = desc
+      payload = ""
+      payloadHash = ""
+      approvers = [governor]
+      executedBy = governor
+      executedAt = now
+
+-- ============================================================
+--       1. MINTING
+-- ============================================================
+
+testDirectMint : Script ()
+testDirectMint = do
+  s <- setupMint
+
+  usdcCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd CantonUSDC with
+      issuer = s.operator
+      owner = s.alice
+      amount = 10000.0
+      privacyObservers = [s.operator]
+
+  -- DirectMint_Mint only takes user + usdcCid
+  (svcCid, musdCid, bridgeCid) <- submitMulti [s.alice] [s.operator] do
+    exerciseCmd s.serviceCid DirectMint_Mint with
+      user = s.alice
+      usdcCid
+
+  svc <- queryContractId s.operator svcCid
+  case svc of
+    None -> abort "Service not found"
+    Some sv -> do
+      assertMsg "Supply increased" (sv.currentSupply > 0.0)
+      assertMsg "Nonce incremented" (sv.nextNonce == 2)
+      assertMsg "Fees accumulated" (sv.accumulatedFees > 0.0)
+  debug "✅ 1. Direct mint USDC → mUSD"
+
+testMintBelowMinimum : Script ()
+testMintBelowMinimum = do
+  s <- setupMint
+
+  usdcCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd CantonUSDC with
+      issuer = s.operator
+      owner = s.alice
+      amount = 50.0
+      privacyObservers = [s.operator]
+
+  submitMultiMustFail [s.alice] [s.operator] do
+    exerciseCmd s.serviceCid DirectMint_Mint with
+      user = s.alice
+      usdcCid
+  debug "✅ 2. Mint below minimum fails"
+
+testMintWhenPaused : Script ()
+testMintWhenPaused = do
+  s <- setupMint
+
+  -- DirectMint_SetPaused only takes newPaused
+  pausedCid <- submit s.operator do
+    exerciseCmd s.serviceCid DirectMint_SetPaused with
+      newPaused = True
+
+  usdcCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd CantonUSDC with
+      issuer = s.operator
+      owner = s.alice
+      amount = 1000.0
+      privacyObservers = [s.operator]
+
+  submitMultiMustFail [s.alice] [s.operator] do
+    exerciseCmd pausedCid DirectMint_Mint with
+      user = s.alice
+      usdcCid
+  debug "✅ 3. Mint when paused fails"
+
+-- ============================================================
+--       2. REDEMPTION
+-- ============================================================
+
+testDirectRedeem : Script ()
+testDirectRedeem = do
+  s <- setupMint
+
+  musdCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd CantonMUSD with
+      issuer = s.operator
+      owner = s.alice
+      amount = 5000.0
+      agreementHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      agreementUri = "https://minted.app/mpa"
+      privacyObservers = [s.operator]
+
+  -- DirectMint_Redeem only takes user + musdCid
+  (svcCid, reqCid) <- submitMulti [s.alice] [s.operator] do
+    exerciseCmd s.serviceCid DirectMint_Redeem with
+      user = s.alice
+      musdCid
+
+  req <- queryContractId s.operator reqCid
+  case req of
+    None -> abort "Redemption request not found"
+    Some r -> assertMsg "Not yet fulfilled" (not r.fulfilled)
+  debug "✅ 4. Direct redeem mUSD → RedemptionRequest"
+
+-- ============================================================
+--       3. REDEMPTION FULFILLMENT
+-- ============================================================
+
+testFulfillRedemption : Script ()
+testFulfillRedemption = do
+  s <- setupMint
+  now <- getTime
+
+  reqCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd RedemptionRequest with
+      operator = s.operator
+      user = s.alice
+      musdBurned = 5000.0
+      usdcOwed = 4985.0
+      feeAmount = 15.0
+      createdAt = now
+      fulfilled = False
+
+  usdcCid <- submit s.operator do
+    createCmd CantonUSDC with
+      issuer = s.operator
+      owner = s.operator
+      amount = 4985.0
+      privacyObservers = [s.operator]
+
+  (fulfilledCid, sentUsdcCid) <- submit s.operator do
+    exerciseCmd reqCid Redemption_Fulfill with
+      usdcCid
+      complianceRegistryCid = s.registryCid
+  debug "✅ 5. Redemption fulfilled"
+
+-- ============================================================
+--       4. SUPPLY CAP AND RATE LIMITING
+-- ============================================================
+
+testUpdateSupplyCap : Script ()
+testUpdateSupplyCap = do
+  s <- setupMint
+  proofCid <- mkGovProof s.operator s.governance SupplyCapChange "update-cap"
+
+  newCid <- submit s.operator do
+    exerciseCmd s.serviceCid DirectMint_UpdateSupplyCap with
+      newCap = 9000000.0
+      governanceProofCid = proofCid
+
+  svc <- queryContractId s.operator newCid
+  case svc of
+    None -> abort "Service not found"
+    Some sv -> assertMsg "Cap updated" (sv.supplyCap == 9000000.0)
+  debug "✅ 6. Supply cap updated"
+
+testSetDailyMintLimit : Script ()
+testSetDailyMintLimit = do
+  s <- setupMint
+  proofCid <- mkGovProof s.operator s.governance ParameterUpdate "set-limit"
+
+  newCid <- submit s.operator do
+    exerciseCmd s.serviceCid DirectMint_SetDailyMintLimit with
+      newLimit = 2000000.0
+      governanceProofCid = proofCid
+  debug "✅ 7. Daily mint limit updated"
+
+-- ============================================================
+--       5. BURN RATE LIMITER
+-- ============================================================
+
+testBurnLimiterRecord : Script ()
+testBurnLimiterRecord = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  limCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      dailyBurnLimit = 500000.0
+      dailyBurned = 0.0
+      lastResetTime = datetime 2026 Feb 10 0 0 0
+
+  newCid <- submit operator do
+    exerciseCmd limCid BurnLimit_RecordBurn with
+      burnAmount = 100000.0
+
+  lim <- queryContractId operator newCid
+  case lim of
+    None -> abort "Limiter not found"
+    Some l -> assertMsg "Burned tracked" (l.dailyBurned == 100000.0)
+  debug "✅ 8. Burn rate limiter records burn"
+
+testBurnLimiterExceeded : Script ()
+testBurnLimiterExceeded = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  limCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      dailyBurnLimit = 500000.0
+      dailyBurned = 450000.0
+      lastResetTime = datetime 2026 Feb 10 0 0 0
+
+  submitMustFail operator do
+    exerciseCmd limCid BurnLimit_RecordBurn with
+      burnAmount = 100000.0
+  debug "✅ 9. Burn rate limit exceeded fails"
+
+testBurnLimiterResets : Script ()
+testBurnLimiterResets = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 11 1 0 0)
+
+  limCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      dailyBurnLimit = 500000.0
+      dailyBurned = 450000.0
+      lastResetTime = datetime 2026 Feb 10 0 0 0
+
+  newCid <- submit operator do
+    exerciseCmd limCid BurnLimit_RecordBurn with
+      burnAmount = 100000.0
+
+  lim <- queryContractId operator newCid
+  case lim of
+    None -> abort "Limiter not found"
+    Some l -> assertMsg "Burned reset" (l.dailyBurned == 100000.0)
+  debug "✅ 10. Burn limiter resets after 24h"
+
+testBurnLimitUpdate : Script ()
+testBurnLimitUpdate = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  limCid <- submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      dailyBurnLimit = 500000.0
+      dailyBurned = 0.0
+      lastResetTime = datetime 2026 Feb 10 0 0 0
+
+  newCid <- submit operator do
+    exerciseCmd limCid BurnLimit_UpdateLimit with
+      newLimit = 1000000.0
+  debug "✅ 11. Burn limit updated"
+
+-- ============================================================
+--       6. FEE WITHDRAWAL
+-- ============================================================
+
+testWithdrawFees : Script ()
+testWithdrawFees = do
+  s <- setupMint
+
+  -- Create service with accumulated fees
+  svcCid <- submit s.operator do
+    createCmd CantonDirectMintService with
+      operator = s.operator
+      usdcIssuer = s.operator
+      usdcxIssuer = None
+      mintFeeBps = 30
+      redeemFeeBps = 30
+      minAmount = 100.0
+      maxAmount = 1000000.0
+      supplyCap = 10000000.0
+      currentSupply = 5000.0
+      accumulatedFees = 150.0
+      paused = False
+      validators = [s.governance]
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nextNonce = 10
+      dailyMintLimit = 1000000.0
+      dailyMinted = 0.0
+      dailyBurned = 0.0
+      lastRateLimitReset = datetime 2026 Feb 10 0 0 0
+      complianceRegistryCid = s.registryCid
+      mpaHash = "mpa-hash"
+      mpaUri = "https://minted.app/mpa"
+      authorizedMinters = [s.alice]
+      serviceName = "FeeMint"
+
+  proofCid <- mkGovProof s.operator s.governance TreasuryWithdrawal "withdraw-fees"
+
+  -- DirectMint_WithdrawFees only takes governanceProofCid
+  newSvcCid <- submit s.operator do
+    exerciseCmd svcCid DirectMint_WithdrawFees with
+      governanceProofCid = proofCid
+
+  svc <- queryContractId s.operator newSvcCid
+  case svc of
+    None -> abort "Service not found"
+    Some sv -> assertMsg "Fees cleared" (sv.accumulatedFees == 0.0)
+  debug "✅ 12. Fee withdrawal"
+
+-- ============================================================
+--       7. NEGATIVE / AUTHORIZATION
+-- ============================================================
+
+testBlacklistedCannotMint : Script ()
+testBlacklistedCannotMint = do
+  s <- setupMint
+
+  newRegCid <- submit s.governance do
+    exerciseCmd s.registryCid BlacklistUser with
+      userToBlock = s.alice
+      reason = "Sanctions"
+
+  usdcCid <- submitMulti [s.operator, s.alice] [] do
+    createCmd CantonUSDC with
+      issuer = s.operator
+      owner = s.alice
+      amount = 1000.0
+      privacyObservers = [s.operator]
+
+  submitMultiMustFail [s.alice] [s.operator] do
+    exerciseCmd s.serviceCid DirectMint_Mint with
+      user = s.alice
+      usdcCid
+  debug "✅ 13. Blacklisted user cannot mint"
+
+testUnauthorizedCannotPause : Script ()
+testUnauthorizedCannotPause = do
+  s <- setupMint
+  submitMustFail s.attacker do
+    exerciseCmd s.serviceCid DirectMint_SetPaused with
+      newPaused = True
+  debug "✅ 14. Unauthorized cannot pause"
+
+-- ============================================================
+--       8. BRIDGE OUT AND RESERVE TRACKER
+-- ============================================================
+
+testBridgeOutComplete : Script ()
+testBridgeOutComplete = do
+  operator <- allocateParty "Operator"
+  governance <- allocateParty "Governance"
+  alice <- allocateParty "Alice"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  bridgeCid <- submit operator do
+    createCmd BridgeOutRequest with
+      operator
+      user = alice
+      amount = 5000.0
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nonce = 1
+      createdAt = datetime 2026 Feb 10 12 0 0
+      status = "pending"
+      validators = [governance]
+
+  submit operator do
+    exerciseCmd bridgeCid BridgeOut_Complete with
+      relayParty = governance
+  debug "✅ 15. BridgeOutRequest completed"
+
+testBridgeOutFail : Script ()
+testBridgeOutFail = do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  bridgeCid <- submit operator do
+    createCmd BridgeOutRequest with
+      operator
+      user = alice
+      amount = 5000.0
+      targetChainId = 1
+      targetTreasury = "0xTreasury"
+      nonce = 2
+      createdAt = datetime 2026 Feb 10 12 0 0
+      status = "pending"
+      validators = []
+
+  -- BridgeOut_Fail has no parameters
+  submit operator do
+    exerciseCmd bridgeCid BridgeOut_Fail
+  debug "✅ 16. BridgeOutRequest failed"
+
+testReserveTrackerDeposit : Script ()
+testReserveTrackerDeposit = do
+  operator <- allocateParty "Operator"
+  governance <- allocateParty "Governance"
+  setTime (datetime 2026 Feb 10 12 0 0)
+
+  trackerCid <- submitMulti [operator, governance] [] do
+    createCmd ReserveTracker with
+      operator
+      governance
+      totalDeposited = 0.0
+      totalRedeemed = 0.0
+      totalBridgedOut = 0.0
+      totalBridgedIn = 0.0
+      cantonMUSDSupply = 0.0
+      lastUpdated = datetime 2026 Feb 10 12 0 0
+
+  newCid <- submitMulti [operator, governance] [] do
+    exerciseCmd trackerCid Reserve_RecordDeposit with
+      depositAmount = 10000.0
+
+  tracker <- queryContractId operator newCid
+  case tracker of
+    None -> abort "Tracker not found"
+    Some t -> assertMsg "Deposit recorded" (t.totalDeposited == 10000.0)
+  debug "✅ 17. ReserveTracker records deposit"
