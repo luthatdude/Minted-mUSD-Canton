@@ -21,6 +21,7 @@ import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -680,20 +681,23 @@ template CantonDirectMintService
 
     -- Admin controls
     -- FIX HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
+    -- FIX C-DAML-03: Governance proof required for supply cap changes
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX: Consume governance proof to prevent replay
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
-        -- FIX HIGH-02: Enforce 24h cooldown between supply cap increases
         now <- getTime
         let cooldownRel = hours 24
         let elapsed = subTime now lastRateLimitReset
-        -- Reuse lastRateLimitReset as cap update cooldown tracker
-        -- (cap updates are rare vs mints, so this coupling is safe)
         assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
         archive self
         create this with supplyCap = newCap, lastRateLimitReset = now
@@ -709,8 +713,12 @@ template CantonDirectMintService
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         archive self
         create this with dailyMintLimit = newLimit
@@ -718,14 +726,23 @@ template CantonDirectMintService
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
         newRegistryCid : ContractId ComplianceRegistry
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
+      with
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
         archive self
         create this with accumulatedFees = 0.0
@@ -769,4 +786,53 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
+
+-- ============================================================
+--                     SECTION 7: BURN RATE LIMITER
+-- ============================================================
+
+-- | FIX C-DAML-02: BurnRateLimiter — rate-limits mUSD burns to prevent
+-- flash-unwind attacks on loop positions. Tracks daily burn volume
+-- and enforces a maximum per 24h window.
+template BurnRateLimiter
+  with
+    operator : Party
+    dailyBurnLimit : Money         -- Max mUSD burned per 24h window
+    dailyBurned : Money            -- Burns in current window
+    lastResetTime : Time           -- Window start
+  where
+    signatory operator
+
+    key operator : Party
+    maintainer key
+
+    ensure dailyBurnLimit > 0.0 && dailyBurned >= 0.0
+
+    -- | Record a burn and enforce rate limit
+    choice BurnLimit_RecordBurn : ContractId BurnRateLimiter
+      with
+        burnAmount : Money
+      controller operator
+      do
+        assertMsg "BURN_AMOUNT_POSITIVE" (burnAmount > 0.0)
+        now <- getTime
+        let windowElapsed = subTime now lastResetTime
+        let oneDayRel = hours 24
+        let (resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, now)
+              else (dailyBurned, lastResetTime)
+        assertMsg "DAILY_BURN_LIMIT_EXCEEDED" (resetBurned + burnAmount <= dailyBurnLimit)
+        create this with
+          dailyBurned = resetBurned + burnAmount
+          lastResetTime = resetTime
+
+    -- | Update daily burn limit (operator-controlled)
+    choice BurnLimit_UpdateLimit : ContractId BurnRateLimiter
+      with
+        newLimit : Money
+      controller operator
+      do
+        assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
+        create this with dailyBurnLimit = newLimit
 

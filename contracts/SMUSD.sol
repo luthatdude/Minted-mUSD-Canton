@@ -257,12 +257,17 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Get global total assets from Treasury
-    /// @dev Falls back to local totalAssets if treasury not set.
+    /// @dev Falls back to local vault balance if treasury not set.
     ///      Treasury.totalValue() returns USDC (6 decimals); scaled by 1e12
     ///      to match mUSD (18 decimals).
+    /// @dev FIX C-SOL-01: Previously called totalAssets() as fallback, which calls
+    ///      globalTotalAssets() again, causing infinite recursion when treasury == address(0).
+    ///      Now uses IERC20(asset()).balanceOf(address(this)) — the ERC4626 base behavior.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
-            return totalAssets();
+            // FIX C-SOL-01: Use underlying asset balance directly to break recursion.
+            // totalAssets() calls globalTotalAssets(), so we must not call totalAssets() here.
+            return IERC20(asset()).balanceOf(address(this));
         }
         // Treasury.totalValue() returns total USDC backing all mUSD (6 decimals)
         // slither-disable-next-line calls-loop
@@ -276,8 +281,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             if (cantonTotalShares > 0) {
                 revert("TREASURY_UNREACHABLE");
             }
-            // No Canton shares — safe to use local totalAssets as sole pricing source
-            return totalAssets();
+            // FIX C-SOL-01: Same fix for catch-block fallback — use balance directly
+            return IERC20(asset()).balanceOf(address(this));
         }
     }
 
