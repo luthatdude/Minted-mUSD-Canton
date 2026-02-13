@@ -266,10 +266,10 @@ describe('SkySUSDSStrategy', function () {
 
     await expect(
       strategy.connect(admin).recoverToken(await usdc.getAddress(), 100)
-    ).to.be.revertedWith('Cannot recover USDC');
+    ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
 
     await expect(
       strategy.connect(admin).recoverToken(await usds.getAddress(), 100)
-    ).to.be.revertedWith('Cannot recover USDS');
+    ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsds");
   });
 });

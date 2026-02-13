@@ -444,7 +444,7 @@ describe("PendleStrategyV2", function () {
 
       await expect(
         strategy.connect(strategist).setPtDiscountRate(5001)
-      ).to.be.revertedWith("DISCOUNT_TOO_HIGH");
+      ).to.be.revertedWithCustomError(strategy, "DiscountTooHigh");
     });
 
     it("Should allow zero discount rate", async function () {
@@ -562,7 +562,7 @@ describe("PendleStrategyV2", function () {
 
       await expect(
         strategy.connect(strategist).setRolloverThreshold(0)
-      ).to.be.revertedWith("INVALID_THRESHOLD");
+      ).to.be.revertedWithCustomError(strategy, "InvalidThreshold");
     });
 
     it("Should allow max rollover threshold (30 days)", async function () {
@@ -619,7 +619,7 @@ describe("PendleStrategyV2", function () {
 
       await expect(
         strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address)
-      ).to.be.revertedWith("Cannot recover USDC");
+      ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
     });
 
     it("Should reject non-admin from recovering tokens", async function () {

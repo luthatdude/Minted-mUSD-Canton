@@ -123,7 +123,7 @@ describe("PendleMarketSelector", function () {
 
       await expect(
         selector.connect(marketAdmin).whitelistMarket(ethers.ZeroAddress, "USD")
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(selector, "ZeroAddress");
     });
 
     it("Should revert batch whitelist with mismatched arrays", async function () {
@@ -134,7 +134,7 @@ describe("PendleMarketSelector", function () {
 
       await expect(
         selector.connect(marketAdmin).whitelistMarkets(markets, categories)
-      ).to.be.revertedWith("Length mismatch");
+      ).to.be.revertedWithCustomError(selector, "LengthMismatch");
     });
   });
 

@@ -188,7 +188,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
     it("Should reject PT discount rate > 5000", async function () {
       const { strategy, strategist } = await loadFixture(deployFixture);
       await expect(strategy.connect(strategist).setPtDiscountRate(5001))
-        .to.be.revertedWith("DISCOUNT_TOO_HIGH");
+        .to.be.revertedWithCustomError(strategy, "DiscountTooHigh");
     });
 
     it("Should update rollover threshold", async function () {
@@ -200,7 +200,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
     it("Should reject rollover threshold < 1 day", async function () {
       const { strategy, strategist } = await loadFixture(deployFixture);
       await expect(strategy.connect(strategist).setRolloverThreshold(3600))
-        .to.be.revertedWith("INVALID_THRESHOLD");
+        .to.be.revertedWithCustomError(strategy, "InvalidThreshold");
     });
 
     it("Should update market selector", async function () {
@@ -278,7 +278,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       const { strategy, admin, usdc } = await loadFixture(deployFixture);
       await expect(
         strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address)
-      ).to.be.revertedWith("Cannot recover USDC");
+      ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
     });
 
     it("Should reject recover from non-admin", async function () {

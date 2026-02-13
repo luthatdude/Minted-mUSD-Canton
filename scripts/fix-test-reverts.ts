@@ -4,6 +4,8 @@
  * to:
  *   .to.be.revertedWithCustomError(<contract>, "ErrorName")
  *
+ * The contract variable is extracted from the await expect() call.
+ *
  * Run with: npx ts-node scripts/fix-test-reverts.ts
  */
 import * as fs from "fs";
@@ -183,12 +185,43 @@ const ERROR_MAP: Record<string, string> = {
   INVALID_SUPPLY_CAP: "InvalidSupplyCap",
   INSUFFICIENT_BALANCE: "InsufficientBalance",
   INSUFFICIENT_LIQUIDITY: "InsufficientLiquidity",
-  DEPOSIT_NOT_FOUND: "InsufficientDeposit", // maps to InsufficientDeposit
+  DEPOSIT_NOT_FOUND: "InsufficientDeposit",
   ATTESTATION_TOO_OLD: "AttestationTooOld",
 
   // Special cases - mixed case strings from contracts
   "Cannot recover PT": "CannotRecoverPt",
   "Cannot recover USDC": "CannotRecoverUsdc",
+};
+
+// ─── Contract variable name mapping (filename → primary contract var) ───────
+const FILE_CONTRACT_MAP: Record<string, string> = {
+  "BLEBridgeV9.test.ts": "bridge",
+  "BorrowModule.test.ts": "borrowModule",
+  "CollateralVault.test.ts": "vault",
+  "CoverageBoost_BLEBridgeV9.test.ts": "bridge",
+  "CoverageBoost_BLEBridgeV9_Branches.test.ts": "bridge",
+  "CoverageBoost_DirectMintV2.test.ts": "directMint",
+  "CoverageBoost_MiscContracts.test.ts": "__MULTI__", // handled specially
+  "CoverageBoost_PendleMarketSelector.test.ts": "selector",
+  "CoverageBoost_PendleMarketSelector_Full.test.ts": "selector",
+  "CoverageBoost_PendleStrategyV2.test.ts": "strategy",
+  "CoverageBoost_PendleStrategyV2_Full.test.ts": "strategy",
+  "DeepAudit.test.ts": "__MULTI__",
+  "DeepAuditV2.test.ts": "__MULTI__",
+  "DirectMintV2.test.ts": "directMint",
+  "InstitutionalAudit.test.ts": "__MULTI__",
+  "LeverageVault.test.ts": "leverageVault",
+  "LeverageVaultFlashLoan.test.ts": "leverageVault",
+  "MUSD.test.ts": "musd",
+  "PendleMarketSelector.test.ts": "selector",
+  "PendleStrategyV2.test.ts": "strategy",
+  "PriceOracle.test.ts": "oracle",
+  "RedemptionQueue.test.ts": "queue",
+  "SMUSD.test.ts": "smusd",
+  "SMUSDPriceAdapter.test.ts": "adapter",
+  "SkySUSDSStrategy.test.ts": "strategy",
+  "TimelockWiring.test.ts": "__MULTI__",
+  "TreasuryV2.test.ts": "treasury",
 };
 
 // ─── Test files to process ──────────────────────────────────────────────────
@@ -200,52 +233,55 @@ const testFiles = fs
 let totalReplacements = 0;
 let totalSkipped = 0;
 const unmappedStrings = new Set<string>();
+const manualFixNeeded: Array<{ file: string; line: number; revertString: string }> = [];
 
 for (const file of testFiles) {
   const filePath = path.join(testDir, file);
   let content = fs.readFileSync(filePath, "utf8");
+  const lines = content.split("\n");
   let fileReplacements = 0;
 
-  // Match patterns like:
-  //   .to.be.revertedWith("STRING")
-  //   .revertedWith("STRING")
-  //   .to.be.revertedWith('STRING')
-  //   .revertedWith('STRING')
-  const regex = /\.revertedWith\(["']([^"']+)["']\)/g;
-  let match;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Match .revertedWith("STRING") or .revertedWith('STRING')
+    const revertMatch = line.match(/\.revertedWith\(["']([^"']+)["']\)/);
+    if (!revertMatch) continue;
 
-  // Collect all matches first to avoid modifying while iterating
-  const matches: Array<{ full: string; revertString: string }> = [];
-  while ((match = regex.exec(content)) !== null) {
-    matches.push({ full: match[0], revertString: match[1] });
-  }
+    const revertString = revertMatch[1];
+    const errorName = ERROR_MAP[revertString];
+    if (!errorName) {
+      unmappedStrings.add(revertString);
+      totalSkipped++;
+      continue;
+    }
 
-  for (const m of matches) {
-    const errorName = ERROR_MAP[m.revertString];
-    if (errorName) {
-      // We need to figure out what contract variable to use.
-      // The pattern is: await expect(contractVar.method(...)).to.be.revertedWith("STRING")
-      // We need to extract the contract variable from the preceding code.
-      // For simplicity, we'll just use the error name without a contract reference
-      // since revertedWithCustomError in chai-ethers can match by error name alone
-      // when used with hardhat-chai-matchers.
-      //
-      // Actually, revertedWithCustomError requires the contract instance.
-      // Let's use a simpler approach: replace with a regex that captures the contract.
+    // Extract contract variable by looking at the `await expect(...)` block
+    const contractVar = extractContractVar(lines, i, file);
 
-      content = content.replace(
-        m.full,
-        `.revertedWithCustomError(${getContractVarPlaceholder(file)}, "${errorName}")`
+    if (contractVar) {
+      lines[i] = line.replace(
+        revertMatch[0],
+        `.revertedWithCustomError(${contractVar}, "${errorName}")`
       );
       fileReplacements++;
     } else {
-      unmappedStrings.add(m.revertString);
-      totalSkipped++;
+      // Fall back to file-level default
+      const defaultVar = FILE_CONTRACT_MAP[file];
+      if (defaultVar && defaultVar !== "__MULTI__") {
+        lines[i] = line.replace(
+          revertMatch[0],
+          `.revertedWithCustomError(${defaultVar}, "${errorName}")`
+        );
+        fileReplacements++;
+      } else {
+        manualFixNeeded.push({ file, line: i + 1, revertString });
+        totalSkipped++;
+      }
     }
   }
 
   if (fileReplacements > 0) {
-    fs.writeFileSync(filePath, content, "utf8");
+    fs.writeFileSync(filePath, lines.join("\n"), "utf8");
     console.log(`  ✅ ${file}: ${fileReplacements} replacements`);
     totalReplacements += fileReplacements;
   }
@@ -255,13 +291,41 @@ console.log(`\nTotal: ${totalReplacements} replacements, ${totalSkipped} skipped
 if (unmappedStrings.size > 0) {
   console.log("Unmapped strings:", [...unmappedStrings]);
 }
+if (manualFixNeeded.length > 0) {
+  console.log("\nManual fix needed:");
+  for (const fix of manualFixNeeded) {
+    console.log(`  ${fix.file}:${fix.line} → "${fix.revertString}"`);
+  }
+}
 
 /**
- * This is a placeholder — we need the actual contract variable.
- * For the Minted test suite, most test files use predictable variable names.
- * We'll need a second pass to fix these.
+ * Extract the contract variable from the await expect() call preceding the revertedWith line.
+ * Looks backwards from the current line to find:
+ *   await expect(contractVar.method(...))
+ *   await expect(contractVar.connect(signer).method(...))
+ *   expect(contractVar.method(...))
  */
-function getContractVarPlaceholder(filename: string): string {
-  // Return a placeholder that we'll fix in a second pass
-  return "CONTRACT_REF";
+function extractContractVar(lines: string[], currentLine: number, filename: string): string | null {
+  // Search backwards up to 10 lines for the expect( call
+  for (let j = currentLine; j >= Math.max(0, currentLine - 10); j--) {
+    const l = lines[j];
+    // Pattern 1: await expect(contractVar.connect(signer).method(
+    let m = l.match(/expect\(\s*(\w+)\.connect\(/);
+    if (m) return m[1];
+
+    // Pattern 2: await expect(contractVar.method(
+    m = l.match(/expect\(\s*(\w+)\.\w+\(/);
+    if (m && m[1] !== "ethers" && m[1] !== "upgrades") return m[1];
+
+    // Pattern 3: upgrades.deployProxy(Factory, ...) → need factory variable
+    // For deploy proxy calls, extract the factory variable
+    m = l.match(/upgrades\.deployProxy\(\s*(\w+)/);
+    if (m) return m[1];
+
+    // Pattern 4: expect(upgrades.deployProxy(Factory, ...)
+    m = l.match(/expect\(\s*upgrades\.deployProxy\(\s*(\w+)/);
+    if (m) return m[1];
+  }
+  return null;
 }
+

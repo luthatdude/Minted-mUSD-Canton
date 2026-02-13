@@ -184,7 +184,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       // Try to withdraw more than reserve
       await expect(
         treasury.connect(vault).withdrawToVault(900n * 10n ** 6n)
-      ).to.be.revertedWith("INSUFFICIENT_LIQUIDITY");
+      ).to.be.revertedWithCustomError(treasury, "InsufficientLiquidity");
     });
 
     // --- depositFromVault: small deposit stays in reserve ---
@@ -231,7 +231,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await strategyA.setWithdrawShouldFail(true);
       await expect(
         treasury.connect(vault).withdraw(vault.address, 950n * 10n ** 6n)
-      ).to.be.revertedWith("INSUFFICIENT_RESERVES");
+      ).to.be.revertedWithCustomError(treasury, "InsufficientReserves");
     });
 
     // --- _autoAllocate: totalTargetBps == 0 (no auto-allocate strategies) ---
@@ -283,7 +283,7 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert recoverToken for the primary asset", async function () {
       await expect(
         treasury.recoverToken(await usdc.getAddress(), 100)
-      ).to.be.revertedWith("CANNOT_RECOVER_ASSET");
+      ).to.be.revertedWithCustomError(treasury, "CannotRecoverAsset");
     });
 
     // --- recoverToken: recover non-primary token ---
@@ -298,7 +298,7 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert setMinAutoAllocate with zero", async function () {
       await expect(
         treasury.setMinAutoAllocate(0)
-      ).to.be.revertedWith("ZERO_MIN_AMOUNT");
+      ).to.be.revertedWithCustomError(treasury, "ZeroAmount");
     });
 
     // --- totalValueNet: total <= pending edge ---
@@ -420,33 +420,33 @@ describe("CoverageBoost — Misc Contracts", function () {
       const LE = await ethers.getContractFactory("LiquidationEngine");
       await expect(
         LE.deploy(ethers.ZeroAddress, await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000)
-      ).to.be.revertedWith("INVALID_VAULT");
+      ).to.be.revertedWithCustomError(LE, "InvalidVault");
       await expect(
         LE.deploy(await collateralVault.getAddress(), ethers.ZeroAddress, await priceOracle.getAddress(), await musd.getAddress(), 5000)
-      ).to.be.revertedWith("INVALID_BORROW_MODULE");
+      ).to.be.revertedWithCustomError(LE, "InvalidBorrowModule");
       await expect(
         LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), ethers.ZeroAddress, await musd.getAddress(), 5000)
-      ).to.be.revertedWith("INVALID_ORACLE");
+      ).to.be.revertedWithCustomError(LE, "InvalidOracle");
       await expect(
         LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), ethers.ZeroAddress, 5000)
-      ).to.be.revertedWith("INVALID_MUSD");
+      ).to.be.revertedWithCustomError(LE, "InvalidMusd");
       await expect(
         LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_CLOSE_FACTOR");
+      ).to.be.revertedWithCustomError(LE, "InvalidCloseFactor");
     });
 
     // --- liquidate: INVALID_AMOUNT ---
     it("should revert liquidate with zero debtToRepay", async function () {
       await expect(
         liquidationEngine.connect(liquidator).liquidate(user1.address, await weth.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(liquidationEngine, "InvalidAmount");
     });
 
     // --- liquidate: DUST_LIQUIDATION ---
     it("should revert liquidate below MIN_LIQUIDATION_AMOUNT", async function () {
       await expect(
         liquidationEngine.connect(liquidator).liquidate(user1.address, await weth.getAddress(), ethers.parseEther("50"))
-      ).to.be.revertedWith("DUST_LIQUIDATION");
+      ).to.be.revertedWithCustomError(liquidationEngine, "DustLiquidation");
     });
 
     // --- liquidate: full liquidation when hf < fullLiquidationThreshold ---
@@ -502,7 +502,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         liquidationEngine.connect(user1).liquidate(
           user1.address, await weth.getAddress(), ethers.parseEther("100")
         )
-      ).to.be.revertedWith("CANNOT_SELF_LIQUIDATE");
+      ).to.be.revertedWithCustomError(liquidationEngine, "CannotSelfLiquidate");
     });
 
     // --- liquidate: DUST_LIQUIDATION ---
@@ -511,7 +511,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         liquidationEngine.connect(liquidator).liquidate(
           user1.address, await weth.getAddress(), 1n // 1 wei < MIN_LIQUIDATION_AMOUNT
         )
-      ).to.be.revertedWith("DUST_LIQUIDATION");
+      ).to.be.revertedWithCustomError(liquidationEngine, "DustLiquidation");
     });
 
     // --- estimateSeize: capped at available collateral ---
@@ -528,8 +528,8 @@ describe("CoverageBoost — Misc Contracts", function () {
 
     // --- setCloseFactor: validations ---
     it("should revert setCloseFactor with invalid value", async function () {
-      await expect(liquidationEngine.setCloseFactor(0)).to.be.revertedWith("INVALID_CLOSE_FACTOR");
-      await expect(liquidationEngine.setCloseFactor(10001)).to.be.revertedWith("INVALID_CLOSE_FACTOR");
+      await expect(liquidationEngine.setCloseFactor(0)).to.be.revertedWithCustomError(liquidationEngine, "InvalidCloseFactor");
+      await expect(liquidationEngine.setCloseFactor(10001)).to.be.revertedWithCustomError(liquidationEngine, "InvalidCloseFactor");
     });
 
     it("should revert setCloseFactor from non-timelock", async function () {
@@ -538,8 +538,8 @@ describe("CoverageBoost — Misc Contracts", function () {
 
     // --- setFullLiquidationThreshold: validations ---
     it("should revert setFullLiquidationThreshold with invalid value", async function () {
-      await expect(liquidationEngine.setFullLiquidationThreshold(0)).to.be.revertedWith("INVALID_THRESHOLD");
-      await expect(liquidationEngine.setFullLiquidationThreshold(10000)).to.be.revertedWith("INVALID_THRESHOLD");
+      await expect(liquidationEngine.setFullLiquidationThreshold(0)).to.be.revertedWithCustomError(liquidationEngine, "InvalidThreshold");
+      await expect(liquidationEngine.setFullLiquidationThreshold(10000)).to.be.revertedWithCustomError(liquidationEngine, "InvalidThreshold");
     });
 
     it("should revert setFullLiquidationThreshold from non-timelock", async function () {
@@ -603,7 +603,7 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert setBorrowModule with zero address", async function () {
       await expect(
         vault.setBorrowModule(ethers.ZeroAddress)
-      ).to.be.revertedWith("INVALID_MODULE");
+      ).to.be.revertedWithCustomError(vault, "InvalidModule");
     });
 
     it("should revert setBorrowModule from non-timelock", async function () {
@@ -630,21 +630,21 @@ describe("CoverageBoost — Misc Contracts", function () {
       await vault.disableCollateral(await weth.getAddress());
       await expect(
         vault.updateCollateral(await weth.getAddress(), 7500, 8000, 500)
-      ).to.be.revertedWith("NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "NotSupported");
     });
 
     // --- updateCollateral: INVALID_FACTOR ---
     it("should revert updateCollateral with invalid factor", async function () {
       await expect(
         vault.updateCollateral(await weth.getAddress(), 8000, 8000, 500)
-      ).to.be.revertedWith("INVALID_FACTOR");
+      ).to.be.revertedWithCustomError(vault, "InvalidFactor");
     });
 
     // --- updateCollateral: THRESHOLD_TOO_HIGH ---
     it("should revert updateCollateral with threshold > 9500", async function () {
       await expect(
         vault.updateCollateral(await weth.getAddress(), 7500, 9600, 500)
-      ).to.be.revertedWith("THRESHOLD_TOO_HIGH");
+      ).to.be.revertedWithCustomError(vault, "ThresholdTooHigh");
     });
 
     // --- updateCollateral: PENALTY_TOO_HIGH ---
@@ -654,7 +654,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       // Upper bound: > 2000 bps reverts with PENALTY_TOO_HIGH
       await expect(
         vault.updateCollateral(await weth.getAddress(), 7500, 8000, 2100)
-      ).to.be.revertedWith("PENALTY_TOO_HIGH");
+      ).to.be.revertedWithCustomError(vault, "PenaltyTooHigh");
     });
 
     it("should revert updateCollateral from non-timelock", async function () {
@@ -667,42 +667,42 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert enableCollateral for token never added", async function () {
       await expect(
         vault.enableCollateral(await wbtc.getAddress())
-      ).to.be.revertedWith("NOT_PREVIOUSLY_ADDED");
+      ).to.be.revertedWithCustomError(vault, "NotPreviouslyAdded");
     });
 
     // --- enableCollateral: ALREADY_ENABLED ---
     it("should revert enableCollateral for already enabled token", async function () {
       await expect(
         vault.enableCollateral(await weth.getAddress())
-      ).to.be.revertedWith("ALREADY_ENABLED");
+      ).to.be.revertedWithCustomError(vault, "AlreadyEnabled");
     });
 
     // --- disableCollateral: NOT_SUPPORTED ---
     it("should revert disableCollateral for unsupported token", async function () {
       await expect(
         vault.disableCollateral(await wbtc.getAddress())
-      ).to.be.revertedWith("NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "NotSupported");
     });
 
     // --- depositFor: INVALID_USER ---
     it("should revert depositFor with zero address user", async function () {
       await expect(
         vault.connect(leverageVault).depositFor(ethers.ZeroAddress, await weth.getAddress(), ethers.parseEther("1"))
-      ).to.be.revertedWith("INVALID_USER");
+      ).to.be.revertedWithCustomError(vault, "InvalidUser");
     });
 
     // --- depositFor: INVALID_AMOUNT ---
     it("should revert depositFor with zero amount", async function () {
       await expect(
         vault.connect(leverageVault).depositFor(user1.address, await weth.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(vault, "InvalidAmount");
     });
 
     // --- withdrawFor: INSUFFICIENT_DEPOSIT ---
     it("should revert withdrawFor with insufficient deposit", async function () {
       await expect(
         vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), ethers.parseEther("100"), deployer.address, true)
-      ).to.be.revertedWith("INSUFFICIENT_DEPOSIT");
+      ).to.be.revertedWithCustomError(vault, "InsufficientDeposit");
     });
 
     // --- withdrawFor: INVALID_RECIPIENT ---
@@ -710,7 +710,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await vault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("10"));
       await expect(
         vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), ethers.parseEther("1"), ethers.ZeroAddress, true)
-      ).to.be.revertedWith("INVALID_RECIPIENT");
+      ).to.be.revertedWithCustomError(vault, "InvalidRecipient");
     });
 
     // --- withdrawFor: skipHealthCheck=true bypasses HF check ---
@@ -726,7 +726,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await vault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("1"));
       await expect(
         vault.connect(liquidator).seize(user1.address, await weth.getAddress(), ethers.parseEther("2"), liquidator.address)
-      ).to.be.revertedWith("INSUFFICIENT_COLLATERAL");
+      ).to.be.revertedWithCustomError(vault, "InsufficientCollateral");
     });
 
     // --- pause / unpause separation ---
@@ -890,7 +890,7 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert markDepositComplete for unknown sequence", async function () {
       await expect(
         router.connect(admin).markDepositComplete(999)
-      ).to.be.revertedWith("DEPOSIT_NOT_FOUND");
+      ).to.be.revertedWithCustomError(router, "DepositNotFound");
     });
 
     // --- emergencyWithdraw: InvalidAmount ---
@@ -1145,7 +1145,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await time.increase(3601);
       await expect(
         smusd.connect(bridge).syncCantonShares(200, 1) // same epoch
-      ).to.be.revertedWith("EPOCH_NOT_SEQUENTIAL");
+      ).to.be.revertedWithCustomError(smusd, "EpochNotSequential");
     });
 
     // --- syncCantonShares: SYNC_TOO_FREQUENT ---
@@ -1154,7 +1154,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await smusd.connect(bridge).syncCantonShares(100, 1);
       await expect(
         smusd.connect(bridge).syncCantonShares(200, 2) // immediate, no wait
-      ).to.be.revertedWith("SYNC_TOO_FREQUENT");
+      ).to.be.revertedWithCustomError(smusd, "SyncTooFrequent");
     });
 
     // --- syncCantonShares: INITIAL_SHARES_TOO_LARGE (no ETH shares) ---
@@ -1163,7 +1163,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       const ethShares = await smusd.totalSupply();
       await expect(
         smusd.connect(bridge).syncCantonShares(ethShares * 3n, 1) // > 2x
-      ).to.be.revertedWith("INITIAL_SHARES_TOO_LARGE");
+      ).to.be.revertedWithCustomError(smusd, "InitialSharesTooLarge");
     });
 
     // --- syncCantonShares: SHARE_INCREASE_TOO_LARGE ---
@@ -1174,7 +1174,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       // Increase by more than 5%
       await expect(
         smusd.connect(bridge).syncCantonShares(2000, 2) // 100% increase
-      ).to.be.revertedWith("SHARE_INCREASE_TOO_LARGE");
+      ).to.be.revertedWithCustomError(smusd, "ShareIncreaseTooLarge");
     });
 
     // --- syncCantonShares: SHARE_DECREASE_TOO_LARGE ---
@@ -1184,7 +1184,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await time.increase(3601);
       await expect(
         smusd.connect(bridge).syncCantonShares(100, 2) // 90% decrease
-      ).to.be.revertedWith("SHARE_DECREASE_TOO_LARGE");
+      ).to.be.revertedWithCustomError(smusd, "ShareDecreaseTooLarge");
     });
 
     // --- receiveInterest: ZERO_AMOUNT ---
@@ -1192,14 +1192,14 @@ describe("CoverageBoost — Misc Contracts", function () {
       await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
       await expect(
         smusd.connect(interestRouter).receiveInterest(0)
-      ).to.be.revertedWith("ZERO_AMOUNT");
+      ).to.be.revertedWithCustomError(smusd, "ZeroAmount");
     });
 
     // --- receiveInterest: NO_SHARES_EXIST ---
     it("should revert receiveInterest when no shares exist", async function () {
       await expect(
         smusd.connect(interestRouter).receiveInterest(100)
-      ).to.be.revertedWith("NO_SHARES_EXIST");
+      ).to.be.revertedWithCustomError(smusd, "NoSharesExist");
     });
 
     // --- receiveInterest: INTEREST_EXCEEDS_CAP ---
@@ -1209,14 +1209,14 @@ describe("CoverageBoost — Misc Contracts", function () {
       const cap = ethers.parseEther("200"); // way over 10% of 1000
       await expect(
         smusd.connect(interestRouter).receiveInterest(cap)
-      ).to.be.revertedWith("INTEREST_EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(smusd, "InterestExceedsCap");
     });
 
     // --- distributeYield: NO_SHARES_EXIST ---
     it("should revert distributeYield when no shares exist", async function () {
       await expect(
         smusd.connect(yieldManager).distributeYield(100)
-      ).to.be.revertedWith("NO_SHARES_EXIST");
+      ).to.be.revertedWithCustomError(smusd, "NoSharesExist");
     });
 
     // --- distributeYield: INVALID_AMOUNT ---
@@ -1224,7 +1224,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
       await expect(
         smusd.connect(yieldManager).distributeYield(0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(smusd, "InvalidAmount");
     });
 
     // --- distributeYield: YIELD_EXCEEDS_CAP ---
@@ -1232,7 +1232,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
       await expect(
         smusd.connect(yieldManager).distributeYield(ethers.parseEther("500"))
-      ).to.be.revertedWith("YIELD_EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(smusd, "YieldExceedsCap");
     });
 
     // --- setTreasury: valid ---
@@ -1244,7 +1244,7 @@ describe("CoverageBoost — Misc Contracts", function () {
     // --- setTreasury: ZERO_ADDRESS ---
     it("should revert setTreasury with zero address", async function () {
       await expect(smusd.setTreasury(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
+        .to.be.revertedWithCustomError(smusd, "ZeroAddress");
     });
 
     // --- maxWithdraw: returns 0 when paused ---
@@ -1392,33 +1392,33 @@ describe("CoverageBoost — Misc Contracts", function () {
     // --- setSharePriceBounds: validations ---
     it("should revert setSharePriceBounds with zero min", async function () {
       await expect(adapter.setSharePriceBounds(0, 200000000n))
-        .to.be.revertedWith("MIN_ZERO");
+        .to.be.revertedWithCustomError(adapter, "MinZero");
     });
 
     it("should revert setSharePriceBounds with max <= min", async function () {
       await expect(adapter.setSharePriceBounds(200000000n, 200000000n))
-        .to.be.revertedWith("MAX_LTE_MIN");
+        .to.be.revertedWithCustomError(adapter, "MaxLteMin");
     });
 
     it("should revert setSharePriceBounds with max > $10", async function () {
       await expect(adapter.setSharePriceBounds(100000000n, 1100000000n))
-        .to.be.revertedWith("MAX_TOO_HIGH");
+        .to.be.revertedWithCustomError(adapter, "MaxTooHigh");
     });
 
     // --- setDonationProtection: validations ---
     it("should revert setDonationProtection with zero supply", async function () {
       await expect(adapter.setDonationProtection(0, 5000000n))
-        .to.be.revertedWith("MIN_SUPPLY_ZERO");
+        .to.be.revertedWithCustomError(adapter, "MinSupplyZero");
     });
 
     it("should revert setDonationProtection with zero change", async function () {
       await expect(adapter.setDonationProtection(1e18.toString(), 0))
-        .to.be.revertedWith("MAX_CHANGE_ZERO");
+        .to.be.revertedWithCustomError(adapter, "MaxChangeZero");
     });
 
     it("should revert setDonationProtection with change > 50%", async function () {
       await expect(adapter.setDonationProtection(1e18.toString(), 60000000n))
-        .to.be.revertedWith("MAX_CHANGE_TOO_HIGH");
+        .to.be.revertedWithCustomError(adapter, "MaxChangeTooHigh");
     });
 
     // --- incrementRound ---
@@ -1482,52 +1482,52 @@ describe("CoverageBoost — Misc Contracts", function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
         LV.deploy(ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address, admin.address)
-      ).to.be.revertedWith("INVALID_ROUTER");
+      ).to.be.revertedWithCustomError(LV, "InvalidRouter");
     });
 
     it("should revert constructor with zero collateralVault", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
         LV.deploy(admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address, admin.address)
-      ).to.be.revertedWith("INVALID_VAULT");
+      ).to.be.revertedWithCustomError(LV, "InvalidVault");
     });
 
     it("should revert constructor with zero borrowModule", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
         LV.deploy(admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address, admin.address)
-      ).to.be.revertedWith("INVALID_BORROW");
+      ).to.be.revertedWithCustomError(LV, "InvalidBorrow");
     });
 
     it("should revert constructor with zero priceOracle", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
         LV.deploy(admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address, admin.address)
-      ).to.be.revertedWith("INVALID_ORACLE");
+      ).to.be.revertedWithCustomError(LV, "InvalidOracle");
     });
 
     it("should revert constructor with zero musd", async function () {
       const LV = await ethers.getContractFactory("LeverageVault");
       await expect(
         LV.deploy(admin.address, admin.address, admin.address, admin.address, ethers.ZeroAddress, admin.address)
-      ).to.be.revertedWith("INVALID_MUSD");
+      ).to.be.revertedWithCustomError(LV, "InvalidMusd");
     });
 
     // --- setConfig: validations ---
     it("should revert setConfig with invalid maxLoops", async function () {
       await expect(
         leverageVault.setConfig(0, 100e18.toString(), 3000, 100)
-      ).to.be.revertedWith("INVALID_MAX_LOOPS");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLoops");
 
       await expect(
         leverageVault.setConfig(21, 100e18.toString(), 3000, 100)
-      ).to.be.revertedWith("INVALID_MAX_LOOPS");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLoops");
     });
 
     it("should revert setConfig with slippage too high", async function () {
       await expect(
         leverageVault.setConfig(10, 100e18.toString(), 3000, 501)
-      ).to.be.revertedWith("SLIPPAGE_TOO_HIGH");
+      ).to.be.revertedWithCustomError(leverageVault, "SlippageTooHigh");
     });
 
     it("should accept setConfig with any fee tier (no fee tier validation)", async function () {
@@ -1543,8 +1543,8 @@ describe("CoverageBoost — Misc Contracts", function () {
 
     // --- setMaxLeverage: validations ---
     it("should revert setMaxLeverage with invalid values", async function () {
-      await expect(leverageVault.setMaxLeverage(9)).to.be.revertedWith("INVALID_MAX_LEVERAGE");
-      await expect(leverageVault.setMaxLeverage(41)).to.be.revertedWith("INVALID_MAX_LEVERAGE");
+      await expect(leverageVault.setMaxLeverage(9)).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
+      await expect(leverageVault.setMaxLeverage(41)).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
     });
 
     it("should accept valid setMaxLeverage", async function () {
@@ -1555,12 +1555,12 @@ describe("CoverageBoost — Misc Contracts", function () {
     // --- enableToken: validations ---
     it("should revert enableToken with zero address", async function () {
       await expect(leverageVault.enableToken(ethers.ZeroAddress, 3000))
-        .to.be.revertedWith("INVALID_TOKEN");
+        .to.be.revertedWithCustomError(leverageVault, "InvalidToken");
     });
 
     it("should revert enableToken with invalid fee tier", async function () {
       await expect(leverageVault.enableToken(user1.address, 2000))
-        .to.be.revertedWith("INVALID_FEE_TIER");
+        .to.be.revertedWithCustomError(leverageVault, "InvalidFeeTier");
     });
 
     // --- disableToken ---
@@ -1612,7 +1612,7 @@ describe("CoverageBoost — Misc Contracts", function () {
         leverageVault.connect(user1).openLeveragedPosition(
           user1.address, 1000, 20, 0, deadline
         )
-      ).to.be.revertedWith("TOKEN_NOT_ENABLED");
+      ).to.be.revertedWithCustomError(leverageVault, "TokenNotEnabled");
     });
 
     // --- openLeveragedPosition: expired deadline causes downstream revert ---

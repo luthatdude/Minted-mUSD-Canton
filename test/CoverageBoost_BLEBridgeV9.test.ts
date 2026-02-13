@@ -158,7 +158,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
 
     it("Should reject setMUSDToken with zero address", async function () {
       await expect(bridge.setMUSDToken(ethers.ZeroAddress))
-        .to.be.revertedWith("INVALID_ADDRESS");
+        .to.be.revertedWithCustomError(bridge, "InvalidAddress");
     });
 
     it("Should reject setMUSDToken from non-timelock", async function () {
@@ -211,7 +211,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     it("Should reject unpause execution before timelock", async function () {
       await bridge.connect(emergency).pause();
       await bridge.requestUnpause();
-      await expect(bridge.executeUnpause()).to.be.revertedWith("TIMELOCK_NOT_ELAPSED");
+      await expect(bridge.executeUnpause()).to.be.revertedWithCustomError(bridge, "TimelockNotElapsed");
     });
   });
 
@@ -261,7 +261,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       const a2 = await createAttestation(2n, ethers.parseEther("11100000"), now2);
       await expect(
         bridge.processAttestation(a2, await createSortedSignatures(a2, validators.slice(0, 3)))
-      ).to.be.revertedWith("ATTESTATION_TOO_CLOSE");
+      ).to.be.revertedWithCustomError(bridge, "AttestationTooClose");
     });
   });
 
@@ -273,7 +273,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       await bridge.setCollateralRatio(11500n);
       // Second change immediately
       await expect(bridge.setCollateralRatio(12000n))
-        .to.be.revertedWith("RATIO_CHANGE_COOLDOWN");
+        .to.be.revertedWithCustomError(bridge, "RatioChangeCooldown");
     });
 
     it("Should allow ratio change after cooldown", async function () {
@@ -285,7 +285,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
 
     it("Should reject ratio below minimum (10000)", async function () {
       await expect(bridge.setCollateralRatio(9999n))
-        .to.be.revertedWith("RATIO_BELOW_100_PERCENT");
+        .to.be.revertedWithCustomError(bridge, "RatioBelow100Percent");
     });
   });
 
@@ -294,17 +294,17 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
   describe("Min Signatures Edge Cases", function () {
     it("Should reject minSignatures of 0", async function () {
       await expect(bridge.setMinSignatures(0))
-        .to.be.revertedWith("MIN_SIGS_TOO_LOW");
+        .to.be.revertedWithCustomError(bridge, "MinSigsTooLow");
     });
 
     it("Should reject minSignatures of 1", async function () {
       await expect(bridge.setMinSignatures(1))
-        .to.be.revertedWith("MIN_SIGS_TOO_LOW");
+        .to.be.revertedWithCustomError(bridge, "MinSigsTooLow");
     });
 
     it("Should reject minSignatures > 10", async function () {
       await expect(bridge.setMinSignatures(11))
-        .to.be.revertedWith("MIN_SIGS_TOO_HIGH");
+        .to.be.revertedWithCustomError(bridge, "MinSigsTooHigh");
     });
   });
 });

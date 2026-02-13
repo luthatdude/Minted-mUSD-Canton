@@ -64,13 +64,13 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should reject deviation below 1% (100 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
       await expect(oracle.connect(admin).setMaxDeviation(50))
-        .to.be.revertedWith("DEVIATION_OUT_OF_RANGE");
+        .to.be.revertedWithCustomError(oracle, "DeviationOutOfRange");
     });
 
     it("should reject deviation above 50% (5000 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
       await expect(oracle.connect(admin).setMaxDeviation(6000))
-        .to.be.revertedWith("DEVIATION_OUT_OF_RANGE");
+        .to.be.revertedWithCustomError(oracle, "DeviationOutOfRange");
     });
 
     it("should accept boundary values (100 and 5000 bps)", async function () {
@@ -138,14 +138,14 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
       await oracle.connect(admin).removeFeed(WETH);
       await expect(oracle.connect(admin).resetLastKnownPrice(WETH))
-        .to.be.revertedWith("FEED_NOT_ENABLED");
+        .to.be.revertedWithCustomError(oracle, "FeedNotEnabled");
     });
 
     it("should reject when feed returns invalid price", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
       await ethFeed.setAnswer(0);
       await expect(oracle.connect(admin).resetLastKnownPrice(WETH))
-        .to.be.revertedWith("INVALID_PRICE");
+        .to.be.revertedWithCustomError(oracle, "InvalidPrice");
     });
 
     it("should reject non-admin caller", async function () {
@@ -181,21 +181,21 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
       await oracle.connect(admin).removeFeed(WETH);
       await expect(oracle.connect(admin).updatePrice(WETH))
-        .to.be.revertedWith("FEED_NOT_ENABLED");
+        .to.be.revertedWithCustomError(oracle, "FeedNotEnabled");
     });
 
     it("should reject stale price", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601); // past stale period
       await expect(oracle.connect(admin).updatePrice(WETH))
-        .to.be.revertedWith("STALE_PRICE");
+        .to.be.revertedWithCustomError(oracle, "StalePrice");
     });
 
     it("should reject invalid price (zero)", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
       await ethFeed.setAnswer(0);
       await expect(oracle.connect(admin).updatePrice(WETH))
-        .to.be.revertedWith("INVALID_PRICE");
+        .to.be.revertedWithCustomError(oracle, "InvalidPrice");
     });
 
     it("should reject non-admin caller", async function () {
@@ -220,7 +220,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       await ethFeed.setAnswer(220000000000n);
 
       await expect(oracle.getPrice(WETH))
-        .to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+        .to.be.revertedWithCustomError(oracle, "CircuitBreakerActive");
     });
 
     it("should allow getPrice within deviation threshold", async function () {
@@ -257,7 +257,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
       // Trigger circuit breaker
       await ethFeed.setAnswer(260000000000n); // 30% move
-      await expect(oracle.getPrice(WETH)).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+      await expect(oracle.getPrice(WETH)).to.be.revertedWithCustomError(oracle, "CircuitBreakerActive");
 
       // Admin resets price
       await oracle.connect(admin).resetLastKnownPrice(WETH);
@@ -272,7 +272,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
       await oracle.connect(admin).setMaxDeviation(500);
       await ethFeed.setAnswer(260000000000n);
-      await expect(oracle.getPrice(WETH)).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+      await expect(oracle.getPrice(WETH)).to.be.revertedWithCustomError(oracle, "CircuitBreakerActive");
 
       // Admin updates price to acknowledge the move
       await oracle.connect(admin).updatePrice(WETH);
@@ -295,7 +295,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       await ethFeed.setAnswer(260000000000n); // 30% move
 
       // getPrice reverts
-      await expect(oracle.getPrice(WETH)).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+      await expect(oracle.getPrice(WETH)).to.be.revertedWithCustomError(oracle, "CircuitBreakerActive");
 
       // getPriceUnsafe succeeds
       const price = await oracle.getPriceUnsafe(WETH);
@@ -305,19 +305,19 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should still enforce staleness check", async function () {
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
-      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("STALE_PRICE");
+      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWithCustomError(oracle, "StalePrice");
     });
 
     it("should still enforce valid price check", async function () {
       const { oracle, ethFeed, WETH } = await loadFixture(deployOracleFixture);
       await ethFeed.setAnswer(0);
-      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("INVALID_PRICE");
+      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWithCustomError(oracle, "InvalidPrice");
     });
 
     it("should reject disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
       await oracle.connect(admin).removeFeed(WETH);
-      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("FEED_NOT_ENABLED");
+      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWithCustomError(oracle, "FeedNotEnabled");
     });
   });
 
@@ -353,7 +353,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
       await expect(oracle.getValueUsdUnsafe(WETH, ethers.parseEther("1")))
-        .to.be.revertedWith("STALE_PRICE");
+        .to.be.revertedWithCustomError(oracle, "StalePrice");
     });
   });
 
@@ -496,7 +496,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
       await expect(borrowModule.connect(owner).setInterestRateModel(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
+        .to.be.revertedWithCustomError(borrowModule, "ZeroAddress");
     });
 
     it("should reject non-admin caller", async function () {
@@ -526,7 +526,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
       await expect(borrowModule.connect(owner).setSMUSD(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
+        .to.be.revertedWithCustomError(borrowModule, "ZeroAddress");
     });
 
     it("should reject non-admin caller", async function () {
@@ -557,7 +557,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject zero address", async function () {
       const { borrowModule, owner } = await loadFixture(deployFullBorrowFixture);
       await expect(borrowModule.connect(owner).setTreasury(ethers.ZeroAddress))
-        .to.be.revertedWith("ZERO_ADDRESS");
+        .to.be.revertedWithCustomError(borrowModule, "ZeroAddress");
     });
 
     it("should reject non-admin caller", async function () {
@@ -589,13 +589,13 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "0");
       await expect(f.borrowModule.connect(f.leverageVault).borrowFor(f.user1.address, 0))
-        .to.be.revertedWith("INVALID_AMOUNT");
+        .to.be.revertedWithCustomError(f.borrowModule, "InvalidAmount");
     });
 
     it("should reject zero user address", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.leverageVault).borrowFor(ethers.ZeroAddress, 1000))
-        .to.be.revertedWith("INVALID_USER");
+        .to.be.revertedWithCustomError(f.borrowModule, "InvalidUser");
     });
 
     it("should reject exceeding borrow capacity", async function () {
@@ -605,7 +605,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       // 10 ETH * $2000 * 75% LTV = $15,000 max
       const tooMuch = ethers.parseEther("16000");
       await expect(f.borrowModule.connect(f.leverageVault).borrowFor(f.user1.address, tooMuch))
-        .to.be.revertedWith("EXCEEDS_BORROW_CAPACITY");
+        .to.be.revertedWithCustomError(f.borrowModule, "ExceedsBorrowCapacity");
     });
 
     it("should reject non-LEVERAGE_VAULT_ROLE caller", async function () {
@@ -619,7 +619,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "0");
       await expect(f.borrowModule.connect(f.leverageVault).borrowFor(f.user1.address, ethers.parseEther("10")))
-        .to.be.revertedWith("BELOW_MIN_DEBT");
+        .to.be.revertedWithCustomError(f.borrowModule, "BelowMinDebt");
     });
   });
 
@@ -650,20 +650,20 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
       await expect(f.borrowModule.connect(f.leverageVault).repayFor(f.user1.address, 0))
-        .to.be.revertedWith("INVALID_AMOUNT");
+        .to.be.revertedWithCustomError(f.borrowModule, "InvalidAmount");
     });
 
     it("should reject zero user address", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.leverageVault).repayFor(ethers.ZeroAddress, 1000))
-        .to.be.revertedWith("INVALID_USER");
+        .to.be.revertedWithCustomError(f.borrowModule, "InvalidUser");
     });
 
     it("should reject when no debt exists", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "0"); // no borrow
       await expect(f.borrowModule.connect(f.leverageVault).repayFor(f.user1.address, ethers.parseEther("1000")))
-        .to.be.revertedWith("NO_DEBT");
+        .to.be.revertedWithCustomError(f.borrowModule, "NoDebt");
     });
 
     it("should reject non-LEVERAGE_VAULT_ROLE caller", async function () {
@@ -892,13 +892,13 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject when no reserves exist", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.owner).withdrawReserves(f.owner.address, ethers.parseEther("1")))
-        .to.be.revertedWith("EXCEEDS_RESERVES");
+        .to.be.revertedWithCustomError(f.borrowModule, "ExceedsReserves");
     });
 
     it("should reject zero address recipient", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.owner).withdrawReserves(ethers.ZeroAddress, 0))
-        .to.be.revertedWith("ZERO_ADDRESS");
+        .to.be.revertedWithCustomError(f.borrowModule, "ZeroAddress");
     });
 
     it("should reject non-admin caller", async function () {
@@ -1071,14 +1071,14 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject zero min debt", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.owner).setMinDebt(0))
-        .to.be.revertedWith("MIN_DEBT_ZERO");
+        .to.be.revertedWithCustomError(f.borrowModule, "MinDebtZero");
     });
 
     it("should reject min debt too high (>1e24)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       const tooHigh = ethers.parseEther("1000001"); // > 1e24 in wei? Let me use 1e24+1
       await expect(f.borrowModule.connect(f.owner).setMinDebt(10n ** 24n + 1n))
-        .to.be.revertedWith("MIN_DEBT_TOO_HIGH");
+        .to.be.revertedWithCustomError(f.borrowModule, "MinDebtTooHigh");
     });
 
     it("should accept boundary value (1e24)", async function () {
@@ -1116,7 +1116,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should reject rate above 5000", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await expect(f.borrowModule.connect(f.owner).setInterestRate(5001))
-        .to.be.revertedWith("RATE_TOO_HIGH");
+        .to.be.revertedWithCustomError(f.borrowModule, "RateTooHigh");
     });
   });
 });
@@ -1250,7 +1250,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       await smusd.grantRole(INTEREST_ROUTER, deployer.address);
 
       await expect(smusd.connect(deployer).receiveInterest(0))
-        .to.be.revertedWith("ZERO_AMOUNT");
+        .to.be.revertedWithCustomError(smusd, "ZeroAmount");
     });
 
     it("should reject when no shares exist", async function () {
@@ -1259,7 +1259,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       await smusd.grantRole(INTEREST_ROUTER, deployer.address);
 
       await expect(smusd.connect(deployer).receiveInterest(ethers.parseEther("100")))
-        .to.be.revertedWith("NO_SHARES_EXIST");
+        .to.be.revertedWithCustomError(smusd, "NoSharesExist");
     });
 
     it("should reject interest exceeding MAX_YIELD_BPS cap", async function () {
@@ -1274,7 +1274,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       await musd.mint(deployer.address, ethers.parseEther("200"));
       await musd.connect(deployer).approve(await smusd.getAddress(), ethers.parseEther("200"));
       await expect(smusd.connect(deployer).receiveInterest(ethers.parseEther("200")))
-        .to.be.revertedWith("INTEREST_EXCEEDS_CAP");
+        .to.be.revertedWithCustomError(smusd, "InterestExceedsCap");
     });
 
     it("should reject non-INTEREST_ROUTER_ROLE caller", async function () {
@@ -1300,7 +1300,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
 
       // Second sync immediately → should fail
       await expect(smusd.connect(deployer).syncCantonShares(1050, 2))
-        .to.be.revertedWith("SYNC_TOO_FREQUENT");
+        .to.be.revertedWithCustomError(smusd, "SyncTooFrequent");
     });
 
     it("should reject share change exceeding 5%", async function () {
@@ -1320,7 +1320,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
 
       // Try 20% increase
       await expect(smusd.connect(deployer).syncCantonShares(1200, 2))
-        .to.be.revertedWith("SHARE_INCREASE_TOO_LARGE");
+        .to.be.revertedWithCustomError(smusd, "ShareIncreaseTooLarge");
     });
 
     it("should reject share decrease exceeding 5%", async function () {
@@ -1337,7 +1337,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
 
       // Try 20% decrease
       await expect(smusd.connect(deployer).syncCantonShares(800, 2))
-        .to.be.revertedWith("SHARE_DECREASE_TOO_LARGE");
+        .to.be.revertedWithCustomError(smusd, "ShareDecreaseTooLarge");
     });
 
     it("should cap initial sync to 2x ETH shares", async function () {
@@ -1353,7 +1353,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
 
       // Try initial sync with 3x ETH shares
       await expect(smusd.connect(deployer).syncCantonShares(ethShares * 3n, 1))
-        .to.be.revertedWith("INITIAL_SHARES_TOO_LARGE");
+        .to.be.revertedWithCustomError(smusd, "InitialSharesTooLarge");
     });
   });
 });
