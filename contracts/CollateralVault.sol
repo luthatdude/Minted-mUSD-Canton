@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./Errors.sol";
 
 /// @dev Interface for checking health factor before withdrawal
 interface IBorrowModule {
@@ -64,7 +65,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Set the BorrowModule address for health factor checks
     function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
-        require(_borrowModule != address(0), "INVALID_MODULE");
+        if (_borrowModule == address(0)) revert InvalidModule();
         emit BorrowModuleUpdated(borrowModule, _borrowModule);
         borrowModule = _borrowModule;
     }
@@ -80,17 +81,17 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
     ) external onlyRole(VAULT_ADMIN_ROLE) {
-        require(token != address(0), "INVALID_TOKEN");
+        if (token == address(0)) revert InvalidToken();
         // Use collateralFactorBps == 0 to detect never-added tokens.
         // A disabled token retains its collateralFactorBps > 0, so checking
         // !enabled would allow a duplicate push into supportedTokens[].
         // Use enableCollateral() to re-enable a disabled token instead.
-        require(collateralConfigs[token].collateralFactorBps == 0, "ALREADY_ADDED");
+        if (collateralConfigs[token].collateralFactorBps != 0) revert AlreadyAdded();
         // Cap supported tokens array to prevent unbounded growth
-        require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
-        require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
-        require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH"); // Max 95%
-        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");    // Max 20%
+        if (supportedTokens.length >= 50) revert TooManyTokens();
+        if (collateralFactorBps == 0 || collateralFactorBps >= liquidationThresholdBps) revert InvalidFactor();
+        if (liquidationThresholdBps > 9500) revert ThresholdTooHigh(); // Max 95%
+        if (liquidationPenaltyBps > 2000) revert PenaltyTooHigh();    // Max 20%
 
         collateralConfigs[token] = CollateralConfig({
             enabled: true,
@@ -110,10 +111,10 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
     ) external onlyRole(VAULT_ADMIN_ROLE) {
-        require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
-        require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
-        require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");
-        require(liquidationPenaltyBps <= 2000, "PENALTY_TOO_HIGH");
+        if (!collateralConfigs[token].enabled) revert NotSupported();
+        if (collateralFactorBps == 0 || collateralFactorBps >= liquidationThresholdBps) revert InvalidFactor();
+        if (liquidationThresholdBps > 9500) revert ThresholdTooHigh();
+        if (liquidationPenaltyBps > 2000) revert PenaltyTooHigh();
 
         collateralConfigs[token].collateralFactorBps = collateralFactorBps;
         collateralConfigs[token].liquidationThresholdBps = liquidationThresholdBps;
@@ -127,7 +128,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     ///      BorrowModule._weightedCollateralValue() continues to count them for health factor.
     ///      The 50-token cap already prevents gas DoS.
     function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
-        require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
+        if (!collateralConfigs[token].enabled) revert NotSupported();
         collateralConfigs[token].enabled = false;
 
         // Token stays in supportedTokens[] — only the enabled flag changes.
@@ -140,8 +141,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @dev Token already remains in supportedTokens[] after disable,
     ///      so no push needed. Just flips the enabled flag.
     function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
-        require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
-        require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
+        if (collateralConfigs[token].collateralFactorBps == 0) revert NotPreviouslyAdded();
+        if (collateralConfigs[token].enabled) revert AlreadyEnabled();
         collateralConfigs[token].enabled = true;
         emit CollateralEnabled(token);
     }
@@ -154,8 +155,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @param token The collateral token address
     /// @param amount Amount to deposit
     function deposit(address token, uint256 amount) external nonReentrant whenNotPaused {
-        require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
-        require(amount > 0, "INVALID_AMOUNT");
+        if (!collateralConfigs[token].enabled) revert TokenNotSupported();
+        if (amount == 0) revert InvalidAmount();
 
         deposits[msg.sender][token] += amount;
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -168,9 +169,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @param token The collateral token address
     /// @param amount Amount to deposit
     function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
-        require(collateralConfigs[token].enabled, "TOKEN_NOT_SUPPORTED");
-        require(amount > 0, "INVALID_AMOUNT");
-        require(user != address(0), "INVALID_USER");
+        if (!collateralConfigs[token].enabled) revert TokenNotSupported();
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert InvalidUser();
 
         deposits[user][token] += amount;
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -187,7 +188,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 amount,
         address user
     ) external onlyRole(BORROW_MODULE_ROLE) nonReentrant {
-        require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
+        if (deposits[user][token] < amount) revert InsufficientDeposit();
 
         deposits[user][token] -= amount;
         IERC20(token).safeTransfer(user, amount);
@@ -206,7 +207,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 amount,
         address liquidator
     ) external onlyRole(LIQUIDATION_ROLE) nonReentrant {
-        require(deposits[user][token] >= amount, "INSUFFICIENT_COLLATERAL");
+        if (deposits[user][token] < amount) revert InsufficientCollateral();
 
         deposits[user][token] -= amount;
         IERC20(token).safeTransfer(liquidator, amount);
@@ -229,17 +230,14 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         address recipient,
         bool skipHealthCheck
     ) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
-        require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
-        require(recipient != address(0), "INVALID_RECIPIENT");
+        if (deposits[user][token] < amount) revert InsufficientDeposit();
+        if (recipient == address(0)) revert InvalidRecipient();
 
         // When skipHealthCheck is true, restrict recipient to the
         // LeverageVault (msg.sender) or the user themselves. This prevents a
         // compromised LEVERAGE_VAULT_ROLE from draining collateral to arbitrary addresses.
         if (skipHealthCheck) {
-            require(
-                recipient == msg.sender || recipient == user,
-                "SKIP_HC_RECIPIENT_RESTRICTED"
-            );
+            if (recipient != msg.sender && recipient != user) revert SkipHcRecipientRestricted();
         }
 
         // Decrement deposit BEFORE health check so healthFactor()
@@ -266,10 +264,10 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
                         // Both oracles failed — BLOCK withdrawal (fail-closed).
                         // Previously this would have reverted naturally, but with try/catch
                         // we must explicitly revert to prevent fail-open.
-                        revert("ORACLE_UNAVAILABLE");
+                        revert OracleUnavailable();
                     }
                 }
-                require(healthOk, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
+                if (!healthOk) revert WithdrawalWouldUndercollateralize();
             }
         }
 

@@ -7,6 +7,7 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./Errors.sol";
 
 /// @title MUSD
 /// @notice ERC-20 stablecoin with supply cap, compliance, and emergency pause
@@ -43,7 +44,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
 
     constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        require(_initialSupplyCap > 0, "INVALID_SUPPLY_CAP");
+        if (_initialSupplyCap == 0) revert InvalidSupplyCap();
         supplyCap = _initialSupplyCap;
         emit SupplyCapUpdated(0, _initialSupplyCap);
     }
@@ -53,11 +54,8 @@ contract MUSD is ERC20, AccessControl, Pausable {
     ///      When attestations report lower backing, cap MUST be able to drop.
     ///      If cap < totalSupply, no new mints allowed but existing holders unaffected.
     function setSupplyCap(uint256 _cap) external {
-        require(
-            hasRole(DEFAULT_ADMIN_ROLE, msg.sender) || hasRole(CAP_MANAGER_ROLE, msg.sender),
-            "UNAUTHORIZED"
-        );
-        require(_cap > 0, "INVALID_SUPPLY_CAP");
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
+        if (_cap == 0) revert InvalidSupplyCap();
         
         uint256 oldCap = supplyCap;
         uint256 currentSupply = totalSupply();
@@ -65,10 +63,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
         // Enforce 24h cooldown between supply cap INCREASES
         // Decreases are always allowed (emergency undercollateralization response)
         if (_cap > oldCap) {
-            require(
-                block.timestamp >= lastCapIncreaseTime + MIN_CAP_INCREASE_INTERVAL,
-                "CAP_INCREASE_COOLDOWN"
-            );
+            if (block.timestamp < lastCapIncreaseTime + MIN_CAP_INCREASE_INTERVAL) revert CapIncreaseCooldown();
             lastCapIncreaseTime = block.timestamp;
         }
         
@@ -85,13 +80,13 @@ contract MUSD is ERC20, AccessControl, Pausable {
     /// @notice Set the local chain cap as percentage of global supply cap
     /// @param _bps Basis points (e.g., 6000 = 60%). Both chains should sum to <= 12000 for 20% safety margin.
     function setLocalCapBps(uint256 _bps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_bps >= 1000 && _bps <= 10000, "LOCAL_CAP_OUT_OF_RANGE");
+        if (_bps < 1000 || _bps > 10000) revert LocalCapOutOfRange();
         emit LocalCapBpsUpdated(localCapBps, _bps);
         localCapBps = _bps;
     }
 
     function setBlacklist(address account, bool status) external onlyRole(COMPLIANCE_ROLE) {
-        require(account != address(0), "INVALID_ADDRESS");
+        if (account == address(0)) revert InvalidAddress();
         isBlacklisted[account] = status;
         emit BlacklistUpdated(account, status);
     }
@@ -99,10 +94,10 @@ contract MUSD is ERC20, AccessControl, Pausable {
     // Blacklist enforced in _update() override
     /// @notice Mint mUSD to a specified address
     function mint(address to, uint256 amount) external onlyRole(BRIDGE_ROLE) {
-        require(to != address(0), "MINT_TO_ZERO");
+        if (to == address(0)) revert MintToZero();
         // Use conservative local cap to prevent cross-chain over-minting
         uint256 effectiveCap = (supplyCap * localCapBps) / 10000;
-        require(totalSupply() + amount <= effectiveCap, "EXCEEDS_LOCAL_CAP");
+        if (totalSupply() + amount > effectiveCap) revert ExceedsLocalCap();
         _mint(to, amount);
         emit Mint(to, amount);
     }
@@ -110,10 +105,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
     // Blacklist enforced in _update() override
     /// @notice Burn mUSD (allowed by BRIDGE_ROLE or LIQUIDATOR_ROLE)
     function burn(address from, uint256 amount) external {
-        require(
-            hasRole(BRIDGE_ROLE, msg.sender) || hasRole(LIQUIDATOR_ROLE, msg.sender),
-            "UNAUTHORIZED_BURN"
-        );
+        if (!hasRole(BRIDGE_ROLE, msg.sender) && !hasRole(LIQUIDATOR_ROLE, msg.sender)) revert UnauthorizedBurn();
         if (from != msg.sender) {
             _spendAllowance(from, msg.sender, amount);
         }
@@ -122,7 +114,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
     }
 
     function _update(address from, address to, uint256 value) internal override whenNotPaused {
-        require(!isBlacklisted[from] && !isBlacklisted[to], "COMPLIANCE_REJECT");
+        if (isBlacklisted[from] || isBlacklisted[to]) revert ComplianceReject();
         super._update(from, to, value);
     }
 

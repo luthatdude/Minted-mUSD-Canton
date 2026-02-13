@@ -11,6 +11,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./TimelockGoverned.sol";
+import "./Errors.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -179,11 +180,11 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         address _musd,
         address _timelock
     ) {
-        require(_swapRouter != address(0), "INVALID_ROUTER");
-        require(_collateralVault != address(0), "INVALID_VAULT");
-        require(_borrowModule != address(0), "INVALID_BORROW");
-        require(_priceOracle != address(0), "INVALID_ORACLE");
-        require(_musd != address(0), "INVALID_MUSD");
+        if (_swapRouter == address(0)) revert InvalidRouter();
+        if (_collateralVault == address(0)) revert InvalidVault();
+        if (_borrowModule == address(0)) revert InvalidBorrow();
+        if (_priceOracle == address(0)) revert InvalidOracle();
+        if (_musd == address(0)) revert InvalidMusd();
 
         swapRouter = ISwapRouter(_swapRouter);
         collateralVault = ICollateralVault(_collateralVault);
@@ -230,20 +231,20 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         uint256 totalDebt,
         uint256 loopsExecuted
     ) {
-        require(leverageEnabled[collateralToken], "TOKEN_NOT_ENABLED");
-        require(initialAmount > 0, "INVALID_AMOUNT");
-        require(targetLeverageX10 >= 10, "LEVERAGE_TOO_LOW"); // Min 1.0x
-        require(positions[msg.sender].totalCollateral == 0, "POSITION_EXISTS");
+        if (!leverageEnabled[collateralToken]) revert TokenNotEnabled();
+        if (initialAmount == 0) revert InvalidAmount();
+        if (targetLeverageX10 < 10) revert LeverageTooLow();
+        if (positions[msg.sender].totalCollateral > 0) revert PositionExists();
 
         // Get collateral config to validate target leverage
         (bool enabled, uint256 collateralFactorBps, , ) = collateralVault.getConfig(collateralToken);
-        require(enabled, "COLLATERAL_NOT_ENABLED");
+        if (!enabled) revert CollateralNotEnabled();
 
         // Max leverage from LTV = 1 / (1 - LTV). E.g., 75% LTV = 4x max
         uint256 ltvMaxLeverageX10 = (10000 * 10) / (10000 - collateralFactorBps);
         // Use the lower of LTV-based max and configured max
         uint256 effectiveMaxLeverage = ltvMaxLeverageX10 < maxLeverageX10 ? ltvMaxLeverageX10 : maxLeverageX10;
-        require(targetLeverageX10 <= effectiveMaxLeverage, "LEVERAGE_EXCEEDS_MAX");
+        if (targetLeverageX10 > effectiveMaxLeverage) revert LeverageExceedsMax();
 
         // Transfer initial collateral from user
         IERC20(collateralToken).safeTransferFrom(msg.sender, address(this), initialAmount);
@@ -296,7 +297,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @return collateralReturned Amount of collateral returned to user
     function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
-        require(pos.totalCollateral > 0, "NO_POSITION");
+        if (pos.totalCollateral == 0) revert NoPosition();
 
         address collateralToken = pos.collateralToken;
         uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
@@ -320,7 +321,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
             // Swap collateral → mUSD
             uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
-            require(musdReceived >= debtToRepay, "INSUFFICIENT_MUSD_FROM_SWAP");
+            if (musdReceived < debtToRepay) revert InsufficientMusdFromSwap();
 
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repayFor(msg.sender, debtToRepay);
@@ -350,7 +351,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             remainingCollateral += heldCollateral;
         }
         
-        require(remainingCollateral >= minCollateralOut, "SLIPPAGE_EXCEEDED");
+        if (remainingCollateral < minCollateralOut) revert SlippageExceeded();
 
         collateralReturned = remainingCollateral;
 
@@ -379,14 +380,14 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @return collateralReturned Amount of collateral returned to user
     function closeLeveragedPositionWithMusd(uint256 musdAmount, uint256 /* userDeadline */) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
-        require(pos.totalCollateral > 0, "NO_POSITION");
+        if (pos.totalCollateral == 0) revert NoPosition();
 
         address collateralToken = pos.collateralToken;
         uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
 
         // If there's debt, user must provide enough mUSD to cover it
         if (debtToRepay > 0) {
-            require(musdAmount >= debtToRepay, "INSUFFICIENT_MUSD_PROVIDED");
+            if (musdAmount < debtToRepay) revert InsufficientMusdProvided();
 
             // Pull mUSD from user
             IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), musdAmount);
@@ -466,7 +467,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
                 totalDebt += toBorrow;
 
                 uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow, 0, userDeadline);
-                require(collateralReceived > 0, "SWAP_FAILED_ORPHANED_DEBT");
+                if (collateralReceived == 0) revert SwapFailedOrphanedDebt();
 
                 // Deposit new collateral
                 IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
@@ -581,7 +582,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             })
         );
         
-        require(musdReceived > 0, "SWAP_RETURNED_ZERO");
+        if (musdReceived == 0) revert SwapReturnedZero();
 
         return musdReceived;
     }
@@ -665,8 +666,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         uint24 _defaultPoolFee,
         uint256 _maxSlippageBps
     ) external onlyTimelock {
-        require(_maxLoops > 0 && _maxLoops <= 20, "INVALID_MAX_LOOPS");
-        require(_maxSlippageBps <= 500, "SLIPPAGE_TOO_HIGH"); // Max 5%
+        if (_maxLoops == 0 || _maxLoops > 20) revert InvalidMaxLoops();
+        if (_maxSlippageBps > 500) revert SlippageTooHigh();
 
         maxLoops = _maxLoops;
         minBorrowPerLoop = _minBorrowPerLoop;
@@ -680,7 +681,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
     /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
     function setMaxLeverage(uint256 _maxLeverageX10) external onlyTimelock {
-        require(_maxLeverageX10 >= 10 && _maxLeverageX10 <= 40, "INVALID_MAX_LEVERAGE"); // 1x to 4x range
+        if (_maxLeverageX10 < 10 || _maxLeverageX10 > 40) revert InvalidMaxLeverage();
         uint256 oldMax = maxLeverageX10;
         maxLeverageX10 = _maxLeverageX10;
         emit MaxLeverageUpdated(oldMax, _maxLeverageX10);
@@ -688,8 +689,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
     /// @notice Enable a collateral token for leverage
     function enableToken(address token, uint24 poolFee) external onlyRole(LEVERAGE_ADMIN_ROLE) {
-        require(token != address(0), "INVALID_TOKEN");
-        require(poolFee == 100 || poolFee == 500 || poolFee == 3000 || poolFee == 10000, "INVALID_FEE_TIER");
+        if (token == address(0)) revert InvalidToken();
+        if (poolFee != 100 && poolFee != 500 && poolFee != 3000 && poolFee != 10000) revert InvalidFeeTier();
 
         leverageEnabled[token] = true;
         tokenPoolFees[token] = poolFee;
@@ -713,7 +714,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @param user The user whose position to emergency-close
     function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         LeveragePosition storage pos = positions[user];
-        require(pos.totalCollateral > 0, "NO_POSITION");
+        if (pos.totalCollateral == 0) revert NoPosition();
 
         address collateralToken = pos.collateralToken;
         uint256 debtToRepay = borrowModule.totalDebt(user);
