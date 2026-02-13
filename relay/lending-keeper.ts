@@ -119,15 +119,20 @@ const PRECISION = BigInt(10) ** BigInt(18);
 const BPS_BASE = BigInt(10000);
 const YEAR_SECONDS = BigInt(31536000);
 
-/** Convert a number (potentially from ledger string) to fixed-point BigInt */
+/** Convert a number or ledger string to fixed-point BigInt (18 decimals).
+ *  TS-H-01 FIX: Strings are parsed directly to BigInt — no parseFloat intermediate.
+ *  This avoids float64 precision loss on values > ~2^53 (~9 quadrillion). */
 function toFixed(value: number | string): bigint {
-  // Parse string → number if needed, then scale to 18 decimals
-  const num = typeof value === "string" ? parseFloat(value) : value;
-  // Use string conversion to avoid floating-point rounding in multiplication
-  const parts = num.toFixed(18).split(".");
-  const whole = BigInt(parts[0]);
-  const frac = BigInt((parts[1] || "0").padEnd(18, "0").slice(0, 18));
-  return whole * PRECISION + frac;
+  const str = typeof value === "number" ? value.toFixed(18) : String(value);
+  // Handle negative values
+  const isNegative = str.startsWith("-");
+  const abs = isNegative ? str.slice(1) : str;
+  const [intPart, fracPart = "0"] = abs.split(".");
+  const whole = BigInt(intPart || "0");
+  // Pad or truncate fractional part to exactly 18 digits
+  const frac = BigInt(fracPart.padEnd(18, "0").slice(0, 18));
+  const result = whole * PRECISION + frac;
+  return isNegative ? -result : result;
 }
 
 /** Convert fixed-point BigInt back to number (for display/logging only) */
@@ -238,13 +243,14 @@ export class LendingKeeperBot {
     );
 
     return contracts.map((c: any) => {
-      const principalDebt = parseFloat(c.payload.principalDebt);
-      if (principalDebt > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.principalDebt}`);
+      // TS-H-01 FIX: Use Number() instead of parseFloat — rejects trailing garbage like "5.0abc"
+      const principalDebt = Number(c.payload.principalDebt);
+      if (Number.isNaN(principalDebt) || principalDebt > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Invalid or oversized debt value: ${c.payload.principalDebt}`);
       }
-      const accruedInterest = parseFloat(c.payload.accruedInterest);
-      if (accruedInterest > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.accruedInterest}`);
+      const accruedInterest = Number(c.payload.accruedInterest);
+      if (Number.isNaN(accruedInterest) || accruedInterest > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Invalid or oversized interest value: ${c.payload.accruedInterest}`);
       }
       return {
         contractId: c.contractId,
@@ -269,9 +275,10 @@ export class LendingKeeperBot {
     );
 
     return contracts.map((c: any) => {
-      const collateralAmount = parseFloat(c.payload.amount);
-      if (collateralAmount > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.amount}`);
+      // TS-H-01 FIX: Use Number() instead of parseFloat
+      const collateralAmount = Number(c.payload.amount);
+      if (Number.isNaN(collateralAmount) || collateralAmount > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Invalid or oversized collateral value: ${c.payload.amount}`);
       }
       return {
         contractId: c.contractId,
@@ -565,8 +572,9 @@ export class LendingKeeperBot {
       }
 
       // Find an mUSD contract with enough balance
+      // TS-H-01 FIX: Use Number() instead of parseFloat
       const musdContract = keeperMusd.find(
-        (c: any) => parseFloat(c.payload.amount) >= candidate.maxRepay
+        (c: any) => Number(c.payload.amount) >= candidate.maxRepay
       );
 
       if (!musdContract) {
