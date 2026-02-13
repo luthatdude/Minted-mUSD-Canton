@@ -97,6 +97,9 @@ contract CollateralVaultUpgradeable is
     // ══════════════════════════════════════════════════════════════════════
 
     /// @notice Add a new collateral token — must be called through MintedTimelockController
+    /// @dev FIX MED-04 (Re-audit): Added supportedTokens length cap (max 50) to prevent
+    ///      gas DoS in BorrowModule's _weightedCollateralValue() which iterates all supported tokens.
+    ///      The non-upgradeable CollateralVault has this check; this version was missing it.
     function addCollateral(
         address token,
         uint256 collateralFactorBps,
@@ -105,6 +108,7 @@ contract CollateralVaultUpgradeable is
     ) external onlyRole(TIMELOCK_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
+        require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps <= 9000, "FACTOR_TOO_HIGH");
         require(liquidationThresholdBps > collateralFactorBps, "THRESHOLD_MUST_EXCEED_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH");

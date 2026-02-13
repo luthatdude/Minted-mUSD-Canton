@@ -106,14 +106,15 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Get the latest price data in Chainlink AggregatorV3 format
-    /// @dev FIX C-4: Changed from `view` to state-mutating so the rate limiter cache
-    ///      auto-updates on every read. Previously the cache only updated when
-    ///      `updateCachedPrice()` was called externally, making the rate limiter
-    ///      ineffective after MAX_RATE_LIMIT_BLOCKS of inactivity.
-    ///      Also returns the actual `_lastPriceBlock` timestamp instead of `block.timestamp`
-    ///      so downstream staleness checks (Chainlink consumers) can detect stale feeds.
+    /// @dev FIX HIGH-01 (Re-audit): Restored to `view` for AggregatorV3 interface compliance.
+    ///      PriceOracle calls this via STATICCALL (view→view). A state-mutating latestRoundData()
+    ///      causes EVM-level revert in STATICCALL context, breaking ALL sMUSD price queries.
+    ///      The rate limiter cache is now updated via the separate `updateCachedPrice()` function
+    ///      which should be called by a keeper or before any price-sensitive operation.
+    ///      See also: Chainlink AggregatorV3Interface declares latestRoundData() as view.
     function latestRoundData()
         external
+        view
         returns (
             uint80 roundId,
             int256 answer,
@@ -124,18 +125,15 @@ contract SMUSDPriceAdapter is AccessControl {
     {
         uint256 price = _getSharePriceUsd();
 
-        // FIX C-4: Update cache on every read so rate limiter stays fresh
-        _lastPrice = price;
-        _lastPriceBlock = block.number;
-        _roundId++;
-
-        // FIX C-4: Return the block timestamp of the last cache update, not block.timestamp.
-        // This allows consumers to detect staleness if no one has called this function recently.
+        // Return cached timestamp so downstream staleness checks work correctly.
+        // If _lastPriceBlock is 0 (never cached), return current timestamp as fallback.
+        uint256 cachedTimestamp = _lastPriceBlock > 0 ? _lastPriceBlock : block.number;
+        
         return (
             _roundId,
             int256(price),
-            block.timestamp,
-            block.timestamp,
+            cachedTimestamp,
+            cachedTimestamp,
             _roundId
         );
     }
