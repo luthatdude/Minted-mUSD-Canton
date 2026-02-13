@@ -92,7 +92,7 @@ contract SkySUSDSStrategy is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-    // TIMELOCK_ROLE replaced by TimelockGoverned — upgrades go through MintedTimelockController
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
