@@ -228,12 +228,21 @@ contract PriceOracle is AccessControl {
             uint256 diff = newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice;
             uint256 deviationBps = (diff * 10000) / oldPrice;
             emit CircuitBreakerTriggered(token, oldPrice, newPrice, deviationBps);
-            if (deviationBps > maxDeviationBps && circuitBreakerTrippedAt[token] == 0) {
-                circuitBreakerTrippedAt[token] = block.timestamp;
+            if (deviationBps > maxDeviationBps) {
+                // FIX C-03: Only set the circuit breaker when deviation exceeds threshold.
+                // Previously, the unconditional clear below immediately cancelled the trip.
+                if (circuitBreakerTrippedAt[token] == 0) {
+                    circuitBreakerTrippedAt[token] = block.timestamp;
+                }
+                // FIX C-03: Do NOT clear — the circuit breaker must persist until
+                // manually reset by an admin after verifying the price move is legitimate.
+                lastKnownPrice[token] = newPrice;
+                return;
             }
         }
         
         lastKnownPrice[token] = newPrice;
+        // FIX C-03: Only clear circuit breaker when price is within bounds
         circuitBreakerTrippedAt[token] = 0;
     }
 

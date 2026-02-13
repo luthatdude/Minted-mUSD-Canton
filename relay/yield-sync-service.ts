@@ -22,7 +22,7 @@
 import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
-import { readSecret, enforceTLSSecurity } from "./utils";
+import { readSecret, enforceTLSSecurity, createSigner } from "./utils";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
@@ -224,9 +224,9 @@ interface CantonStakingService {
 class YieldSyncService {
   private config: YieldSyncConfig;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
-  private smusd: ethers.Contract;
+  private smusd!: ethers.Contract;
   private ledger: Ledger;
   private isRunning: boolean = false;
 
@@ -260,15 +260,7 @@ class YieldSyncService {
 
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    // FIX C-REL-01: Guard against raw private key usage in production
-    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
-      throw new Error(
-        "SECURITY: Raw private key usage is forbidden in production. " +
-        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
-        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
-      );
-    }
-    this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
+    // FIX C-07: Wallet initialised asynchronously via init() — use KMS when available
     
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
@@ -279,7 +271,7 @@ class YieldSyncService {
     this.smusd = new ethers.Contract(
       config.smusdAddress,
       SMUSD_ABI,
-      this.wallet  // Signing wallet for syncCantonShares()
+      this.provider  // Upgraded to signing wallet in init()
     );
 
     // Canton connection (TLS by default)
@@ -304,6 +296,14 @@ class YieldSyncService {
    * Start the yield sync service
    */
   async start(): Promise<void> {
+    // FIX C-07: Initialise KMS-backed (or fallback) signer
+    this.wallet = await createSigner(this.provider, "bridge_private_key", "BRIDGE_PRIVATE_KEY");
+    // Re-bind smusd with signing capability
+    this.smusd = new ethers.Contract(
+      this.config.smusdAddress,
+      SMUSD_ABI,
+      this.wallet,
+    );
     console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 

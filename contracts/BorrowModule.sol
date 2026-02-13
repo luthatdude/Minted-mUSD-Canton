@@ -66,6 +66,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    /// @notice FIX H-03: TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     ICollateralVault public immutable vault;
     IPriceOracle public immutable oracle;
@@ -741,7 +743,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
     /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
     /// Admin should coordinate with supply cap management before withdrawing.
-    function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
         require(amount <= protocolReserves, "EXCEEDS_RESERVES");
         require(to != address(0), "ZERO_ADDRESS");
         
@@ -765,14 +767,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Update the global interest rate
     /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
     /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
-    function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
+    function setInterestRate(uint256 _rateBps) external onlyRole(TIMELOCK_ROLE) {
         require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
         uint256 old = interestRateBps;
         interestRateBps = _rateBps;
         emit InterestRateUpdated(old, _rateBps);
     }
 
-    function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+    function setMinDebt(uint256 _minDebt) external onlyRole(TIMELOCK_ROLE) {
         require(_minDebt > 0, "MIN_DEBT_ZERO");
         require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
         emit MinDebtUpdated(minDebt, _minDebt);
