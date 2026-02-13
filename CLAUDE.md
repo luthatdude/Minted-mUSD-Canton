@@ -48,12 +48,27 @@ slither . --config-file slither.config.json
 
 ## Agent Teams
 
-This project uses Claude Code agent teams. Specialized agents are defined in `.github/agents/`:
+This project uses Claude Code agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`). Agents are defined in `.github/agents/`:
 
-- **solidity-auditor** — Reviews Solidity contracts for security vulnerabilities, gas optimization, and DeFi-specific risks.
-- **daml-auditor** — Reviews DAML templates for authorization, privacy, lifecycle, and Canton-specific issues.
-- **typescript-reviewer** — Reviews TypeScript services for type safety, error handling, and blockchain interaction patterns.
+### Leadership
+- **team-leader** — Oversees the entire build. Coordinates all agents, sequences changes across the cross-chain stack, and ensures quality gates are met.
+- **auditor** — Lead auditor that orchestrates security reviews and synthesizes findings from specialist reviewers.
+
+### Builders
+- **solidity-coder** — Writes and modifies Solidity smart contracts (18 core contracts, ERC-20/4626, bridge, governance).
+- **daml-coder** — Writes and modifies DAML/Canton templates (14 templates in V3 module).
+- **frontend-agent** — Builds Next.js 15 UI (pages, components, hooks, wallet integration).
+- **relay-bridge-agent** — Builds the cross-chain relay service, validator nodes, and bridge logic.
+- **devops-agent** — Manages CI/CD, Docker, Kubernetes, and deployment infrastructure.
+- **gas-optimizer** — Analyzes and optimizes Solidity gas costs on hot-path functions.
+- **docs-agent** — Maintains NatSpec, DAML doc comments, architecture docs, and READMEs.
+
+### Reviewers
+- **solidity-auditor** — Reviews Solidity contracts for security vulnerabilities and DeFi-specific risks.
+- **daml-auditor** — Reviews DAML templates for authorization, privacy, lifecycle, and Canton issues.
+- **typescript-reviewer** — Reviews TypeScript services for type safety, error handling, and security.
 - **infra-reviewer** — Reviews Kubernetes manifests, Docker configs, CI/CD pipelines, and deployment scripts.
+- **testing-agent** — Writes and runs tests across Foundry, Hardhat, DAML scripts, and TypeScript.
 
 ## Security
 
