@@ -17,6 +17,7 @@ export function CantonBridge() {
   
   const [tab, setTab] = useState<"lock" | "attest" | "claim" | "usdc">("lock");
   const [amount, setAmount] = useState("");
+  const [slippageBps, setSlippageBps] = useState("50"); // H-09: Default 0.5% slippage tolerance
   const [musdCid, setMusdCid] = useState("");
   const [targetChain, setTargetChain] = useState("1"); // Ethereum mainnet
   const [targetAddress, setTargetAddress] = useState("");
@@ -67,6 +68,7 @@ export function CantonBridge() {
           amount,
           targetChainId: targetChain,
           targetAddress,
+          slippageToleranceBps: parseInt(slippageBps) || 50, // H-09: Pass slippage tolerance
         }
       );
       setResult(`Locked ${amount} mUSD for bridge to chain ${targetChain}`);
@@ -228,6 +230,38 @@ export function CantonBridge() {
             <div>
               <label className="label">Amount to Lock</label>
               <input type="number" className="input" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            </div>
+            {/* H-09: Slippage tolerance input */}
+            <div>
+              <label className="label">Slippage Tolerance (bps)</label>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="number"
+                  className="input w-24"
+                  min="1"
+                  max="500"
+                  value={slippageBps}
+                  onChange={(e) => setSlippageBps(e.target.value)}
+                />
+                <span className="text-gray-400 text-sm">
+                  ({((parseInt(slippageBps) || 0) / 100).toFixed(2)}%)
+                </span>
+                <div className="flex gap-1 ml-2">
+                  {[10, 50, 100].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setSlippageBps(v.toString())}
+                      className={`px-2 py-1 text-xs rounded ${
+                        slippageBps === v.toString()
+                          ? "bg-emerald-600 text-white"
+                          : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                      }`}
+                    >
+                      {(v / 100).toFixed(1)}%
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
