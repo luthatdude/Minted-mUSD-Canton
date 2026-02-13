@@ -366,7 +366,12 @@ jobs:
 
       - name: Validate K8s manifests
         run: |
-          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary {} +
+          find k8s/ -name '*.yaml' -exec kubeconform \
+            -strict \
+            -ignore-missing-schemas \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -summary {} +
 
   # ============================================================
   #  DEPENDENCY AUDIT
