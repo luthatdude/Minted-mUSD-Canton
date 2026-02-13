@@ -5,7 +5,8 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: canton-participant-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: canton-participant
@@ -22,13 +23,14 @@ spec:
         insecureSkipVerify: false
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: nginx-proxy-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: nginx-proxy
@@ -43,13 +45,14 @@ spec:
       scheme: http
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: postgres-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: postgres
@@ -64,14 +67,15 @@ spec:
       scheme: http
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton
 ---
 # PodMonitor for relay services (no Service object — metrics exposed on sidecar)
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: bridge-relay-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: bridge-relay
@@ -85,13 +89,14 @@ spec:
       path: /metrics
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: price-oracle-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: price-oracle
@@ -105,13 +110,14 @@ spec:
       path: /metrics
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: yield-sync-metrics
-  namespace: canton
+  # INFRA-H-02: Fixed namespace from 'canton' to 'musd-canton' to match workloads
+  namespace: musd-canton
   labels:
     app: minted
     component: yield-sync
@@ -125,4 +131,4 @@ spec:
       path: /metrics
   namespaceSelector:
     matchNames:
-      - canton
+      - musd-canton

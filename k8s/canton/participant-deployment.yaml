@@ -118,11 +118,6 @@ spec:
           # FIX IC-07: Pin Canton image to SHA256 digest for supply chain security
           # Canton Open Source 2.9.3 - verify digest before deployment
           image: digitalasset/canton-open-source@sha256:4f9b3c5e8a7d6b2c1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d
-          args:
-            - "-c"
-            - "/etc/canton/participant.conf"
-            - "--bootstrap"
-            - "/etc/canton/init.canton"
           ports:
             - name: ledger-api
               containerPort: 5011
@@ -137,18 +132,20 @@ spec:
               value: "5432"
             - name: CANTON_DB_NAME
               value: canton
-            - name: CANTON_DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: username
-            - name: CANTON_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: password
+            # INFRA-H-04: DB credentials read from volume-mounted secrets at /run/secrets/
+            # Canton HOCON config references CANTON_DB_USER and CANTON_DB_PASSWORD env vars,
+            # which are populated from files by the entrypoint wrapper (see command override below)
             - name: JAVA_OPTS
               value: "-Xmx2g -Xms1g -XX:+UseG1GC"
+          # INFRA-H-04: Wrap entrypoint to load credentials from mounted secret files
+          # into env vars before launching Canton (HOCON config reads these env vars)
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export CANTON_DB_USER="$(cat /run/secrets/db-username)"
+              export CANTON_DB_PASSWORD="$(cat /run/secrets/db-password)"
+              exec /app/bin/canton -c /etc/canton/participant.conf --bootstrap /etc/canton/init.canton
           resources:
             requests:
               cpu: "1"
@@ -170,6 +167,15 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            # INFRA-H-04: Mount DB credentials as files instead of env vars
+            - name: db-credentials
+              mountPath: /run/secrets/db-username
+              subPath: username
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-password
+              subPath: password
+              readOnly: true
           livenessProbe:
             grpc:
               port: 5011
@@ -209,12 +215,10 @@ spec:
             - "--access-token-file"
             - "/etc/canton/secrets/json-api-token"
           env:
-            # JWT authentication configuration
-            - name: DAML_JSON_API_JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: json-api-credentials
-                  key: jwt-secret
+            # INFRA-H-04: JWT secret moved from env var to volume mount at /run/secrets/jwt-secret
+            # The JSON API reads the JWT secret from the file system
+            - name: DAML_JSON_API_JWT_SECRET_FILE
+              value: /run/secrets/jwt-secret
           ports:
             - name: json-api
               containerPort: 7575
@@ -237,6 +241,11 @@ spec:
             # FIX IC-03: Mount JWT secrets for JSON API authentication
             - name: json-api-secrets
               mountPath: /etc/canton/secrets
+              readOnly: true
+            # INFRA-H-04: Mount JWT secret as file instead of env var
+            - name: jwt-credentials
+              mountPath: /run/secrets/jwt-secret
+              subPath: jwt-secret
               readOnly: true
           livenessProbe:
             httpGet:
@@ -268,6 +277,14 @@ spec:
             sizeLimit: 1Mi
         # INFRA-CRIT-01: JWT signing key for token generation
         - name: jwt-secret-vol
+          secret:
+            secretName: json-api-credentials
+        # INFRA-H-04: DB credentials mounted as files (read from /run/secrets/)
+        - name: db-credentials
+          secret:
+            secretName: postgres-credentials
+        # INFRA-H-04: JWT credentials mounted as files (read from /run/secrets/)
+        - name: jwt-credentials
           secret:
             secretName: json-api-credentials
         - name: tmp
