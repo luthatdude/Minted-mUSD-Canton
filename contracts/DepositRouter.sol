@@ -70,7 +70,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Role for administrative functions (config changes)
     bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
     
-    /// @notice FIX H-07: TIMELOCK_ROLE for critical parameter changes
+    /// @notice TIMELOCK_ROLE for critical parameter changes
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ============ Constants ============
@@ -139,6 +139,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event FeeUpdated(uint256 oldFee, uint256 newFee);
     event FeesWithdrawn(address indexed to, uint256 amount);
+    /// @dev Dedicated event for failed native token refunds.
+    event RefundFailed(address indexed recipient, uint256 amount);
 
     // ============ Errors ============
     
@@ -411,7 +413,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
             // If refund fails, excess stays in contract for admin recovery
             // via emergencyWithdraw() rather than reverting the entire deposit
             if (!success) {
-                emit FeesWithdrawn(msg.sender, 0); // Signal failed refund for monitoring
+                // Emit dedicated RefundFailed event with amount
+                // so monitoring can detect stuck native tokens for admin recovery
+                emit RefundFailed(msg.sender, msg.value - bridgeCost);
             }
         }
     }

@@ -38,8 +38,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT,
-      deployer.address
+      DAILY_CAP_LIMIT
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -47,29 +46,30 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     const CAP_MANAGER_ROLE = await musd.CAP_MANAGER_ROLE();
     const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
     const EMERGENCY_ROLE = await bridge.EMERGENCY_ROLE();
-    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
 
     await musd.grantRole(BRIDGE_ROLE, await bridge.getAddress());
     await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     await bridge.grantRole(EMERGENCY_ROLE, emergency.address);
-    await bridge.grantRole(RELAYER_ROLE, deployer.address);
 
     for (const v of validators) {
       await bridge.grantRole(VALIDATOR_ROLE, v.address);
     }
+
+    // Grant TIMELOCK_ROLE to deployer for admin function tests
+    const TIMELOCK_ROLE = await bridge.TIMELOCK_ROLE();
+    await bridge.grantRole(TIMELOCK_ROLE, deployer.address);
   });
 
   async function createSortedSignatures(
-    attestation: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint },
+    attestation: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint; entropy: string; cantonStateHash: string },
     signers: HardhatEthersSigner[]
   ): Promise<string[]> {
     const chainId = (await ethers.provider.getNetwork()).chainId;
     const bridgeAddr = await bridge.getAddress();
     const messageHash = ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
-      [attestation.id, attestation.cantonAssets, attestation.nonce, attestation.timestamp, chainId, bridgeAddr]
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+      [attestation.id, attestation.cantonAssets, attestation.nonce, attestation.timestamp, attestation.entropy, attestation.cantonStateHash, chainId, bridgeAddr]
     );
-    const ethHash = ethers.hashMessage(ethers.getBytes(messageHash));
 
     const sigPairs = await Promise.all(
       signers.map(async (s) => ({
@@ -79,6 +79,14 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     );
     sigPairs.sort((a, b) => a.address.toLowerCase().localeCompare(b.address.toLowerCase()));
     return sigPairs.map((p) => p.sig);
+  }
+
+  // Helper to create attestation with entropy and computed ID
+  async function createAttestation(nonce: bigint, cantonAssets: bigint, timestamp: bigint) {
+    const entropy = ethers.hexlify(ethers.randomBytes(32));
+    const cantonStateHash = ethers.hexlify(ethers.randomBytes(32));
+    const id = await bridge.computeAttestationId(nonce, cantonAssets, timestamp, entropy, cantonStateHash);
+    return { id, cantonAssets, nonce, timestamp, entropy, cantonStateHash };
   }
 
   // ── View Functions ──────────────────────────────────────────
@@ -124,12 +132,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       await musd.mint(deployer.address, ethers.parseEther("1000000"));
 
       const now = BigInt(await time.latest());
-      const attestation = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("health-test-1")),
-        cantonAssets: ethers.parseEther("11000000"), // 11M canton assets
-        nonce: 1n,
-        timestamp: now,
-      };
+      const attestation = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
       await bridge.processAttestation(attestation, sigs);
 
@@ -218,24 +221,14 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     it("Should track cap decreases separately from increases", async function () {
       // First process an attestation to set baseline
       const now = BigInt(await time.latest());
-      const attestation = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("rate-limit-1")),
-        cantonAssets: ethers.parseEther("11000000"),
-        nonce: 1n,
-        timestamp: now,
-      };
+      const attestation = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
       await bridge.processAttestation(attestation, sigs);
 
       // Now decrease
       const now2 = BigInt(await time.latest()) + 61n;
       await time.increaseTo(Number(now2));
-      const attestation2 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("rate-limit-2")),
-        cantonAssets: ethers.parseEther("5000000"), // big decrease
-        nonce: 2n,
-        timestamp: now2,
-      };
+      const attestation2 = await createAttestation(2n, ethers.parseEther("5000000"), now2);
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
       await bridge.processAttestation(attestation2, sigs2);
 
@@ -247,45 +240,25 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
 
     it("Should handle attestation with exactly MIN_ATTESTATION_GAP", async function () {
       const now = BigInt(await time.latest());
-      const a1 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("gap-1")),
-        cantonAssets: ethers.parseEther("11000000"),
-        nonce: 1n,
-        timestamp: now,
-      };
+      const a1 = await createAttestation(1n, ethers.parseEther("11000000"), now);
       await bridge.processAttestation(a1, await createSortedSignatures(a1, validators.slice(0, 3)));
 
       // Exactly 60 seconds later
       await time.increase(60);
       const now2 = BigInt(await time.latest());
-      const a2 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("gap-2")),
-        cantonAssets: ethers.parseEther("11100000"),
-        nonce: 2n,
-        timestamp: now2,
-      };
+      const a2 = await createAttestation(2n, ethers.parseEther("11100000"), now2);
       await bridge.processAttestation(a2, await createSortedSignatures(a2, validators.slice(0, 3)));
     });
 
     it("Should reject attestation too soon after last", async function () {
       const now = BigInt(await time.latest());
-      const a1 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("toofast-1")),
-        cantonAssets: ethers.parseEther("11000000"),
-        nonce: 1n,
-        timestamp: now,
-      };
+      const a1 = await createAttestation(1n, ethers.parseEther("11000000"), now);
       await bridge.processAttestation(a1, await createSortedSignatures(a1, validators.slice(0, 3)));
 
       // Only 10 seconds later
       await time.increase(10);
       const now2 = BigInt(await time.latest());
-      const a2 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("toofast-2")),
-        cantonAssets: ethers.parseEther("11100000"),
-        nonce: 2n,
-        timestamp: now2,
-      };
+      const a2 = await createAttestation(2n, ethers.parseEther("11100000"), now2);
       await expect(
         bridge.processAttestation(a2, await createSortedSignatures(a2, validators.slice(0, 3)))
       ).to.be.revertedWith("ATTESTATION_TOO_CLOSE");

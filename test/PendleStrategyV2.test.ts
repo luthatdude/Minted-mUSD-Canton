@@ -280,10 +280,7 @@ describe("PendleStrategyV2", function () {
     it("Should be upgradeable by admin", async function () {
       const { strategy, admin } = await loadFixture(deployFixture);
 
-      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600);
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2", admin);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), PendleStrategyV2Next);
 
       expect(await upgraded.getAddress()).to.equal(await strategy.getAddress());
@@ -306,11 +303,8 @@ describe("PendleStrategyV2", function () {
       await strategy.connect(strategist).setSlippage(75);
       expect(await strategy.slippageBps()).to.equal(75);
 
-      // Upgrade with timelock
-      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      await time.increase(48 * 3600);
+      // Upgrade via UUPS
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2", admin);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), PendleStrategyV2Next);
 
       // Check state preserved
@@ -473,64 +467,31 @@ describe("PendleStrategyV2", function () {
   });
 
   // ================================================================
-  //  NEW COVERAGE TESTS — requestUpgrade / cancelUpgrade timelocks
+  //  UUPS UPGRADE AUTHORIZATION
   // ================================================================
 
-  describe("Upgrade Timelock", function () {
-    it("Should request an upgrade and set pending implementation", async function () {
+  describe("Upgrade Authorization", function () {
+    it("Should allow admin to perform UUPS upgrade", async function () {
       const { strategy, admin } = await loadFixture(deployFixture);
 
-      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2", admin);
+      const upgraded = await upgrades.upgradeProxy(
+        await strategy.getAddress(),
+        PendleStrategyV2Next
+      );
 
-      await expect(strategy.connect(admin).requestUpgrade(newImpl))
-        .to.emit(strategy, "UpgradeRequested");
-
-      expect(await strategy.pendingImplementation()).to.equal(newImpl);
-      expect(await strategy.upgradeRequestTime()).to.be.gt(0);
+      // Verify state preserved after upgrade
+      expect(await upgraded.marketCategory()).to.equal("USD");
+      expect(await upgraded.active()).to.be.true;
     });
 
-    it("Should reject upgrade request with zero address", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-
-      await expect(
-        strategy.connect(admin).requestUpgrade(ethers.ZeroAddress)
-      ).to.be.revertedWith("ZERO_ADDRESS");
-    });
-
-    it("Should reject upgrade request from non-admin", async function () {
+    it("Should reject upgrade from non-admin", async function () {
       const { strategy, user1 } = await loadFixture(deployFixture);
 
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2", user1);
       await expect(
-        strategy.connect(user1).requestUpgrade(ethers.Wallet.createRandom().address)
+        upgrades.upgradeProxy(await strategy.getAddress(), PendleStrategyV2Next)
       ).to.be.reverted;
-    });
-
-    it("Should cancel a pending upgrade", async function () {
-      const { strategy, admin } = await loadFixture(deployFixture);
-
-      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
-
-      await strategy.connect(admin).requestUpgrade(newImpl);
-      expect(await strategy.pendingImplementation()).to.equal(newImpl);
-
-      await expect(strategy.connect(admin).cancelUpgrade())
-        .to.emit(strategy, "UpgradeCancelled");
-
-      expect(await strategy.pendingImplementation()).to.equal(ethers.ZeroAddress);
-      expect(await strategy.upgradeRequestTime()).to.equal(0);
-    });
-
-    it("Should reject cancel from non-admin", async function () {
-      const { strategy, admin, user1 } = await loadFixture(deployFixture);
-
-      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
-      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
-
-      await strategy.connect(admin).requestUpgrade(newImpl);
-
-      await expect(strategy.connect(user1).cancelUpgrade()).to.be.reverted;
     });
   });
 

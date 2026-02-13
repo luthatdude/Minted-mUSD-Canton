@@ -61,7 +61,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     /// @notice Role for updating selector parameters
     bytes32 public constant PARAMS_ADMIN_ROLE = keccak256("PARAMS_ADMIN_ROLE");
 
-    /// @notice FIX CRIT-06: Timelock role for upgrade authorization
+    /// @notice Timelock role for upgrade authorization
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -161,7 +161,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(MARKET_ADMIN_ROLE, _admin);
         _grantRole(PARAMS_ADMIN_ROLE, _admin);
-        /// @notice FIX H-02: Grant TIMELOCK_ROLE to timelock controller, not admin EOA
+        // Grant TIMELOCK_ROLE to timelock controller
         _grantRole(TIMELOCK_ROLE, _timelockController);
 
         // Default parameters
@@ -452,6 +452,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         require(markets.length <= 50, "BATCH_TOO_LARGE");
 
         for (uint256 i = 0; i < markets.length; i++) {
+            require(markets[i] != address(0), "ZERO_ADDRESS");
             if (!isWhitelisted[markets[i]]) {
                 require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
                 whitelistedMarkets.push(markets[i]);
@@ -524,8 +525,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // UPGRADEABILITY
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades
+    /// @notice Only MintedTimelockController can authorize upgrades
     function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
     /// @dev Storage gap for future upgrades

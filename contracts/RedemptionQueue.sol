@@ -7,12 +7,26 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+/// @dev Interface for burning mUSD tokens after redemption fulfillment
+interface IMUSDBurnable {
+    function burn(address from, uint256 amount) external;
+}
+
 /// @title RedemptionQueue
 /// @notice Orderly mUSD-to-USDC redemption queue preventing bank-run scenarios.
 ///         Users queue redemption requests which are processed FIFO when liquidity
 ///         is available. This prevents a rush to redeem from causing a liquidity
 ///         crisis in the Treasury.
-/// @dev FIX: Implements bank-run resilience mechanism identified in economic model audit.
+/// @dev Burns mUSD after fulfillment to prevent permanent supply inflation.
+///
+/// @dev DEPLOYMENT DEPENDENCY — This contract's `processBatch()`
+///      calls `musdBurnable.burn(address(this), ...)` which requires the RedemptionQueue
+///      address to hold BRIDGE_ROLE or LIQUIDATOR_ROLE on the MUSD contract.
+///      Deployment scripts MUST include:
+///
+///          musd.grantRole(musd.BRIDGE_ROLE(), redemptionQueueAddress);
+///
+///      See also: scripts/deploy.ts and scripts/verify-deployment.ts for the grant step.
 contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
@@ -20,6 +34,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     IERC20 public immutable musd;
+    IMUSDBurnable public immutable musdBurnable;
     IERC20 public immutable usdc;
 
     struct RedemptionRequest {
@@ -58,6 +73,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     ) {
         require(_musd != address(0) && _usdc != address(0), "ZERO_ADDRESS");
         musd = IERC20(_musd);
+        musdBurnable = IMUSDBurnable(_musd);
         usdc = IERC20(_usdc);
         maxDailyRedemption = _maxDailyRedemption;
         minRequestAge = _minRequestAge;
@@ -135,6 +151,11 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
             dailyRedeemed += req.usdcAmount;
             totalPendingMusd -= req.musdAmount;
             totalPendingUsdc -= req.usdcAmount;
+
+            // Burn the locked mUSD to reduce totalSupply and maintain peg integrity.
+            // Without this burn, redeemed mUSD stays locked forever, inflating totalSupply
+            // and degrading the health ratio reported by BLEBridgeV9.getHealthRatio().
+            musdBurnable.burn(address(this), req.musdAmount);
 
             usdc.safeTransfer(req.user, req.usdcAmount);
 

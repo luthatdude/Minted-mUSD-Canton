@@ -264,7 +264,7 @@ class YieldSyncService {
 
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    // FIX C-07: Wallet initialised asynchronously via init() — use KMS when available
+    // Wallet initialised asynchronously via init() — use KMS when available
     
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
@@ -300,7 +300,7 @@ class YieldSyncService {
    * Start the yield sync service
    */
   async start(): Promise<void> {
-    // FIX C-07: Initialise KMS-backed (or fallback) signer
+    // Initialise KMS-backed (or fallback) signer
     this.wallet = await createSigner(this.provider, "bridge_private_key", "BRIDGE_PRIVATE_KEY");
     // Re-bind smusd with signing capability
     this.smusd = new ethers.Contract(
@@ -308,6 +308,8 @@ class YieldSyncService {
       SMUSD_ABI,
       this.wallet,
     );
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`[YieldSync] Bridge wallet: ${walletAddress}`);
     console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 

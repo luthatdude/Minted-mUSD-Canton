@@ -259,7 +259,7 @@ export function EthWalletProvider({
   ): Promise<T> => {
     if (!provider) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, provider);
-    // FIX C-FE-03: Validate method name against ABI to prevent arbitrary invocation
+    // Validate method name against ABI to prevent arbitrary invocation
     const abiMethods = abi
       .filter((item: any) => item.type === 'function')
       .map((item: any) => item.name);
@@ -284,7 +284,7 @@ export function EthWalletProvider({
       }
     }
     const contract = new Contract(contractAddress, abi, signer);
-    // FIX C-FE-03: Validate method name against ABI to prevent arbitrary invocation
+    // Validate method name against ABI to prevent arbitrary invocation
     const abiMethods = abi
       .filter((item: any) => item.type === 'function')
       .map((item: any) => item.name);

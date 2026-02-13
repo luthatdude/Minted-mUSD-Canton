@@ -18,15 +18,16 @@ jobs:
     name: Solidity Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned all Actions to prevent supply-chain attacks
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -71,7 +72,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: solidity-coverage
           path: coverage/
@@ -85,11 +86,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: solidity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           submodules: recursive
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -98,7 +99,7 @@ jobs:
         run: npm ci
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: foundry-rs/foundry-toolchain@8f1998e9878d786b7571f19a22fa0e656386e004 # v1.3.0
 
       - name: Run Foundry tests
         run: forge test -vvv
@@ -111,15 +112,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: solidity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
 
       - name: Cache Hardhat artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
           path: |
             ~/.cache/hardhat-nodejs
@@ -146,7 +147,7 @@ jobs:
 
       # Slither static analysis
       - name: Run Slither
-        uses: crytic/slither-action@v0.4.0
+        uses: crytic/slither-action@6bf3d1e41fe5ee8f8b86ad4e63f6a7ffc81e3d45 # v0.4.0
         id: slither
         with:
           node-version: "20"
@@ -170,7 +171,7 @@ jobs:
 
       - name: Upload Slither SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@48ab28a6f5dbc2a99bf1e0131198dd8f1df78169 # v3.28.0
         with:
           sarif_file: results.sarif
         continue-on-error: true  # SARIF upload can fail on forks
@@ -183,9 +184,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: solidity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -205,9 +206,9 @@ jobs:
     needs: solidity
     continue-on-error: true  # Advisory — Mythril can timeout on complex contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -257,7 +258,7 @@ jobs:
       DAML_SDK_VERSION: "2.10.3"
       DAML_HOME: /home/runner/.daml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install DAML SDK ${{ env.DAML_SDK_VERSION }}
         run: |
@@ -297,9 +298,9 @@ jobs:
     name: Relay Service Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -322,13 +323,13 @@ jobs:
     # Skip on PRs - Dockerfile changes need to be on main first
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 # v3.8.0
 
       - name: Build relay image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
         with:
           context: relay
           push: false
@@ -338,7 +339,7 @@ jobs:
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # v0.34.0
         with:
           image-ref: musd-relay:ci
           format: table
@@ -355,7 +356,7 @@ jobs:
     name: K8s Manifest Validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install kubeconform
         run: |
@@ -365,7 +366,12 @@ jobs:
 
       - name: Validate K8s manifests
         run: |
-          find k8s/ -name '*.yaml' -exec kubeconform -strict -summary {} +
+          find k8s/ -name '*.yaml' -exec kubeconform \
+            -strict \
+            -ignore-missing-schemas \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -summary {} +
 
   # ============================================================
   #  DEPENDENCY AUDIT
@@ -374,9 +380,9 @@ jobs:
     name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: "npm"
@@ -391,3 +397,64 @@ jobs:
       - name: Check for known vulnerabilities
         run: npx audit-ci --config audit-ci.json
         # GHSA-37qj-frw5-hhjh allowlisted (mitigated via npm override)
+
+  # ============================================================
+  #  CERTORA FORMAL VERIFICATION
+  # ============================================================
+  certora:
+    name: Certora Formal Verification
+    runs-on: ubuntu-latest
+    needs: solidity
+    continue-on-error: true  # Advisory until all specs are production-ready
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Certora CLI
+        run: pip3 install certora-cli
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Run Certora — MUSD invariants
+        run: certoraRun certora/MUSD.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — SMUSD invariants
+        run: certoraRun certora/SMUSD.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — BorrowModule invariants
+        run: certoraRun certora/BorrowModule.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — LiquidationEngine invariants
+        run: certoraRun certora/LiquidationEngine.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+  # ============================================================
+  #  SECRET SCANNING
+  # ============================================================
+  secret-scan:
+    name: Secret Scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

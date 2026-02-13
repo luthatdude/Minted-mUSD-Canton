@@ -92,9 +92,7 @@ contract SkySUSDSStrategy is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-    /// @notice FIX C-02: Declare TIMELOCK_ROLE explicitly — was undefined, defaulting to
-    /// bytes32(0) (DEFAULT_ADMIN_ROLE), which allowed admin to bypass 48h timelock delay
-    /// on unpause() and recoverToken().
+    /// @notice TIMELOCK_ROLE for timelock-gated operations (unpause, recovery, upgrades)
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -191,14 +189,11 @@ contract SkySUSDSStrategy is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
-        // TimelockGoverned replaces TIMELOCK_ROLE — upgrades go through MintedTimelockController
+        _grantRole(TIMELOCK_ROLE, _timelock);
 
-        // FIX C-06: Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
-        // Without this, DEFAULT_ADMIN can grant itself TIMELOCK_ROLE and bypass the 48h
-        // upgrade delay, enabling instant implementation swap to drain all funds
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
         _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
-        // FIX HIGH-07: Removed infinite approvals from initialize().
         // Per-operation approvals are set before each PSM/sUSDS interaction
         // in deposit(), withdraw(), and withdrawAll() to limit exposure
         // if PSM or sUSDS contracts are compromised.
@@ -227,7 +222,7 @@ contract SkySUSDSStrategy is
         // Transfer USDC from Treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
-        // FIX HIGH-07: Per-operation approval (replaces infinite approval)
+        // Per-operation approval
         usdc.forceApprove(address(psm), amount);
 
         // Step 1: Swap USDC → USDS via PSM (1:1, zero slippage)
@@ -235,7 +230,7 @@ contract SkySUSDSStrategy is
 
         // Step 2: Deposit USDS into sUSDS savings vault
         uint256 usdsAmount = amount * USDC_TO_USDS_SCALE; // Scale 6→18 decimals
-        // FIX HIGH-07: Per-operation approval for sUSDS deposit
+        // Per-operation approval for sUSDS deposit
         usds.forceApprove(address(sUsds), usdsAmount);
         uint256 shares = sUsds.deposit(usdsAmount, address(this));
 
@@ -273,7 +268,7 @@ contract SkySUSDSStrategy is
 
         // Step 2: Swap USDS → USDC via PSM
         uint256 usdcAmount = usdsNeeded / USDC_TO_USDS_SCALE;
-        // FIX HIGH-07: Per-operation approval for PSM buyGem
+        // Per-operation approval for PSM buyGem
         usds.forceApprove(address(psm), usdsNeeded);
         psm.buyGem(address(this), usdcAmount);
 
@@ -320,7 +315,7 @@ contract SkySUSDSStrategy is
         // Step 2: Swap all USDS → USDC via PSM
         uint256 usdcAmount = usdsOut / USDC_TO_USDS_SCALE;
         if (usdcAmount > 0) {
-            // FIX HIGH-07: Per-operation approval for PSM buyGem
+            // Per-operation approval for PSM buyGem
             usds.forceApprove(address(psm), usdsOut);
             psm.buyGem(address(this), usdcAmount);
         }
@@ -413,8 +408,7 @@ contract SkySUSDSStrategy is
             uint256 usdsOut = sUsds.redeem(shares, address(this), address(this));
             uint256 usdcAmount = usdsOut / USDC_TO_USDS_SCALE;
             if (usdcAmount > 0) {
-                // FIX C-REL-01: Add missing USDS approval for PSM buyGem
-                // Without this approval the PSM cannot pull USDS, causing emergencyWithdraw to revert
+                // Add USDS approval for PSM buyGem
                 usds.forceApprove(address(psm), usdsOut);
                 psm.buyGem(address(this), usdcAmount);
             }
@@ -436,7 +430,7 @@ contract SkySUSDSStrategy is
     /**
      * @notice Unpause strategy
      */
-    /// @notice FIX C-06: Unpause requires timelock to prevent premature recovery after exploit
+    /// @notice Unpause requires timelock to prevent premature recovery after exploit
     function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
@@ -444,7 +438,7 @@ contract SkySUSDSStrategy is
     /**
      * @notice Recover stuck tokens (not USDC, USDS, or sUSDS)
      */
-    /// @notice FIX C-06: Recovery requires timelock delay to prevent instant drain
+    /// @notice Recovery requires timelock delay to prevent instant drain
     function recoverToken(address token, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
         require(token != address(usdc), "Cannot recover USDC");
         require(token != address(usds), "Cannot recover USDS");
@@ -456,6 +450,6 @@ contract SkySUSDSStrategy is
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    /// @notice Only MintedTimelockController can authorize upgrades (48h delay enforced)
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

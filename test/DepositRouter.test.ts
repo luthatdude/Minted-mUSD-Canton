@@ -49,6 +49,10 @@ describe("DepositRouter", function () {
     const PAUSER_ROLE = await router.PAUSER_ROLE();
     await router.connect(admin).grantRole(PAUSER_ROLE, pauser.address);
 
+    // Grant timelock role to admin for parameter changes
+    const TIMELOCK_ROLE = await router.TIMELOCK_ROLE();
+    await router.connect(admin).grantRole(TIMELOCK_ROLE, admin.address);
+
     return { router, usdc, wormholeRelayer, tokenBridge, admin, pauser, user1, user2, treasury, directMint };
   }
 

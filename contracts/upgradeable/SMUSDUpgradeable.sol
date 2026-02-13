@@ -50,22 +50,21 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  /// @notice Last Canton sync timestamp
  uint256 public lastCantonSyncTime;
  
- /// @notice FIX CRIT-02: Minimum interval between syncs (4 hours, was 1 hour)
- /// @dev At 1h intervals, 24 syncs/day × 1.05^24 ≈ 3.2x/day — too permissive.
- ///      At 4h intervals, 6 syncs/day × 1.01^6 ≈ 1.06x/day — safe.
+ /// @notice Minimum interval between syncs (4 hours)
+ /// @dev At 4h intervals, 6 syncs/day × 1.01^6 ≈ 1.06x/day — safe.
  uint256 public constant MIN_SYNC_INTERVAL = 4 hours;
  
- /// @notice FIX CRIT-02: Maximum share change per sync (1% = 100 bps, was 5% = 500 bps)
+ /// @notice Maximum share change per sync (1% = 100 bps)
  uint256 public constant MAX_SHARE_CHANGE_BPS = 100;
 
- /// @notice FIX CRIT-02: Daily cumulative share change cap (5% = 500 bps)
+ /// @notice Daily cumulative share change cap (5% = 500 bps)
  /// @dev Prevents compounding small changes across multiple syncs in 24h
  uint256 public constant MAX_DAILY_SHARE_CHANGE_BPS = 500;
 
- /// @notice FIX CRIT-02: Track cumulative daily share change
+ /// @notice Track cumulative daily share change
  uint256 public dailyCumulativeShareChangeBps;
 
- /// @notice FIX CRIT-02: Last daily reset timestamp
+ /// @notice Last daily reset timestamp
  uint256 public lastDailyResetTime;
 
  // ═══════════════════════════════════════════════════════════════════════
@@ -294,7 +293,7 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  // Rate limit - minimum 4 hours between syncs
  require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
  
- // FIX CRIT-02: Reset daily cumulative tracker every 24h
+ // Reset daily cumulative tracker every 24h
  if (block.timestamp >= lastDailyResetTime + 24 hours) {
   dailyCumulativeShareChangeBps = 0;
   // Note: lastDailyResetTime is updated below after all checks pass
@@ -315,7 +314,7 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
  require(_cantonShares >= maxDecrease, "SHARE_DECREASE_TOO_LARGE");
 
- // FIX CRIT-02: Check daily cumulative change
+ // Check daily cumulative change
  uint256 changeBps;
  if (_cantonShares > cantonTotalShares) {
   changeBps = ((_cantonShares - cantonTotalShares) * 10000) / cantonTotalShares;

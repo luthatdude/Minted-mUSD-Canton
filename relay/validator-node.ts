@@ -1,5 +1,21 @@
 /**
- * Minted Protocol - Canton Validator Node
+ * Minted Protocol - Canton Validator Node (V1 — DEPRECATED)
+ *
+ * @deprecated Use validator-node-v2.ts instead.
+ *
+ * ╔═══════════════════════════════════════════════════════════════════════════════╗
+ * ║  DEPRECATED — Use validator-node-v2.ts for all new deployments.        ║
+ * ║                                                                             ║
+ * ║  V1 message hash has 7 parameters; V2 has 8 (adds cantonStateHash).         ║
+ * ║  V1 attestation ID uses ethers.id() (keccak256 of UTF-8 string);            ║
+ * ║  V2 uses computeAttestationId() matching BLEBridgeV9 on-chain derivation.   ║
+ * ║                                                                             ║
+ * ║  These differences make V1 and V2 signatures INCOMPATIBLE.                  ║
+ * ║  If BLEBridgeV9 verifies using the V2 format, V1 signatures will always     ║
+ * ║  fail, potentially dropping below minSignatures and blocking attestations.  ║
+ * ║                                                                             ║
+ * ║  ALL validators MUST upgrade to V2 before BLEBridgeV9 V2 deployment.        ║
+ * ╚═══════════════════════════════════════════════════════════════════════════════╝
  *
  * Watches for AttestationRequest contracts and signs them using AWS KMS.
  *
@@ -23,6 +39,13 @@ import * as fs from "fs";
 
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
+
+// Warn operators that V1 is deprecated and incompatible with V2 signatures
+console.warn(
+  "[DEPRECATED] validator-node.ts (V1) uses a 7-parameter message hash WITHOUT cantonStateHash. " +
+  "V2 uses 8 parameters. Mixed V1/V2 validators will produce incompatible signatures. " +
+  "Migrate all validators to validator-node-v2.ts before enabling cantonStateHash verification."
+);
 
 // ============================================================
 //                     CONFIGURATION
@@ -159,7 +182,13 @@ class ValidatorNode {
       try {
         await this.pollForAttestations();
         // Write heartbeat file for Docker healthcheck
-        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
+        try {
+          fs.writeFileSync("/tmp/heartbeat", new Date().toISOString());
+        } catch (heartbeatError) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[Validator] heartbeat write failed", heartbeatError);
+          }
+        }
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }
@@ -415,7 +444,7 @@ class ValidatorNode {
     const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
     const timestamp = Math.max(1, rawTimestamp);
 
-    // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
+    // Include entropy in hash (matches BLEBridgeV9 signature verification)
     const entropy = (payload as any).entropy
       ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
       : ethers.ZeroHash;
@@ -515,6 +544,21 @@ async function main(): Promise<void> {
   }
   if (!DEFAULT_CONFIG.cantonToken) {
     throw new Error("CANTON_TOKEN not set");
+  }
+
+  // Runtime deprecation warning — V1 signatures are incompatible with V2 on-chain verification.
+  console.warn("╔══════════════════════════════════════════════════════════════════════════════╗");
+  console.warn("║  ⚠️  DEPRECATION WARNING: validator-node.ts (V1) is DEPRECATED.             ║");
+  console.warn("║  V1 message hash has 7 parameters; BLEBridgeV9 V2 expects 8.               ║");
+  console.warn("║  V1 attestation ID derivation differs from V2 on-chain contract.           ║");
+  console.warn("║  Signatures from this node WILL BE REJECTED by BLEBridgeV9 V2.             ║");
+  console.warn("║  MIGRATE TO: validator-node-v2.ts                                          ║");
+  console.warn("╚══════════════════════════════════════════════════════════════════════════════╝");
+
+  // Abort in production to prevent V1 from silently generating unusable signatures
+  if (process.env.NODE_ENV === "production") {
+    console.error("[FATAL] V1 validator node MUST NOT run in production. Use validator-node-v2.ts.");
+    process.exit(1);
   }
 
   // Create validator node

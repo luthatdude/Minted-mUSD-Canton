@@ -13,7 +13,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @dev FIX S-H01: Typed interface for Treasury calls (replaces raw staticcall)
+/// @dev Typed interface for Treasury calls
 interface ITreasury {
     function totalValue() external view returns (uint256);
 }
@@ -29,7 +29,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
     
-    // FIX M-3: Maximum yield per distribution (10% of total assets) to prevent excessive dilution
+    // Maximum yield per distribution (10% of total assets) to prevent excessive dilution
     uint256 public constant MAX_YIELD_BPS = 1000; // 10% max yield per distribution
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -46,7 +46,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     address public treasury;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // FIX CRITICAL: Rate limiting for Canton share sync to prevent manipulation
+    // Rate limiting for Canton share sync to prevent manipulation
     // ═══════════════════════════════════════════════════════════════════════
     
     /// @notice Last Canton sync timestamp
@@ -82,7 +82,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         _grantRole(PAUSER_ROLE, msg.sender);
     }
 
-    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party deposit.
+    // Always set cooldown for receiver to prevent bypass via third-party deposit.
     // A depositor can always set their own cooldown, and depositing on behalf of someone
     // correctly locks the receiver's withdrawal window.
     // FIX: Added nonReentrant and whenNotPaused for security
@@ -92,7 +92,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return super.deposit(assets, receiver);
     }
 
-    // FIX S-H01: Always set cooldown for receiver to prevent bypass via third-party mint.
+    // Always set cooldown for receiver to prevent bypass via third-party mint.
     // Matches deposit() behavior — any path that increases shares must reset cooldown.
     // FIX: Added nonReentrant and whenNotPaused for security
     function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
@@ -107,14 +107,14 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return super.withdraw(assets, receiver, owner);
     }
 
-    // FIX S-02: Override redeem to enforce cooldown
+    // Override redeem to enforce cooldown
     // FIX: Added nonReentrant and whenNotPaused for security
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
         require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
         return super.redeem(shares, receiver, owner);
     }
 
-    // FIX S-01: Propagate cooldown on transfer to prevent bypass
+    // Propagate cooldown on transfer to prevent bypass
     function _update(address from, address to, uint256 value) internal override {
         // Skip cooldown propagation for mint (from == 0) and burn (to == 0)
         if (from != address(0) && to != address(0)) {
@@ -132,18 +132,17 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         super._update(from, to, value);
     }
 
-    // FIX S-04: Use SafeERC20 for token transfers
-    // FIX M-3: Added maximum yield cap to prevent excessive dilution attacks
+    // Use SafeERC20 for token transfers with maximum yield cap to prevent excessive dilution
     function distributeYield(uint256 amount) external onlyRole(YIELD_MANAGER_ROLE) {
         require(totalSupply() > 0, "NO_SHARES_EXIST");
         require(amount > 0, "INVALID_AMOUNT");
         
-        // FIX P2-M2: Use globalTotalAssets() for cap (serves both ETH + Canton shareholders)
+        // Use globalTotalAssets() for cap (serves both ETH + Canton shareholders)
         uint256 currentAssets = globalTotalAssets();
         uint256 maxYield = (currentAssets * MAX_YIELD_BPS) / 10000;
         require(amount <= maxYield, "YIELD_EXCEEDS_CAP");
 
-        // FIX S-04: Use safeTransferFrom
+        // Use safeTransferFrom
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
 
         emit YieldDistributed(msg.sender, amount);
@@ -156,11 +155,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         require(amount > 0, "ZERO_AMOUNT");
         require(globalTotalShares() > 0, "NO_SHARES_EXIST");
         
-        // FIX P2-M2: Use globalTotalAssets() for the cap, not local totalAssets().
+        // Use globalTotalAssets() for the cap, not local totalAssets().
         // The vault serves both Ethereum and Canton shareholders, so the cap
-        // should reflect the total asset base. Using local assets was too
-        // restrictive when Canton shares are large, potentially causing
-        // _accrueGlobalInterest() to revert and blocking all borrows/repays.
+        // should reflect the total asset base.
         uint256 currentAssets = globalTotalAssets();
         uint256 maxInterest = (currentAssets * MAX_YIELD_BPS) / 10000;
         require(amount <= maxInterest, "INTEREST_EXCEEDS_CAP");
@@ -175,7 +172,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         emit InterestReceived(msg.sender, amount, totalInterestReceived);
     }
 
-    // FIX S-03: decimalsOffset provides some protection against donation attacks
+    // decimalsOffset provides some protection against donation attacks
     // by making the initial share price calculation more robust
     function _decimalsOffset() internal pure override returns (uint8) {
         return 3;
@@ -208,7 +205,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Sync Canton shares from bridge attestation
-    /// @dev FIX CRITICAL: Rate-limited to prevent share price manipulation
+    /// @dev Rate-limited to prevent share price manipulation
     /// @param _cantonShares Total smUSD shares on Canton
     /// @param epoch Sync epoch (must be sequential)
     function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
@@ -217,7 +214,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // FIX: Rate limit - minimum 1 hour between syncs
         require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
         
-        // FIX S-C01: First sync must use admin-only initialization to prevent manipulation
+        // First sync must use admin-only initialization to prevent manipulation
         // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
         if (cantonTotalShares == 0) {
             uint256 ethShares = totalSupply();
@@ -245,10 +242,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Get global total assets from Treasury
     /// @dev Falls back to local totalAssets if treasury not set
-    /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but
+    /// @dev Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
-    /// @dev FIX S-H01: Uses typed interface call instead of raw staticcall for
-    ///      better error propagation and compile-time safety.
+    ///      Uses typed interface call for better error propagation and compile-time safety.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
             return totalAssets();
@@ -307,7 +303,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // FIX CX-C-01: ERC-4626 compliance — maxWithdraw/maxRedeem must return 0
+    // ERC-4626 compliance — maxWithdraw/maxRedeem must return 0
     // when withdraw/redeem would revert (paused or cooldown active).
     // EIP-4626 §maxWithdraw: "MUST return the maximum amount … that would
     // not cause a revert"
@@ -341,7 +337,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause all deposits and withdrawals
-    /// @dev FIX C-01: Requires DEFAULT_ADMIN_ROLE for separation of duties
+    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties.
     /// This ensures a compromised PAUSER cannot immediately re-enable operations
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();

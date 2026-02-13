@@ -112,7 +112,7 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # FIX HIGH-08: External HTTPS traffic restricted to LoadBalancer source.
+    # External HTTPS traffic restricted to LoadBalancer source.
     # Without a 'from' selector, ALL pods/namespaces could reach NGINX directly,
     # bypassing the LoadBalancer's WAF/Cloud Armor protection.
     - from:

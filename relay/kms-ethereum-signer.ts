@@ -1,5 +1,5 @@
 /**
- * FIX H-07: AWS KMS-based Ethereum Transaction Signer
+ * AWS KMS-based Ethereum Transaction Signer
  *
  * Replaces raw private key loading for Ethereum transaction signing.
  * The private key NEVER enters Node.js memory — all signing is performed
@@ -157,7 +157,7 @@ export class KMSEthereumSigner extends ethers.AbstractSigner {
  * Create an Ethereum signer — uses KMS if kmsKeyId is configured,
  * falls back to raw private key (development only).
  *
- * FIX H-07: In production, require KMS to prevent private key exposure in memory.
+ * In production, require KMS to prevent private key exposure in memory.
  */
 export async function createEthereumSigner(
   config: {
@@ -191,7 +191,7 @@ export async function createEthereumSigner(
 
   const wallet = new ethers.Wallet(config.privateKey, provider);
 
-  // FIX H-07: Zero out the private key string from config after wallet creation
+  // Zero out the private key string from config after wallet creation
   // This reduces the window where the key is readable in memory
   if (config.privateKey) {
     // Overwrite the string reference (doesn't guarantee V8 GC, but reduces exposure)

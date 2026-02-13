@@ -24,6 +24,11 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 contract InterestRateModel is AccessControl {
     bytes32 public constant RATE_ADMIN_ROLE = keccak256("RATE_ADMIN_ROLE");
 
+    /// @notice TIMELOCK_ROLE for critical rate parameter changes.
+    ///         setParams() is gated by TIMELOCK_ROLE, enforcing a 48h governance delay
+    ///         via MintedTimelockController.
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+
     // ============================================================
     //                  RATE PARAMETERS (all in BPS)
     // ============================================================
@@ -77,7 +82,7 @@ contract InterestRateModel is AccessControl {
     /// @notice Initialize with default parameters
     /// @param _admin The admin address for rate updates
     constructor(address _admin) {
-        // FIX S-L-04: Validate admin address to prevent permanently bricked governance
+        // Validate admin address to prevent permanently bricked governance
         require(_admin != address(0), "INVALID_ADMIN");
         // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
         // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
@@ -89,6 +94,9 @@ contract InterestRateModel is AccessControl {
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(RATE_ADMIN_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _admin);
+        // Make TIMELOCK_ROLE self-administering so DEFAULT_ADMIN cannot bypass
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     // ============================================================
@@ -245,13 +253,15 @@ contract InterestRateModel is AccessControl {
     // ============================================================
 
     /// @notice Update rate parameters (governance-controlled)
+    /// @dev Dual-gated by RATE_ADMIN_ROLE + TIMELOCK_ROLE.
+    ///      The MintedTimelockController should hold both roles, enforcing 48h delay.
     function setParams(
         uint256 _baseRateBps,
         uint256 _multiplierBps,
         uint256 _kinkBps,
         uint256 _jumpMultiplierBps,
         uint256 _reserveFactorBps
-    ) external onlyRole(RATE_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         // Validate parameters
         if (_kinkBps > BPS) revert KinkTooHigh();
         if (_reserveFactorBps > 5000) revert ReserveFactorTooHigh(); // Max 50% to reserves

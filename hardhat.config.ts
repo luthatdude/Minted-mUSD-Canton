@@ -5,7 +5,9 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000001";
+// Changed from well-known private key (0x...001 = known address 0x7E5F...) to empty string.
+// The old default loaded a real private key into memory even when not deploying.
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 const RPC_URL = process.env.RPC_URL || "";
 
 const config: HardhatUserConfig = {
@@ -25,17 +27,9 @@ const config: HardhatUserConfig = {
     sepolia: {
       url: RPC_URL || "https://eth-sepolia.g.alchemy.com/v2/demo",
       chainId: 11155111,
-      accounts: DEPLOYER_PRIVATE_KEY !== "0x0000000000000000000000000000000000000000000000000000000000000001" 
-        ? [DEPLOYER_PRIVATE_KEY] 
-        : [],
+      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
-    goerli: {
-      url: RPC_URL || "https://eth-goerli.g.alchemy.com/v2/demo",
-      chainId: 5,
-      accounts: DEPLOYER_PRIVATE_KEY !== "0x0000000000000000000000000000000000000000000000000000000000000001" 
-        ? [DEPLOYER_PRIVATE_KEY] 
-        : [],
-    },
+    // Removed deprecated Goerli (shut down). Keeping stale testnets creates confusion.
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY || "",
