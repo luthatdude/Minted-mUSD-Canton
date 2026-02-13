@@ -11,7 +11,27 @@ methods {
     function fullLiquidationThreshold() external returns (uint256) envfree;
     function isLiquidatable(address) external returns (bool) envfree;
     function estimateSeize(address, address, uint256) external returns (uint256) envfree;
+    function liquidate(address, address, uint256) external;
     function paused() external returns (bool) envfree;
+
+    // ── External contract summaries ──
+    // PER_CALLEE_CONSTANT: same callee → same return value within a single rule.
+    // Without these, Certora havocs external calls independently, allowing
+    // healthFactorUnsafe to return >= 10000 inside isLiquidatable() but
+    // < 10000 inside liquidate(), producing a spurious counterexample.
+    function _.healthFactorUnsafe(address) external => PER_CALLEE_CONSTANT;
+    function _.totalDebt(address)          external => PER_CALLEE_CONSTANT;
+    function _.getConfig(address)          external => PER_CALLEE_CONSTANT;
+    function _.getPriceUnsafe(address)     external => PER_CALLEE_CONSTANT;
+    function _.getValueUsdUnsafe(address, uint256) external => PER_CALLEE_CONSTANT;
+    function _.deposits(address, address)  external => PER_CALLEE_CONSTANT;
+    function _.decimals()                  external => PER_CALLEE_CONSTANT;
+
+    // State-changing external calls — NONDET (side-effects don't matter for properties)
+    function _.burn(address, uint256)                     external => NONDET;
+    function _.seize(address, address, uint256, address)  external => NONDET;
+    function _.reduceDebt(address, uint256)               external => NONDET;
+    function _.transferFrom(address, address, uint256)    external => NONDET;
 }
 
 // ═══════════════════════════════════════════════════════════════════
