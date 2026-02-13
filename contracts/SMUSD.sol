@@ -73,8 +73,6 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
-    /// @notice FIX SOL-C-05: Emitted when Treasury call fails and globalTotalAssets falls back to local
-    event TreasuryFallbackTriggered(uint256 localAssets);
 
     constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -250,10 +248,11 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             // Convert USDC (6 decimals) to mUSD (18 decimals)
             return usdcValue * 1e12;
         } catch {
-            // FIX SOL-C-05: Emit event so monitoring detects degraded state
-            uint256 local = totalAssets();
-            emit TreasuryFallbackTriggered(local);
-            return local;
+            // SOL-C-05: Fallback to local assets if Treasury call fails.
+            // Cannot emit events in a view function — monitoring should detect
+            // divergence between globalTotalAssets() and Treasury.totalValue()
+            // off-chain by comparing both values periodically.
+            return totalAssets();
         }
     }
 
