@@ -55,7 +55,7 @@ export function useCantonBoostPool() {
   const deposit = useCallback(
     async (amount: string) => {
       if (!loopWallet.isConnected || state.pools.length === 0) return;
-      await loopWallet.exerciseChoice(state.pools[0].contractId, "LiquidityPool_Deposit", {
+      await loopWallet.exerciseChoice(BOOST_POOL_TEMPLATE, state.pools[0].contractId, "LiquidityPool_Deposit", {
         amount,
       });
       await fetchPools();
@@ -66,7 +66,7 @@ export function useCantonBoostPool() {
   const withdraw = useCallback(
     async (amount: string) => {
       if (!loopWallet.isConnected || state.pools.length === 0) return;
-      await loopWallet.exerciseChoice(state.pools[0].contractId, "LiquidityPool_Withdraw", {
+      await loopWallet.exerciseChoice(BOOST_POOL_TEMPLATE, state.pools[0].contractId, "LiquidityPool_Withdraw", {
         amount,
       });
       await fetchPools();
