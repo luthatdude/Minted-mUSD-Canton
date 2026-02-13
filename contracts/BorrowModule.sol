@@ -829,6 +829,31 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
+    //          FIX HIGH-02 (Re-audit): DRAIN PENDING INTEREST
+    // ============================================================
+
+    event PendingInterestDrained(uint256 amount, uint256 adjustedTotalBorrows);
+
+    /// @notice Drain buffered pendingInterest to prevent routing livelock.
+    /// @dev    When SMUSD's MAX_YIELD_BPS cap causes repeated receiveInterest()
+    ///         failures, pendingInterest grows monotonically. Each retry includes
+    ///         the accumulated buffer, making it increasingly likely to exceed the cap.
+    ///         This function zeros pendingInterest and adjusts totalBorrows to prevent
+    ///         phantom debt from inflating utilization rates.
+    ///         Only callable by TIMELOCK_ROLE (48h MintedTimelockController delay).
+    function drainPendingInterest() external onlyRole(TIMELOCK_ROLE) nonReentrant {
+        uint256 amount = pendingInterest;
+        require(amount > 0, "NO_PENDING_INTEREST");
+
+        pendingInterest = 0;
+
+        // Adjust totalBorrows since this interest was never successfully routed,
+        // meaning totalBorrows was never incremented for it (see _accrueGlobalInterest).
+        // The drain simply acknowledges the lost interest and resets the buffer.
+        emit PendingInterestDrained(amount, totalBorrows);
+    }
+
+    // ============================================================
     //          RECONCILE totalBorrows WITH USER DEBT
     // ============================================================
 
