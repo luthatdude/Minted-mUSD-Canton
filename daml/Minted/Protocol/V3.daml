@@ -26,7 +26,7 @@ module Minted.Protocol.V3 where
 import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as T
-import DA.Action (foldlA)
+import DA.Action (foldlA, when)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
 
