@@ -49,7 +49,7 @@ contract ReentrancyTest is Test {
             address(musd), 5000, address(this)
         );
 
-        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18);
+        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18, 0);
         vault.addCollateral(address(weth), 7500, 8500, 500);
 
         musd.grantRole(musd.BRIDGE_ROLE(), address(borrowModule));

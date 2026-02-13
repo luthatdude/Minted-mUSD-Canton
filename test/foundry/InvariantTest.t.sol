@@ -55,7 +55,7 @@ contract InvariantTest is Test {
         );
 
         // Oracle setup
-        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18);
+        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18, 0);
 
         // Collateral setup
         vault.addCollateral(address(weth), 7500, 8500, 500);

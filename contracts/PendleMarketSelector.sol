@@ -152,16 +152,17 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 
-    function initialize(address _admin) external initializer {
+    function initialize(address _admin, address _timelockController) external initializer {
         require(_admin != address(0), "ZERO_ADMIN");
+        require(_timelockController != address(0), "ZERO_TIMELOCK");
         __AccessControl_init();
         __UUPSUpgradeable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(MARKET_ADMIN_ROLE, _admin);
         _grantRole(PARAMS_ADMIN_ROLE, _admin);
-        /// @notice FIX CRIT-06: Grant TIMELOCK_ROLE for upgrade authorization
-        _grantRole(TIMELOCK_ROLE, _admin);
+        /// @notice FIX H-02: Grant TIMELOCK_ROLE to timelock controller, not admin EOA
+        _grantRole(TIMELOCK_ROLE, _timelockController);
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium

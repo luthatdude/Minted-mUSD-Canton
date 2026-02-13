@@ -400,6 +400,17 @@ template PriceOracle
         assertMsg "PRICE_STALE" (age <= maxStaleness)
         return price
 
+    -- FIX D-M-04: Unsafe price query that skips staleness check.
+    -- Used exclusively by liquidation paths where blocking on stale data
+    -- would allow bad debt to accumulate during oracle outages.
+    nonconsuming choice Oracle_GetPriceUnsafe : Money
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == provider)
+        return price
+
     -- DAML-M-07: Added price movement cap to prevent oracle manipulation
     choice Oracle_UpdatePrice : ContractId PriceOracle
       with
@@ -721,10 +732,12 @@ template Vault
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         let totalDebt = principalDebt + accruedInterest + newInterest
         
-        -- Check if vault is liquidatable
-        price <- exercise oracleCid Oracle_GetPrice with 
+        -- FIX D-M-04: Use Oracle_GetPriceUnsafe for liquidation path.
+        -- During volatile markets, Oracle_GetPrice may reject stale data,
+        -- blocking liquidations and allowing bad debt to accumulate.
+        -- Liquidations MUST proceed with the latest available price.
+        price <- exercise oracleCid Oracle_GetPriceUnsafe with 
           requester = liquidator
-          maxStaleness = hours 1
         let colValue = collateralAmount * price
         let healthBefore = colValue / totalDebt
         assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)

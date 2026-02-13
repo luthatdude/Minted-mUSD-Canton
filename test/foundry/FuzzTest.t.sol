@@ -53,7 +53,7 @@ contract FuzzTest is Test {
         );
 
         // Oracle setup — direct call gated by onlyTimelock (test contract is timelock)
-        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18);
+        oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18, 0);
 
         // Collateral setup
         vault.addCollateral(address(weth), 7500, 8500, 500);

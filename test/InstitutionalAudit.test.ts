@@ -11,7 +11,7 @@
  *  3. SMUSD: ERC-4626 compliance (convertToShares/convertToAssets consistency)
  *  4. Cross-contract integration paths
  *
- *  SMUSD convertToShares/convertToAssets now delegates to
+ *  FIX AUDIT-01: SMUSD convertToShares/convertToAssets now delegates to
  *  internal _convertToShares/_convertToAssets for ERC-4626 spec compliance.
  */
 
@@ -19,7 +19,6 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import { timelockSetFeed, timelockRemoveFeed, timelockSetMaxDeviation, timelockSetCircuitBreakerEnabled, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient, refreshFeeds } from "./helpers/timelock";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SECTION 1: PriceOracle — Circuit Breaker Coverage
@@ -33,15 +32,13 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     const ethFeed = await MockFeedFactory.deploy(8, 200000000000n); // $2000
 
     const OracleFactory = await ethers.getContractFactory("PriceOracle");
-    const oracle = await OracleFactory.deploy(admin.address);
+    const oracle = await OracleFactory.deploy();
 
     const ORACLE_ADMIN_ROLE = await oracle.ORACLE_ADMIN_ROLE();
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
 
     const WETH = "0x0000000000000000000000000000000000000001";
-    await timelockSetFeed(oracle, admin, WETH, await ethFeed.getAddress(), 3600, 18);
-
-    await refreshFeeds(ethFeed);
+    await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18, 0);
 
     return { oracle, ethFeed, deployer, admin, user, WETH, ORACLE_ADMIN_ROLE };
   }
@@ -53,7 +50,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
   describe("setMaxDeviation", function () {
     it("should update max deviation within valid range", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
+      await oracle.connect(admin).setMaxDeviation(500); // 5%
       expect(await oracle.maxDeviationBps()).to.equal(500);
     });
 
@@ -78,9 +75,9 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should accept boundary values (100 and 5000 bps)", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await timelockSetMaxDeviation(oracle, admin, 100);
+      await oracle.connect(admin).setMaxDeviation(100);
       expect(await oracle.maxDeviationBps()).to.equal(100);
-      await timelockSetMaxDeviation(oracle, admin, 5000);
+      await oracle.connect(admin).setMaxDeviation(5000);
       expect(await oracle.maxDeviationBps()).to.equal(5000);
     });
 
@@ -97,16 +94,14 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
   describe("setCircuitBreakerEnabled", function () {
     it("should disable circuit breaker", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
+      await oracle.connect(admin).setCircuitBreakerEnabled(false);
       expect(await oracle.circuitBreakerEnabled()).to.be.false;
     });
 
     it("should re-enable circuit breaker", async function () {
       const { oracle, admin } = await loadFixture(deployOracleFixture);
-      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
-      // Wait for cooldown (1h) before requesting another toggle
-      await time.increase(3600);
-      await timelockSetCircuitBreakerEnabled(oracle, admin, true);
+      await oracle.connect(admin).setCircuitBreakerEnabled(false);
+      await oracle.connect(admin).setCircuitBreakerEnabled(true);
       expect(await oracle.circuitBreakerEnabled()).to.be.true;
     });
 
@@ -141,7 +136,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject for disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await timelockRemoveFeed(oracle, admin, WETH);
+      await oracle.connect(admin).removeFeed(WETH);
       await expect(oracle.connect(admin).resetLastKnownPrice(WETH))
         .to.be.revertedWith("FEED_NOT_ENABLED");
     });
@@ -184,7 +179,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject for disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await timelockRemoveFeed(oracle, admin, WETH);
+      await oracle.connect(admin).removeFeed(WETH);
       await expect(oracle.connect(admin).updatePrice(WETH))
         .to.be.revertedWith("FEED_NOT_ENABLED");
     });
@@ -219,8 +214,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
       // setFeed auto-initializes lastKnownPrice to $2000
       // Set max deviation to 5% so any >5% move triggers it
-      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500); // 5%
 
       // Move price 10% ($2000 → $2200)
       await ethFeed.setAnswer(220000000000n);
@@ -233,8 +227,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
       // Set tight deviation (5%)
-      await timelockSetMaxDeviation(oracle, admin, 500);
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500);
 
       // Move price 3% ($2000 → $2060)
       await ethFeed.setAnswer(206000000000n);
@@ -246,9 +239,8 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should bypass circuit breaker when disabled", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
-      await timelockSetCircuitBreakerEnabled(oracle, admin, false);
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500); // 5%
+      await oracle.connect(admin).setCircuitBreakerEnabled(false);
 
       // Move price 30% ($2000 → $2600)
       await ethFeed.setAnswer(260000000000n);
@@ -261,8 +253,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should allow getPrice after admin resets lastKnownPrice", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await timelockSetMaxDeviation(oracle, admin, 500);
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500);
 
       // Trigger circuit breaker
       await ethFeed.setAnswer(260000000000n); // 30% move
@@ -279,8 +270,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should allow getPrice after admin updatePrice", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await timelockSetMaxDeviation(oracle, admin, 500);
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500);
       await ethFeed.setAnswer(260000000000n);
       await expect(oracle.getPrice(WETH)).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
 
@@ -301,8 +291,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should return price even when circuit breaker would trigger", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await timelockSetMaxDeviation(oracle, admin, 500); // 5%
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500); // 5%
       await ethFeed.setAnswer(260000000000n); // 30% move
 
       // getPrice reverts
@@ -313,13 +302,10 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       expect(price).to.equal(ethers.parseEther("2600"));
     });
 
-    it("should allow stale prices (liquidations during outages)", async function () {
-      // Unsafe variants no longer revert on stale prices.
-      // Liquidations must proceed during feed outages using last available price.
+    it("should still enforce staleness check", async function () {
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
-      const price = await oracle.getPriceUnsafe(WETH);
-      expect(price).to.be.gt(0);
+      await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("STALE_PRICE");
     });
 
     it("should still enforce valid price check", async function () {
@@ -330,7 +316,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     it("should reject disabled feed", async function () {
       const { oracle, admin, WETH } = await loadFixture(deployOracleFixture);
-      await timelockRemoveFeed(oracle, admin, WETH);
+      await oracle.connect(admin).removeFeed(WETH);
       await expect(oracle.getPriceUnsafe(WETH)).to.be.revertedWith("FEED_NOT_ENABLED");
     });
   });
@@ -339,8 +325,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     it("should calculate value bypassing circuit breaker", async function () {
       const { oracle, admin, ethFeed, WETH } = await loadFixture(deployOracleFixture);
 
-      await timelockSetMaxDeviation(oracle, admin, 500);
-      await refreshFeeds(ethFeed);
+      await oracle.connect(admin).setMaxDeviation(500);
       await ethFeed.setAnswer(260000000000n); // $2600
 
       // getValueUsd calls getPrice → would revert
@@ -357,21 +342,18 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const btcFeed = await MockFeed.deploy(8, 5000000000000n); // $50000
 
       const WBTC = "0x0000000000000000000000000000000000000002";
-      await timelockSetFeed(oracle, admin, WBTC, await btcFeed.getAddress(), 3600, 8);
-      await refreshFeeds(btcFeed);
+      await oracle.connect(admin).setFeed(WBTC, await btcFeed.getAddress(), 3600, 8, 0);
 
       const oneBTC = 100000000n; // 1 BTC in 8 decimals
       const value = await oracle.getValueUsdUnsafe(WBTC, oneBTC);
       expect(value).to.equal(ethers.parseEther("50000"));
     });
 
-    it("should allow stale prices (liquidations during outages)", async function () {
-      // Unsafe variants no longer revert on stale prices.
-      // Liquidations must proceed during feed outages using last available price.
+    it("should reject stale price", async function () {
       const { oracle, WETH } = await loadFixture(deployOracleFixture);
       await time.increase(3601);
-      const value = await oracle.getValueUsdUnsafe(WETH, ethers.parseEther("1"));
-      expect(value).to.be.gt(0);
+      await expect(oracle.getValueUsdUnsafe(WETH, ethers.parseEther("1")))
+        .to.be.revertedWith("STALE_PRICE");
     });
   });
 
@@ -393,7 +375,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const MockFeed = await ethers.getContractFactory("MockAggregatorV3");
       const newFeed = await MockFeed.deploy(8, 300000000000n); // $3000
 
-      await timelockSetFeed(oracle, admin, WETH, await newFeed.getAddress(), 3600, 18);
+      await oracle.connect(admin).setFeed(WETH, await newFeed.getAddress(), 3600, 18, 0);
       expect(await oracle.lastKnownPrice(WETH)).to.equal(ethers.parseEther("3000"));
     });
   });
@@ -414,17 +396,15 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy(owner.address);
+    const priceOracle = await PriceOracle.deploy();
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
-    await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy(owner.address);
-    await timelockAddCollateral(collateralVault, owner, await weth.getAddress(), 7500, 8000, 1000);
-
-    await refreshFeeds(ethFeed);
+    const collateralVault = await CollateralVault.deploy();
+    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     const borrowModule = await BorrowModule.deploy(
@@ -432,17 +412,16 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% APR
-      ethers.parseEther("100"),
-      owner.address
+      ethers.parseEther("100")
     );
 
     // Deploy SMUSD
     const SMUSD = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSD.deploy(await musd.getAddress(), owner.address);
+    const smusd = await SMUSD.deploy(await musd.getAddress());
 
     // Deploy InterestRateModel (single admin address constructor)
     const InterestRateModel = await ethers.getContractFactory("InterestRateModel");
-    const interestRateModel = await InterestRateModel.deploy(owner.address, owner.address);
+    const interestRateModel = await InterestRateModel.deploy(owner.address);
 
     // Grant roles
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
@@ -500,7 +479,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setInterestRateModel", function () {
     it("should set the interest rate model", async function () {
       const { borrowModule, interestRateModel, owner } = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRateModel(borrowModule, owner, await interestRateModel.getAddress());
+      await borrowModule.connect(owner).setInterestRateModel(await interestRateModel.getAddress());
       expect(await borrowModule.interestRateModel()).to.equal(await interestRateModel.getAddress());
     });
 
@@ -530,7 +509,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setSMUSD", function () {
     it("should set the SMUSD address", async function () {
       const { borrowModule, smusd, owner } = await loadFixture(deployFullBorrowFixture);
-      await timelockSetSMUSD(borrowModule, owner, await smusd.getAddress());
+      await borrowModule.connect(owner).setSMUSD(await smusd.getAddress());
       expect(await borrowModule.smusd()).to.equal(await smusd.getAddress());
     });
 
@@ -561,7 +540,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     it("should set the treasury address", async function () {
       const { borrowModule, owner, user2 } = await loadFixture(deployFullBorrowFixture);
       // Using a random address as treasury stand-in
-      await timelockSetTreasury(borrowModule, owner, user2.address);
+      await borrowModule.connect(owner).setTreasury(user2.address);
       expect(await borrowModule.treasury()).to.equal(user2.address);
     });
 
@@ -791,8 +770,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       // Trip circuit breaker
       const ORACLE_ADMIN = await f.priceOracle.ORACLE_ADMIN_ROLE();
       await f.priceOracle.grantRole(ORACLE_ADMIN, f.owner.address);
-      await timelockSetMaxDeviation(f.priceOracle, f.owner, 100); // 1%
-      await refreshFeeds(f.ethFeed);
+      await f.priceOracle.connect(f.owner).setMaxDeviation(100); // 1%
       await f.ethFeed.setAnswer(180000000000n); // $1800 (10% drop)
 
       // healthFactor (safe) reverts
@@ -847,8 +825,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getUtilizationRate — should use interestRateModel when set", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
-      await refreshFeeds(f.ethFeed);
+      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
       await depositAndBorrow(f, f.user1, "10", "5000");
 
       const rate = await f.borrowModule.getUtilizationRate();
@@ -863,8 +840,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getCurrentBorrowRate — should return dynamic rate with model", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
-      await refreshFeeds(f.ethFeed);
+      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
       await depositAndBorrow(f, f.user1, "10", "5000");
 
       const rate = await f.borrowModule.getCurrentBorrowRate();
@@ -880,7 +856,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("getCurrentSupplyRate — should use model when set", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
+      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
 
       const rate = await f.borrowModule.getCurrentSupplyRate();
       expect(rate).to.be.gte(0);
@@ -947,17 +923,14 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
         .to.be.reverted;
     });
 
-    // repay() must remain available even when paused,
-    // so users can reduce debt and avoid unfair liquidation.
-    it("should ALLOW repay when paused", async function () {
+    it("should block repay when paused", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
       await f.borrowModule.connect(f.owner).pause();
 
       await f.musd.connect(f.user1).approve(await f.borrowModule.getAddress(), ethers.parseEther("5000"));
-      // Should succeed — repay must work even when paused
       await expect(f.borrowModule.connect(f.user1).repay(ethers.parseEther("1000")))
-        .to.not.be.reverted;
+        .to.be.reverted;
     });
 
     it("should block borrowFor when paused", async function () {
@@ -1014,10 +987,8 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       const f = await loadFixture(deployFullBorrowFixture);
 
       // Setup full pipeline
-      await timelockSetInterestRateModel(f.borrowModule, f.owner, await f.interestRateModel.getAddress());
-      await timelockSetSMUSD(f.borrowModule, f.owner, await f.smusd.getAddress());
-
-      await refreshFeeds(f.ethFeed);
+      await f.borrowModule.connect(f.owner).setInterestRateModel(await f.interestRateModel.getAddress());
+      await f.borrowModule.connect(f.owner).setSMUSD(await f.smusd.getAddress());
 
       // Deposit mUSD into SMUSD to have shares
       await f.musd.connect(f.owner).mint(f.owner.address, ethers.parseEther("10000"));
@@ -1107,7 +1078,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     it("should accept boundary value (1e24)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetMinDebt(f.borrowModule, f.owner, 10n ** 24n);
+      await f.borrowModule.connect(f.owner).setMinDebt(10n ** 24n);
       expect(await f.borrowModule.minDebt()).to.equal(10n ** 24n);
     });
 
@@ -1127,13 +1098,13 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   describe("setInterestRate boundaries", function () {
     it("should accept zero rate", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRate(f.borrowModule, f.owner, 0);
+      await f.borrowModule.connect(f.owner).setInterestRate(0);
       expect(await f.borrowModule.interestRateBps()).to.equal(0);
     });
 
     it("should accept max rate (5000 bps = 50%)", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
-      await timelockSetInterestRate(f.borrowModule, f.owner, 5000);
+      await f.borrowModule.connect(f.owner).setInterestRate(5000);
       expect(await f.borrowModule.interestRateBps()).to.equal(5000);
     });
 
@@ -1146,7 +1117,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECTION 3: SMUSD — ERC-4626 Compliance
+//  SECTION 3: SMUSD — ERC-4626 Compliance (FIX AUDIT-01)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
@@ -1157,7 +1128,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const SMUSD = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSD.deploy(await musd.getAddress(), deployer.address);
+    const smusd = await SMUSD.deploy(await musd.getAddress());
 
     // Grant BRIDGE_ROLE to deployer for minting
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
@@ -1175,7 +1146,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
   }
 
   describe("convertToShares / convertToAssets consistency", function () {
-    it("convertToShares should match deposit result", async function () {
+    it("convertToShares should match deposit result (FIX AUDIT-01)", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // First user deposits to create a non-trivial share price
@@ -1197,13 +1168,13 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       // The key check: previewDeposit should also match
       const previewDeposit = await smusd.previewDeposit(depositAmount);
 
-      // These should be consistent (within rounding)
+      // With FIX AUDIT-01, these should be consistent (within rounding)
       // previewDeposit uses _convertToShares with Floor rounding
       // convertToShares now also delegates to _convertToShares with Floor rounding
       expect(previewShares).to.equal(previewDeposit);
     });
 
-    it("convertToAssets should match redeem result", async function () {
+    it("convertToAssets should match redeem result (FIX AUDIT-01)", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // Deposit
@@ -1219,7 +1190,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       const previewAssets = await smusd.convertToAssets(shares);
       const previewRedeem = await smusd.previewRedeem(shares);
 
-      // These should be consistent
+      // With FIX AUDIT-01, these should be consistent
       expect(previewAssets).to.equal(previewRedeem);
     });
 
@@ -1395,9 +1366,9 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
     const wbtc = await MockERC20.deploy("Wrapped BTC", "WBTC", 8);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const vault = await CollateralVault.deploy(deployer.address);
+    const vault = await CollateralVault.deploy();
 
-    await timelockAddCollateral(vault, deployer, await weth.getAddress(), 7500, 8000, 1000);
+    await vault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
     const BORROW_MODULE_ROLE = await vault.BORROW_MODULE_ROLE();
     await vault.grantRole(BORROW_MODULE_ROLE, borrowModule.address);
@@ -1410,7 +1381,7 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
   describe("Collateral configuration", function () {
     it("should add multiple collateral types", async function () {
       const { vault, wbtc, deployer } = await loadFixture(deployVaultFixture);
-      await timelockAddCollateral(vault, deployer, await wbtc.getAddress(), 6500, 7000, 1500);
+      await vault.addCollateral(await wbtc.getAddress(), 6500, 7000, 1500);
       const tokens = await vault.getSupportedTokens();
       expect(tokens.length).to.equal(2);
     });
@@ -1423,7 +1394,7 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
 
     it("should update collateral config", async function () {
       const { vault, weth, deployer } = await loadFixture(deployVaultFixture);
-      await timelockUpdateCollateral(vault, deployer, await weth.getAddress(), 6000, 7000, 1500);
+      await vault.updateCollateral(await weth.getAddress(), 6000, 7000, 1500);
       const [enabled, cf, lt, lp] = await vault.getConfig(await weth.getAddress());
       expect(enabled).to.be.true;
       expect(cf).to.equal(6000);
@@ -1474,17 +1445,15 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
     const musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
-    const priceOracle = await PriceOracle.deploy(deployer.address);
+    const priceOracle = await PriceOracle.deploy();
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
-    await timelockSetFeed(priceOracle, deployer, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy(deployer.address);
-    await timelockAddCollateral(collateralVault, deployer, await weth.getAddress(), 7500, 8000, 1000);
-
-    await refreshFeeds(ethFeed);
+    const collateralVault = await CollateralVault.deploy();
+    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     const borrowModule = await BorrowModule.deploy(
@@ -1492,8 +1461,7 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100"),
-      deployer.address
+      ethers.parseEther("100")
     );
 
     const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
@@ -1502,8 +1470,7 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000, // closeFactorBps = 50%
-      deployer.address
+      5000 // closeFactorBps = 50%
     );
 
     // Grant roles
@@ -1597,7 +1564,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     const TreasuryV2 = await ethers.getContractFactory("TreasuryV2");
     const treasury = await upgrades.deployProxy(
       TreasuryV2,
-      [await usdc.getAddress(), deployer.address, deployer.address, deployer.address, deployer.address],
+      [await usdc.getAddress(), deployer.address, deployer.address, deployer.address],
       { kind: 'uups' }
     );
     await treasury.waitForDeployment();
@@ -1607,8 +1574,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      deployer.address,  // feeRecipient
-      deployer.address
+      deployer.address  // feeRecipient
     );
 
     // Grant roles
@@ -1632,12 +1598,12 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     return { directMint, musd, usdc, treasury, deployer, user1 };
   }
 
-  describe("Minimum fee enforcement", function () {
+  describe("Minimum fee enforcement (FIX S-M08)", function () {
     it("should charge minimum 1 wei USDC fee even on tiny redemptions", async function () {
-      const { directMint, musd, usdc, deployer, user1 } = await loadFixture(deployMintFixture);
+      const { directMint, musd, usdc, user1 } = await loadFixture(deployMintFixture);
 
       // Set fees (mintFee=0, redeemFee=100 bps = 1%)
-      await timelockSetFees(directMint, deployer, 0, 100);
+      await directMint.setFees(0, 100);
 
       // Mint first
       const mintAmt = 1000n * 10n ** 6n; // 1000 USDC
@@ -1659,10 +1625,10 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
 
   describe("Fee tracking", function () {
     it("should track accumulated mint fees", async function () {
-      const { directMint, usdc, deployer, user1 } = await loadFixture(deployMintFixture);
+      const { directMint, usdc, user1 } = await loadFixture(deployMintFixture);
 
       // Set mint fee 0.5%
-      await timelockSetFees(directMint, deployer, 50, 0);
+      await directMint.setFees(50, 0);
 
       const mintAmt = 10000n * 10n ** 6n; // 10,000 USDC
       await usdc.connect(user1).approve(await directMint.getAddress(), mintAmt);
@@ -1690,7 +1656,7 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
     const bridge = await upgrades.deployProxy(
       BLEBridgeV9,
-      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000"), deployer.address],
+      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000")],
       { kind: 'uups' }
     );
     await bridge.waitForDeployment();
@@ -1702,10 +1668,6 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     await bridge.grantRole(VALIDATOR_ROLE, admin.address);
     await bridge.grantRole(VALIDATOR_ROLE, deployer.address);
     await bridge.grantRole(EMERGENCY_ROLE, admin.address);
-
-    // Grant RELAYER_ROLE so deployer can call processAttestation()
-    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
-    await bridge.grantRole(RELAYER_ROLE, deployer.address);
 
     // Grant CAP_MANAGER to bridge on MUSD
     const CAP_MANAGER = await musd.CAP_MANAGER_ROLE();

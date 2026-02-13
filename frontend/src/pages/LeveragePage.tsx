@@ -131,7 +131,8 @@ export default function LeveragePage() {
         WETH_ADDRESS,
         amount,
         leverageX10,
-        maxLoops
+        maxLoops,
+        0
       );
       await tx.wait();
       // Refresh position
