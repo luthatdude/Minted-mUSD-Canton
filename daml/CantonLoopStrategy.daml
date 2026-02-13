@@ -134,12 +134,14 @@ template CantonLoopStrategyService
         now <- getTime
 
         -- Calculate entry fee
-        let entryFee = depositAmount * intToDecimal entryFeeBps / 10000.0
+        let entryFeeMoney : Money = intToDecimal entryFeeBps
+        let entryFee = depositAmount * entryFeeMoney / 10000.0
         let netDeposit = depositAmount - entryFee
 
         -- Simulate loop: each iteration borrows up to collateral factor, swaps, deposits
         -- In production this would interact with the lending service
-        let effectiveLeverage = min (intToDecimal maxLeverageX10 / 10.0) (intToDecimal (requestedLoops + 1))
+        let maxLevMoney : Money = intToDecimal maxLeverageX10
+        let effectiveLeverage = min (maxLevMoney / 10.0) (intToDecimal (requestedLoops + 1))
         let totalCollat = netDeposit * effectiveLeverage
         let totalBorrowed = totalCollat - netDeposit
 
@@ -154,7 +156,7 @@ template CantonLoopStrategyService
           totalCollateral = totalCollat
           totalDebt = totalBorrowed
           loopCount = requestedLoops
-          maxLeverage = intToDecimal maxLeverageX10 / 10.0
+          maxLeverage = maxLevMoney / 10.0
           openedAt = now
           lastUpdated = now
           privacyObservers = []
@@ -196,7 +198,8 @@ template CantonLoopStrategyService
 
         -- Calculate exit fee on remaining collateral value after debt repay
         let remainder = pos.totalCollateral - pos.totalDebt
-        let exitFee = remainder * intToDecimal exitFeeBps / 10000.0
+        let exitFeeMoney : Money = intToDecimal exitFeeBps
+        let exitFee = remainder * exitFeeMoney / 10000.0
 
         -- Update service state
         create this with
