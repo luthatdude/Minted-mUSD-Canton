@@ -71,19 +71,36 @@ rule dust_liquidation_reverts(address borrower, address token) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// INVARIANTS: CLOSE FACTOR BOUNDS
+// RULES: CLOSE FACTOR BOUNDS (inductive, constructor base case assumed)
 // ═══════════════════════════════════════════════════════════════════
 
-/// @notice Close factor must be in valid range (0, 10000]
-/// @dev Enforced by constructor and setCloseFactor — invariant uses induction:
-///      base case checks constructor, inductive step checks all state transitions.
-invariant close_factor_bounded()
-    closeFactorBps() > 0 && closeFactorBps() <= 10000;
+/// @notice No function can push closeFactorBps out of (0, 10000]
+/// @dev Parametric rule: for every public function f, if close factor
+///      was valid before f, it must remain valid after f.
+rule close_factor_bounded(method f) {
+    env e;
+    calldataarg args;
+    require closeFactorBps() > 0 && closeFactorBps() <= 10000;
 
-/// @notice Full liquidation threshold must be in valid range (0, 10000)
-/// @dev Enforced by constructor (5000) and setFullLiquidationThreshold.
-invariant full_liquidation_threshold_bounded()
-    fullLiquidationThreshold() > 0 && fullLiquidationThreshold() < 10000;
+    f(e, args);
+
+    assert closeFactorBps() > 0 && closeFactorBps() <= 10000,
+        "Close factor out of bounds";
+}
+
+/// @notice No function can push fullLiquidationThreshold out of (0, 10000)
+/// @dev Parametric rule: for every public function f, if threshold
+///      was valid before f, it must remain valid after f.
+rule full_liquidation_threshold_bounded(method f) {
+    env e;
+    calldataarg args;
+    require fullLiquidationThreshold() > 0 && fullLiquidationThreshold() < 10000;
+
+    f(e, args);
+
+    assert fullLiquidationThreshold() > 0 && fullLiquidationThreshold() < 10000,
+        "Full liquidation threshold out of bounds";
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: PAUSED STATE
