@@ -452,6 +452,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         require(markets.length <= 50, "BATCH_TOO_LARGE");
 
         for (uint256 i = 0; i < markets.length; i++) {
+            require(markets[i] != address(0), "ZERO_ADDRESS");
             if (!isWhitelisted[markets[i]]) {
                 require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
                 whitelistedMarkets.push(markets[i]);
