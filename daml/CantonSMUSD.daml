@@ -177,9 +177,6 @@ template CantonStakingService
           stakedAt = now
           privacyObservers = userObs
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
         -- Update pool state (local shares only - global sync happens via bridge)
         newService <- create this with
           totalShares = totalShares + newShares
@@ -225,9 +222,6 @@ template CantonStakingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
         -- Update pool state
         newService <- create this with
           totalShares = totalShares - smusd.shares
@@ -259,9 +253,6 @@ template CantonStakingService
         let maxAllowedPrice = globalSharePrice * 1.1
         assertMsg "SHARE_PRICE_INCREASE_TOO_LARGE" (newGlobalSharePrice <= maxAllowedPrice)
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
         create this with
           globalSharePrice = newGlobalSharePrice
           globalTotalAssets = newGlobalTotalAssets
@@ -282,8 +273,6 @@ template CantonStakingService
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
         create this with
           globalSharePrice = newSharePrice
           globalTotalAssets = newTotalTreasuryAssets
@@ -295,6 +284,4 @@ template CantonStakingService
         newPaused : Bool
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
         create this with paused = newPaused

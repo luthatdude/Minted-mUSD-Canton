@@ -322,7 +322,7 @@ testBorrowAgainstCTN = do
       coinCid
 
   -- Borrow 500 mUSD (well under $1105 limit)
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
@@ -356,7 +356,7 @@ testBorrowExceedsLTV = do
       coinCid
 
   -- Try to borrow 1200 mUSD (exceeds $1105 limit)
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 1200.0
@@ -380,7 +380,7 @@ testBorrowBelowMinimum = do
       coinCid
 
   -- Try to borrow 5 mUSD (below 10 mUSD minimum)
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 5.0
@@ -408,7 +408,7 @@ testRepayDebt = do
       user = setup.user
       coinCid
 
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
@@ -483,7 +483,7 @@ testLiquidation = do
       user = setup.user
       coinCid
 
-  (svc2, debtCid, _musdCid) <- submit setup.user do
+  (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 1100.0
@@ -547,7 +547,7 @@ testLiquidationHealthyPositionFails = do
       user = setup.user
       coinCid
 
-  (svc2, debtCid, _musdCid) <- submit setup.user do
+  (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 100.0
@@ -613,7 +613,7 @@ testMultiCollateralBorrow = do
   -- USDC: 1000 * $1.00 * 95% = $950.00
   -- Total weighted = $1502.50
   -- Borrow 1400 mUSD (under $1502.50)
-  (svc3, debtCid, musdCid) <- submit setup.user do
+  (svc3, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Borrow with
       user = setup.user
       borrowAmount = 1400.0
@@ -853,7 +853,7 @@ testWithdrawReserves = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       complianceRegistryCid = setup.complianceCid
-      serviceName = "lending"
+      serviceName = "lending-reserves"
       observers = [setup.user]
 
   govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "CantonLending" "withdraw-reserves"
@@ -914,7 +914,7 @@ testBorrowAgainstUSDCHighLTV = do
       usdcCid
 
   -- Borrow 9000 mUSD (under 9500 limit)
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 9000.0
@@ -946,7 +946,7 @@ testFullLifecycle = do
       coinCid
 
   -- 2. Borrow 500 mUSD
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
