@@ -32,7 +32,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER_ROLE");
-    /// @notice FIX H-08: TIMELOCK_ROLE for critical parameter changes
+    /// @notice TIMELOCK_ROLE for critical parameter changes
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // Role for TreasuryReceiver
 

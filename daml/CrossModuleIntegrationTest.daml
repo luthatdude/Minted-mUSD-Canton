@@ -25,7 +25,7 @@ import DA.Set qualified as Set
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Transfer(..), CantonUSDC(..), CantonDirectMintService(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
 import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_EmergencyUpdate(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
 
@@ -94,6 +94,7 @@ testMintStakeUnstakeFlow = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 0.0
       globalSharePrice = 1.0
       globalTotalAssets = 0.0
@@ -108,7 +109,7 @@ testMintStakeUnstakeFlow = do
       observers = [alice]
 
   -- Step 3: Alice stakes mUSD → gets smUSD shares
-  (stakingCid2, smusdCid) <- submit alice do
+  (stakingCid2, smusdCid) <- submitMulti [alice] [operator] do
     exerciseCmd stakingCid Stake with
       user = alice
       musdCid
@@ -120,7 +121,7 @@ testMintStakeUnstakeFlow = do
   assertMsg "Entry price is 1.0" (s.entrySharePrice == 1.0)
 
   -- Step 4: Unstake → get mUSD back at current share price (1.0)
-  (stakingCid3, musdBackCid) <- submit alice do
+  (stakingCid3, musdBackCid) <- submitMulti [alice] [operator] do
     exerciseCmd stakingCid2 Unstake with
       user = alice
       smusdCid
@@ -186,13 +187,13 @@ testLendingFullCycleIntegration = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit user do
+  (svc1, escrowCid) <- submitMulti [user] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user
       coinCid
 
   -- Step 2: Borrow 500 mUSD
-  (svc2, debtCid, musdCid) <- submit user do
+  (svc2, debtCid, musdCid) <- submitMulti [user] [operator] do
     exerciseCmd svc1 Lending_Borrow with
       user
       borrowAmount = 500.0
@@ -211,7 +212,7 @@ testLendingFullCycleIntegration = do
       debtCid
 
   -- Step 4: Withdraw
-  (svc4, returnedCoinCid) <- submit user do
+  (svc4, returnedCoinCid) <- submitMulti [user] [operator] do
     exerciseCmd svc3 Lending_WithdrawCTN with
       user
       escrowCid
@@ -241,6 +242,7 @@ testSharePriceSyncWithinBounds = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -261,6 +263,8 @@ testSharePriceSyncWithinBounds = do
       newGlobalTotalAssets = 105.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "a]b]c]d]e]f]0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+      validatorCount = 3
 
   -- Verify the price was applied
   price <- submit operator do
@@ -284,6 +288,7 @@ testSharePriceIncreaseTooLargeRejected = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -304,6 +309,8 @@ testSharePriceIncreaseTooLargeRejected = do
       newGlobalTotalAssets = 115.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      validatorCount = 3
   debug "✅ Integration 4: Share price increase >10% rejected (FIX D-M09)"
 
 -- ============================================================
@@ -322,6 +329,7 @@ testSharePriceDecreaseTooLargeRejected = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -342,6 +350,8 @@ testSharePriceDecreaseTooLargeRejected = do
       newGlobalTotalAssets = 85.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      validatorCount = 3
   debug "✅ Integration 5: Share price decrease >10% rejected"
 
 -- ============================================================
@@ -400,12 +410,12 @@ testLiquidationFlow = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit borrower do
+  (svc1, escrowCid) <- submitMulti [borrower] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
 
-  (svc2, debtCid, _musdCid) <- submit borrower do
+  (svc2, debtCid, _musdCid) <- submitMulti [borrower] [operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = borrower
       borrowAmount = 1100.0
@@ -500,13 +510,13 @@ testHealthyPositionNotLiquidatable = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit borrower do
+  (svc1, escrowCid) <- submitMulti [borrower] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
 
   -- Borrow a small amount (well-collateralized)
-  (svc2, debtCid, _musdCid) <- submit borrower do
+  (svc2, debtCid, _musdCid) <- submitMulti [borrower] [operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = borrower
       borrowAmount = 100.0
@@ -523,7 +533,7 @@ testHealthyPositionNotLiquidatable = do
       privacyObservers = []
 
   -- Should fail — position is healthy
-  submitMustFail keeper do
+  submitMultiMustFail [keeper] [operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = keeper
       borrower
@@ -576,7 +586,7 @@ testComplianceBlocksBlacklistedTransfer = do
       privacyObservers = []
 
   -- Alice tries to transfer mUSD to blacklisted Bob → should fail
-  submitMustFail alice do
+  submitMultiMustFail [alice] [operator] do
     exerciseCmd musdCid CantonMUSD_Transfer with
       newOwner = bob
       complianceRegistryCid = complianceCid
@@ -664,13 +674,13 @@ testSupplyCapCoordination = do
       amount = 1000000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit user do
+  (svc1, escrowCid) <- submitMulti [user] [operator] do
     exerciseCmd lendingCid Lending_DepositCTN with
       user
       coinCid
 
   -- Try to borrow 11M mUSD → should fail because DM has 40M + 11M = 51M > 50M globalMintCap
-  submitMustFail user do
+  submitMultiMustFail [user] [operator] do
     exerciseCmd svc1 Lending_Borrow with
       user
       borrowAmount = 11000000.0

@@ -43,7 +43,7 @@ interface ValidatorConfig {
   // AWS KMS — primary and rotation keys
   awsRegion: string;
   kmsKeyId: string;               // Primary signing key
-  kmsRotationKeyId: string;       // FIX INFRA-03: Secondary key for zero-downtime rotation
+  kmsRotationKeyId: string;       // Secondary key for zero-downtime rotation
   kmsKeyRotationEnabled: boolean; // Whether rotation is active
 
   // Ethereum — addresses for both keys
@@ -55,7 +55,7 @@ interface ValidatorConfig {
   pollIntervalMs: number;
   minCollateralRatioBps: number;
 
-  // FIX P2-CODEX: Template allowlist to prevent signing arbitrary contract types
+  // Template allowlist to prevent signing arbitrary contract types
   allowedTemplates: string[];
 }
 
@@ -80,7 +80,7 @@ const DEFAULT_CONFIG: ValidatorConfig = {
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
   minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
 
-  // FIX P2-CODEX: Only sign attestation requests from allowed DAML templates
+  // Only sign attestation requests from allowed DAML templates
   allowedTemplates: (process.env.ALLOWED_TEMPLATES || "MintedProtocolV3:AttestationRequest")
     .split(",")
     .map(t => t.trim())
@@ -280,7 +280,7 @@ class ValidatorNode {
   private lastSignedTotalValue: bigint = 0n;
   private readonly MAX_VALUE_JUMP_BPS = parseInt(process.env.MAX_VALUE_JUMP_BPS || "2000", 10); // 20%
 
-  // FIX INFRA-03: KMS key rotation state
+  // KMS key rotation state
   private activeKmsKeyId: string;
   private activeEthAddress: string;
   private rotationInProgress: boolean = false;
@@ -288,7 +288,7 @@ class ValidatorNode {
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX INFRA-03: Initialize with primary key, support rotation
+    // Initialize with primary key, support rotation
     this.activeKmsKeyId = config.kmsKeyId;
     this.activeEthAddress = config.ethereumAddress;
 
@@ -324,7 +324,7 @@ class ValidatorNode {
   }
 
   /**
-   * FIX INFRA-03: Switch to rotation key for zero-downtime key rotation
+   * Switch to rotation key for zero-downtime key rotation
    *
    * Key rotation flow:
    *   1. Generate new KMS key, get its ETH address
@@ -361,7 +361,7 @@ class ValidatorNode {
   }
 
   /**
-   * FIX INFRA-03: Get current active key status
+   * Get current active key status
    */
   getKeyStatus(): { activeKeyId: string; activeEthAddress: string; rotationAvailable: boolean } {
     return {
@@ -378,7 +378,13 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
+        try {
+          fs.writeFileSync("/tmp/heartbeat", new Date().toISOString());
+        } catch (heartbeatError) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[Validator] heartbeat write failed", heartbeatError);
+          }
+        }
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }
@@ -392,7 +398,7 @@ class ValidatorNode {
   }
 
   private async pollForAttestations(): Promise<void> {
-    // FIX P2-CODEX: Only query allowed DAML templates (prevents signing arbitrary contracts)
+    // Only query allowed DAML templates (prevents signing arbitrary contracts)
     const templateId = this.config.allowedTemplates[0] || "MintedProtocolV3:AttestationRequest";
     const attestations = await (this.ledger.query as any)(
       templateId,
@@ -518,7 +524,7 @@ class ValidatorNode {
         };
       }
 
-      // FIX CX-H-02: Enforce total-value tolerance — previously computed but never checked.
+      // Enforce total-value tolerance — previously computed but never checked.
       // Without this, per-asset tolerances ($100K each) can accumulate across many assets
       // to produce a multi-million-dollar overvaluation that passes validation.
       if (totalDiff > tolerance) {
@@ -650,17 +656,17 @@ class ValidatorNode {
     const nonce = BigInt(payload.nonce);
     const timestamp = BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600));
 
-    // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
+    // Include entropy in hash (matches BLEBridgeV9 signature verification)
     const entropy = (payload as any).entropy
       ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
       : ethers.ZeroHash;
 
-    // FIX CROSS-CHAIN-01: Include Canton state hash for on-ledger verification
+    // Include Canton state hash for on-ledger verification
     const stateHash = cantonStateHash
       ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
       : ethers.ZeroHash;
 
-    // FIX P2-CODEX: Derive attestation ID matching BLEBridgeV9.computeAttestationId()
+    // Derive attestation ID matching BLEBridgeV9.computeAttestationId()
     // Previously used ethers.id(payload.attestationId) which is keccak256(utf8) — wrong.
     // On-chain: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))
     const idBytes32 = ethers.solidityPackedKeccak256(
@@ -685,13 +691,13 @@ class ValidatorNode {
     );
   }
 
-  // FIX INFRA-03: Sign with currently active KMS key (supports key rotation)
+  // Sign with currently active KMS key (supports key rotation)
   private async signWithKMS(messageHash: string): Promise<string> {
     return this.signWithKMSKey(messageHash, this.activeKmsKeyId, this.activeEthAddress);
   }
 
   /**
-   * FIX INFRA-03: Sign with a specific KMS key
+   * Sign with a specific KMS key
    * Used for both normal signing and rotation key testing
    */
   private async signWithKMSKey(messageHash: string, keyId: string, ethAddress: string): Promise<string> {
@@ -765,7 +771,7 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
   }
-  // FIX P2-CODEX: Validate template allowlist is not empty
+  // Validate template allowlist is not empty
   if (DEFAULT_CONFIG.allowedTemplates.length === 0) {
     throw new Error("ALLOWED_TEMPLATES must not be empty — validator needs at least one template to query");
   }

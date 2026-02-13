@@ -16,8 +16,11 @@
 module CantonBoostPoolTest where
 
 import CantonBoostPool
+import CantonCoinToken (CantonCoin(..), CantonCoin_Split(..), CantonCoin_Transfer(..), CantonCoinTransferProposal(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonDirectMint (Money)
+import Compliance (ComplianceRegistry(..))
+import DA.Set qualified as Set
 import DA.Time
 import DA.Date
 import Daml.Script
@@ -54,7 +57,16 @@ createCanton operator user amount =
 
 -- | Create a default CantonBoostPoolService
 createPoolService : Party -> [Party] -> Script (ContractId CantonBoostPoolService)
-createPoolService operator observers =
+createPoolService operator observers = do
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submit operator do
     createCmd CantonBoostPoolService with
       operator
@@ -73,7 +85,8 @@ createPoolService operator observers =
       cantonCapRatio = 0.25            -- 20/80 ratio
       cooldownSeconds = 172800         -- 48 hours
       paused = False
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
+      serviceName = "CantonBoostPool"
       observers
 
 -- ============================================================
@@ -98,7 +111,7 @@ test_BasicDeposit = script do
   -- Alice deposits Canton (1,000 CTN × $0.172 = $172 mUSD value)
   -- Max allowed = 10,000 × 1.0 × 0.25 = 2,500 mUSD → $172 is well within cap
   setTime baseTime
-  (newPoolCid, lpCid) <- submit alice do
+  (newPoolCid, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -137,7 +150,7 @@ test_DepositCapEnforcement = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  submitMustFail alice do
+  submitMultiMustFail [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -161,6 +174,15 @@ test_CapScalesWithSharePrice = script do
   smusdCid <- createSmusd operator alice 10000.0 1.0 baseTime
 
   -- Deploy pool with higher share price (simulating yield accrual)
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   poolCid <- submit operator do
     createCmd CantonBoostPoolService with
       operator
@@ -179,7 +201,8 @@ test_CapScalesWithSharePrice = script do
       cantonCapRatio = 0.25
       cooldownSeconds = 172800
       paused = False
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
+      serviceName = "CantonBoostPool"
       observers = [alice]
 
   -- With sharePrice=1.10, cap = 10,000 × 1.10 × 0.25 = 2,750 mUSD
@@ -187,7 +210,7 @@ test_CapScalesWithSharePrice = script do
   cantonCid <- createCanton operator alice 15000.0
 
   setTime baseTime
-  (_, lpCid) <- submit alice do
+  (_, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -212,7 +235,7 @@ test_WithdrawFlow = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -221,7 +244,7 @@ test_WithdrawFlow = script do
   -- Fast forward past cooldown (48 hours + 1 second)
   setTime (addRelTime baseTime (seconds 172801))
 
-  (poolCid3, returnedCantonCid) <- submit alice do
+  (poolCid3, returnedCantonCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid2 Withdraw with
       user = alice
       lpCid
@@ -247,7 +270,7 @@ test_CooldownEnforcement = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -256,7 +279,7 @@ test_CooldownEnforcement = script do
   -- Try to withdraw immediately (only 1 hour later, need 48)
   setTime (addRelTime baseTime (hours 1))
 
-  submitMustFail alice do
+  submitMultiMustFail [alice] [operator] do
     exerciseCmd poolCid2 Withdraw with
       user = alice
       lpCid
@@ -281,7 +304,7 @@ test_RewardDistribution = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -289,10 +312,9 @@ test_RewardDistribution = script do
 
   -- Distribute 100 Canton in validator rewards (epoch 1)
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-1"
       actionType = ParameterUpdate
       description = "test"
@@ -306,13 +328,11 @@ test_RewardDistribution = script do
     exerciseCmd poolCid2 DistributeRewards with
       rewardAmount = 100.0
       epochNumber = 1
-      governanceProofCid = distProof1
 
   -- Distribute another 200 Canton (epoch 2)
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-2"
       actionType = ParameterUpdate
       description = "test"
@@ -326,7 +346,6 @@ test_RewardDistribution = script do
     exerciseCmd poolCid3 DistributeRewards with
       rewardAmount = 200.0
       epochNumber = 2
-      governanceProofCid = distProof2
 
   -- After 300 total rewards:
   -- LP share (60%) = 180 Canton added to pool
@@ -334,7 +353,7 @@ test_RewardDistribution = script do
   -- Alice withdraws after cooldown — should get original deposit + 180 reward (minus fees)
   setTime (addRelTime baseTime (seconds 172801))
 
-  (poolCid5, returnedCantonCid) <- submit alice do
+  (poolCid5, returnedCantonCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid4 Withdraw with
       user = alice
       lpCid
@@ -356,10 +375,9 @@ test_RewardEpochSequential = script do
 
   -- Epoch 1 works
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch1"
       actionType = ParameterUpdate
       description = "test"
@@ -373,13 +391,11 @@ test_RewardEpochSequential = script do
     exerciseCmd poolCid DistributeRewards with
       rewardAmount = 100.0
       epochNumber = 1
-      governanceProofCid = distProof1
 
   -- Epoch 1 again fails (not sequential)
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch1-dup"
       actionType = ParameterUpdate
       description = "test"
@@ -393,13 +409,11 @@ test_RewardEpochSequential = script do
     exerciseCmd poolCid2 DistributeRewards with
       rewardAmount = 100.0
       epochNumber = 1
-      governanceProofCid = distProof2
 
   -- Epoch 0 fails (going backwards)
-  distProof3 <- submitMulti [operator, governor] [] do
+  distProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch0"
       actionType = ParameterUpdate
       description = "test"
@@ -413,7 +427,6 @@ test_RewardEpochSequential = script do
     exerciseCmd poolCid2 DistributeRewards with
       rewardAmount = 100.0
       epochNumber = 0
-      governanceProofCid = distProof3
 
   debug "TEST 7 PASSED: Reward epoch must be sequential"
   pure ()
@@ -432,10 +445,9 @@ test_CantonPriceSync = script do
 
   now <- getTime
   -- Valid: 10% increase (0.172 → 0.189)
-  syncProof1 <- submitMulti [operator, governor] [] do
+  syncProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-1"
       actionType = ParameterUpdate
       description = "test"
@@ -448,13 +460,11 @@ test_CantonPriceSync = script do
   poolCid2 <- submit operator do
     exerciseCmd poolCid SyncCantonPrice with
       newPriceMusd = 0.189
-      governanceProofCid = syncProof1
 
   -- Invalid: >20% jump (0.189 → 0.300)
-  syncProof2 <- submitMulti [operator, governor] [] do
+  syncProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-2"
       actionType = ParameterUpdate
       description = "test"
@@ -467,13 +477,11 @@ test_CantonPriceSync = script do
   submitMustFail operator do
     exerciseCmd poolCid2 SyncCantonPrice with
       newPriceMusd = 0.300
-      governanceProofCid = syncProof2
 
   -- Valid: 15% decrease (0.189 → 0.161)
-  syncProof3 <- submitMulti [operator, governor] [] do
+  syncProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-3"
       actionType = ParameterUpdate
       description = "test"
@@ -486,13 +494,11 @@ test_CantonPriceSync = script do
   poolCid3 <- submit operator do
     exerciseCmd poolCid2 SyncCantonPrice with
       newPriceMusd = 0.161
-      governanceProofCid = syncProof3
 
   -- Invalid: zero price
-  syncProof4 <- submitMulti [operator, governor] [] do
+  syncProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-4"
       actionType = ParameterUpdate
       description = "test"
@@ -505,7 +511,6 @@ test_CantonPriceSync = script do
   submitMustFail operator do
     exerciseCmd poolCid3 SyncCantonPrice with
       newPriceMusd = 0.0
-      governanceProofCid = syncProof4
 
   debug "TEST 8 PASSED: Canton price sync — bounds enforced"
   pure ()
@@ -524,10 +529,9 @@ test_SharePriceSync = script do
 
   now <- getTime
   -- Valid: share price up (1.0 → 1.05)
-  spProof1 <- submitMulti [operator, governor] [] do
+  spProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-1"
       actionType = ParameterUpdate
       description = "test"
@@ -540,13 +544,11 @@ test_SharePriceSync = script do
   poolCid2 <- submit operator do
     exerciseCmd poolCid SyncSharePrice with
       newGlobalSharePrice = 1.05
-      governanceProofCid = spProof1
 
   -- Valid: small decrease (1.05 → 0.95, just within 10%)
-  spProof2 <- submitMulti [operator, governor] [] do
+  spProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-2"
       actionType = ParameterUpdate
       description = "test"
@@ -559,13 +561,11 @@ test_SharePriceSync = script do
   poolCid3 <- submit operator do
     exerciseCmd poolCid2 SyncSharePrice with
       newGlobalSharePrice = 0.95
-      governanceProofCid = spProof2
 
   -- Invalid: >10% decrease (0.95 → 0.80)
-  spProof3 <- submitMulti [operator, governor] [] do
+  spProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-3"
       actionType = ParameterUpdate
       description = "test"
@@ -578,13 +578,11 @@ test_SharePriceSync = script do
   submitMustFail operator do
     exerciseCmd poolCid3 SyncSharePrice with
       newGlobalSharePrice = 0.80
-      governanceProofCid = spProof3
 
   -- Invalid: zero
-  spProof4 <- submitMulti [operator, governor] [] do
+  spProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-4"
       actionType = ParameterUpdate
       description = "test"
@@ -597,7 +595,6 @@ test_SharePriceSync = script do
   submitMustFail operator do
     exerciseCmd poolCid3 SyncSharePrice with
       newGlobalSharePrice = 0.0
-      governanceProofCid = spProof4
 
   debug "TEST 9 PASSED: Share price sync — decrease cap enforced"
   pure ()
@@ -619,7 +616,7 @@ test_ProtocolRewardWithdraw = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  (poolCid2, _) <- submit alice do
+  (poolCid2, _) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -627,10 +624,9 @@ test_ProtocolRewardWithdraw = script do
 
   -- Distribute 1000 Canton rewards → 400 to protocol (40%)
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-rewards"
       actionType = ParameterUpdate
       description = "test"
@@ -644,13 +640,11 @@ test_ProtocolRewardWithdraw = script do
     exerciseCmd poolCid2 DistributeRewards with
       rewardAmount = 1000.0
       epochNumber = 1
-      governanceProofCid = distProof
 
   -- Operator withdraws 200 of 400 accrued
-  wdProof1 <- submitMulti [operator, governor] [] do
+  wdProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-1"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -663,13 +657,11 @@ test_ProtocolRewardWithdraw = script do
   (poolCid4, rewardCantonCid) <- submit operator do
     exerciseCmd poolCid3 WithdrawProtocolRewards with
       withdrawAmount = 200.0
-      governanceProofCid = wdProof1
 
   -- Cannot withdraw more than remaining (200 left)
-  wdProof2 <- submitMulti [operator, governor] [] do
+  wdProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-2"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -682,13 +674,11 @@ test_ProtocolRewardWithdraw = script do
   submitMustFail operator do
     exerciseCmd poolCid4 WithdrawProtocolRewards with
       withdrawAmount = 300.0
-      governanceProofCid = wdProof2
 
   -- Can withdraw the rest
-  wdProof3 <- submitMulti [operator, governor] [] do
+  wdProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-3"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -701,7 +691,6 @@ test_ProtocolRewardWithdraw = script do
   (poolCid5, _) <- submit operator do
     exerciseCmd poolCid4 WithdrawProtocolRewards with
       withdrawAmount = 200.0
-      governanceProofCid = wdProof3
 
   debug "TEST 10 PASSED: Protocol reward withdrawal"
   pure ()
@@ -724,10 +713,9 @@ test_PauseUnpause = script do
 
   -- Pause pool
   now <- getTime
-  pauseProof1 <- submitMulti [operator, governor] [] do
+  pauseProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-pause-1"
       actionType = EmergencyPause
       description = "test"
@@ -740,21 +728,19 @@ test_PauseUnpause = script do
   poolCid2 <- submit operator do
     exerciseCmd poolCid BoostPool_SetPaused with
       newPaused = True
-      governanceProofCid = pauseProof1
 
   -- Deposit fails when paused
   setTime baseTime
-  submitMustFail alice do
+  submitMultiMustFail [alice] [operator] do
     exerciseCmd poolCid2 Deposit with
       user = alice
       cantonCid
       smusdCid
 
   -- Unpause
-  unpauseProof <- submitMulti [operator, governor] [] do
+  unpauseProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-unpause"
       actionType = EmergencyPause
       description = "test"
@@ -767,20 +753,18 @@ test_PauseUnpause = script do
   poolCid3 <- submit operator do
     exerciseCmd poolCid2 BoostPool_SetPaused with
       newPaused = False
-      governanceProofCid = unpauseProof
 
   -- Deposit succeeds
-  (poolCid4, lpCid) <- submit alice do
+  (poolCid4, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid3 Deposit with
       user = alice
       cantonCid
       smusdCid
 
   -- Pause again — withdrawals still allowed when paused (users can always exit)
-  pauseProof2 <- submitMulti [operator, governor] [] do
+  pauseProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-pause-2"
       actionType = EmergencyPause
       description = "test"
@@ -793,11 +777,10 @@ test_PauseUnpause = script do
   poolCid5 <- submit operator do
     exerciseCmd poolCid4 BoostPool_SetPaused with
       newPaused = True
-      governanceProofCid = pauseProof2
 
   setTime (addRelTime baseTime (seconds 172801))
   -- Withdraw succeeds even when paused (H-B1 fix: operator cannot lock user funds)
-  (_, returnedCantonCid) <- submit alice do
+  (_, returnedCantonCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid5 Withdraw with
       user = alice
       lpCid
@@ -819,10 +802,9 @@ test_FeeUpdate = script do
 
   now <- getTime
   -- Valid: update to 100bps / 100bps
-  feeProof1 <- submitMulti [operator, governor] [] do
+  feeProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-1"
       actionType = ParameterUpdate
       description = "test"
@@ -836,13 +818,11 @@ test_FeeUpdate = script do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 100
-      governanceProofCid = feeProof1
 
   -- Invalid: entry fee > 500 bps (5%)
-  feeProof2 <- submitMulti [operator, governor] [] do
+  feeProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-2"
       actionType = ParameterUpdate
       description = "test"
@@ -856,13 +836,11 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 600
       newExitFeeBps = 100
-      governanceProofCid = feeProof2
 
   -- Invalid: exit fee > 500 bps
-  feeProof3 <- submitMulti [operator, governor] [] do
+  feeProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-3"
       actionType = ParameterUpdate
       description = "test"
@@ -876,13 +854,11 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 501
-      governanceProofCid = feeProof3
 
   -- Valid: zero fees
-  feeProof4 <- submitMulti [operator, governor] [] do
+  feeProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-4"
       actionType = ParameterUpdate
       description = "test"
@@ -896,7 +872,6 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
-      governanceProofCid = feeProof4
 
   debug "TEST 12 PASSED: Fee update — bounds enforced"
   pure ()
@@ -915,10 +890,9 @@ test_CapRatioUpdate = script do
 
   now <- getTime
   -- Valid: change ratio to 0.50 (50/50 pool)
-  capProof1 <- submitMulti [operator, governor] [] do
+  capProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-1"
       actionType = ParameterUpdate
       description = "test"
@@ -931,13 +905,11 @@ test_CapRatioUpdate = script do
   poolCid2 <- submit operator do
     exerciseCmd poolCid BoostPool_UpdateCapRatio with
       newCapRatio = 0.50
-      governanceProofCid = capProof1
 
   -- Invalid: zero ratio
-  capProof2 <- submitMulti [operator, governor] [] do
+  capProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-2"
       actionType = ParameterUpdate
       description = "test"
@@ -950,13 +922,11 @@ test_CapRatioUpdate = script do
   submitMustFail operator do
     exerciseCmd poolCid2 BoostPool_UpdateCapRatio with
       newCapRatio = 0.0
-      governanceProofCid = capProof2
 
   -- Invalid: > 1.0
-  capProof3 <- submitMulti [operator, governor] [] do
+  capProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-3"
       actionType = ParameterUpdate
       description = "test"
@@ -969,7 +939,6 @@ test_CapRatioUpdate = script do
   submitMustFail operator do
     exerciseCmd poolCid2 BoostPool_UpdateCapRatio with
       newCapRatio = 1.5
-      governanceProofCid = capProof3
 
   debug "TEST 13 PASSED: Cap ratio update — bounds enforced"
   pure ()
@@ -1021,7 +990,7 @@ test_UnauthorizedWithdraw = script do
   poolCid <- createPoolService operator [alice, bob]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -1065,14 +1034,14 @@ test_MultipleDepositors = script do
   setTime baseTime
 
   -- Alice deposits first
-  (poolCid2, lpAlice) <- submit alice do
+  (poolCid2, lpAlice) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid = cantonAlice
       smusdCid = smusdAlice
 
   -- Bob deposits second
-  (poolCid3, lpBob) <- submit bob do
+  (poolCid3, lpBob) <- submitMulti [bob] [operator] do
     exerciseCmd poolCid2 Deposit with
       user = bob
       cantonCid = cantonBob
@@ -1081,10 +1050,9 @@ test_MultipleDepositors = script do
   -- Distribute 300 Canton rewards → 180 to LPs (60%)
   -- Alice has ~2/3 of pool, Bob ~1/3 (by share proportion)
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-multi"
       actionType = ParameterUpdate
       description = "test"
@@ -1098,17 +1066,16 @@ test_MultipleDepositors = script do
     exerciseCmd poolCid3 DistributeRewards with
       rewardAmount = 300.0
       epochNumber = 1
-      governanceProofCid = distProof
 
   -- Both withdraw
   setTime (addRelTime baseTime (seconds 172801))
 
-  (poolCid5, aliceCantonBack) <- submit alice do
+  (poolCid5, aliceCantonBack) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid4 Withdraw with
       user = alice
       lpCid = lpAlice
 
-  (poolCid6, bobCantonBack) <- submit bob do
+  (poolCid6, bobCantonBack) <- submitMulti [bob] [operator] do
     exerciseCmd poolCid5 Withdraw with
       user = bob
       lpCid = lpBob
@@ -1182,7 +1149,7 @@ test_LPTransfer = script do
   poolCid <- createPoolService operator [alice, bob]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -1199,7 +1166,7 @@ test_LPTransfer = script do
   -- Bob can withdraw (after cooldown — uses Alice's original depositedAt)
   setTime (addRelTime baseTime (seconds 172801))
 
-  (_, bobCantonCid) <- submit bob do
+  (_, bobCantonCid) <- submitMulti [bob] [operator] do
     exerciseCmd poolCid2 Withdraw with
       user = bob
       lpCid = newLpCid
@@ -1248,7 +1215,7 @@ test_LPSplit = script do
   poolCid <- createPoolService operator [alice]
 
   setTime baseTime
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -1261,12 +1228,12 @@ test_LPSplit = script do
   -- Withdraw both halves after cooldown
   setTime (addRelTime baseTime (seconds 172801))
 
-  (poolCid3, _) <- submit alice do
+  (poolCid3, _) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid2 Withdraw with
       user = alice
       lpCid = lp1
 
-  (poolCid4, _) <- submit alice do
+  (poolCid4, _) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid3 Withdraw with
       user = alice
       lpCid = lp2
@@ -1288,10 +1255,9 @@ test_InvalidReward = script do
 
   -- Zero reward
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-invalid-reward"
       actionType = ParameterUpdate
       description = "test"
@@ -1305,7 +1271,6 @@ test_InvalidReward = script do
     exerciseCmd poolCid DistributeRewards with
       rewardAmount = 0.0
       epochNumber = 1
-      governanceProofCid = distProof
 
   debug "TEST 22 PASSED: Zero reward rejected"
   pure ()
@@ -1333,7 +1298,7 @@ test_FullLifecycle = script do
   setTime baseTime
 
   -- 1. DEPOSIT
-  (poolCid2, lpCid) <- submit alice do
+  (poolCid2, lpCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid Deposit with
       user = alice
       cantonCid
@@ -1341,10 +1306,9 @@ test_FullLifecycle = script do
 
   -- 2. VALIDATOR REWARDS over 3 epochs (100 + 200 + 300 = 600 CTN total)
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-1"
       actionType = ParameterUpdate
       description = "test"
@@ -1358,12 +1322,10 @@ test_FullLifecycle = script do
     exerciseCmd poolCid2 DistributeRewards with
       rewardAmount = 100.0
       epochNumber = 1
-      governanceProofCid = distProof1
 
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-2"
       actionType = ParameterUpdate
       description = "test"
@@ -1377,12 +1339,10 @@ test_FullLifecycle = script do
     exerciseCmd poolCid3 DistributeRewards with
       rewardAmount = 200.0
       epochNumber = 2
-      governanceProofCid = distProof2
 
-  distProof3 <- submitMulti [operator, governor] [] do
+  distProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-3"
       actionType = ParameterUpdate
       description = "test"
@@ -1396,13 +1356,11 @@ test_FullLifecycle = script do
     exerciseCmd poolCid4 DistributeRewards with
       rewardAmount = 300.0
       epochNumber = 3
-      governanceProofCid = distProof3
 
   -- 3. CANTON PRICE INCREASES (demand from pool)
-  syncPriceProof <- submitMulti [operator, governor] [] do
+  syncPriceProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-sync-price"
       actionType = ParameterUpdate
       description = "test"
@@ -1415,13 +1373,11 @@ test_FullLifecycle = script do
   poolCid6 <- submit operator do
     exerciseCmd poolCid5 SyncCantonPrice with
       newPriceMusd = 0.190  -- ~10% increase
-      governanceProofCid = syncPriceProof
 
   -- 4. sMUSD SHARE PRICE INCREASES (Treasury yield)
-  syncShareProof <- submitMulti [operator, governor] [] do
+  syncShareProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-sync-share"
       actionType = ParameterUpdate
       description = "test"
@@ -1434,14 +1390,12 @@ test_FullLifecycle = script do
   poolCid7 <- submit operator do
     exerciseCmd poolCid6 SyncSharePrice with
       newGlobalSharePrice = 1.05  -- 5% yield
-      governanceProofCid = syncShareProof
 
   -- 5. OPERATOR WITHDRAWS PROTOCOL REWARDS
   -- 600 total rewards → 40% = 240 protocol share
-  wdProof <- submitMulti [operator, governor] [] do
+  wdProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-wd-rewards"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -1454,7 +1408,6 @@ test_FullLifecycle = script do
   (poolCid8, protocolCantonCid) <- submit operator do
     exerciseCmd poolCid7 WithdrawProtocolRewards with
       withdrawAmount = 240.0
-      governanceProofCid = wdProof
 
   -- 6. ALICE WITHDRAWS (with profit!)
   -- Original: 10,000 CTN (minus entry fee)
@@ -1462,7 +1415,7 @@ test_FullLifecycle = script do
   -- Total pool balance should be ~10,335 CTN (9975 net deposit + 360 rewards)
   setTime (addRelTime baseTime (seconds 172801))
 
-  (finalPoolCid, aliceCantonCid) <- submit alice do
+  (finalPoolCid, aliceCantonCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid8 Withdraw with
       user = alice
       lpCid
@@ -1504,84 +1457,36 @@ test_NonOperatorAdmin = script do
 
   poolCid <- createPoolService operator [attacker]
 
-  -- Create a governance proof (as operator) — attacker still can't use admin choices
-  now <- getTime
-  proofCid <- submitMulti [operator, governor] [] do
-    createCmd GovernanceActionLog with
-      operator
-      proposer = governor
-      proposalId = "test-attacker-proof"
-      actionType = EmergencyPause
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      targetModule = "CantonBoostPool"
-      approvers = [governor]
-      executedBy = governor
-      executedAt = now
-  paramProofCid <- submitMulti [operator, governor] [] do
-    createCmd GovernanceActionLog with
-      operator
-      proposer = governor
-      proposalId = "test-attacker-param-proof"
-      actionType = ParameterUpdate
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      targetModule = "CantonBoostPool"
-      approvers = [governor]
-      executedBy = governor
-      executedAt = now
-  treasuryProofCid <- submitMulti [operator, governor] [] do
-    createCmd GovernanceActionLog with
-      operator
-      proposer = governor
-      proposalId = "test-attacker-treasury-proof"
-      actionType = TreasuryWithdrawal
-      description = "test"
-      payload = ""
-      payloadHash = ""
-      targetModule = "CantonBoostPool"
-      approvers = [governor]
-      executedBy = governor
-      executedAt = now
-
   -- Attacker cannot pause
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_SetPaused with
       newPaused = True
-      governanceProofCid = proofCid
 
   -- Attacker cannot update fees
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
-      governanceProofCid = paramProofCid
 
   -- Attacker cannot distribute rewards
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid DistributeRewards with
       rewardAmount = 1000.0
       epochNumber = 1
-      governanceProofCid = paramProofCid
 
   -- Attacker cannot sync prices
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid SyncCantonPrice with
       newPriceMusd = 0.200
-      governanceProofCid = paramProofCid
 
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid SyncSharePrice with
       newGlobalSharePrice = 1.10
-      governanceProofCid = paramProofCid
 
   -- Attacker cannot withdraw protocol rewards
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid WithdrawProtocolRewards with
       withdrawAmount = 1.0
-      governanceProofCid = treasuryProofCid
 
   debug "TEST 25 PASSED: Non-operator cannot call admin choices"
   pure ()

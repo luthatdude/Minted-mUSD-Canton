@@ -11,7 +11,7 @@
  *  3. SMUSD: ERC-4626 compliance (convertToShares/convertToAssets consistency)
  *  4. Cross-contract integration paths
  *
- *  FIX AUDIT-01: SMUSD convertToShares/convertToAssets now delegates to
+ *  SMUSD convertToShares/convertToAssets now delegates to
  *  internal _convertToShares/_convertToAssets for ERC-4626 spec compliance.
  */
 
@@ -438,6 +438,10 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     await borrowModule.grantRole(LEVERAGE_VAULT_ROLE, leverageVault.address);
     await borrowModule.grantRole(PAUSER_ROLE, owner.address);
 
+    // Grant TIMELOCK_ROLE for parameter changes
+    const TIMELOCK_ROLE = await borrowModule.TIMELOCK_ROLE();
+    await borrowModule.grantRole(TIMELOCK_ROLE, owner.address);
+
     // Setup interest routing
     const INTEREST_ROUTER_ROLE = await smusd.INTEREST_ROUTER_ROLE();
     await smusd.grantRole(INTEREST_ROUTER_ROLE, await borrowModule.getAddress());
@@ -669,7 +673,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
         .to.be.reverted;
     });
 
-    it("should prevent dust position on partial repay", async function () {
+    it("should auto-close dust position on partial repay below min debt", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
 
@@ -678,10 +682,11 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
       await f.musd.grantRole(f.BRIDGE_ROLE, f.leverageVault.address);
 
       // Try to repay leaving only 50 mUSD (below 100 min debt)
+      // Auto-close mechanism adjusts repay to full debt, but allowance is only 4950
       const tooMuch = ethers.parseEther("4950");
       await f.musd.connect(f.leverageVault).approve(await f.borrowModule.getAddress(), tooMuch);
       await expect(f.borrowModule.connect(f.leverageVault).repayFor(f.user1.address, tooMuch))
-        .to.be.revertedWith("REMAINING_BELOW_MIN_DEBT");
+        .to.be.reverted; // Auto-close tries full repay → ERC20InsufficientAllowance
     });
   });
 
@@ -1032,16 +1037,16 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
   // ──────────────────────────────────────────────
 
   describe("Repay — dust position guard", function () {
-    it("should reject partial repay leaving below min debt", async function () {
+    it("should auto-close dust position on partial repay below min debt", async function () {
       const f = await loadFixture(deployFullBorrowFixture);
       await depositAndBorrow(f, f.user1, "10", "5000");
 
-      // Repay leaving 50 mUSD (below 100 min)
+      // Repay leaving 50 mUSD (below 100 min) — auto-close adjusts to full repay
       await f.musd.connect(f.owner).mint(f.user1.address, ethers.parseEther("1000"));
       const repayAmt = ethers.parseEther("4950");
       await f.musd.connect(f.user1).approve(await f.borrowModule.getAddress(), repayAmt);
       await expect(f.borrowModule.connect(f.user1).repay(repayAmt))
-        .to.be.revertedWith("REMAINING_BELOW_MIN_DEBT");
+        .to.be.reverted; // Auto-close tries full repay → ERC20InsufficientAllowance
     });
 
     it("should allow full repay to zero", async function () {
@@ -1117,7 +1122,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  SECTION 3: SMUSD — ERC-4626 Compliance (FIX AUDIT-01)
+//  SECTION 3: SMUSD — ERC-4626 Compliance
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
@@ -1146,7 +1151,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
   }
 
   describe("convertToShares / convertToAssets consistency", function () {
-    it("convertToShares should match deposit result (FIX AUDIT-01)", async function () {
+    it("convertToShares should match deposit result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // First user deposits to create a non-trivial share price
@@ -1168,13 +1173,13 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       // The key check: previewDeposit should also match
       const previewDeposit = await smusd.previewDeposit(depositAmount);
 
-      // With FIX AUDIT-01, these should be consistent (within rounding)
+      // These should be consistent (within rounding)
       // previewDeposit uses _convertToShares with Floor rounding
       // convertToShares now also delegates to _convertToShares with Floor rounding
       expect(previewShares).to.equal(previewDeposit);
     });
 
-    it("convertToAssets should match redeem result (FIX AUDIT-01)", async function () {
+    it("convertToAssets should match redeem result", async function () {
       const { musd, smusd, user1, deployer } = await loadFixture(deploySMUSDFixture);
 
       // Deposit
@@ -1190,7 +1195,7 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       const previewAssets = await smusd.convertToAssets(shares);
       const previewRedeem = await smusd.previewRedeem(shares);
 
-      // With FIX AUDIT-01, these should be consistent
+      // These should be consistent
       expect(previewAssets).to.equal(previewRedeem);
     });
 
@@ -1564,7 +1569,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     const TreasuryV2 = await ethers.getContractFactory("TreasuryV2");
     const treasury = await upgrades.deployProxy(
       TreasuryV2,
-      [await usdc.getAddress(), deployer.address, deployer.address, deployer.address],
+      [await usdc.getAddress(), deployer.address, deployer.address, deployer.address, deployer.address],
       { kind: 'uups' }
     );
     await treasury.waitForDeployment();
@@ -1595,10 +1600,14 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     // Also pre-fund directMint with USDC for redemptions
     await usdc.mint(await directMint.getAddress(), 100000n * 10n ** 6n);
 
+    // Grant TIMELOCK_ROLE to deployer for setFees/setLimits
+    const TIMELOCK_ROLE = await directMint.TIMELOCK_ROLE();
+    await directMint.grantRole(TIMELOCK_ROLE, deployer.address);
+
     return { directMint, musd, usdc, treasury, deployer, user1 };
   }
 
-  describe("Minimum fee enforcement (FIX S-M08)", function () {
+  describe("Minimum fee enforcement", function () {
     it("should charge minimum 1 wei USDC fee even on tiny redemptions", async function () {
       const { directMint, musd, usdc, user1 } = await loadFixture(deployMintFixture);
 

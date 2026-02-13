@@ -1,5 +1,5 @@
 // Minted mUSD Protocol - totalBorrows Reconciliation Keeper
-// FIX: Automated periodic reconciliation to prevent totalBorrows drift
+// Automated periodic reconciliation to prevent totalBorrows drift
 //
 // BorrowModule.totalBorrows can drift from the actual sum of user debts due to
 // rounding in interest accrual, repayment, and liquidation. This keeper:
@@ -29,7 +29,7 @@ function readSecret(name: string, envVar: string): string {
 interface ReconciliationConfig {
   rpcUrl: string;
   borrowModuleAddress: string;
-  // FIX C-REL: Guard against raw private key in production
+  // Guard against raw private key in production
   privateKey: string;
   intervalMs: number; // How often to reconcile (default: 7 days)
   maxGasPrice: bigint; // Max gas price to avoid overpaying
@@ -43,7 +43,7 @@ function loadConfig(): ReconciliationConfig {
   const borrowModuleAddress = process.env.BORROW_MODULE_ADDRESS;
   if (!borrowModuleAddress) throw new Error("FATAL: BORROW_MODULE_ADDRESS is required");
 
-  // FIX C-REL: Block raw private key usage in production
+  // Block raw private key usage in production
   if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
     throw new Error(
       "SECURITY: Raw private key usage is forbidden in production. " +

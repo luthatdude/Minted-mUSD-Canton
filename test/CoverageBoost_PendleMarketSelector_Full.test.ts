@@ -767,7 +767,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
         selector.connect(paramsAdmin).setParams(7 * 86400, 1_000_000, 200, 3000, 7000)
       )
         .to.emit(selector, "ParamsUpdated")
-        .withArgs(7 * 86400, 1_000_000, 200, 3000, 7000);
+        .withArgs(7 * 86400, 1_000_000, 3000, 7000);
     });
 
     it("reverts from non-PARAMS_ADMIN", async function () {
@@ -819,9 +819,9 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
       expect(await selector.MAX_WHITELISTED_MARKETS()).to.equal(100);
     });
 
-    it("timelock is set correctly", async function () {
+    it("timelock role is set correctly", async function () {
       const { selector, admin } = await loadFixture(deployFullFixture);
-      expect(await selector.timelock()).to.equal(admin.address);
+      expect(await selector.hasRole(await selector.TIMELOCK_ROLE(), admin.address)).to.be.true;
     });
 
     it("default params are set correctly after initialize", async function () {

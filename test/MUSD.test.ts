@@ -30,6 +30,9 @@ describe("MUSD", function () {
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.grantRole(await musd.COMPLIANCE_ROLE(), compliance.address);
     await musd.grantRole(await musd.EMERGENCY_ROLE(), emergency.address);
+
+    // Set local cap to 100% so effective cap = supplyCap for supply-cap tests
+    await musd.setLocalCapBps(10000);
   });
 
   // ============================================================
@@ -75,7 +78,7 @@ describe("MUSD", function () {
     it("should reject mint exceeding supply cap", async function () {
       await expect(
         musd.connect(bridge).mint(user1.address, SUPPLY_CAP + 1n)
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWith("EXCEEDS_LOCAL_CAP");
     });
 
     it("should allow minting up to exact supply cap", async function () {
@@ -87,7 +90,7 @@ describe("MUSD", function () {
       await musd.connect(bridge).mint(user1.address, SUPPLY_CAP);
       await expect(
         musd.connect(bridge).mint(user1.address, 1n)
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWith("EXCEEDS_LOCAL_CAP");
     });
 
     it("should emit Mint event", async function () {
@@ -177,7 +180,7 @@ describe("MUSD", function () {
       // Now new mints should fail
       await expect(
         musd.connect(bridge).mint(user1.address, ethers.parseEther("1"))
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWith("EXCEEDS_LOCAL_CAP");
     });
 
     it("should allow cap equal to current supply", async function () {

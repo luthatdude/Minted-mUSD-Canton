@@ -54,7 +54,7 @@ export default function LeveragePage() {
   const [estimatedDebt, setEstimatedDebt] = useState<bigint>(0n);
   const [maxLeverage, setMaxLeverage] = useState(30);
   const [loading, setLoading] = useState(false);
-  // FIX M-05 (Final Audit): User-visible error feedback instead of silent console.error
+  // User-visible error feedback instead of silent console.error
   const [txError, setTxError] = useState<string | null>(null);
 
   // Fetch user data
@@ -112,7 +112,7 @@ export default function LeveragePage() {
     estimate();
   }, [leverageVault, depositAmount, leverageX10]);
 
-  // FIX M-03/M-04: Combined atomic approve + open position
+  // Combined atomic approve + open position
   // Previously used separate MaxUint256 approve then open (two clicks, race condition)
   const handleOpenPosition = async () => {
     if (!leverageVault || !weth || !depositAmount) return;
@@ -153,7 +153,7 @@ export default function LeveragePage() {
     setLoading(true);
     setTxError(null);
     try {
-      // FIX FE-H03: Calculate reasonable minCollateralOut instead of 0
+      // Calculate reasonable minCollateralOut instead of 0
       // Use 95% of initial deposit as minimum to protect against sandwich/MEV attacks
       const minOut = (position.initialDeposit * 95n) / 100n;
       const tx = await leverageVault.closeLeveragedPosition(minOut);
@@ -207,7 +207,7 @@ export default function LeveragePage() {
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
 
-        {/* FIX M-05 (Final Audit): Show transaction errors to user */}
+        {/* Show transaction errors to user */}
         {txError && (
           <div className="col-span-full rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400 flex justify-between items-center">
             <span>{txError}</span>

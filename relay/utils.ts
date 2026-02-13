@@ -23,26 +23,19 @@ export function enforceTLSSecurity(): void {
     // Force-enable TLS certificate validation in production
     if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
       console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     }
-    // INFRA-H-06: Define a getter that prevents runtime tampering with this env var
-    // FIX P1-CODEX: Use configurable:true and guard against re-definition.
-    // Previous code used configurable:false which crashes on module re-import
-    // or process restart (Object.defineProperty throws on non-configurable redefinition).
-    const originalValue = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    const descriptor = Object.getOwnPropertyDescriptor(process.env, "NODE_TLS_REJECT_UNAUTHORIZED");
-    if (!descriptor || descriptor.configurable !== false) {
-      Object.defineProperty(process.env, "NODE_TLS_REJECT_UNAUTHORIZED", {
-        get: () => originalValue || "1",
-        set: (val: string) => {
-          if (val === "0") {
-            console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
-            return;
-          }
-        },
-        configurable: false,
-      });
-    }
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+
+    // Periodically verify TLS enforcement hasn't been tampered with at runtime.
+    // Node.js 22+ forbids accessor descriptors on process.env (ERR_INVALID_OBJECT_DEFINE_PROPERTY),
+    // so we use an interval-based watchdog instead of Object.defineProperty.
+    const TLS_WATCHDOG_INTERVAL_MS = 5000;
+    setInterval(() => {
+      if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+        console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+      }
+    }, TLS_WATCHDOG_INTERVAL_MS).unref(); // unref() so the timer doesn't keep the process alive
   }
 }
 
@@ -133,7 +126,7 @@ export function isValidSecp256k1PrivateKey(privateKey: string): boolean {
  * Read and validate a private key from Docker secret or env var.
  * Throws if the key is not in the valid secp256k1 range.
  *
- * FIX H-07: After validation, attempts to zero out the env var source
+ * After validation, attempts to zero out the env var source
  * to reduce the window where the key is readable in memory.
  */
 export function readAndValidatePrivateKey(secretName: string, envVar: string): string {
@@ -150,7 +143,7 @@ export function readAndValidatePrivateKey(secretName: string, envVar: string): s
     );
   }
 
-  // FIX H-07: Clear the env var after reading to reduce memory exposure window.
+  // Clear the env var after reading to reduce memory exposure window.
   // The key is still held by the caller's variable, but at least the env source
   // is scrubbed. For full protection, use AWS KMS (see kms-ethereum-signer.ts).
   if (process.env[envVar] && process.env.NODE_ENV !== "test") {
@@ -161,7 +154,7 @@ export function readAndValidatePrivateKey(secretName: string, envVar: string): s
 }
 
 // ============================================================
-//  FIX C-07: KMS Signer Factory
+//  KMS Signer Factory
 // ============================================================
 
 /**
@@ -205,20 +198,12 @@ export async function createSigner(
 
       console.log(`[KMS] Signer initialised — address ${address}`);
 
-      // Return an ethers VoidSigner (read-only address) wrapped so that
-      // sendTransaction will use KMS to sign.  Full KMS signer integration
-      // is non-trivial; for production the @aws-sdk/client-kms SignCommand
-      // flow should be wrapped in a custom AbstractSigner. For now we log
-      // the successful KMS init and return a Wallet fallback if a raw key
-      // is also present, giving operators time to migrate fully.
-      const rawKey = readAndValidatePrivateKey(secretName, envVar);
-      if (rawKey) {
-        console.warn("[KMS] Raw private key also present — using KMS address-verified local signer");
-        return new ethers.Wallet(rawKey, provider);
-      }
-
-      // If no raw key, return a VoidSigner (will fail on write ops until
-      // full KMS signer is integrated)
+      // Do NOT load raw private key when KMS is configured.
+      // Previously the code loaded the raw key into a Wallet even with KMS present,
+      // completely defeating the purpose of KMS (key stays in heap memory).
+      // Return a VoidSigner for now — full KMS AbstractSigner integration is required
+      // before production write operations will work without a raw key.
+      console.warn("[KMS] Using VoidSigner — full KMS AbstractSigner required for write ops");
       return new ethers.VoidSigner(address, provider);
     } catch (err) {
       console.error(`[KMS] Failed to initialise KMS signer: ${(err as Error).message}`);
@@ -232,11 +217,21 @@ export async function createSigner(
     throw new Error(`FATAL: Neither KMS_KEY_ID nor ${envVar} is configured`);
   }
 
+  // In production, raw private keys must not be used.
+  // JS strings are immutable — the key persists in V8 heap memory until GC,
+  // making it extractable via memory dumps (/proc/pid/mem, core dumps, heap snapshots).
+  // KMS keeps the private key inside the HSM boundary and never exposes it to the process.
   if (process.env.NODE_ENV === "production") {
-    console.warn(
-      `[SECURITY] Using raw private key for signer — migrate to KMS_KEY_ID for production security`,
+    throw new Error(
+      `SECURITY: Raw private key usage is FORBIDDEN in production. ` +
+      `Configure KMS_KEY_ID for HSM-backed signing. ` +
+      `See kms-ethereum-signer.ts for setup instructions.`
     );
   }
+
+  console.warn(
+    `[SECURITY] Using raw private key for signer — acceptable in ${process.env.NODE_ENV || "development"} only`,
+  );
 
   return new ethers.Wallet(key, provider);
 }

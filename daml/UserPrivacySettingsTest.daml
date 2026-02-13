@@ -13,7 +13,7 @@ import DA.List (head)
 import UserPrivacySettings
 import CantonDirectMint (CantonMUSD(..), CantonUSDC(..), USDCx(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLending (EscrowedCollateral(..), CantonDebtPosition(..), CollateralType(..))
 
 -- ============================================================
@@ -556,8 +556,6 @@ testObserverOnEscrow = do
       amount = 10000.0
       depositedAt = baseTime
       lastUpdatedAt = baseTime
-      originalSourceChain = None
-      originalCctpNonce = None
       privacyObservers = [auditor]
 
   escrow <- queryContractId auditor escrowCid

@@ -215,6 +215,7 @@ test_InvalidSplitRejected = do
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Split with
       splitAmount = 150.0  -- INVALID: more than 100.0
+      operator = operator
 
   return ()
 
@@ -277,6 +278,7 @@ test_InsufficientApprovalsRejected = do
       proposedAt = now
       expiresAt = addRelTime now (days 7)
       timelockEndsAt = None
+      timelockDuration = hours 24
       status = Gov.Pending
       observers = []
 
@@ -318,6 +320,7 @@ test_NonGovernorCannotApprove = do
       proposedAt = now
       expiresAt = addRelTime now (days 7)
       timelockEndsAt = None
+      timelockDuration = hours 24
       status = Gov.Pending
       observers = []
 

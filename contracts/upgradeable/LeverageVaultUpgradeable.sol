@@ -482,7 +482,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  borrowModule.borrowFor(user, toBorrow);
  totalDebt += toBorrow;
 
- // FIX HIGH-06: Track collateral before swap for convergence check
+ // Track collateral before swap for convergence check
  uint256 collateralBefore = totalCollateral;
 
  // Swap mUSD → collateral — revert on failure to prevent orphaned debt
@@ -494,7 +494,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  collateralVault.depositFor(user, collateralToken, collateralReceived);
  totalCollateral += collateralReceived;
 
- // FIX HIGH-06: Convergence check — if collateral gained is <1% of remaining gap,
+ // Convergence check — if collateral gained is <1% of remaining gap,
  // break early to prevent gas waste and potential infinite loops
  uint256 remainingGap = (targetLeverageX10 * currentCollateral / 10) > totalCollateral
      ? (targetLeverageX10 * currentCollateral / 10) - totalCollateral

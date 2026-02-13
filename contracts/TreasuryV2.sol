@@ -108,7 +108,7 @@ contract TreasuryV2 is
     /// @notice Minimum deposit to trigger auto-allocation
     uint256 public minAutoAllocateAmount;
 
-    /// @notice FIX P1-CODEX: High-water mark for fee accrual. Fees only accrue when
+    /// @notice High-water mark for fee accrual. Fees only accrue when
     ///         totalValue exceeds this peak, preventing fee charging on principal recovery
     ///         after transient strategy failures.
     uint256 public peakRecordedValue;
@@ -630,11 +630,8 @@ contract TreasuryV2 is
      * @notice Accrue protocol fees on yield
      * Attacker cannot inflate totalValue() temporarily and immediately accrue fees.
      */
-    /// @dev FIX P1-CODEX: Track peak value to prevent charging fees on principal recovery.
-    ///      Previously, if a strategy temporarily returned 0 (transient failure caught by
-    ///      try/catch in totalValue()), lastRecordedValue would drop. When the strategy
-    ///      recovered, the increase was treated as "yield" and fees were charged on principal.
-    ///      Now uses peakRecordedValue: fees only accrue when totalValue exceeds the all-time
+    /// @dev Track peak value to prevent charging fees on principal recovery.
+    ///      Uses peakRecordedValue: fees only accrue when totalValue exceeds the all-time
     ///      high-water mark, ensuring only genuine yield is subject to performance fees.
     function _accrueFees() internal {
         if (block.timestamp < lastFeeAccrual + MIN_ACCRUAL_INTERVAL) {
@@ -643,9 +640,8 @@ contract TreasuryV2 is
 
         uint256 currentValue = totalValue();
 
-        // FIX P1-CODEX: Only charge fees on genuine yield above the high-water mark.
+        // Only charge fees on genuine yield above the high-water mark.
         // peakRecordedValue tracks the highest legitimate totalValue observed.
-        // This prevents fee charging when a broken strategy recovers (principal recovery != yield).
         uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
 
         if (currentValue > peak) {
@@ -942,7 +938,7 @@ contract TreasuryV2 is
      */
     event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
 
-    /// @notice FIX H-04: Fee config changes require timelock delay via TimelockGoverned
+    /// @notice Fee config changes require timelock delay via TimelockGoverned
     function setFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
@@ -985,7 +981,7 @@ contract TreasuryV2 is
     /**
      * @notice Update vault address
      */
-    /// @notice FIX H-04: Vault address changes require timelock delay via TimelockGoverned
+    /// @notice Vault address changes require timelock delay via TimelockGoverned
     function setVault(address _vault) external onlyTimelock {
         if (_vault == address(0)) revert ZeroAddress();
 
@@ -997,7 +993,7 @@ contract TreasuryV2 is
     /**
      * @notice Emergency token recovery (not the primary asset)
      */
-    /// @notice FIX H-04: Token recovery requires timelock delay via TimelockGoverned
+    /// @notice Token recovery requires timelock delay via TimelockGoverned
     function recoverToken(address token, uint256 amount) external onlyTimelock {
         require(token != address(asset), "CANNOT_RECOVER_ASSET");
         IERC20(token).safeTransfer(msg.sender, amount);
@@ -1006,6 +1002,6 @@ contract TreasuryV2 is
     /**
      * @notice UUPS upgrade authorization
      */
-    /// @notice FIX HIGH-03: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    /// @notice Only MintedTimelockController can authorize upgrades (48h delay enforced)
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

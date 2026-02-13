@@ -11,7 +11,7 @@ import DA.Optional (fromSome)
 import DA.Set qualified as Set
 import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLoopStrategy
 import Governance (GovernanceActionLog(..), ActionType(..))
 import Compliance
@@ -24,23 +24,20 @@ baseTime : Time
 baseTime = datetime 2026 Feb 6 12 0 0
 
 -- | Create a governance proof for tests
--- Now requires a proposer (governor) party separate from operator
 createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator proposer actionType targetModule desc = do
+createGovProof operator governor actionType targetModule desc = do
   now <- getTime
-  submitMulti [operator, proposer] [] do
+  submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer
       proposalId = "test-" <> desc
       actionType
-      -- Module-scoped governance proof
       targetModule
       description = desc
       payload = ""
       payloadHash = ""
-      approvers = [proposer]
-      executedBy = proposer
+      approvers = [governor]
+      executedBy = governor
       executedAt = now
 
 -- | Create a compliance registry
@@ -87,11 +84,9 @@ setupLoopTest = do
   submit operator do
     createCmd BurnRateLimiter with
       operator
-      epochBurnLimit = 1000000.0
-      currentEpochBurns = 0.0
-      epochStart = baseTime
-      epochDurationSeconds = 86400
-      paused = False
+      dailyBurnLimit = 1000000.0
+      dailyBurned = 0.0
+      lastResetTime = baseTime
 
   return LoopTestSetup with ..
 

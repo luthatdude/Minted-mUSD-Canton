@@ -218,7 +218,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @return totalCollateral Total collateral after loops
     /// @return totalDebt Total mUSD debt
     /// @return loopsExecuted Number of loops completed
-    /// @param userDeadline FIX S-L-02: User-supplied deadline for swaps (0 = use default 300s)
+    /// @param userDeadline User-supplied deadline for swaps (0 = use default 300s)
     function openLeveragedPosition(
         address collateralToken,
         uint256 initialAmount,
@@ -503,19 +503,19 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     // ============================================================
 
     /// @notice Swap mUSD to collateral via Uniswap V3
-    /// @param userMinOut FIX S-M-03: User-supplied minimum output for sandwich protection (0 = oracle only)
-    /// @param userDeadline FIX S-L-02: User-supplied deadline (0 = default 300s)
+    /// @param userMinOut User-supplied minimum output for sandwich protection (0 = oracle only)
+    /// @param userDeadline User-supplied deadline (0 = default 300s)
     function _swapMusdToCollateral(address collateralToken, uint256 musdAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 collateralReceived) {
         // slither-disable-next-line incorrect-equality
         if (musdAmount == 0) return 0;
 
-        // FIX S-M-03: Use max(oracleMin, userMinOut) — oracle provides safety floor,
+        // Use max(oracleMin, userMinOut) — oracle provides safety floor,
         // user can set tighter slippage to protect against sandwich attacks
         uint256 expectedOut = _getCollateralForMusd(collateralToken, musdAmount);
         uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;
         uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;
 
-        // FIX S-L-02: User-supplied deadline prevents miner timestamp manipulation
+        // User-supplied deadline prevents miner timestamp manipulation
         uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;
 
         IERC20(address(musd)).forceApprove(address(swapRouter), musdAmount);
@@ -547,18 +547,18 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     }
 
     /// @notice Swap collateral to mUSD via Uniswap V3
-    /// @param userMinOut FIX S-M-03: User-supplied minimum output (0 = oracle only)
-    /// @param userDeadline FIX S-L-02: User-supplied deadline (0 = default 300s)
+    /// @param userMinOut User-supplied minimum output (0 = oracle only)
+    /// @param userDeadline User-supplied deadline (0 = default 300s)
     function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 musdReceived) {
         // slither-disable-next-line incorrect-equality
         if (collateralAmount == 0) return 0;
 
-        // FIX S-M-03: Use max(oracleMin, userMinOut) for sandwich protection
+        // Use max(oracleMin, userMinOut) for sandwich protection
         uint256 expectedOut = priceOracle.getValueUsd(collateralToken, collateralAmount);
         uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;
         uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;
 
-        // FIX S-L-02: User-supplied deadline
+        // User-supplied deadline
         uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;
 
         // Approve router
@@ -708,7 +708,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
-    /// @dev FIX H-05: Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
+    /// @dev Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
     ///      Remaining collateral is returned to the user as-is to minimize swap losses.
     /// @param user The user whose position to emergency-close
     function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
