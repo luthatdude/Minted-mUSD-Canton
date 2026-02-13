@@ -10,7 +10,7 @@ export function DashboardMintPage() {
     <div className="space-y-6">
       <PageHeader
         title="Dashboard Mint"
-        description="Mint mUSD using USDC across Ethereum and Canton Network"
+        subtitle="Mint mUSD using USDC across Ethereum and Canton Network"
       />
       <MintPage />
     </div>
