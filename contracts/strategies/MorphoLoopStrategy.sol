@@ -269,10 +269,10 @@ contract MorphoLoopStrategy is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // FIX HIGH-07: Removed infinite USDC approval from initialize().
-        // Per-operation approvals are set before each Morpho interaction
-        // in _loop(), _deleverage(), and _fullDeleverage() to limit exposure
-        // if the Morpho contract is compromised.
+        // FIX C-05: Removed infinite approval (type(uint256).max) to Morpho.
+        // Per-operation approvals are now set before each supply/borrow/repay
+        // call in _loop(), _deleverage(), and _fullDeleverage() to limit
+        // exposure if Morpho Blue is compromised or upgraded maliciously.
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -490,7 +490,7 @@ contract MorphoLoopStrategy is
         }
 
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
-            // FIX HIGH-07: Per-operation approval for Morpho supplyCollateral
+            // FIX C-05: Per-operation approval before each Morpho interaction
             usdc.forceApprove(address(morpho), amountToSupply);
             // Supply USDC as collateral
             morpho.supplyCollateral(marketParams, amountToSupply, address(this), "");
@@ -550,7 +550,7 @@ contract MorphoLoopStrategy is
                 // Only use newly withdrawn funds for repayment
                 uint256 available = balance - startingBalance;
                 uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
-                // FIX HIGH-07: Per-operation approval for Morpho repay
+                // FIX C-05: Per-operation approval before repay
                 usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
@@ -602,7 +602,7 @@ contract MorphoLoopStrategy is
             uint256 balance = usdc.balanceOf(address(this));
             if (balance > 0) {
                 uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
-                // FIX HIGH-07: Per-operation approval for Morpho repay
+                // FIX C-05: Per-operation approval before repay
                 usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }

@@ -334,7 +334,16 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @dev    ERC-4626 requires totalAssets() to reflect all managed assets.
     ///         This vault serves both Ethereum and Canton shareholders, so the
     ///         canonical value is globalTotalAssets().
+    ///
+    ///         FIX C-01: When treasury is not set AND no Canton shares exist,
+    ///         globalTotalAssets() previously called back to totalAssets() causing
+    ///         infinite recursion and permanent DoS. Now returns the local USDC
+    ///         balance as the base case to break the recursion.
     function totalAssets() public view override returns (uint256) {
+        // FIX C-01: Base case — prevent infinite recursion when treasury not yet configured
+        if (treasury == address(0)) {
+            return IERC20(asset()).balanceOf(address(this));
+        }
         return globalTotalAssets();
     }
 

@@ -466,9 +466,6 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  // Check if we've reached target leverage
  if ((totalCollateral * 10) / currentCollateral >= targetLeverageX10) break;
 
- // FIX HIGH-06: Track collateral before loop iteration for convergence check
- uint256 collateralBefore = totalCollateral;
-
  // Calculate and execute borrow (scoped to free stack slots)
  uint256 toBorrow;
  {
@@ -484,6 +481,9 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  // Borrow mUSD (minted to this contract for swapping)
  borrowModule.borrowFor(user, toBorrow);
  totalDebt += toBorrow;
+
+ // FIX HIGH-06: Track collateral before swap for convergence check
+ uint256 collateralBefore = totalCollateral;
 
  // Swap mUSD → collateral — revert on failure to prevent orphaned debt
  uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow, slippageBps, swapDeadline);
@@ -692,7 +692,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  uint256 _minBorrowPerLoop,
  uint24 _defaultPoolFee,
  uint256 _maxSlippageBps
- ) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+ ) external onlyRole(TIMELOCK_ROLE) {
  require(_maxLoops > 0 && _maxLoops <= 20, "INVALID_MAX_LOOPS");
  require(_maxSlippageBps <= 500, "SLIPPAGE_TOO_HIGH"); // Max 5%
  // Validate fee tier matches Uniswap V3 valid tiers
@@ -712,7 +712,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
 
  /// @notice Set maximum allowed leverage (toggle between presets: 1.5x, 2x, 2.5x, 3x)
  /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
- function setMaxLeverage(uint256 _maxLeverageX10) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+ function setMaxLeverage(uint256 _maxLeverageX10) external onlyRole(TIMELOCK_ROLE) {
  require(_maxLeverageX10 >= 10 && _maxLeverageX10 <= 40, "INVALID_MAX_LEVERAGE"); // 1x to 4x range
  uint256 oldMax = maxLeverageX10;
  maxLeverageX10 = _maxLeverageX10;
@@ -720,7 +720,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  }
 
  /// @notice Enable a collateral token for leverage
- function enableToken(address token, uint24 poolFee) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+ function enableToken(address token, uint24 poolFee) external onlyRole(TIMELOCK_ROLE) {
  require(token != address(0), "INVALID_TOKEN");
  require(poolFee == 100 || poolFee == 500 || poolFee == 3000 || poolFee == 10000, "INVALID_FEE_TIER");
 
@@ -731,7 +731,7 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  }
 
  /// @notice Disable a collateral token
- function disableToken(address token) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+ function disableToken(address token) external onlyRole(TIMELOCK_ROLE) {
  leverageEnabled[token] = false;
  emit TokenDisabled(token);
  }

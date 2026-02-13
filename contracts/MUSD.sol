@@ -26,7 +26,15 @@ contract MUSD is ERC20, AccessControl, Pausable {
     uint256 public lastCapIncreaseTime;
     uint256 public constant MIN_CAP_INCREASE_INTERVAL = 24 hours;
 
+    /// @notice FIX X-M-01: Conservative local chain cap.
+    /// Set to globalCap * localCapBps / 10000 (e.g., 6000 = 60% of global cap on this chain).
+    /// This ensures that even if both chains independently mint to their local cap,
+    /// combined supply stays within safe bounds: localCapEth + localCapCanton <= globalCap * 1.2
+    /// The safety margin accounts for bridge latency in cross-chain supply synchronization.
+    uint256 public localCapBps = 6000; // Default: 60% of supplyCap for this chain
+
     event SupplyCapUpdated(uint256 oldCap, uint256 newCap);
+    event LocalCapBpsUpdated(uint256 oldBps, uint256 newBps);
     event BlacklistUpdated(address indexed account, bool status);
     event Mint(address indexed to, uint256 amount);
     event Burn(address indexed from, uint256 amount);
@@ -74,6 +82,14 @@ contract MUSD is ERC20, AccessControl, Pausable {
         emit SupplyCapUpdated(oldCap, _cap);
     }
 
+    /// @notice FIX X-M-01: Set the local chain cap as percentage of global supply cap
+    /// @param _bps Basis points (e.g., 6000 = 60%). Both chains should sum to <= 12000 for 20% safety margin.
+    function setLocalCapBps(uint256 _bps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_bps >= 1000 && _bps <= 10000, "LOCAL_CAP_OUT_OF_RANGE");
+        emit LocalCapBpsUpdated(localCapBps, _bps);
+        localCapBps = _bps;
+    }
+
     function setBlacklist(address account, bool status) external onlyRole(COMPLIANCE_ROLE) {
         require(account != address(0), "INVALID_ADDRESS");
         isBlacklisted[account] = status;
@@ -84,7 +100,9 @@ contract MUSD is ERC20, AccessControl, Pausable {
     /// @notice Mint mUSD to a specified address
     function mint(address to, uint256 amount) external onlyRole(BRIDGE_ROLE) {
         require(to != address(0), "MINT_TO_ZERO");
-        require(totalSupply() + amount <= supplyCap, "EXCEEDS_CAP");
+        // FIX X-M-01: Use conservative local cap to prevent cross-chain over-minting
+        uint256 effectiveCap = (supplyCap * localCapBps) / 10000;
+        require(totalSupply() + amount <= effectiveCap, "EXCEEDS_LOCAL_CAP");
         _mint(to, amount);
         emit Mint(to, amount);
     }

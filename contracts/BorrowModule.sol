@@ -66,6 +66,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    /// @notice FIX H-03: TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     ICollateralVault public immutable vault;
     IPriceOracle public immutable oracle;
@@ -95,6 +97,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Total interest paid to suppliers (for analytics)
     uint256 public totalInterestPaidToSuppliers;
+
+    /// @notice FIX S-M-01: Buffered interest that failed to route to SMUSD
+    /// Retried on next accrual to prevent phantom debt accumulation
+    uint256 public pendingInterest;
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -254,8 +260,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
+        // FIX S-L-06: Auto-close dust positions. If remaining debt would be
+        // below minDebt, force full repayment to prevent uneconomical dust.
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
@@ -299,8 +310,12 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
+        // FIX S-L-06: Auto-close dust positions in repayFor (same as repay)
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
@@ -439,28 +454,39 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Add reserves to protocol
             protocolReserves += reserveAmount;
 
-            // Route supplier portion to SMUSD
-            // repay/liquidation paths. Interest is still tracked in totalBorrows.
+            // FIX S-M-01: Route supplier portion to SMUSD. Buffer unrouted interest
+            // so totalBorrows only increases when routing succeeds, preventing phantom debt.
+            bool routingSucceeded = false;
             if (supplierAmount > 0 && address(smusd) != address(0)) {
-                try musd.mint(address(this), supplierAmount) {
-                    // Approve and send to SMUSD
-                    IERC20(address(musd)).approve(address(smusd), supplierAmount);
-                    try smusd.receiveInterest(supplierAmount) {
-                        totalInterestPaidToSuppliers += supplierAmount;
-                        emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+                uint256 toRoute = supplierAmount + pendingInterest;
+                try musd.mint(address(this), toRoute) {
+                    // FIX S-L-01: Use forceApprove instead of raw approve
+                    IERC20(address(musd)).forceApprove(address(smusd), toRoute);
+                    try smusd.receiveInterest(toRoute) {
+                        totalInterestPaidToSuppliers += toRoute;
+                        pendingInterest = 0;
+                        routingSucceeded = true;
+                        emit InterestRoutedToSuppliers(toRoute, reserveAmount);
                     } catch (bytes memory reason) {
                         // SMUSD rejected — burn the minted tokens to keep supply clean
-                        musd.burn(address(this), supplierAmount);
-                        emit InterestRoutingFailed(supplierAmount, reason);
+                        musd.burn(address(this), toRoute);
+                        pendingInterest += supplierAmount;
+                        emit InterestRoutingFailed(toRoute, reason);
                     }
                 } catch (bytes memory reason) {
-                    // Supply cap hit — skip routing, interest still accrues as debt
+                    // Supply cap hit — buffer for retry
+                    pendingInterest += supplierAmount;
                     emit InterestRoutingFailed(supplierAmount, reason);
                 }
+            } else {
+                routingSucceeded = true; // No routing needed
             }
 
-            // Update total borrows to include accrued interest
-            totalBorrows += interest;
+            // FIX S-M-01: Only increase totalBorrows when interest is successfully routed
+            // This prevents phantom debt from inflating utilization rates
+            if (routingSucceeded) {
+                totalBorrows += interest;
+            }
             
             uint256 utilization = address(interestRateModel) != address(0)
                 ? interestRateModel.utilizationRate(totalBorrows, totalSupply)
@@ -741,7 +767,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
     /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
     /// Admin should coordinate with supply cap management before withdrawing.
-    function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
         require(amount <= protocolReserves, "EXCEEDS_RESERVES");
         require(to != address(0), "ZERO_ADDRESS");
         
@@ -765,14 +791,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Update the global interest rate
     /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
     /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
-    function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
+    function setInterestRate(uint256 _rateBps) external onlyRole(TIMELOCK_ROLE) {
         require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
         uint256 old = interestRateBps;
         interestRateBps = _rateBps;
         emit InterestRateUpdated(old, _rateBps);
     }
 
-    function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
+    function setMinDebt(uint256 _minDebt) external onlyRole(TIMELOCK_ROLE) {
         require(_minDebt > 0, "MIN_DEBT_ZERO");
         require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
         emit MinDebtUpdated(minDebt, _minDebt);
@@ -807,6 +833,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);
+    event DriftThresholdExceeded(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift, uint256 thresholdBps);
+
+    /// @notice Maximum allowed drift as basis points of totalBorrows.
+    ///         Reverts if drift exceeds this to prevent silent large mismatches.
+    uint256 public constant MAX_DRIFT_BPS = 500; // 5%
 
     /// @notice Reconcile totalBorrows with the actual sum of all user debts
     /// @dev    Fixes H-01 — accounting drift can accumulate from rounding in
@@ -814,6 +845,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///         computes the true aggregate debt by iterating tracked borrowers
     ///         and snaps totalBorrows to that value.
     ///         Callable by BORROW_ADMIN_ROLE; should be run periodically (e.g. weekly).
+    ///         The keeper bot (bot/src/reconciliation-keeper.ts) automates this.
     /// @param  borrowers Array of all addresses that have (or had) debt positions.
     ///         Off-chain indexer supplies this list from Borrowed / Repaid events.
     function reconcileTotalBorrows(address[] calldata borrowers) external onlyRole(BORROW_ADMIN_ROLE) nonReentrant {
@@ -827,6 +859,17 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
         uint256 oldTotal = totalBorrows;
         int256 drift = int256(oldTotal) - int256(sumDebt);
+
+        // H-01: Guard against excessively large drift (> MAX_DRIFT_BPS of old total)
+        uint256 absDrift = drift >= 0 ? uint256(drift) : uint256(-drift);
+        if (oldTotal > 0) {
+            uint256 driftBps = (absDrift * 10_000) / oldTotal;
+            require(driftBps <= MAX_DRIFT_BPS, "BorrowModule: drift exceeds safety threshold");
+            if (driftBps > 100) { // > 1% — emit warning event
+                emit DriftThresholdExceeded(oldTotal, sumDebt, drift, driftBps);
+            }
+        }
+
         totalBorrows = sumDebt;
 
         emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);

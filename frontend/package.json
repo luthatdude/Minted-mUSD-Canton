@@ -9,8 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@daml/ledger": "^2.8.0",
-    "@daml/types": "^2.8.0",
+    "@daml/ledger": "^2.10.3",
+    "@daml/types": "^2.10.3",
     "@fivenorth/loop-sdk": "^0.7.6",
     "@metamask/sdk": "^0.31.5",
     "@reown/appkit": "^1.6.0",
