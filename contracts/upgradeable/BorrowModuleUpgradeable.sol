@@ -446,7 +446,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  // Use try/catch to handle circuit breaker gracefully
  // If circuit breaker trips during withdrawal, fall back to unsafe price
  // rather than DoS-ing the withdrawal entirely
- uint256 withdrawnValue;
+ uint256 withdrawnValue = 0;
  try oracle.getValueUsd(token, amount) returns (uint256 val) {
  withdrawnValue = val;
  } catch {
@@ -620,7 +620,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  // Use totalBorrowsBeforeAccrual (cached pre-increment value) to prevent
  // systematic undercharging. Without this, the denominator is inflated by the global
  // interest already added in _accrueGlobalInterest(), causing sum(user_debts) < totalBorrows.
- uint256 interest;
+ uint256 interest = 0;
  uint256 userTotal = pos.principal + pos.accruedInterest;
  uint256 denominator = totalBorrowsBeforeAccrual > 0 ? totalBorrowsBeforeAccrual : totalBorrows;
  if (denominator > 0 && userTotal > 0) {
