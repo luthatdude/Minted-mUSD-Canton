@@ -187,7 +187,7 @@ testLendingFullCycleIntegration = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit user do
+  (svc1, escrowCid) <- submitMulti [user] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user
       coinCid
@@ -212,7 +212,7 @@ testLendingFullCycleIntegration = do
       debtCid
 
   -- Step 4: Withdraw
-  (svc4, returnedCoinCid) <- submit user do
+  (svc4, returnedCoinCid) <- submitMulti [user] [operator] do
     exerciseCmd svc3 Lending_WithdrawCTN with
       user
       escrowCid
@@ -410,7 +410,7 @@ testLiquidationFlow = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit borrower do
+  (svc1, escrowCid) <- submitMulti [borrower] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
@@ -510,7 +510,7 @@ testHealthyPositionNotLiquidatable = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit borrower do
+  (svc1, escrowCid) <- submitMulti [borrower] [operator] do
     exerciseCmd serviceCid Lending_DepositCTN with
       user = borrower
       coinCid
@@ -533,7 +533,7 @@ testHealthyPositionNotLiquidatable = do
       privacyObservers = []
 
   -- Should fail — position is healthy
-  submitMustFail keeper do
+  submitMultiMustFail [keeper] [operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = keeper
       borrower
@@ -674,7 +674,7 @@ testSupplyCapCoordination = do
       amount = 1000000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit user do
+  (svc1, escrowCid) <- submitMulti [user] [operator] do
     exerciseCmd lendingCid Lending_DepositCTN with
       user
       coinCid
