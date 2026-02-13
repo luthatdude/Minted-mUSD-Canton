@@ -2,12 +2,7 @@
 name: daml-coder
 description: DAML developer that writes and modifies Canton Network smart contracts for the Minted mUSD protocol
 tools:
-  - read
-  - write
-  - edit
-  - grep
-  - glob
-  - bash
+  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'figma/*', 'agent', 'pylance-mcp-server/*', 'ms-azuretools.vscode-containers/containerToolsConfig', 'todo']
 ---
 
 # DAML Coder Agent

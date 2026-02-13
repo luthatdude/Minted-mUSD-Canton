@@ -10,6 +10,7 @@ pragma solidity 0.8.26;
  */
 contract MockSMUSDAdapter {
     uint256 private _assetsPerShare;
+    uint256 private _totalSupply = 100_000e18;
 
     constructor(uint256 initialAssetsPerShare) {
         _assetsPerShare = initialAssetsPerShare;
@@ -18,6 +19,11 @@ contract MockSMUSDAdapter {
     /// @notice Set the assets returned per share (test helper)
     function setAssetsPerShare(uint256 newAssetsPerShare) external {
         _assetsPerShare = newAssetsPerShare;
+    }
+
+    /// @notice Set total supply (test helper)
+    function setTotalSupply(uint256 newTotalSupply) external {
+        _totalSupply = newTotalSupply;
     }
 
     /// @notice Convert shares to assets based on current price
@@ -30,9 +36,9 @@ contract MockSMUSDAdapter {
         return 100_000e18;
     }
 
-    /// @notice Returns total supply (fixed high value to pass minTotalSupply check)
-    function totalSupply() external pure returns (uint256) {
-        return 100_000e18;
+    /// @notice Returns total supply
+    function totalSupply() external view returns (uint256) {
+        return _totalSupply;
     }
 
     /// @notice Returns decimals offset (0 for testing)

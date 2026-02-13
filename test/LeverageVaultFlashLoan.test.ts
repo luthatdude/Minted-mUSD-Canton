@@ -1,3 +1,4 @@
+// @ts-nocheck — test file uses dynamic contract types from loadFixture
 /**
  * TEST-004: LeverageVault Flash Loan Attack Vector Tests (MEDIUM severity)
  *
@@ -27,8 +28,8 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy mock tokens
     const MockERC20 = await ethers.getContractFactory("MockERC20");
-    const musd = await (await ethers.getContractFactory("MUSD")).deploy(ethers.parseEther("100000000"));
-    const weth = await MockERC20.deploy("Wrapped ETH", "WETH", 18);
+    const musd: any = await (await ethers.getContractFactory("MUSD")).deploy(ethers.parseEther("100000000"));
+    const weth: any = await MockERC20.deploy("Wrapped ETH", "WETH", 18);
 
     // Deploy price oracle + feed
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
@@ -72,7 +73,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy LeverageVault
     const LeverageVault = await ethers.getContractFactory("LeverageVault");
-    const leverageVault = await LeverageVault.deploy(
+    const leverageVault: any = await LeverageVault.deploy(
       await swapRouter.getAddress(),
       await collateralVault.getAddress(),
       await borrowModule.getAddress(),
