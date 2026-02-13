@@ -78,6 +78,10 @@ describe("LiquidationEngine", function () {
     await collateralVault.grantRole(LIQUIDATION_ROLE_VAULT, await liquidationEngine.getAddress());
     await borrowModule.grantRole(LIQUIDATION_ROLE_BORROW, await liquidationEngine.getAddress());
 
+    // SOL-H-01: Grant TIMELOCK_ROLE for admin setters (setCloseFactor, setFullLiquidationThreshold)
+    const TIMELOCK_ROLE_LIQ = await liquidationEngine.TIMELOCK_ROLE();
+    await liquidationEngine.grantRole(TIMELOCK_ROLE_LIQ, owner.address);
+
     // Mint tokens to users
     await weth.mint(user1.address, ethers.parseEther("100"));
     await weth.mint(liquidator.address, ethers.parseEther("100"));
