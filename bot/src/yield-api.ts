@@ -16,10 +16,11 @@
 
 import * as http from "http";
 import { createLogger, format, transports } from "winston";
-import * as dotenv from "dotenv";
-import * as path from "path";
 
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+// Enforce TLS certificate validation
+if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+  throw new Error("[YieldAPI] NODE_TLS_REJECT_UNAUTHORIZED=0 is forbidden");
+}
 
 // Handle unhandled promise rejections to prevent silent failures
 process.on('unhandledRejection', (reason, promise) => {
