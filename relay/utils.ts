@@ -23,26 +23,19 @@ export function enforceTLSSecurity(): void {
     // Force-enable TLS certificate validation in production
     if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
       console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     }
-    // INFRA-H-06: Define a getter that prevents runtime tampering with this env var
-    // Use configurable:true and guard against re-definition.
-    // Previous code used configurable:false which crashes on module re-import
-    // or process restart (Object.defineProperty throws on non-configurable redefinition).
-    const originalValue = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    const descriptor = Object.getOwnPropertyDescriptor(process.env, "NODE_TLS_REJECT_UNAUTHORIZED");
-    if (!descriptor || descriptor.configurable !== false) {
-      Object.defineProperty(process.env, "NODE_TLS_REJECT_UNAUTHORIZED", {
-        get: () => originalValue || "1",
-        set: (val: string) => {
-          if (val === "0") {
-            console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
-            return;
-          }
-        },
-        configurable: false,
-      });
-    }
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+
+    // Periodically verify TLS enforcement hasn't been tampered with at runtime.
+    // Node.js 22+ forbids accessor descriptors on process.env (ERR_INVALID_OBJECT_DEFINE_PROPERTY),
+    // so we use an interval-based watchdog instead of Object.defineProperty.
+    const TLS_WATCHDOG_INTERVAL_MS = 5000;
+    setInterval(() => {
+      if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+        console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+      }
+    }, TLS_WATCHDOG_INTERVAL_MS).unref(); // unref() so the timer doesn't keep the process alive
   }
 }
 
