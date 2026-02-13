@@ -84,11 +84,9 @@ setupLoopTest = do
   submit operator do
     createCmd BurnRateLimiter with
       operator
-      epochBurnLimit = 1000000.0
-      currentEpochBurns = 0.0
-      epochStart = baseTime
-      epochDurationSeconds = 86400
-      paused = False
+      dailyBurnLimit = 1000000.0
+      dailyBurned = 0.0
+      lastResetTime = baseTime
 
   return LoopTestSetup with ..
 
