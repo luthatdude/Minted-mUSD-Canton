@@ -192,13 +192,17 @@ contract PriceOracle is AccessControl {
             uint256 oldPrice = lastKnownPrice[token];
             uint256 diff = price > oldPrice ? price - oldPrice : oldPrice - price;
             uint256 deviationBps = (diff * 10000) / oldPrice;
-            
+
             if (deviationBps > maxDeviationBps) {
                 if (circuitBreakerTrippedAt[token] > 0 &&
                     block.timestamp >= circuitBreakerTrippedAt[token] + circuitBreakerCooldown) {
-                    // Auto-recovery: cooldown elapsed, accept the new price level
-                    // Note: lastKnownPrice is updated in updatePrice() — this view fn
-                    //       just allows reads to proceed after cooldown expiry.
+                    // Auto-recovery: cooldown elapsed from formal trip time
+                } else if (circuitBreakerTrippedAt[token] == 0 &&
+                           block.timestamp >= updatedAt + circuitBreakerCooldown) {
+                    // FIX P1-CODEX: Auto-recovery when circuit breaker was never formally
+                    // tripped by updatePrice() but the Chainlink feed has been at the new
+                    // level for >cooldown. Without this, getPrice() permanently reverts
+                    // if no keeper calls updatePrice() after a legitimate large price move.
                 } else {
                     revert("CIRCUIT_BREAKER_TRIGGERED");
                 }

@@ -816,7 +816,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// Admin sends mUSD to this contract, which is burned to reduce
  /// the unbacked supply. Reduces the badDebt accumulator accordingly.
  /// @param amount Amount of bad debt to cover (mUSD, 18 decimals)
- function coverBadDebt(uint256 amount) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE (not just DEFAULT_ADMIN_ROLE) for high-impact debt operations
+ function coverBadDebt(uint256 amount) external nonReentrant onlyRole(TIMELOCK_ROLE) {
  require(amount > 0, "ZERO_AMOUNT");
  require(badDebt > 0, "NO_BAD_DEBT");
 
@@ -845,7 +846,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// breaking interest accrual math (overallocation via proportional share).
  /// @param amount Amount of bad debt to socialize
  /// @param borrowers Array of active borrower addresses whose debt should be reduced
- function socializeBadDebt(uint256 amount, address[] calldata borrowers) external nonReentrant onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE for irreversible debt socialization
+ function socializeBadDebt(uint256 amount, address[] calldata borrowers) external nonReentrant onlyRole(TIMELOCK_ROLE) {
  require(amount > 0, "ZERO_AMOUNT");
  require(badDebt > 0, "NO_BAD_DEBT");
  require(borrowers.length > 0, "NO_BORROWERS");
@@ -1035,7 +1037,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
  /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
  /// Admin should coordinate with supply cap management before withdrawing.
- function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE for reserve withdrawal (mints mUSD)
+ function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
  require(amount <= protocolReserves, "EXCEEDS_RESERVES");
  require(to != address(0), "ZERO_ADDRESS");
  
