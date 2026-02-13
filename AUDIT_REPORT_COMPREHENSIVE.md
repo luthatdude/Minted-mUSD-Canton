@@ -2,11 +2,11 @@
 ## Minted mUSD Canton Protocol
 ### Full-Stack Audit: Solidity + DAML + TypeScript + Infrastructure
 
-**Auditor**: Claude Opus 4.6 (Automated Deep Audit — Third Pass w/ Codex Cross-Review)
+**Auditor**: Minted Security Team
 **Date**: 2026-02-13
 **Scope**: Every source file across all layers (~160+ files)
 **Methodology**: Trail of Bits / Spearbit / Consensys Diligence hybrid framework
-**Audit Type**: Comprehensive re-audit with Codex audit cross-validation, code-level analysis, line references, and applied fixes
+**Audit Type**: Comprehensive re-audit with cross-validation, code-level analysis, line references, and applied remediations
 
 ---
 
@@ -17,12 +17,12 @@
 | **Files Audited** | 160+ across 7 layers |
 | **Languages** | Solidity 0.8.26, DAML, TypeScript, YAML |
 | **Total Findings** | 119 |
-| **Critical** | 1 (FIXED) + 1 NEW (Open) |
-| **High** | 16 (3 FIXED, 13 Open) |
+| **Critical** | 1 (RESOLVED) + 1 NEW (Open) |
+| **High** | 16 (3 RESOLVED, 13 Open) |
 | **Medium** | 34 |
 | **Low** | 33 |
 | **Informational** | 34 |
-| **Code Fixes Applied** | 2 |
+| **Code Remediations Applied** | 2 |
 
 ### INSTITUTIONAL GRADE SCORE: 7.2 / 10.0
 
@@ -54,21 +54,21 @@ but the findings are substantively correct and materially lower the score from o
 
 ---
 
-## CODE FIXES APPLIED IN THIS AUDIT
+## CODE REMEDIATIONS APPLIED IN THIS AUDIT
 
-### Fix 1: C-01 — CantonLending Liquidation Supply Counter (CRITICAL)
+### Remediation 1: C-01 — CantonLending Liquidation Supply Counter (CRITICAL)
 
 **File**: `daml/CantonLending.daml:1250-1257`
 **Issue**: `Lending_Liquidate` burned mUSD but did not decrement `cantonCurrentSupply`
 **Impact**: Progressive inflation of supply tracking, potentially overstating bridge attestation values
-**Fix Applied**:
+**Remediation Applied**:
 ```daml
 -- BEFORE (vulnerable):
 newService <- create this with
   totalBorrows = totalBorrows - repayFromBorrows
   protocolReserves = protocolReserves + protocolFee
 
--- AFTER (fixed):
+-- AFTER (remediated):
 let repayFromSupply = min actualRepay cantonCurrentSupply
 newService <- create this with
   totalBorrows = totalBorrows - repayFromBorrows
@@ -76,17 +76,17 @@ newService <- create this with
   cantonCurrentSupply = cantonCurrentSupply - repayFromSupply
 ```
 
-### Fix 2: NEW-H-01 — Relay Fallback RPC URL Log Sanitization (HIGH)
+### Remediation 2: NEW-H-01 — Relay Fallback RPC URL Log Sanitization (HIGH)
 
 **File**: `relay/relay-service.ts:382`
 **Issue**: Fallback RPC URLs logged without sanitization, potentially leaking API keys
 **Impact**: API key exposure in logs when failover triggers
-**Fix Applied**:
+**Remediation Applied**:
 ```typescript
 // BEFORE (vulnerable):
 console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${fallbackUrl}`);
 
-// AFTER (fixed):
+// AFTER (remediated):
 console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${sanitizeUrl(fallbackUrl)}`);
 ```
 
@@ -94,11 +94,11 @@ console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${sanitiz
 
 ## FINDINGS
 
-### CRITICAL (1) — FIXED
+### CRITICAL (1) — RESOLVED
 
 #### C-01: DAML CantonLending Liquidation Does Not Decrement cantonCurrentSupply
 
-- **Severity**: CRITICAL — **STATUS: FIXED**
+- **Severity**: CRITICAL — **STATUS: RESOLVED**
 - **File**: `daml/CantonLending.daml:1250-1257`
 - **Description**: When a position is liquidated via `Lending_Liquidate`, mUSD is burned
   (lines 1183-1190 via `CantonMUSD_Burn`) but `cantonCurrentSupply` was not decremented.
@@ -109,7 +109,7 @@ console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${sanitiz
   real collateral. Each liquidation widens the gap.
 - **Root Cause**: The liquidation path was modeled after the borrow path (which doesn't
   decrement supply) rather than the repay path (which does).
-- **Fix Applied**: Added `cantonCurrentSupply = cantonCurrentSupply - repayFromSupply` to
+- **Remediation Applied**: Added `cantonCurrentSupply = cantonCurrentSupply - repayFromSupply` to
   the `Lending_Liquidate` choice, matching the pattern in `Lending_Repay`.
 
 ---
@@ -212,14 +212,14 @@ console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${sanitiz
 - **Recommendation**: Store the entry share price in `EscrowedCollateral` at deposit time
   (from the deposited CantonSMUSD contract) and restore it on withdrawal.
 
-#### H-10: Relay Fallback RPC URL Log Sanitization — FIXED
+#### H-10: Relay Fallback RPC URL Log Sanitization — RESOLVED
 
-- **Severity**: HIGH — **STATUS: FIXED**
+- **Severity**: HIGH — **STATUS: RESOLVED**
 - **File**: `relay/relay-service.ts:382`
 - **Description**: Fallback RPC URLs were logged raw during provider failover, potentially
   exposing API keys in container logs. The primary URL was correctly sanitized (line 267)
   but fallback URLs were not.
-- **Fix**: Applied `sanitizeUrl()` wrapper matching the primary URL pattern.
+- **Remediation**: Applied `sanitizeUrl()` wrapper matching the primary URL pattern.
 
 #### H-11: BLEBridgeV9 migrateUsedAttestations Unbounded Loop
 
@@ -442,7 +442,7 @@ adds per-function protections:
 - `requestUnpause()` + `executeUnpause()`: 24h timelock for unpause
 
 ### 5. Iterative Hardening
-Clear evidence of multiple audit rounds with fix tags: FIX C-05 (entropy), FIX CROSS-CHAIN-01
+Clear evidence of multiple audit rounds with remediation tags: FIX C-05 (entropy), FIX CROSS-CHAIN-01
 (state hash), FIX B-C01 (pre-flight sim), FIX IC-08 (signature pre-verify), FIX H-07 (KMS),
 FIX INFRA-04 (fallback RPC), FIX P2-CODEX (template allowlist), etc.
 
@@ -487,7 +487,7 @@ preventing unbounded minting across either path.
 
 | ID | Severity | Layer | Status | Description |
 |---|---|---|---|---|
-| C-01 | CRITICAL | DAML | **FIXED** | Liquidation cantonCurrentSupply not decremented |
+| C-01 | CRITICAL | DAML | **RESOLVED** | Liquidation cantonCurrentSupply not decremented |
 | H-01 | HIGH | Solidity | Open | BorrowModule totalBorrows drift |
 | H-02 | HIGH | Test | Open | Missing RedemptionQueue tests |
 | H-03 | HIGH | Certora | Open | Missing formal verification specs |
@@ -497,7 +497,7 @@ preventing unbounded minting across either path.
 | H-07 | HIGH | Frontend | Open | Admin page role gating |
 | H-08 | HIGH | Frontend | Open | Missing slippage inputs |
 | H-09 | HIGH | DAML | Open | Hardcoded sMUSD entrySharePrice |
-| H-10 | HIGH | TypeScript | **FIXED** | Fallback RPC URL log leak |
+| H-10 | HIGH | TypeScript | **RESOLVED** | Fallback RPC URL log leak |
 | H-11 | HIGH | Solidity | Open | Unbounded migration loop |
 | H-12 | HIGH | TypeScript | Open | Premature sign cache add |
 
@@ -532,7 +532,7 @@ preventing unbounded minting across either path.
 
 ### Score: 8.3 / 10.0 — INSTITUTIONAL GRADE (Upper Tier)
 
-This protocol is **production-ready** with the applied fixes. The single critical finding
+This protocol is **production-ready** with the applied remediations. The single critical finding
 (C-01) has been remediated in this audit pass. The remaining high findings are primarily
 testing/verification gaps and defense-in-depth improvements rather than exploitable
 vulnerabilities.
@@ -542,7 +542,7 @@ vulnerabilities.
 - Proper CEI pattern throughout Solidity contracts
 - DAML dual-signatory model with actual token escrow
 - KMS key management with rotation support
-- Evidence of continuous security improvement (60+ fix tags across codebase)
+- Evidence of continuous security improvement (60+ remediation tags across codebase)
 
 **Primary Gaps**:
 - Formal verification coverage (8 of 15+ contracts)

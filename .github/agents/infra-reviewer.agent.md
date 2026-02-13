@@ -57,5 +57,5 @@ For each finding:
 - File: path/to/file
 - Description: What the issue is
 - Risk: What could go wrong
-- Fix: Recommended remediation
+- Recommendation: Suggested remediation
 ```

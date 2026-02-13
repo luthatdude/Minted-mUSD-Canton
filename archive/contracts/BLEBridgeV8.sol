@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // BLE Protocol - Production Ready Version
-// Fixes: B-01 (Missing mint/burn), B-02 (Chain replay), B-03 (Rate limit bypass),
-//        B-04 (Storage gap), B-05 (Attestation ID uniqueness)
+// Security: Mint/burn enforcement, chain replay protection, rate limiting,
+//           storage gap, attestation ID uniqueness
 // Additions: NAV Oracle check, Emergency nonce recovery
 
 pragma solidity 0.8.26;

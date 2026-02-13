@@ -50,5 +50,5 @@ For each finding:
 - Lines: X-Y
 - Description: What the issue is
 - Impact: Security risk or reliability concern
-- Fix: Recommended change
+- Recommendation: Suggested change
 ```
