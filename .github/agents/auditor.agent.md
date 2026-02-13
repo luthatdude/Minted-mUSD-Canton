@@ -2,11 +2,8 @@
 name: auditor
 description: Lead auditor that orchestrates the agent team for comprehensive protocol reviews
 tools:
-  - read
-  - grep
-  - glob
-  - bash
-delegates:
+  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'figma/*', 'agent', 'pylance-mcp-server/*', 'ms-azuretools.vscode-containers/containerToolsConfig', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-python.python/installPythonPackage', 'ms-python.python/configurePythonEnvironment', 'todo']
+handoffs:
   - solidity-auditor
   - daml-auditor
   - typescript-reviewer
