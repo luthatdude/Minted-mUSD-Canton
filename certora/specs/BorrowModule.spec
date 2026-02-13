@@ -15,11 +15,6 @@ methods {
     function borrowCapacity(address) external returns (uint256) envfree;
     function minDebt() external returns (uint256) envfree;
     function protocolReserves() external returns (uint256) envfree;
-    function borrow(uint256) external;
-    function repay(uint256) external;
-    function withdrawCollateral(address, uint256) external;
-    function reduceDebt(address, uint256) external;
-    function accrueInterest(address) external;
     function paused() external returns (bool) envfree;
 }
 
