@@ -147,8 +147,9 @@ template ComplianceRegistry
       do
         assertMsg "REASON_REQUIRED" (reason /= "")
         assertMsg "EMPTY_LIST" (not (null usersToBlock))
-        -- Cap bulk operations to prevent abuse
-        assertMsg "BULK_LIMIT_EXCEEDED" (length usersToBlock <= 100)
+        -- FIX D-L-04: Increase bulk cap from 100 to 1000 for emergency mass-freeze scenarios
+        -- (e.g., exploit response requiring rapid blacklisting of many attacker addresses)
+        assertMsg "BULK_LIMIT_EXCEEDED" (length usersToBlock <= 1000)
         now <- getTime
         let newBlacklisted = foldl (\acc p -> Set.insert p acc) blacklisted usersToBlock
         create this with

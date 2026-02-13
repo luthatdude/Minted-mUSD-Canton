@@ -53,6 +53,7 @@ data AttestationPayload = AttestationPayload with
     nonce: Int
     chainId: Int
     expiresAt: Time        -- FIX D-03: Expiration timestamp
+    entropy: Text          -- FIX C-05: Unpredictable entropy from aggregator (hex-encoded)
   deriving (Eq, Show)
 
 

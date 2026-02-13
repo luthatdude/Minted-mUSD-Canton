@@ -25,7 +25,9 @@ module CantonBoostPool where
 import DA.Time
 import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
+import CantonLending (EscrowedCollateral, CollateralType(..))
 import UserPrivacySettings (lookupUserObservers)
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: CANTON COIN TOKEN
@@ -66,7 +68,6 @@ template CantonCoin
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
 
-    -- FIX H-B2: Burn requires owner consent (both signatories) to prevent operator burning user coins
     choice CantonCoin_Burn : ()
       controller issuer, owner
       do return ()
@@ -154,10 +155,9 @@ template BoostPoolLPTransferProposal
       do create lp
 
 -- ============================================================
---       SECTION 2B: BOOST POOL DEPOSIT RECORD (FIX C-B2)
+--       SECTION 2B: BOOST POOL DEPOSIT RECORD
 -- ============================================================
 
--- | FIX C-B2: Tracks cumulative Canton deposited per user for cap enforcement.
 -- One record per user, updated on each deposit.
 template BoostPoolDepositRecord
   with
@@ -180,7 +180,6 @@ template BoostPoolDepositRecord
       do
         create this with cumulativeCantonValue = cumulativeCantonValue + additionalValue
 
-    -- FIX H-BP1: Decrement cumulative cap on withdrawal so users can re-deposit
     choice DepositRecord_Subtract : ContractId BoostPoolDepositRecord
       with
         subtractValue : Money
@@ -218,7 +217,6 @@ template CantonBoostPoolService
     protocolRewardsAccrued : Money      -- 40% kept by protocol
     lpRewardsDistributed   : Money      -- 60% distributed to LPs
     lastRewardEpoch        : Int        -- Last reward distribution epoch
-    -- FIX C-B3: Track accumulated fees for protocol withdrawal
     protocolFeesAccrued    : Money      -- Entry + exit fees accumulated
     -- Pool parameters
     entryFeeBps            : Bps        -- Entry fee (default 25 = 0.25%)
@@ -227,10 +225,16 @@ template CantonBoostPoolService
     cantonCapRatio         : Money      -- Max Canton value as ratio of sMUSD value (default 0.25 = 20/80)
     cooldownSeconds        : Int        -- Minimum lock before withdrawal
     paused                 : Bool
+    -- DAML-H-04: Mandatory compliance — all depositors must pass blacklist/freeze checks
+    complianceRegistryCid  : ContractId ComplianceRegistry
+    serviceName            : Text
     observers              : [Party]
   where
     signatory operator
     observer observers
+
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
 
     ensure totalCantonDeposited >= 0.0
         && totalLPShares >= 0.0
@@ -247,26 +251,31 @@ template CantonBoostPoolService
     -- ──────────────────────────────────────────────
 
     -- | Deposit Canton into the boost pool.
-    -- FIX C-B1: sMUSD is archived and recreated (prevents same sMUSD qualifying unlimited deposits)
-    -- FIX C-B2: Cumulative per-user cap tracked via BoostPoolDepositRecord
-    -- FIX C-B3: Entry fees routed to protocolFeesAccrued
     choice Deposit : (ContractId CantonBoostPoolService, ContractId BoostPoolLP)
       with
         user       : Party
         cantonCid  : ContractId CantonCoin      -- Canton being deposited
-        smusdCid   : ContractId CantonSMUSD     -- FIX C-B1: Consumed and recreated
+        smusdCid   : ContractId CantonSMUSD
       controller user
       do
         assertMsg "POOL_PAUSED" (not paused)
+
+        -- DAML-H-04: Mandatory compliance check — depositor must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         canton <- fetch cantonCid
         assertMsg "CANTON_ISSUER_MISMATCH" (canton.issuer == operator)
         assertMsg "CANTON_OWNER_MISMATCH" (canton.owner == user)
 
-        -- FIX C-B1: Consume the sMUSD to prevent re-use as qualifier
         smusd <- fetch smusdCid
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
+
+        -- FIX D-M04: Prevent sMUSD collateral escape — user cannot qualify for
+        -- BoostPool with sMUSD that is already escrowed as lending collateral
+        smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
+        assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
+
         archive smusdCid
 
         -- Calculate deposit cap from sMUSD value
@@ -274,7 +283,6 @@ template CantonBoostPoolService
         let maxCantonValueMusd = smusdValueMusd * cantonCapRatio
         let cantonValueMusd = canton.amount * cantonPriceMusd
 
-        -- FIX C-B2: Check cumulative deposit cap (not just per-deposit)
         existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
         previousDeposits <- case existingRecordOpt of
           None -> return 0.0
@@ -327,7 +335,6 @@ template CantonBoostPoolService
           depositedAt = now
           privacyObservers = userObs
 
-        -- FIX C-B3: Route entry fee to protocol
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited + netCantonIn
           totalLPShares = totalLPShares + newShares
@@ -340,15 +347,15 @@ template CantonBoostPoolService
     -- ──────────────────────────────────────────────
 
     -- | Withdraw Canton from the pool by burning LP tokens.
-    -- FIX H-B1: Withdrawals are allowed even when paused (users can always exit)
-    -- FIX C-B3: Exit fees routed to protocolFeesAccrued
     choice Withdraw : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         user  : Party
         lpCid : ContractId BoostPoolLP
       controller user
       do
-        -- FIX H-B1: Removed pause check — withdrawals always allowed
+
+        -- DAML-H-04: Mandatory compliance check — withdrawer must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
 
         lp <- fetch lpCid
         assertMsg "LP_OWNER_MISMATCH" (lp.owner == user)
@@ -359,7 +366,6 @@ template CantonBoostPoolService
         let elapsed = subTime now lp.depositedAt
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownRel)
 
-        -- FIX M-8: Guard against division by zero if pool state is inconsistent
         assertMsg "POOL_EMPTY" (totalLPShares > 0.0)
         -- Calculate proportional Canton out
         let shareRatio = lp.shares / totalLPShares
@@ -380,7 +386,6 @@ template CantonBoostPoolService
           amount = netCantonOut
           privacyObservers = userObs
 
-        -- FIX H-BP1: Decrement cumulative deposit record so user can re-deposit
         let withdrawnCantonValue = rawCantonOut * cantonPriceMusd
         existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
         case existingRecordOpt of
@@ -389,7 +394,6 @@ template CantonBoostPoolService
             pure ()
           None -> pure ()
 
-        -- FIX C-B3: Route exit fee to protocol
         newService <- create this with
           totalCantonDeposited = totalCantonDeposited - rawCantonOut
           totalLPShares = totalLPShares - lp.shares
@@ -411,7 +415,6 @@ template CantonBoostPoolService
       controller operator
       do
         assertMsg "EPOCH_SEQUENTIAL" (epochNumber > lastRewardEpoch)
-        -- FIX M-11: Limit max epoch gap to prevent accounting anomalies from large skips
         assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastRewardEpoch + 100)
         assertMsg "REWARD_POSITIVE" (rewardAmount > 0.0)
 
@@ -484,7 +487,6 @@ template CantonBoostPoolService
         return (newService, cantonCid)
 
     -- | Operator withdraws accumulated protocol fees (entry + exit fees from C-B3 fix).
-    -- FIX H-BP2: Without this, protocolFeesAccrued was permanently locked.
     choice WithdrawProtocolFees : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         withdrawAmount : Money

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -8,7 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
  * @title PendleMarketSelector
  * @notice Selects optimal Pendle PT market based on TVL and implied yield
  * @dev Used by PendleStrategyV2 to auto-select best market for deposits
- * @dev FIX C-01: Migrated from OwnableUpgradeable to AccessControlUpgradeable
+ * @dev Uses AccessControlUpgradeable for role-based access (UUPS upgradeable)
  *
  * Selection Criteria:
  *   1. Filter: Only markets with underlying = target asset (e.g., USDC-based)
@@ -52,7 +52,7 @@ interface ISY {
 contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ROLES (FIX C-01)
+    // ROLES
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Role for managing market whitelist
@@ -60,6 +60,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
     /// @notice Role for updating selector parameters
     bytes32 public constant PARAMS_ADMIN_ROLE = keccak256("PARAMS_ADMIN_ROLE");
+
+    /// @notice FIX CRIT-06: Timelock role for upgrade authorization
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -149,16 +152,17 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // INITIALIZER
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// FIX S-M16: Added zero-address check for admin parameter
-    function initialize(address _admin) external initializer {
+    function initialize(address _admin, address _timelockController) external initializer {
         require(_admin != address(0), "ZERO_ADMIN");
+        require(_timelockController != address(0), "ZERO_TIMELOCK");
         __AccessControl_init();
         __UUPSUpgradeable_init();
 
-        // FIX C-01: Set up role hierarchy
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(MARKET_ADMIN_ROLE, _admin);
         _grantRole(PARAMS_ADMIN_ROLE, _admin);
+        /// @notice FIX H-02: Grant TIMELOCK_ROLE to timelock controller, not admin EOA
+        _grantRole(TIMELOCK_ROLE, _timelockController);
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -213,8 +217,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         view
         returns (MarketInfo[] memory markets)
     {
-        // FIX M-01: Single pass — cache MarketInfo to avoid double external calls.
-        // Build temporary array with all whitelisted markets' info, then filter.
+        // Single pass — cache MarketInfo to avoid double external calls.
         uint256 len = whitelistedMarkets.length;
         MarketInfo[] memory temp = new MarketInfo[](len);
         bool[] memory valid = new bool[](len);
@@ -417,7 +420,6 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Maximum whitelisted markets to prevent unbounded array growth
-    /// FIX S-M14/S-M15: Cap whitelistedMarkets array to prevent gas DoS
     uint256 public constant MAX_WHITELISTED_MARKETS = 100;
 
     /**
@@ -426,10 +428,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      * @param category Asset category (e.g., "USD", "ETH")
      */
     function whitelistMarket(address market, string calldata category) external onlyRole(MARKET_ADMIN_ROLE) {
-        // FIX L-07: Validate market address
         require(market != address(0), "ZERO_ADDRESS");
         if (!isWhitelisted[market]) {
-            // FIX S-M15: Enforce maximum markets cap
             require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
             whitelistedMarkets.push(market);
             isWhitelisted[market] = true;
@@ -449,12 +449,10 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         string[] calldata categories
     ) external onlyRole(MARKET_ADMIN_ROLE) {
         require(markets.length == categories.length, "Length mismatch");
-        // FIX S-M14: Cap batch size to prevent out-of-gas on large arrays
         require(markets.length <= 50, "BATCH_TOO_LARGE");
 
         for (uint256 i = 0; i < markets.length; i++) {
             if (!isWhitelisted[markets[i]]) {
-                // FIX S-M15: Enforce maximum markets cap
                 require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
                 whitelistedMarkets.push(markets[i]);
                 isWhitelisted[markets[i]] = true;
@@ -526,9 +524,10 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // UPGRADEABILITY
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX C-01: UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice UUPS upgrade authorization requires DEFAULT_ADMIN_ROLE
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
-    /// @dev FIX H-02: Storage gap for future upgrades
+    /// @dev Storage gap for future upgrades
     uint256[40] private __gap;
 }

@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
+import { timelockSetFees, timelockSetFeeRecipient, timelockSetLimits } from "./helpers/timelock";
 
 describe("DirectMintV2", function () {
   let directMint: DirectMintV2;
@@ -41,7 +42,8 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       deployer.address, // vault placeholder
       deployer.address, // admin
-      feeRecipient.address
+      feeRecipient.address,
+      deployer.address
     ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
@@ -51,7 +53,8 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      feeRecipient.address
+      feeRecipient.address,
+      deployer.address
     );
     await directMint.waitForDeployment();
 
@@ -84,11 +87,11 @@ describe("DirectMintV2", function () {
       const DirectMintFactory = await ethers.getContractFactory("DirectMintV2");
       
       await expect(
-        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address)
+        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address, deployer.address)
       ).to.be.revertedWith("INVALID_USDC");
 
       await expect(
-        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address)
+        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address, deployer.address)
       ).to.be.revertedWith("INVALID_MUSD");
     });
   });
@@ -96,7 +99,7 @@ describe("DirectMintV2", function () {
   describe("Minting", function () {
     it("Should mint mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedMusd = ethers.parseUnits("1000", MUSD_DECIMALS); // 1000 mUSD
@@ -110,7 +113,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply mint fee correctly", async function () {
       // Set 1% mint fee
-      await directMint.setFees(100, 0); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 100, 0); // 100 bps = 1%
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedFee = ethers.parseUnits("10", USDC_DECIMALS); // 10 USDC fee
@@ -174,7 +177,7 @@ describe("DirectMintV2", function () {
 
     it("Should redeem mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default mint fee is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const expectedUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -193,7 +196,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply redeem fee correctly", async function () {
       // Set 1% redeem fee
-      await directMint.setFees(0, 100); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 0, 100); // 100 bps = 1%
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const grossUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -237,7 +240,7 @@ describe("DirectMintV2", function () {
 
     it("Should allow fee withdrawal", async function () {
       // Set fees and mint
-      await directMint.setFees(100, 0); // 1% mint fee
+      await timelockSetFees(directMint, deployer, 100, 0); // 1% mint fee
       const usdcAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await directMint.connect(user).mint(usdcAmount);
 
@@ -271,8 +274,7 @@ describe("DirectMintV2", function () {
       const newMinRedeem = ethers.parseUnits("10", USDC_DECIMALS);
       const newMaxRedeem = ethers.parseUnits("500000", USDC_DECIMALS);
 
-      await expect(directMint.setLimits(newMinMint, newMaxMint, newMinRedeem, newMaxRedeem))
-        .to.emit(directMint, "LimitsUpdated");
+      await timelockSetLimits(directMint, deployer, newMinMint, newMaxMint, newMinRedeem, newMaxRedeem);
 
       expect(await directMint.minMintAmount()).to.equal(newMinMint);
       expect(await directMint.maxMintAmount()).to.equal(newMaxMint);

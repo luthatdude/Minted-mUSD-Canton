@@ -64,7 +64,7 @@ describe("SMUSD", function () {
       expect(await smusd.asset()).to.equal(await musd.getAddress());
     });
 
-    it("should have decimalsOffset of 3 (FIX S-03 donation attack)", async function () {
+    it("should have decimalsOffset of 3", async function () {
       // ERC-4626 with offset means 1 share = 10^3 assets initially
       // This mitigates the donation attack by making share inflation expensive
       const shares = await smusd.previewDeposit(ethers.parseEther("1000"));
@@ -90,7 +90,7 @@ describe("SMUSD", function () {
       expect(await smusd.getRemainingCooldown(user1.address)).to.be.gt(0);
     });
 
-    it("FIX S-H01: should set cooldown for receiver (not depositor) on third-party deposit", async function () {
+    it("should set cooldown for receiver (not depositor) on third-party deposit", async function () {
       // user1 deposits on behalf of user2
       await smusd.connect(user1).deposit(ethers.parseEther("1000"), user2.address);
       expect(await smusd.canWithdraw(user2.address)).to.be.false;
@@ -119,7 +119,7 @@ describe("SMUSD", function () {
       expect(await musd.balanceOf(user1.address)).to.be.gt(balanceBefore);
     });
 
-    it("FIX S-02: should enforce cooldown on redeem() too", async function () {
+    it("should enforce cooldown on redeem() too", async function () {
       const shares = await smusd.balanceOf(user1.address);
       await expect(
         smusd.connect(user1).redeem(shares / 2n, user1.address, user1.address)
@@ -135,10 +135,10 @@ describe("SMUSD", function () {
   });
 
   // ============================================================
-  //  COOLDOWN PROPAGATION ON TRANSFER (FIX S-01)
+  //  COOLDOWN PROPAGATION ON TRANSFER
   // ============================================================
 
-  describe("Transfer cooldown propagation (FIX S-01)", function () {
+  describe("Transfer cooldown propagation", function () {
     it("should propagate stricter cooldown to receiver", async function () {
       // user2 deposits first — has an earlier cooldown
       await smusd.connect(user2).deposit(ethers.parseEther("1000"), user2.address);
@@ -213,7 +213,7 @@ describe("SMUSD", function () {
       ).to.be.reverted;
     });
 
-    it("FIX M-3: should reject yield exceeding MAX_YIELD_BPS cap", async function () {
+    it("should reject yield exceeding MAX_YIELD_BPS cap", async function () {
       // MAX_YIELD_BPS = 1000 = 10%
       // With 1000 mUSD deposited, max yield = 100 mUSD
       const excessiveYield = ethers.parseEther("200"); // 20% > 10%

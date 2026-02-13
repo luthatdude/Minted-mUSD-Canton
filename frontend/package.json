@@ -9,8 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@daml/ledger": "^2.8.0",
-    "@daml/types": "^2.8.0",
+    "@daml/ledger": "^2.10.3",
+    "@daml/types": "^2.10.3",
     "@fivenorth/loop-sdk": "^0.7.6",
     "@metamask/sdk": "^0.34.0",
     "@reown/appkit": "^1.6.0",
@@ -18,12 +18,14 @@
     "@reown/appkit-universal-connector": "^1.6.0",
     "@solana/web3.js": "^1.95.0",
     "@tanstack/react-query": "^5.62.0",
+    "@types/three": "^0.182.0",
     "ethers": "^6.13.0",
     "lucide-react": "^0.312.0",
     "next": "^15.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^2.15.4"
+    "recharts": "^2.15.4",
+    "three": "^0.182.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

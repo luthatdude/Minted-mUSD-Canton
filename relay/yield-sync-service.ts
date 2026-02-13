@@ -22,7 +22,10 @@
 import { ethers } from "ethers";
 import Ledger from "@daml/ledger";
 import { ContractId } from "@daml/types";
-import { readSecret } from "./utils";
+import { readSecret, enforceTLSSecurity, createSigner } from "./utils";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -51,7 +54,15 @@ interface YieldSyncConfig {
 }
 
 const DEFAULT_CONFIG: YieldSyncConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01 / INFRA-H-03: Read RPC URL from Docker secret (contains API keys), fallback to env var
+  ethereumRpcUrl: (() => {
+    const url = readSecret("ethereum_rpc_url", "ETHEREUM_RPC_URL");
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required");
+    if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
+      throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
+    }
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
   bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
@@ -213,9 +224,9 @@ interface CantonStakingService {
 class YieldSyncService {
   private config: YieldSyncConfig;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
-  private smusd: ethers.Contract;
+  private smusd!: ethers.Contract;
   private ledger: Ledger;
   private isRunning: boolean = false;
 
@@ -229,9 +240,27 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
+    // FIX R-05: Validate bridge private key before constructing wallet
+    const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
+    if (keyBytes.length !== 32) {
+      throw new Error(
+        `[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`
+      );
+    }
+    // Validate it's a valid secp256k1 scalar (0 < key < curve order)
+    const SECP256K1_ORDER = BigInt(
+      "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+    );
+    const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
+    if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
+      throw new Error(
+        "[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar"
+      );
+    }
+
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
+    // FIX C-07: Wallet initialised asynchronously via init() — use KMS when available
     
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
@@ -242,7 +271,7 @@ class YieldSyncService {
     this.smusd = new ethers.Contract(
       config.smusdAddress,
       SMUSD_ABI,
-      this.wallet  // Signing wallet for syncCantonShares()
+      this.provider  // Upgraded to signing wallet in init()
     );
 
     // Canton connection (TLS by default)
@@ -267,6 +296,14 @@ class YieldSyncService {
    * Start the yield sync service
    */
   async start(): Promise<void> {
+    // FIX C-07: Initialise KMS-backed (or fallback) signer
+    this.wallet = await createSigner(this.provider, "bridge_private_key", "BRIDGE_PRIVATE_KEY");
+    // Re-bind smusd with signing capability
+    this.smusd = new ethers.Contract(
+      this.config.smusdAddress,
+      SMUSD_ABI,
+      this.wallet,
+    );
     console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -32,7 +32,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER_ROLE");
-    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // FIX H-07: Role for TreasuryReceiver
+    /// @notice FIX H-08: TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // Role for TreasuryReceiver
 
     IERC20 public immutable usdc;
     IMUSD_V2 public immutable musd;
@@ -43,7 +45,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     uint256 public redeemFeeBps;
     uint256 public constant MAX_FEE_BPS = 500; // 5% max
 
-    // FIX C-02: Separate mint fees (held locally) from redeem fees (held in Treasury)
+    // Separate mint fees (held locally) from redeem fees (held in Treasury)
     uint256 public mintFees;
     uint256 public redeemFees;
     address public feeRecipient;
@@ -146,7 +148,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
         // Calculate fee - using combined calculation to avoid precision loss
         uint256 feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
-        // FIX S-M08: Ensure fee is non-zero when redeemFeeBps > 0 to prevent fee-free small redemptions
+        // Ensure fee is non-zero when redeemFeeBps > 0 to prevent fee-free small redemptions
         if (redeemFeeBps > 0 && feeUsdc == 0) {
             feeUsdc = 1; // Minimum 1 wei USDC fee
         }
@@ -169,7 +171,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //              RECEIVER INTEGRATION (H-07 FIX)
+    //              RECEIVER INTEGRATION
     // ============================================================
 
     /// @notice Mint mUSD for a recipient (called by TreasuryReceiver for cross-chain mints)
@@ -223,10 +225,16 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Preview how much USDC user will receive for mUSD redemption
+    /// @dev Mirrors the fee-floor logic in redeem() so that the preview
+    ///      output exactly matches on-chain execution.
     function previewRedeem(uint256 musdAmount) external view returns (uint256 usdcOut, uint256 feeUsdc) {
         uint256 usdcEquivalent = musdAmount / 1e12;
         // Combined calculation to avoid precision loss
         feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
+        // Apply the same fee floor as redeem()
+        if (redeemFeeBps > 0 && feeUsdc == 0) {
+            feeUsdc = 1; // Minimum 1 wei USDC fee — matches redeem()
+        }
         usdcOut = usdcEquivalent - feeUsdc;
     }
 
@@ -251,7 +259,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     //                    ADMIN FUNCTIONS
     // ============================================================
 
-    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(FEE_MANAGER_ROLE) {
+    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(TIMELOCK_ROLE) {
         require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
         require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
         mintFeeBps = _mintFeeBps;
@@ -264,7 +272,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         uint256 _maxMint,
         uint256 _minRedeem,
         uint256 _maxRedeem
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         require(_minMint <= _maxMint, "INVALID_MINT_LIMITS");
         require(_minRedeem <= _maxRedeem, "INVALID_REDEEM_LIMITS");
         minMintAmount = _minMint;
@@ -290,7 +298,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         emit FeesWithdrawn(feeRecipient, fees);
     }
 
-    /// @notice FIX C-02: Withdraw accumulated redeem fees from Treasury
+    /// @notice Withdraw accumulated redeem fees from Treasury.
     /// Redeem fees stay in Treasury during redeem(); this function extracts them.
     function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
         uint256 fees = redeemFees;
@@ -309,7 +317,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         _pause();
     }
 
-    /// FIX H-2: Unpause requires admin, not pauser (separation of duties)
+    /// @notice Unpause requires admin, not pauser (separation of duties)
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
@@ -317,7 +325,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Emergency token recovery (not USDC)
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(usdc), "CANNOT_RECOVER_USDC");
-        // FIX M-06: Also block mUSD recovery to prevent extraction of protocol tokens
+        // Block mUSD recovery to prevent extraction of protocol tokens
         require(token != address(musd), "CANNOT_RECOVER_MUSD");
         IERC20(token).safeTransfer(msg.sender, amount);
     }

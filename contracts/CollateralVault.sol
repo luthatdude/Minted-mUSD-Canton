@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Collateral Vault
 // Accepts ERC-20 collateral deposits (WETH, WBTC, etc.) for overcollateralized borrowing
 
@@ -10,9 +10,10 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
-/// @dev FIX S-H04: Interface for checking health factor before withdrawal
+/// @dev Interface for checking health factor before withdrawal
 interface IBorrowModule {
     function healthFactor(address user) external view returns (uint256);
+    function healthFactorUnsafe(address user) external view returns (uint256);
     function totalDebt(address user) external view returns (uint256);
 }
 
@@ -28,10 +29,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
-    /// @dev FIX S-H04: BorrowModule reference for health factor checks
+    /// @dev BorrowModule reference for health factor checks
     address public borrowModule;
     
-    /// @dev FIX S-H04: Event for borrowModule updates
     event BorrowModuleUpdated(address indexed oldModule, address indexed newModule);
 
     struct CollateralConfig {
@@ -50,7 +50,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
     event CollateralAdded(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
     event CollateralUpdated(address indexed token, uint256 collateralFactorBps, uint256 liquidationThresholdBps);
-    // FIX M-05: Separate event for disable/enable to avoid misleading 0-value emissions
+    // Separate event for disable/enable to avoid misleading 0-value emissions
     event CollateralDisabled(address indexed token);
     event CollateralEnabled(address indexed token);
     event Deposited(address indexed user, address indexed token, uint256 amount);
@@ -62,7 +62,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(VAULT_ADMIN_ROLE, msg.sender);
     }
 
-    /// @dev FIX S-H04: Set the BorrowModule address for health factor checks
+    /// @notice Set the BorrowModule address for health factor checks
     function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
         require(_borrowModule != address(0), "INVALID_MODULE");
         emit BorrowModuleUpdated(borrowModule, _borrowModule);
@@ -81,13 +81,12 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 liquidationPenaltyBps
     ) external onlyRole(VAULT_ADMIN_ROLE) {
         require(token != address(0), "INVALID_TOKEN");
-        // FIX CV-H01 (Final Audit): Use collateralFactorBps == 0 instead of !enabled.
-        // A disabled token still has collateralFactorBps > 0, so the old guard
-        // allowed addCollateral to push a duplicate into supportedTokens[],
-        // causing BorrowModule._weightedCollateralValue() to double-count.
+        // Use collateralFactorBps == 0 to detect never-added tokens.
+        // A disabled token retains its collateralFactorBps > 0, so checking
+        // !enabled would allow a duplicate push into supportedTokens[].
         // Use enableCollateral() to re-enable a disabled token instead.
         require(collateralConfigs[token].collateralFactorBps == 0, "ALREADY_ADDED");
-        // FIX M-08: Cap supported tokens array to prevent unbounded growth
+        // Cap supported tokens array to prevent unbounded growth
         require(supportedTokens.length < 50, "TOO_MANY_TOKENS");
         require(collateralFactorBps > 0 && collateralFactorBps < liquidationThresholdBps, "INVALID_FACTOR");
         require(liquidationThresholdBps <= 9500, "THRESHOLD_TOO_HIGH"); // Max 95%
@@ -123,11 +122,10 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         emit CollateralUpdated(token, collateralFactorBps, liquidationThresholdBps);
     }
 
-    /// FIX M-09: Allow disabling collateral (no new deposits, existing positions can withdraw)
-    /// FIX H-01 (Final Audit): Disabled tokens MUST remain in supportedTokens[] so that
-    /// BorrowModule._weightedCollateralValue() continues to count them for health factor.
-    /// Removing them (previous S-M04) made the S-C01 fix dead code, instantly liquidating
-    /// users who held disabled collateral. The 50-token cap already prevents gas DoS.
+    /// @notice Disable a collateral token (no new deposits; existing positions can withdraw)
+    /// @dev Disabled tokens MUST remain in supportedTokens[] so that
+    ///      BorrowModule._weightedCollateralValue() continues to count them for health factor.
+    ///      The 50-token cap already prevents gas DoS.
     function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].enabled, "NOT_SUPPORTED");
         collateralConfigs[token].enabled = false;
@@ -135,18 +133,16 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         // Token stays in supportedTokens[] — only the enabled flag changes.
         // BorrowModule checks liqThreshold (persists) rather than enabled flag.
 
-        // FIX M-05: Emit specific disable event instead of misleading CollateralUpdated(0, 0)
         emit CollateralDisabled(token);
     }
 
-    /// FIX S-C03: Re-enable a previously disabled collateral token
-    /// FIX H-01 (Final Audit): Token already remains in supportedTokens[] after disable,
-    /// so no push needed on re-enable. Just flip the enabled flag.
+    /// @notice Re-enable a previously disabled collateral token
+    /// @dev Token already remains in supportedTokens[] after disable,
+    ///      so no push needed. Just flips the enabled flag.
     function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
         require(collateralConfigs[token].collateralFactorBps > 0, "NOT_PREVIOUSLY_ADDED");
         require(!collateralConfigs[token].enabled, "ALREADY_ENABLED");
         collateralConfigs[token].enabled = true;
-        // FIX M-05: Use specific enable event
         emit CollateralEnabled(token);
     }
 
@@ -220,7 +216,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Withdraw collateral on behalf of a user (for LeverageVault close position)
     /// @dev Only callable by contracts with LEVERAGE_VAULT_ROLE
-    /// @dev FIX S-H04: Now checks health factor via BorrowModule to prevent undercollateralized withdrawals
+    /// @dev Checks health factor via BorrowModule to prevent undercollateralized withdrawals
     /// @param user The user whose collateral to withdraw
     /// @param token The collateral token
     /// @param amount Amount to withdraw
@@ -235,23 +231,48 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     ) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
         require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
         require(recipient != address(0), "INVALID_RECIPIENT");
-        
-        // FIX S-H04: Check health factor unless explicitly skipped during atomic position closure
+
+        // FIX C-SOL-02: When skipHealthCheck is true, restrict recipient to the
+        // LeverageVault (msg.sender) or the user themselves. This prevents a
+        // compromised LEVERAGE_VAULT_ROLE from draining collateral to arbitrary addresses.
+        if (skipHealthCheck) {
+            require(
+                recipient == msg.sender || recipient == user,
+                "SKIP_HC_RECIPIENT_RESTRICTED"
+            );
+        }
+
+        // FIX S-M-05: Decrement deposit BEFORE health check so healthFactor()
+        // sees the post-withdrawal state. Solidity's atomic revert ensures the
+        // decrement is rolled back if the health check fails.
+        deposits[user][token] -= amount;
+
+        // Check health factor unless explicitly skipped during atomic position closure
         if (!skipHealthCheck && borrowModule != address(0)) {
             // Only check if user has debt
             uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
             if (userDebt > 0) {
-                // Get current health factor - must be >= 1.0 (10000 bps) after withdrawal
-                // Note: This is a view call, actual withdrawal may change the calculation
-                // The LeverageVault must use skipHealthCheck=true only in atomic close operations
-                // where debt is being repaid in the same transaction
-                uint256 hf = IBorrowModule(borrowModule).healthFactor(user);
-                // Require significant margin (1.1x = 11000 bps) to account for the withdrawal
-                require(hf >= 11000, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
+                // FIX C-UPG-01: Use try/catch so oracle failure does NOT silently
+                // allow withdrawal. If both safe and unsafe health checks revert,
+                // we block the withdrawal rather than fail-open.
+                bool healthOk = false;
+                try IBorrowModule(borrowModule).healthFactor(user) returns (uint256 hf) {
+                    healthOk = hf >= 11000;
+                } catch {
+                    // Safe oracle reverted (circuit breaker). Try unsafe path for resilience.
+                    try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
+                        healthOk = hfUnsafe >= 11000;
+                    } catch {
+                        // FIX C-UPG-01: Both oracles failed — BLOCK withdrawal (fail-closed).
+                        // Previously this would have reverted naturally, but with try/catch
+                        // we must explicitly revert to prevent fail-open.
+                        revert("ORACLE_UNAVAILABLE");
+                    }
+                }
+                require(healthOk, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
             }
         }
 
-        deposits[user][token] -= amount;
         IERC20(token).safeTransfer(recipient, amount);
 
         emit Withdrawn(user, token, amount);
@@ -292,7 +313,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause deposits
-    /// FIX H-02: Require DEFAULT_ADMIN_ROLE for separation of duties
+    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }

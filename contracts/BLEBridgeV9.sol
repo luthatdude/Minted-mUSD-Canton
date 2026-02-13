@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - V9
 // Refactored: Canton attestations update supply cap, not mint directly
 //
@@ -58,14 +58,13 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     uint256 public dailyCapDecreased;      // Cumulative cap decreases in current window (offsets increases)
     uint256 public lastRateLimitReset;     // Timestamp of last window reset
 
-    // FIX BB-M01 (Final Audit): unpauseRequestTime moved here from mid-contract
-    // to prevent storage layout fragility on future UUPS upgrades.
+    // unpauseRequestTime placed here to maintain clean storage layout ordering
     uint256 public unpauseRequestTime;
 
-    /// FIX H-5: Maximum attestation age — reject attestations older than this
+    /// @dev Maximum attestation age — reject attestations older than this
     uint256 public constant MAX_ATTESTATION_AGE = 6 hours;
     
-    /// FIX B-C04: Minimum gap between attestation timestamps to prevent same-block replay
+    /// @dev Minimum gap between attestation timestamps to prevent same-block replay
     uint256 public constant MIN_ATTESTATION_GAP = 60; // 1 minute minimum between attestations
 
     // Attestation tracking
@@ -76,7 +75,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         uint256 cantonAssets;      // Total assets on Canton (e.g., $500M)
         uint256 nonce;
         uint256 timestamp;
+        bytes32 entropy;           // FIX C-05: Unpredictable validator entropy prevents pre-computation
+        bytes32 cantonStateHash;   // FIX CROSS-CHAIN-01: Canton ledger state hash for on-chain verification
     }
+
+    /// @notice Last verified Canton state hash (on-ledger attestation anchor)
+    bytes32 public lastCantonStateHash;
+
+    /// @notice Mapping of Canton state hashes that have been verified
+    mapping(bytes32 => bool) public verifiedStateHashes;
 
     // Events
     event AttestationReceived(
@@ -91,11 +98,11 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason);
     event NonceForceUpdated(uint256 oldNonce, uint256 newNonce, string reason);
     event MUSDTokenUpdated(address indexed oldToken, address indexed newToken);
-    // FIX S-H03: Event for attestation invalidation audit trail
     event AttestationInvalidated(bytes32 indexed attestationId, string reason);
-    // FIX S-M02: Event for min signatures change
     event MinSignaturesUpdated(uint256 oldMinSigs, uint256 newMinSigs);
-    /// FIX B-C05: Event for attestation migration from V8
+    event CantonStateHashVerified(bytes32 indexed stateHash, bytes32 indexed attestationId);
+    event AttestationIdMismatch(bytes32 indexed submitted, bytes32 indexed computed);
+    /// @dev Event for attestation migration from previous bridge version
     event AttestationsMigrated(uint256 count, address indexed fromBridge);
     // Rate limiting events
     event RateLimitReset(uint256 timestamp);
@@ -118,7 +125,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         __ReentrancyGuard_init();
         __Pausable_init();
 
-        // FIX C-01: Enforce minimum signature threshold of 2 at initialization
+        // Enforce minimum signature threshold of 2 at initialization
         require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
         require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
         require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
@@ -144,12 +151,11 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         musdToken = IMUSD(_musdToken);
     }
 
-    // FIX S-M02: Emit event for admin parameter change
-    // FIX C-01: Enforce minimum signature threshold of 2 to prevent single-point compromise
-    // FIX B-H04: Add upper bound to prevent bridge lockup
+    /// @notice Set minimum validator signatures required
+    /// @dev Enforces min=2 and max=10 to prevent single-point compromise or lockup
     function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
-        require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH"); // FIX B-H04: Max 10 to prevent lockup
+        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
+        require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH");
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
@@ -160,7 +166,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         dailyCapIncreaseLimit = _limit;
     }
 
-    /// @notice FIX B-C05: Migrate used attestation IDs from previous bridge version
+    /// @notice Migrate used attestation IDs from previous bridge version
     /// @dev Must be called during upgrade to prevent cross-version replay attacks
     /// @param attestationIds Array of attestation IDs that were used in the previous bridge
     /// @param previousBridge Address of the previous bridge contract (for audit trail)
@@ -175,13 +181,13 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         emit AttestationsMigrated(attestationIds.length, previousBridge);
     }
 
-    // FIX M-05: Ratio changes are applied immediately but emit event for monitoring.
+    // Ratio changes are applied immediately but emit event for monitoring.
     // For production, this should be behind a timelock contract.
     function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        // FIX S-M02: Rate-limit ratio changes to once per day
+        // Rate-limit ratio changes to once per day
         require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
         require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
-        // FIX M-05: Prevent drastic ratio changes (max 10% change at a time)
+        // Prevent drastic ratio changes (max 10% change at a time)
         uint256 oldRatio = collateralRatioBps;
         uint256 diff = _ratioBps > oldRatio ? _ratioBps - oldRatio : oldRatio - _ratioBps;
         require(diff <= 1000, "RATIO_CHANGE_TOO_LARGE"); // Max 10% change per call
@@ -189,7 +195,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         collateralRatioBps = _ratioBps;
         emit CollateralRatioUpdated(oldRatio, _ratioBps);
 
-        // FIX M-04 (Final Audit): Admin ratio changes bypass rate limit.
+        // Admin ratio changes bypass rate limit.
         // setCollateralRatio is already admin-only with daily cooldown + 10% max change,
         // so applying the daily cap limit on top can block legitimate governance.
         if (attestedCantonAssets > 0) {
@@ -203,7 +209,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                  EMERGENCY FUNCTIONS
     // ============================================================
 
-    /// @dev FIX B-H08: Timelock for unpause to prevent immediate recovery after exploit
+    /// @dev Timelock for unpause to prevent immediate recovery after exploit
     uint256 public constant UNPAUSE_DELAY = 24 hours;
     
     event UnpauseRequested(uint256 requestTime, uint256 executeAfter);
@@ -218,14 +224,14 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         }
     }
 
-    /// FIX B-H08: Request unpause (starts timelock)
+    /// @notice Request unpause (starts timelock)
     function requestUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(paused(), "NOT_PAUSED");
         unpauseRequestTime = block.timestamp;
         emit UnpauseRequested(block.timestamp, block.timestamp + UNPAUSE_DELAY);
     }
 
-    /// FIX B-H08: Execute unpause after timelock delay
+    /// @notice Execute unpause after timelock delay
     function executeUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(paused(), "NOT_PAUSED");
         require(unpauseRequestTime > 0, "NO_UNPAUSE_REQUEST");
@@ -234,8 +240,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         _unpause();
     }
 
-    /// @dev Legacy unpause function - now requires timelock
-    /// FIX H-05: Kept for interface compatibility but reverts with guidance
+    /// @dev Legacy unpause function — now requires timelock
     function unpause() external view onlyRole(DEFAULT_ADMIN_ROLE) {
         revert("USE_requestUnpause_AND_executeUnpause");
     }
@@ -259,8 +264,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         currentNonce = _newNonce;
     }
 
-    /// @notice Invalidate an attestation ID
-    /// FIX S-H03: Added reason parameter and event emission for audit trail
+    /// @notice Invalidate an attestation ID for security
     function invalidateAttestationId(bytes32 _attestationId, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
         require(!usedAttestationIds[_attestationId], "ALREADY_USED");
         require(bytes(_reason).length > 0, "REASON_REQUIRED");
@@ -271,6 +275,26 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     // ============================================================
     //                  CORE ATTESTATION LOGIC
     // ============================================================
+
+    /// @notice Compute deterministic attestation ID from attestation data
+    /// @dev Allows off-chain actors to pre-compute and verify attestation IDs
+    function computeAttestationId(
+        uint256 _nonce,
+        uint256 _cantonAssets,
+        uint256 _timestamp,
+        bytes32 _entropy,
+        bytes32 _cantonStateHash
+    ) public view returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            _nonce,
+            _cantonAssets,
+            _timestamp,
+            _entropy,
+            _cantonStateHash,
+            block.chainid,
+            address(this)
+        ));
+    }
 
     /// @notice Process Canton attestation and update mUSD supply cap
     /// @param att The attestation data from Canton validators
@@ -284,17 +308,41 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");
         require(att.cantonAssets > 0, "ZERO_ASSETS");
         require(att.timestamp <= block.timestamp, "FUTURE_TIMESTAMP");
-        /// FIX B-C04: Require minimum gap between attestation timestamps
+        /// @dev Require minimum gap between attestation timestamps
         require(att.timestamp >= lastAttestationTime + MIN_ATTESTATION_GAP, "ATTESTATION_TOO_CLOSE");
-        /// FIX H-5: Reject attestations older than MAX_ATTESTATION_AGE
+        /// @dev Reject attestations older than MAX_ATTESTATION_AGE
         require(block.timestamp - att.timestamp <= MAX_ATTESTATION_AGE, "ATTESTATION_TOO_OLD");
 
-        // Verify signatures
+        // FIX C-05: Require non-zero entropy and validate attestation ID derivation
+        // This prevents pre-computation attacks where all hash inputs are predictable.
+        // Entropy must be generated by the aggregator at attestation creation time
+        // (e.g., crypto.randomBytes) and included in what validators sign.
+        require(att.entropy != bytes32(0), "MISSING_ENTROPY");
+
+        // FIX CROSS-CHAIN-01: Require Canton state hash for on-ledger verification
+        // This binds the attestation to a specific Canton ledger state, preventing
+        // attestations that don't correspond to verified Canton state
+        require(att.cantonStateHash != bytes32(0), "MISSING_STATE_HASH");
+
+        bytes32 expectedId = keccak256(abi.encodePacked(
+            att.nonce,
+            att.cantonAssets,
+            att.timestamp,
+            att.entropy,
+            att.cantonStateHash,
+            block.chainid,
+            address(this)
+        ));
+        require(att.id == expectedId, "INVALID_ATTESTATION_ID");
+
+        // Verify signatures — validators sign over the full attestation including state hash
         bytes32 messageHash = keccak256(abi.encodePacked(
             att.id,
             att.cantonAssets,
             att.nonce,
             att.timestamp,
+            att.entropy,
+            att.cantonStateHash,
             block.chainid,
             address(this)
         ));
@@ -309,8 +357,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             lastSigner = signer;
         }
 
-        // Mark attestation as used
+        // Mark attestation as used and record Canton state hash
         usedAttestationIds[att.id] = true;
+        verifiedStateHashes[att.cantonStateHash] = true;
+        lastCantonStateHash = att.cantonStateHash;
         currentNonce++;
         lastAttestationTime = att.timestamp;
         attestedCantonAssets = att.cantonAssets;
@@ -318,6 +368,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         // Update supply cap based on attested assets (rate-limited for attestations)
         uint256 newCap = _updateSupplyCap(att.cantonAssets, false);
 
+        emit CantonStateHashVerified(att.cantonStateHash, att.id);
         emit AttestationReceived(att.id, att.cantonAssets, newCap, att.nonce, att.timestamp);
     }
 
@@ -353,7 +404,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
                 _handleRateLimitCapDecrease(oldCap - newCap);
             }
 
-            // FIX M-04: Do NOT floor at currentSupply when cap drops.
+            // Do NOT floor at currentSupply when cap drops.
             // If assets decreased, the cap should reflect reality (no new minting).
             // Existing tokens remain but the cap correctly signals undercollateralization.
             musdToken.setSupplyCap(newCap);
@@ -368,8 +419,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Enforce 24h rolling window on supply cap increases
     /// @param increase The requested cap increase amount
     /// @return allowed The actual allowed increase (clamped to remaining limit)
-    /// @dev FIX M-05: Reverts when allowed == 0 to preserve attestation for next window.
-    ///      Previously, a zero-allowed increase would consume the attestation/nonce but
+    /// @dev Reverts when allowed == 0 to preserve attestation for next window.
+    ///      A zero-allowed increase would otherwise consume the attestation/nonce but
     ///      leave supply cap unchanged, requiring governance intervention.
     function _handleRateLimitCapIncrease(uint256 increase) internal returns (uint256 allowed) {
         _resetDailyLimitsIfNeeded();
@@ -383,8 +434,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             ? dailyCapIncreaseLimit - netIncreased 
             : 0;
         
-        // FIX M-05: If daily limit is exhausted, revert to preserve attestation
-        // The attestation can be resubmitted after the 24h window resets
+        // If daily limit is exhausted, revert to preserve attestation.
+        // The attestation can be resubmitted after the 24h window resets.
         require(remaining > 0, "DAILY_CAP_LIMIT_EXHAUSTED");
         
         allowed = increase > remaining ? remaining : increase;
@@ -404,7 +455,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Reset daily limits if 24h window has elapsed
-    /// FIX M-03: Use >= to prevent boundary timing attack at exact reset second
+    /// @dev Use >= to prevent boundary timing attack at exact reset second
     function _resetDailyLimitsIfNeeded() internal {
         if (block.timestamp >= lastRateLimitReset + 1 days) {
             dailyCapIncreased = 0;
@@ -467,9 +518,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                      UPGRADEABILITY
     // ============================================================
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX H-01: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// Previously, an admin EOA could instantly upgrade the bridge implementation,
+    /// bypassing the 48h delay enforced on all other upgradeable contracts.
+    /// Now requires MintedTimelockController (48h delay) for upgrade authorization.
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
-    // Storage gap for future upgrades — 13 state variables → 50 - 13 = 37
-    // FIX H-02: Corrected count to include unpauseRequestTime (13th variable)
-    uint256[37] private __gap;
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
+
+    // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
+    // (Added: lastCantonStateHash, verifiedStateHashes)
+    uint256[35] private __gap;
 }

@@ -78,6 +78,41 @@ spec:
             limits:
               cpu: 50m
               memory: 32Mi
+        # INFRA-CRIT-01: Generate JWT token for JSON API authentication
+        # Uses the jwt-secret from json-api-credentials to create a signed token
+        - name: generate-json-api-token
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command:
+            - sh
+            - -c
+            - |
+              # Generate HMAC-SHA256 JWT for DAML JSON API
+              HEADER=$(printf '{"alg":"HS256","typ":"JWT"}' | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+              # Token payload with admin access and 24h expiry
+              EXP=$(($(date +%s) + 86400))
+              PAYLOAD=$(printf '{"https://daml.com/ledger-api":{"ledgerId":"canton","applicationId":"json-api","actAs":["operator"]},"exp":%d}' "$EXP" | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+              UNSIGNED="${HEADER}.${PAYLOAD}"
+              # Sign with HMAC-SHA256 using jwt-secret
+              SIG=$(printf '%s' "$UNSIGNED" | openssl dgst -sha256 -hmac "$(cat /etc/jwt-secret/jwt-secret)" -binary | base64 | tr -d '=' | tr '/+' '_-' | tr -d '\n')
+              printf '%s.%s' "$UNSIGNED" "$SIG" > /etc/canton/secrets/json-api-token
+              echo "JWT token generated successfully"
+          volumeMounts:
+            - name: json-api-secrets
+              mountPath: /etc/canton/secrets
+            - name: jwt-secret-vol
+              mountPath: /etc/jwt-secret
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
       containers:
         - name: canton
           # FIX IC-07: Pin Canton image to SHA256 digest for supply chain security
@@ -227,8 +262,12 @@ spec:
         - name: tls-certs
           secret:
             secretName: canton-tls
-        # FIX IC-03: JSON API authentication secrets
+        # FIX IC-03: JSON API authentication secrets (writable for init-container token generation)
         - name: json-api-secrets
+          emptyDir:
+            sizeLimit: 1Mi
+        # INFRA-CRIT-01: JWT signing key for token generation
+        - name: jwt-secret-vol
           secret:
             secretName: json-api-credentials
         - name: tmp

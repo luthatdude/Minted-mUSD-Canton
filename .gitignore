@@ -25,3 +25,4 @@ relay/secrets/
 # IDE
 .vscode/
 .idea/
+yield-scanner.log
