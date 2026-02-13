@@ -1,5 +1,5 @@
 // Points calculator — computes points accrual for protocol participants
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 export interface PointsConfig {
   /** Points per dollar per day for mUSD holders */

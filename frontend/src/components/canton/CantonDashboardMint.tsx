@@ -1,5 +1,5 @@
 // Canton Dashboard Mint — Canton Network-specific minting within the dashboard view
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import React, { useState, useCallback } from "react";
 import { StatCard } from "@/components/StatCard";

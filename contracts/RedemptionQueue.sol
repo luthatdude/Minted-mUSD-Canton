@@ -17,13 +17,12 @@ interface IMUSDBurnable {
 ///         Users queue redemption requests which are processed FIFO when liquidity
 ///         is available. This prevents a rush to redeem from causing a liquidity
 ///         crisis in the Treasury.
-/// @dev FIX C-1: Burns mUSD after fulfillment to prevent permanent supply inflation.
+/// @dev Burns mUSD after fulfillment to prevent permanent supply inflation.
 ///
-/// @dev FIX MED-02 (Re-audit): DEPLOYMENT DEPENDENCY — This contract's `processBatch()`
+/// @dev DEPLOYMENT DEPENDENCY — This contract's `processBatch()`
 ///      calls `musdBurnable.burn(address(this), ...)` which requires the RedemptionQueue
 ///      address to hold BRIDGE_ROLE or LIQUIDATOR_ROLE on the MUSD contract.
-///      Without this role grant, ALL redemption fulfillments will revert, permanently
-///      locking users' mUSD in the queue. Deployment scripts MUST include:
+///      Deployment scripts MUST include:
 ///
 ///          musd.grantRole(musd.BRIDGE_ROLE(), redemptionQueueAddress);
 ///
@@ -153,7 +152,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
             totalPendingMusd -= req.musdAmount;
             totalPendingUsdc -= req.usdcAmount;
 
-            // FIX C-1: Burn the locked mUSD to reduce totalSupply and maintain peg integrity.
+            // Burn the locked mUSD to reduce totalSupply and maintain peg integrity.
             // Without this burn, redeemed mUSD stays locked forever, inflating totalSupply
             // and degrading the health ratio reported by BLEBridgeV9.getHealthRatio().
             musdBurnable.burn(address(this), req.musdAmount);

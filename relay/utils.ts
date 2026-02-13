@@ -26,7 +26,7 @@ export function enforceTLSSecurity(): void {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     }
     // INFRA-H-06: Define a getter that prevents runtime tampering with this env var
-    // FIX P1-CODEX: Use configurable:true and guard against re-definition.
+    // Use configurable:true and guard against re-definition.
     // Previous code used configurable:false which crashes on module re-import
     // or process restart (Object.defineProperty throws on non-configurable redefinition).
     const originalValue = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
@@ -133,7 +133,7 @@ export function isValidSecp256k1PrivateKey(privateKey: string): boolean {
  * Read and validate a private key from Docker secret or env var.
  * Throws if the key is not in the valid secp256k1 range.
  *
- * FIX H-07: After validation, attempts to zero out the env var source
+ * After validation, attempts to zero out the env var source
  * to reduce the window where the key is readable in memory.
  */
 export function readAndValidatePrivateKey(secretName: string, envVar: string): string {
@@ -150,7 +150,7 @@ export function readAndValidatePrivateKey(secretName: string, envVar: string): s
     );
   }
 
-  // FIX H-07: Clear the env var after reading to reduce memory exposure window.
+  // Clear the env var after reading to reduce memory exposure window.
   // The key is still held by the caller's variable, but at least the env source
   // is scrubbed. For full protection, use AWS KMS (see kms-ethereum-signer.ts).
   if (process.env[envVar] && process.env.NODE_ENV !== "test") {
@@ -161,7 +161,7 @@ export function readAndValidatePrivateKey(secretName: string, envVar: string): s
 }
 
 // ============================================================
-//  FIX C-07: KMS Signer Factory
+//  KMS Signer Factory
 // ============================================================
 
 /**
@@ -205,7 +205,7 @@ export async function createSigner(
 
       console.log(`[KMS] Signer initialised — address ${address}`);
 
-      // FIX C-6: Do NOT load raw private key when KMS is configured.
+      // Do NOT load raw private key when KMS is configured.
       // Previously the code loaded the raw key into a Wallet even with KMS present,
       // completely defeating the purpose of KMS (key stays in heap memory).
       // Return a VoidSigner for now — full KMS AbstractSigner integration is required
@@ -224,7 +224,7 @@ export async function createSigner(
     throw new Error(`FATAL: Neither KMS_KEY_ID nor ${envVar} is configured`);
   }
 
-  // FIX C-6: In production, raw private keys must not be used.
+  // In production, raw private keys must not be used.
   // JS strings are immutable — the key persists in V8 heap memory until GC,
   // making it extractable via memory dumps (/proc/pid/mem, core dumps, heap snapshots).
   // KMS keeps the private key inside the HSM boundary and never exposes it to the process.

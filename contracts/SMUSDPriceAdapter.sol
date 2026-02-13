@@ -106,12 +106,9 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Get the latest price data in Chainlink AggregatorV3 format
-    /// @dev FIX HIGH-01 (Re-audit): Restored to `view` for AggregatorV3 interface compliance.
-    ///      PriceOracle calls this via STATICCALL (view→view). A state-mutating latestRoundData()
-    ///      causes EVM-level revert in STATICCALL context, breaking ALL sMUSD price queries.
-    ///      The rate limiter cache is now updated via the separate `updateCachedPrice()` function
+    /// @dev Returns price as `view` for AggregatorV3 interface compliance.
+    ///      The rate limiter cache is updated via the separate `updateCachedPrice()` function
     ///      which should be called by a keeper or before any price-sensitive operation.
-    ///      See also: Chainlink AggregatorV3Interface declares latestRoundData() as view.
     function latestRoundData()
         external
         view
@@ -211,9 +208,7 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Public function to update the cached price (callable by anyone)
-    /// @dev FIX HIGH-04: Removed admin-only restriction so the rate limiter auto-updates.
-    /// Previously only ADAPTER_ADMIN could call this, making the rate limiter manual-only.
-    /// Now any price consumer can trigger a cache update before reading.
+    /// @dev Any price consumer can trigger a cache update before reading.
     /// @dev Also increments roundId so consumers can detect updates
     function updateCachedPrice() external {
         uint256 price = _getSharePriceUsd();

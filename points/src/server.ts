@@ -1,5 +1,5 @@
 // Points API server — serves points data and leaderboard
-// FIX H-06: Populated stub file (was 0-byte)
+// Populated stub file (was 0-byte)
 
 import { loadConfig } from "./config";
 

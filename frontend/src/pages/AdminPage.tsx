@@ -108,7 +108,7 @@ export function AdminPage() {
           vals.paused = (await directMint.paused()).toString();
         }
         if (treasury) {
-          // FIX H-02 (Final Audit): Use TreasuryV2 functions instead of stale V1 calls
+          // Use TreasuryV2 functions instead of stale V1 calls
           vals.maxDeploy = formatBps(await treasury.reserveBps());
           vals.totalBacking = formatUSD(await treasury.totalValue(), 6);
         }
