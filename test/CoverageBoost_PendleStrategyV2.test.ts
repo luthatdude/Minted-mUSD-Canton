@@ -49,6 +49,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
         treasury.address,
         admin.address,
         "USD",
+        admin.address, // timelock
       ],
       { kind: "uups", initializer: "initialize" }
     );
@@ -113,7 +114,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       await expect(
         upgrades.deployProxy(
           PendleStrategyV2,
-          [ethers.ZeroAddress, await marketSelector.getAddress(), treasury.address, admin.address, "USD"],
+          [ethers.ZeroAddress, await marketSelector.getAddress(), treasury.address, admin.address, "USD", admin.address /* timelock */],
           { kind: "uups", initializer: "initialize" }
         )
       ).to.be.reverted;
@@ -125,7 +126,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       await expect(
         upgrades.deployProxy(
           PendleStrategyV2,
-          [await usdc.getAddress(), ethers.ZeroAddress, treasury.address, admin.address, "USD"],
+          [await usdc.getAddress(), ethers.ZeroAddress, treasury.address, admin.address, "USD", admin.address /* timelock */],
           { kind: "uups", initializer: "initialize" }
         )
       ).to.be.reverted;

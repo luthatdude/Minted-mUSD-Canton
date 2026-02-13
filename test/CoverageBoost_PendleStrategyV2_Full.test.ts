@@ -112,6 +112,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
         treasury.address,
         admin.address,
         "USD",
+        admin.address, // timelock
       ],
       { kind: "uups", initializer: "initialize" }
     );
@@ -1002,6 +1003,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
             f.treasury.address,
             f.admin.address,
             "USD",
+            f.admin.address, // timelock
           ],
           { kind: "uups", initializer: "initialize" }
         )
@@ -1020,6 +1022,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
             f.treasury.address,
             f.admin.address,
             "USD",
+            f.admin.address, // timelock
           ],
           { kind: "uups", initializer: "initialize" }
         )
@@ -1038,6 +1041,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
             ethers.ZeroAddress,
             f.admin.address,
             "USD",
+            f.admin.address, // timelock
           ],
           { kind: "uups", initializer: "initialize" }
         )
@@ -1056,6 +1060,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
             f.treasury.address,
             ethers.ZeroAddress,
             "USD",
+            f.admin.address, // timelock
           ],
           { kind: "uups", initializer: "initialize" }
         )

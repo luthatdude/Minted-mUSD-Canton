@@ -40,6 +40,7 @@ describe("PendleStrategyV2", function () {
         treasury.address,
         admin.address,
         "USD",
+        admin.address, // timelock (use admin for tests)
       ],
       {
         kind: "uups",
@@ -102,7 +103,8 @@ describe("PendleStrategyV2", function () {
           await marketSelector.getAddress(),
           treasury.address,
           admin.address,
-          "USD"
+          "USD",
+          admin.address
         )
       ).to.be.reverted;
     });
@@ -121,6 +123,7 @@ describe("PendleStrategyV2", function () {
             treasury.address,
             admin.address,
             "USD",
+            admin.address,
           ],
           { kind: "uups", initializer: "initialize" }
         )
