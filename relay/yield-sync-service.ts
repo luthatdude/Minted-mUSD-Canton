@@ -286,7 +286,6 @@ class YieldSyncService {
     console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
     console.log(`[YieldSync] Treasury: ${config.treasuryAddress}`);
     console.log(`[YieldSync] SMUSD: ${config.smusdAddress}`);
-    console.log(`[YieldSync] Bridge wallet: ${this.wallet.address}`);
     console.log(`[YieldSync] Canton: ${config.cantonHost}:${config.cantonPort}`);
     console.log(`[YieldSync] Operator: ${config.cantonParty}`);
     console.log(`[YieldSync] Sync interval: ${config.syncIntervalMs}ms`);
@@ -304,6 +303,8 @@ class YieldSyncService {
       SMUSD_ABI,
       this.wallet,
     );
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`[YieldSync] Bridge wallet: ${walletAddress}`);
     console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 
