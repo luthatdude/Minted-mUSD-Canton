@@ -312,8 +312,8 @@ class LiquidationBot {
           if (collateralBalance === 0n) continue;
           
           // Get close factor
-          const closeFactorBps = await this.liquidationEngine.closeFactorBps();
-          const fullLiqThreshold = await this.liquidationEngine.fullLiquidationThreshold();
+          const closeFactorBps = BigInt(await this.liquidationEngine.closeFactorBps());
+          const fullLiqThreshold = BigInt(await this.liquidationEngine.fullLiquidationThreshold());
           
           // Calculate max repayable debt
           let maxRepay: bigint;
@@ -327,9 +327,9 @@ class LiquidationBot {
           const estimatedSeize = await this.liquidationEngine.estimateSeize(borrower, token, maxRepay);
           
           // Calculate profit
-          const collateralPrice = await this.priceOracle.getPrice(token);
+          const collateralPrice = BigInt(await this.priceOracle.getPrice(token));
           const decimals = this.tokenDecimals.get(token) || 18;
-          const seizeValueUsd = (estimatedSeize * collateralPrice) / BigInt(10 ** decimals);
+          const seizeValueUsd = (estimatedSeize * collateralPrice) / (10n ** BigInt(decimals));
           
           // Profit = seize value - debt repaid
           const profitWei = seizeValueUsd - maxRepay;

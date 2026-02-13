@@ -20,7 +20,6 @@ interface ITreasury {
 
 contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
-    using Math for uint256;
 
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -280,35 +279,28 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return totalSupply();
     }
 
-    /// @notice Override convertToShares to use global share price
-    /// @dev FIX AUDIT-01: Delegates to internal _convertToShares to ensure preview
-    ///      functions match actual deposit/mint behavior (ERC-4626 compliance).
-    ///      Previously used a different formula without virtual-share offset,
-    ///      creating an inconsistency between preview and execution.
+    /// @notice ERC-4626 conversion uses local vault accounting.
+    /// @dev Safety: redemptions are paid from local vault liquidity, so preview
+    ///      and execution must be based on local totalAssets/totalSupply.
     function convertToShares(uint256 assets) public view override returns (uint256) {
-        return _convertToShares(assets, Math.Rounding.Floor);
+        return super.convertToShares(assets);
     }
 
-    /// @notice Override convertToAssets to use global share price
-    /// @dev FIX AUDIT-01: Delegates to internal _convertToAssets to ensure preview
-    ///      functions match actual redeem/withdraw behavior (ERC-4626 compliance).
+    /// @notice ERC-4626 conversion uses local vault accounting.
+    /// @dev Safety: previewed asset value must be redeemable from this vault.
     function convertToAssets(uint256 shares) public view override returns (uint256) {
-        return _convertToAssets(shares, Math.Rounding.Floor);
+        return super.convertToAssets(shares);
     }
 
-    /// @notice FIX C-02: Override internal _convertToShares to use global share price
-    /// @dev OZ ERC4626 deposit/withdraw/mint/redeem call these internal versions.
-    ///      Without this override, operations would use Ethereum-local rate while
-    ///      views showed global rate — creating an arbitrage surface.
+    /// @notice Internal ERC-4626 conversion is intentionally local.
+    /// @dev Do not use global Treasury TVL for execution-path conversions.
     function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
-        uint256 shares = globalTotalShares();
-        return assets.mulDiv(shares + 10 ** _decimalsOffset(), globalTotalAssets() + 1, rounding);
+        return super._convertToShares(assets, rounding);
     }
 
-    /// @notice FIX C-02: Override internal _convertToAssets to use global share price
+    /// @notice Internal ERC-4626 conversion is intentionally local.
     function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
-        uint256 totalShares = globalTotalShares();
-        return shares.mulDiv(globalTotalAssets() + 1, totalShares + 10 ** _decimalsOffset(), rounding);
+        return super._convertToAssets(shares, rounding);
     }
 
     // ============================================================

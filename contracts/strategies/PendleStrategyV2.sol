@@ -6,6 +6,7 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
 
@@ -376,12 +377,14 @@ contract PendleStrategyV2 is
         // Transfer USDC from treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
-        // Swap USDC → PT via Pendle Router
-        uint256 minPtOut = (amount * (BPS - slippageBps)) / BPS;
+        // Swap USDC → PT via Pendle Router.
+        // Use normalized PT expectation (including decimal scaling) for bounds.
+        uint256 expectedPtOut = _usdcToPt(amount);
+        uint256 minPtOut = (expectedPtOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
             guessMin: minPtOut,
-            guessMax: amount * 2, // PT can be worth more than underlying
+            guessMax: expectedPtOut * 2, // PT can be worth more than underlying
             guessOffchain: 0,
             maxIteration: 256,
             eps: 1e14 // 0.01% precision
@@ -599,11 +602,12 @@ contract PendleStrategyV2 is
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
-        uint256 minPtOut = (usdcAmount * (BPS - slippageBps)) / BPS;
+        uint256 expectedPtOut = _usdcToPt(usdcAmount);
+        uint256 minPtOut = (expectedPtOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
             guessMin: minPtOut,
-            guessMax: usdcAmount * 2,
+            guessMax: expectedPtOut * 2,
             guessOffchain: 0,
             maxIteration: 256,
             eps: 1e14
@@ -640,7 +644,8 @@ contract PendleStrategyV2 is
         IPendleMarket market = IPendleMarket(currentMarket);
         bool expired = market.isExpired();
 
-        uint256 minUsdcOut = (ptAmount * (BPS - slippageBps)) / BPS;
+        uint256 expectedUsdcOut = _ptToUsdc(ptAmount);
+        uint256 minUsdcOut = (expectedUsdcOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
             tokenOut: address(usdc),
@@ -678,9 +683,10 @@ contract PendleStrategyV2 is
     }
 
     function _ptToUsdc(uint256 ptAmount) internal view returns (uint256) {
+        uint256 usdcEquivalent = _scalePtToUsdcDecimals(ptAmount);
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
             // At or after maturity, PT = 1:1 underlying
-            return ptAmount;
+            return usdcEquivalent;
         }
 
         // Before maturity, PT trades at discount
@@ -700,12 +706,13 @@ contract PendleStrategyV2 is
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
-        return (ptAmount * valueBps) / BPS;
+        return (usdcEquivalent * valueBps) / BPS;
     }
 
     function _usdcToPt(uint256 usdcAmount) internal view returns (uint256) {
+        uint256 ptEquivalent = _scaleUsdcToPtDecimals(usdcAmount);
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
-            return usdcAmount;
+            return ptEquivalent;
         }
 
         uint256 timeRemaining = currentExpiry - block.timestamp;
@@ -718,8 +725,39 @@ contract PendleStrategyV2 is
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
-        // PT needed = usdc / (PT value per usdc)
-        return (usdcAmount * BPS) / valueBps;
+        // PT needed = usdc-equivalent / (PT value per usdc)
+        return (ptEquivalent * BPS) / valueBps;
+    }
+
+    function _scaleUsdcToPtDecimals(uint256 usdcAmount) internal view returns (uint256) {
+        if (currentPT == address(0)) return usdcAmount;
+
+        uint8 usdcDecimals = IERC20Metadata(address(usdc)).decimals();
+        uint8 ptDecimals = IERC20Metadata(currentPT).decimals();
+        if (ptDecimals == usdcDecimals) return usdcAmount;
+
+        if (ptDecimals > usdcDecimals) {
+            return usdcAmount * _pow10(ptDecimals - usdcDecimals);
+        }
+        return usdcAmount / _pow10(usdcDecimals - ptDecimals);
+    }
+
+    function _scalePtToUsdcDecimals(uint256 ptAmount) internal view returns (uint256) {
+        if (currentPT == address(0)) return ptAmount;
+
+        uint8 usdcDecimals = IERC20Metadata(address(usdc)).decimals();
+        uint8 ptDecimals = IERC20Metadata(currentPT).decimals();
+        if (ptDecimals == usdcDecimals) return ptAmount;
+
+        if (ptDecimals > usdcDecimals) {
+            return ptAmount / _pow10(ptDecimals - usdcDecimals);
+        }
+        return ptAmount * _pow10(usdcDecimals - ptDecimals);
+    }
+
+    function _pow10(uint8 exponent) internal pure returns (uint256) {
+        require(exponent <= 77, "DECIMALS_TOO_LARGE");
+        return 10 ** uint256(exponent);
     }
 
     function _emptyLimitOrder() internal pure returns (IPendleRouter.LimitOrderData memory) {
