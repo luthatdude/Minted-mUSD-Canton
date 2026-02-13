@@ -1,0 +1,789 @@
+---
+name: advanced-coding
+description: "Advanced coding skill for Solidity, DAML, and TypeScript. Use when: (1) Writing or reviewing smart contracts in Solidity or DAML, (2) Building TypeScript services, APIs, SDKs, or frontends, (3) Implementing cross-chain bridge logic between Canton and EVM, (4) Writing DeFi protocol logic (stablecoins, vaults, yield strategies, AMMs), (5) Building production infrastructure with TypeScript (Node.js, Express, Next.js, ethers.js, viem). Triggers on keywords: solidity, daml, typescript, smart contract, ERC-20, ERC-4626, vault, bridge, stablecoin, mint, burn, yield, Canton, DeFi, ethers, viem, hardhat, foundry, web3."
+---
+
+# Advanced Coding: Solidity + DAML + TypeScript
+
+When writing code in any of these three languages, follow the patterns and standards below. These are production-grade patterns — not tutorial code.
+
+---
+
+## SOLIDITY
+
+### Compiler & Standards
+- Solidity ^0.8.20+ (built-in overflow protection)
+- Use OpenZeppelin v5 contracts as base
+- Target EVM-compatible chains (Ethereum, Arbitrum, Base, etc.)
+- Use SPDX license identifiers on every file
+
+### File Structure
+```
+contracts/
+├── core/               # Core protocol contracts
+│   ├── Token.sol
+│   ├── Vault.sol
+│   └── Bridge.sol
+├── interfaces/         # All interfaces extracted
+│   ├── IToken.sol
+│   ├── IVault.sol
+│   └── IBridge.sol
+├── libraries/          # Shared logic
+│   └── MathLib.sol
+├── governance/         # Access control, timelock
+│   └── Admin.sol
+└── test/
+    ├── unit/
+    ├── integration/
+    └── invariant/
+```
+
+### Coding Standards
+
+**Naming**
+```solidity
+// Contracts: PascalCase
+contract StablecoinVault { }
+
+// Interfaces: I-prefix
+interface IStablecoinVault { }
+
+// Functions: camelCase, verb-first
+function calculateYield() external view returns (uint256) { }
+
+// State variables: camelCase, s_ prefix for storage
+uint256 private s_totalSupply;
+
+// Constants: UPPER_SNAKE_CASE
+uint256 public constant MAX_SUPPLY = 1_000_000e18;
+
+// Immutables: i_ prefix
+address private immutable i_owner;
+
+// Events: PascalCase, past tense
+event TokensMinted(address indexed to, uint256 amount);
+
+// Errors: PascalCase, contract-prefixed
+error Vault__InsufficientBalance(uint256 requested, uint256 available);
+```
+
+**Function Ordering**
+```solidity
+contract Example {
+    // 1. Type declarations (enums, structs)
+    // 2. State variables
+    // 3. Events
+    // 4. Errors
+    // 5. Modifiers
+    // 6. Constructor
+    // 7. Receive/fallback
+    // 8. External functions
+    // 9. Public functions
+    // 10. Internal functions
+    // 11. Private functions
+    // 12. View/pure functions (grouped by visibility)
+}
+```
+
+**Security Patterns — Always Use**
+
+```solidity
+// CEI Pattern (Checks-Effects-Interactions) — MANDATORY
+function withdraw(uint256 amount) external nonReentrant {
+    // CHECKS
+    if (amount > s_balances[msg.sender]) {
+        revert Vault__InsufficientBalance(amount, s_balances[msg.sender]);
+    }
+    // EFFECTS
+    s_balances[msg.sender] -= amount;
+    s_totalDeposited -= amount;
+    // INTERACTIONS
+    (bool success,) = msg.sender.call{value: amount}("");
+    if (!success) revert Vault__TransferFailed();
+    emit Withdrawn(msg.sender, amount);
+}
+
+// Access control — use OpenZeppelin AccessControl or Ownable2Step
+// NEVER use tx.origin
+// NEVER use single-step ownership transfer
+
+// Reentrancy — use OpenZeppelin ReentrancyGuard on ALL external state-changing functions
+
+// Integer math — use uint256 for all token amounts, avoid downcasting without checks
+// Decimals — always track and convert decimals explicitly
+function _normalizeDecimals(
+    uint256 amount,
+    uint8 fromDecimals,
+    uint8 toDecimals
+) internal pure returns (uint256) {
+    if (fromDecimals == toDecimals) return amount;
+    if (fromDecimals > toDecimals) {
+        return amount / 10 ** (fromDecimals - toDecimals);
+    }
+    return amount * 10 ** (toDecimals - fromDecimals);
+}
+```
+
+### DeFi-Specific Patterns
+
+**ERC-4626 Vault (Yield-Bearing)**
+```solidity
+// ALWAYS override these for security:
+function maxDeposit(address) public view override returns (uint256) {
+    return s_depositCap - totalAssets();
+}
+
+function maxMint(address) public view override returns (uint256) {
+    return convertToShares(maxDeposit(address(0)));
+}
+
+// ALWAYS use virtual assets/shares to prevent inflation attack
+function _decimalsOffset() internal pure override returns (uint8) {
+    return 6; // Adds virtual shares to prevent first-depositor manipulation
+}
+
+// ALWAYS check for zero-share mints
+function deposit(uint256 assets, address receiver) public override returns (uint256 shares) {
+    shares = previewDeposit(assets);
+    if (shares == 0) revert Vault__ZeroShares();
+    // ... rest of deposit logic
+}
+```
+
+**Stablecoin Patterns**
+```solidity
+// Mint with attestation
+function mint(address to, uint256 amount, bytes calldata proof) external {
+    if (!_verifyAttestation(proof, amount)) revert Token__InvalidAttestation();
+    if (totalSupply() + amount > s_supplyCap) revert Token__CapExceeded();
+    _mint(to, amount);
+    emit Minted(to, amount, keccak256(proof));
+}
+
+// Burn-to-redeem pattern
+function redeem(uint256 amount) external {
+    _burn(msg.sender, amount);
+    // Queue redemption — don't transfer in same tx for large amounts
+    s_redemptionQueue[msg.sender] += amount;
+    emit RedemptionQueued(msg.sender, amount);
+}
+
+// Emergency pause — ALWAYS include
+function pause() external onlyRole(PAUSER_ROLE) {
+    _pause();
+}
+```
+
+**Bridge Lock/Mint Pattern**
+```solidity
+// Lock on source chain
+function lockForBridge(
+    uint256 amount,
+    bytes32 destinationChainId,
+    bytes32 recipient
+) external whenNotPaused nonReentrant {
+    IERC20(s_token).safeTransferFrom(msg.sender, address(this), amount);
+    
+    uint256 nonce = s_bridgeNonce++;
+    bytes32 lockHash = keccak256(
+        abi.encodePacked(block.chainid, destinationChainId, msg.sender, recipient, amount, nonce)
+    );
+    s_locks[lockHash] = true;
+    
+    emit Locked(msg.sender, recipient, amount, nonce, destinationChainId, lockHash);
+}
+
+// Mint on destination (requires multi-sig or oracle verification)
+function mintFromBridge(
+    bytes32 lockHash,
+    address recipient,
+    uint256 amount,
+    bytes[] calldata signatures
+) external whenNotPaused nonReentrant {
+    if (s_processed[lockHash]) revert Bridge__AlreadyProcessed();
+    if (!_verifySignatures(lockHash, signatures)) revert Bridge__InvalidSignatures();
+    
+    s_processed[lockHash] = true;
+    _mint(recipient, amount);
+    
+    emit BridgeMinted(recipient, amount, lockHash);
+}
+```
+
+### Testing (Foundry)
+```solidity
+// ALWAYS use these testing patterns:
+
+// Fuzz testing for numeric inputs
+function testFuzz_DepositWithdraw(uint256 amount) public {
+    amount = bound(amount, 1, MAX_DEPOSIT);
+    // ... test deposit and withdraw with random amounts
+}
+
+// Invariant testing
+function invariant_totalSupplyMatchesBalances() public {
+    assertEq(token.totalSupply(), handler.ghost_totalMinted() - handler.ghost_totalBurned());
+}
+
+// Fork testing for mainnet interactions
+function testFork_SwapOnUniswap() public {
+    vm.createSelectFork(vm.envString("ETH_RPC_URL"));
+    // ... test against real deployed contracts
+}
+
+// Event testing
+function test_EmitsOnMint() public {
+    vm.expectEmit(true, true, false, true);
+    emit Minted(alice, 100e18);
+    vault.mint(alice, 100e18);
+}
+
+// Gas snapshots — always track gas for critical paths
+function test_GasDeposit() public {
+    uint256 gasBefore = gasleft();
+    vault.deposit(100e18, alice);
+    uint256 gasUsed = gasBefore - gasleft();
+    assertLt(gasUsed, 100_000, "Deposit too expensive");
+}
+```
+
+---
+
+## DAML
+
+### File Structure
+```
+daml/
+├── daml.yaml
+├── src/
+│   ├── Main/
+│   │   ├── Token.daml
+│   │   ├── Vault.daml
+│   │   └── Bridge.daml
+│   ├── Interface/
+│   │   ├── Token/
+│   │   │   └── Instance.daml
+│   │   └── Types.daml
+│   └── Util/
+│       ├── Math.daml
+│       └── Validation.daml
+└── test/
+    ├── Token/
+    │   └── Test.daml
+    └── Integration/
+        └── Test.daml
+```
+
+### Coding Standards
+
+**Template Structure**
+```daml
+-- Module documentation
+-- | Token represents a fungible asset on Canton Network.
+-- Signatories: issuer (asset originator)
+-- Observers: holder (current owner), auditor (optional compliance)
+module Main.Token where
+
+import Daml.Script
+import DA.Optional (fromSome)
+
+-- | A fungible token with issuer attestation
+template Token
+  with
+    issuer   : Party    -- Asset originator, always signatory
+    holder   : Party    -- Current owner
+    amount   : Decimal  -- Token quantity (18 decimal precision)
+    metadata : TokenMetadata  -- On-chain metadata
+  where
+    -- Authorization
+    signatory issuer
+    observer holder
+
+    -- Invariants — checked at creation AND after every choice
+    ensure amount > 0.0
+      && issuer /= holder  -- Issuer cannot hold their own token
+
+    -- Contract key for lookups
+    key (issuer, holder) : (Party, Party)
+    maintainer key._1
+
+    -- Choices
+    choice Transfer : ContractId Token
+      with
+        newHolder : Party
+      controller holder
+      do
+        -- Validate
+        assertMsg "Cannot transfer to self" (newHolder /= holder)
+        assertMsg "Cannot transfer to issuer" (newHolder /= issuer)
+        -- Create new token with updated holder
+        create this with holder = newHolder
+
+    choice Split : (ContractId Token, ContractId Token)
+      with
+        splitAmount : Decimal
+      controller holder
+      do
+        assertMsg "Split amount must be positive" (splitAmount > 0.0)
+        assertMsg "Split amount exceeds balance" (splitAmount < amount)
+        token1 <- create this with amount = splitAmount
+        token2 <- create this with amount = amount - splitAmount
+        return (token1, token2)
+
+    nonconsuming choice GetBalance : Decimal
+      controller holder
+      do return amount
+```
+
+**The Propose-Accept Pattern (MANDATORY for multi-party workflows)**
+```daml
+-- Step 1: Proposal (single signatory)
+template TransferProposal
+  with
+    from     : Party
+    to       : Party
+    amount   : Decimal
+    tokenCid : ContractId Token
+  where
+    signatory from
+    observer to
+
+    choice AcceptTransfer : ContractId Token
+      controller to
+      do
+        token <- fetch tokenCid
+        assertMsg "Proposal amount mismatch" (token.amount == amount)
+        exercise tokenCid Transfer with newHolder = to
+
+    choice RejectTransfer : ()
+      controller to
+      do return ()
+
+    choice WithdrawProposal : ()
+      controller from
+      do return ()
+```
+
+**Interface Pattern (DAML Interfaces for polymorphism)**
+```daml
+-- Define an interface
+interface Transferable where
+  viewtype TransferableView
+  getOwner : Party
+  getAmount : Decimal
+  
+  choice ITransfer : ContractId Transferable
+    with newOwner : Party
+    controller getOwner this
+    do
+      transferImpl this newOwner
+
+-- Implement on a template
+template StableCoin
+  with
+    issuer : Party
+    holder : Party
+    amount : Decimal
+  where
+    signatory issuer
+    observer holder
+
+    interface instance Transferable for StableCoin where
+      view = TransferableView with
+        owner = holder
+        amount = amount
+      getOwner = holder
+      getAmount = amount
+```
+
+**Error Handling**
+```daml
+-- Use assertMsg for clear failure messages — ALWAYS
+assertMsg "Insufficient balance: cannot withdraw more than deposited" 
+  (withdrawAmount <= balance)
+
+-- Use Either for recoverable errors in helper functions
+validateTransfer : Decimal -> Decimal -> Either Text Decimal
+validateTransfer amount balance
+  | amount <= 0.0 = Left "Amount must be positive"
+  | amount > balance = Left "Insufficient balance"
+  | otherwise = Right (balance - amount)
+
+-- Use try-catch for exerciseByKey failures
+try do
+  exerciseByKey @Token (issuer, holder) Transfer with newHolder
+catch
+  _ -> do
+    -- Log or create error contract
+    create TransferFailed with ..
+```
+
+### Canton-Specific Patterns
+
+**Disclosure Contract (controlled visibility)**
+```daml
+template DisclosedToken
+  with
+    token    : Token      -- The actual data
+    viewers  : [Party]    -- Who can see it
+    discloser : Party
+  where
+    signatory discloser
+    observer viewers
+    
+    -- Allows adding viewers without re-creating the source token
+    choice AddViewer : ContractId DisclosedToken
+      with newViewer : Party
+      controller discloser
+      do create this with viewers = newViewer :: viewers
+```
+
+---
+
+## TYPESCRIPT
+
+### Project Structure
+```
+src/
+├── index.ts               # Entry point
+├── config/
+│   ├── index.ts           # Config aggregation
+│   ├── env.ts             # Environment validation (zod)
+│   └── constants.ts       # Protocol constants
+├── contracts/             # Generated types from ABIs / DAML codegen
+│   ├── abis/
+│   └── types/
+├── services/
+│   ├── bridge.service.ts
+│   ├── vault.service.ts
+│   └── attestation.service.ts
+├── blockchain/
+│   ├── provider.ts        # RPC provider management
+│   ├── wallet.ts          # Signer management
+│   └── multicall.ts       # Batched reads
+├── canton/
+│   ├── client.ts          # Canton JSON API client
+│   ├── ledger.ts          # Ledger interaction helpers
+│   └── types.ts           # Canton-specific types
+├── api/
+│   ├── routes/
+│   ├── middleware/
+│   └── validators/
+├── utils/
+│   ├── retry.ts
+│   ├── logger.ts
+│   └── errors.ts
+├── types/
+│   └── index.ts           # Shared type definitions
+└── test/
+    ├── unit/
+    ├── integration/
+    └── fixtures/
+```
+
+### Coding Standards
+
+**TypeScript Config (strict mode ALWAYS)**
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  }
+}
+```
+
+**Type-First Design**
+```typescript
+// Define types before implementation — ALWAYS
+// Use branded types for domain primitives
+type Address = string & { readonly __brand: "Address" };
+type TokenAmount = bigint & { readonly __brand: "TokenAmount" };
+type TransactionHash = string & { readonly __brand: "TransactionHash" };
+
+function toAddress(value: string): Address {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(value)) {
+    throw new InvalidAddressError(value);
+  }
+  return value.toLowerCase() as Address;
+}
+
+function toTokenAmount(value: bigint): TokenAmount {
+  if (value < 0n) throw new NegativeAmountError(value);
+  return value as TokenAmount;
+}
+
+// Use discriminated unions for state machines
+type BridgeTransactionState =
+  | { status: "pending"; lockHash: string; timestamp: number }
+  | { status: "confirmed"; lockHash: string; signatures: string[]; blockNumber: number }
+  | { status: "completed"; lockHash: string; mintTxHash: TransactionHash }
+  | { status: "failed"; lockHash: string; error: string; retryCount: number };
+```
+
+**Error Handling**
+```typescript
+// Custom error hierarchy — ALWAYS
+class AppError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly statusCode: number = 500,
+    public readonly isOperational: boolean = true,
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+class ContractError extends AppError {
+  constructor(message: string, public readonly txHash?: string) {
+    super(message, "CONTRACT_ERROR", 502);
+  }
+}
+
+class BridgeError extends AppError {
+  constructor(message: string, public readonly lockHash: string) {
+    super(message, "BRIDGE_ERROR", 500);
+  }
+}
+
+// Result type for operations that can fail gracefully
+type Result<T, E = AppError> =
+  | { ok: true; value: T }
+  | { ok: false; error: E };
+
+async function safeMint(
+  params: MintParams
+): Promise<Result<TransactionHash, ContractError>> {
+  try {
+    const tx = await contract.mint(params.to, params.amount);
+    const receipt = await tx.wait();
+    return { ok: true, value: receipt.hash as TransactionHash };
+  } catch (err) {
+    return {
+      ok: false,
+      error: new ContractError(
+        `Mint failed: ${err instanceof Error ? err.message : "Unknown"}`,
+      ),
+    };
+  }
+}
+```
+
+**Blockchain Interaction (viem / ethers v6)**
+```typescript
+// Provider with retry and fallback
+import { createPublicClient, http, fallback } from "viem";
+import { mainnet } from "viem/chains";
+
+const client = createPublicClient({
+  chain: mainnet,
+  transport: fallback([
+    http(process.env.RPC_PRIMARY),
+    http(process.env.RPC_FALLBACK),
+  ]),
+  batch: {
+    multicall: true, // Batch reads automatically
+  },
+});
+
+// ALWAYS use bigint for token amounts — NEVER floating point
+const amount = parseUnits("100.5", 18); // 100500000000000000000n
+
+// ALWAYS estimate gas before sending
+const gasEstimate = await client.estimateContractGas({
+  address: contractAddress,
+  abi: vaultAbi,
+  functionName: "deposit",
+  args: [amount],
+  account: signer.address,
+});
+
+// Add 20% buffer
+const gasLimit = (gasEstimate * 120n) / 100n;
+```
+
+**Canton JSON API Client**
+```typescript
+interface CantonConfig {
+  ledgerUrl: string;
+  token: string;
+  applicationId: string;
+}
+
+class CantonLedgerClient {
+  private readonly baseUrl: string;
+  private readonly headers: Record<string, string>;
+
+  constructor(private readonly config: CantonConfig) {
+    this.baseUrl = config.ledgerUrl;
+    this.headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.token}`,
+    };
+  }
+
+  async createContract<T>(
+    templateId: string,
+    payload: T,
+    party: string,
+  ): Promise<Result<string>> {
+    const response = await this.post("/v1/create", {
+      templateId,
+      payload,
+      meta: { actAs: [party] },
+    });
+    if (!response.ok) return { ok: false, error: new ContractError(response.statusText) };
+    const data = await response.json();
+    return { ok: true, value: data.contractId };
+  }
+
+  async exerciseChoice<T>(
+    contractId: string,
+    templateId: string,
+    choice: string,
+    argument: T,
+    party: string,
+  ): Promise<Result<unknown>> {
+    return this.post("/v1/exercise", {
+      templateId,
+      contractId,
+      choice,
+      argument,
+      meta: { actAs: [party] },
+    });
+  }
+
+  async queryContracts<T>(
+    templateId: string,
+    party: string,
+    filter?: Record<string, unknown>,
+  ): Promise<T[]> {
+    const response = await this.post("/v1/query", {
+      templateIds: [templateId],
+      query: filter ?? {},
+      meta: { actAs: [party] },
+    });
+    const data = await response.json();
+    return data.result;
+  }
+
+  private async post(path: string, body: unknown): Promise<Response> {
+    return fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: this.headers,
+      body: JSON.stringify(body),
+    });
+  }
+}
+```
+
+**Environment Validation (MANDATORY)**
+```typescript
+import { z } from "zod";
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(["development", "staging", "production"]),
+  PORT: z.coerce.number().default(3000),
+  
+  // Blockchain
+  RPC_URL: z.string().url(),
+  PRIVATE_KEY: z.string().regex(/^0x[a-fA-F0-9]{64}$/),
+  CHAIN_ID: z.coerce.number(),
+  
+  // Canton
+  CANTON_LEDGER_URL: z.string().url(),
+  CANTON_AUTH_TOKEN: z.string().min(1),
+  
+  // Protocol
+  VAULT_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  BRIDGE_ADDRESS: z.string().regex(/^0x[a-fA-F0-9]{40}$/),
+  
+  // Limits
+  MAX_MINT_AMOUNT: z.coerce.bigint().default(1_000_000n),
+  BRIDGE_TIMEOUT_SECONDS: z.coerce.number().default(3600),
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+export const env: Env = envSchema.parse(process.env);
+```
+
+**Testing**
+```typescript
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Use dependency injection for testability
+describe("BridgeService", () => {
+  let service: BridgeService;
+  let mockProvider: MockProvider;
+  let mockCanton: MockCantonClient;
+
+  beforeEach(() => {
+    mockProvider = new MockProvider();
+    mockCanton = new MockCantonClient();
+    service = new BridgeService(mockProvider, mockCanton);
+  });
+
+  it("should lock tokens and emit event", async () => {
+    const result = await service.lockForBridge({
+      amount: parseUnits("100", 18),
+      recipient: "canton-party-id",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(mockProvider.getLockedAmount()).toBe(parseUnits("100", 18));
+    }
+  });
+
+  it("should reject lock with zero amount", async () => {
+    const result = await service.lockForBridge({
+      amount: 0n,
+      recipient: "canton-party-id",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("INVALID_AMOUNT");
+    }
+  });
+});
+```
+
+---
+
+## Cross-Language Conventions
+
+### Shared Across All Three Languages
+1. **No magic numbers** — use named constants everywhere
+2. **No abbreviations** in public APIs — `calculateYield`, not `calcYld`
+3. **Comments explain WHY, not WHAT** — the code shows what
+4. **Every public function has a docstring/NatSpec/doc comment**
+5. **All amounts use the highest precision type** — `uint256`, `Decimal`, `bigint`
+6. **Never trust external input** — validate at every boundary
+7. **Errors are specific and actionable** — not "something went wrong"
+8. **Tests exist for every public function** — no exceptions
+
+### Cross-Chain Data Flow
+```
+Canton (DAML)          Bridge              Ethereum (Solidity)       SDK (TypeScript)
+─────────────         ──────              ───────────────────       ────────────────
+Template.Token   →    Lock/Attestation →   ERC20.mint()         ←   bridgeService.lock()
+exerciseChoice   →    Proof generation →   verifyProof()        ←   attestation.verify()
+Archive token    ←    Burn confirmation ←  ERC20.burn()         ←   bridgeService.redeem()
+```
+
+When implementing cross-chain flows, ALWAYS:
+- Define the data types in TypeScript first (single source of truth for API layer)
+- Mirror the types in Solidity structs and DAML records
+- Validate at EVERY boundary crossing (Canton→Bridge, Bridge→EVM, EVM→SDK)
+- Log every state transition with correlation IDs across all three layers
