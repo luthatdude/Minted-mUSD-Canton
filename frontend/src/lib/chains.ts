@@ -53,7 +53,7 @@ export const ETHEREUM_MAINNET: ChainConfig = {
   nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
   contracts: {
     USDC: process.env.NEXT_PUBLIC_USDC_ADDRESS || '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-    // FIX P0: Use correct env var name for deposit router
+    // Use correct env var name for deposit router
     // Fallback to DIRECT_MINT for backwards compatibility
     depositRouter: process.env.NEXT_PUBLIC_DEPOSIT_ROUTER_ADDRESS || process.env.NEXT_PUBLIC_DIRECT_MINT_ADDRESS || '',
   },

@@ -8,6 +8,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
+import "../TimelockGoverned.sol";
 
 /**
  * @title MorphoLoopStrategy
@@ -131,7 +132,8 @@ contract MorphoLoopStrategy is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -187,12 +189,12 @@ contract MorphoLoopStrategy is
     /// @notice Total principal deposited (before leverage)
     uint256 public totalPrincipal;
 
-    /// @notice FIX CRITICAL: Maximum borrow rate (annualized, 18 decimals) for profitable looping
+    /// @notice Maximum borrow rate (annualized, 18 decimals) for profitable looping
     /// @dev Only loop when borrowRate < maxBorrowRateForProfit
-    /// @dev Default: 3% = 0.03e18 - looping is only profitable when borrow rate is low
+    /// @dev Default: 3% = 0.03e18 — looping is only profitable when borrow rate is low
     uint256 public maxBorrowRateForProfit;
 
-    /// @notice FIX: Minimum supply rate required to proceed (annualized, 18 decimals)
+    /// @notice Minimum supply rate required to proceed (annualized, 18 decimals)
     /// @dev Default: 1% = 0.01e18
     uint256 public minSupplyRateRequired;
 
@@ -234,12 +236,15 @@ contract MorphoLoopStrategy is
         address _morpho,
         bytes32 _marketId,
         address _treasury,
-        address _admin
+        address _admin,
+        address _timelock
     ) external initializer {
+        require(_timelock != address(0), "ZERO_TIMELOCK");
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         morpho = IMorphoBlue(_morpho);
@@ -252,7 +257,7 @@ contract MorphoLoopStrategy is
         targetLoops = 4;
         active = true;
 
-        // FIX CRITICAL: Set profitability thresholds
+        // Set profitability thresholds
         // Only loop when borrow rate is low enough to profit
         // maxBorrowRateForProfit: 3% annualized = 0.03e18
         // minSupplyRateRequired: 1% annualized = 0.01e18
@@ -264,8 +269,10 @@ contract MorphoLoopStrategy is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // Approve Morpho to spend USDC
-        usdc.forceApprove(_morpho, type(uint256).max);
+        // FIX C-05: Removed infinite approval (type(uint256).max) to Morpho.
+        // Per-operation approvals are now set before each supply/borrow/repay
+        // call in _loop(), _deleverage(), and _fullDeleverage() to limit
+        // exposure if Morpho Blue is compromised or upgraded maliciously.
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -450,7 +457,7 @@ contract MorphoLoopStrategy is
         // seconds_per_year ≈ 31536000
         currentBorrowRate = borrowRatePerSecond * 31536000;
 
-        // FIX CRITICAL: Only loop if borrow rate is below threshold
+        // Only loop if borrow rate is below threshold
         // For collateral-based looping, collateral earns 0%, so we need very low borrow rates
         // or external yield sources (like Morpho rewards) to be profitable
         profitable = currentBorrowRate <= maxBorrowRateForProfit;
@@ -458,8 +465,8 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Execute looping: supply → borrow → supply → repeat
-     * @dev FIX CRITICAL: Now checks profitability before looping
-     *      If not profitable, only supplies initial amount without leverage
+     * @dev Checks profitability before looping; if not profitable,
+     *      only supplies initial amount without leverage
      * @param initialAmount Starting USDC amount
      * @return totalSupplied Total USDC supplied across all loops
      */
@@ -467,20 +474,24 @@ contract MorphoLoopStrategy is
         uint256 amountToSupply = initialAmount;
         totalSupplied = 0;
 
-        // FIX CRITICAL: Check if looping is profitable before proceeding
+        // Check if looping is profitable before proceeding
         (bool profitable, uint256 borrowRate) = _isLoopingProfitable();
         
         if (!profitable) {
             // Looping not profitable - supply as collateral without leverage
             // This protects against paying high borrow interest with 0% supply yield
             emit LoopingSkipped(borrowRate, maxBorrowRateForProfit, "Borrow rate too high");
-            
+
+            // FIX HIGH-07: Per-operation approval for Morpho supplyCollateral
+            usdc.forceApprove(address(morpho), initialAmount);
             // Just supply the initial amount without looping
             morpho.supplyCollateral(marketParams, initialAmount, address(this), "");
             return initialAmount;
         }
 
         for (uint256 i = 0; i < targetLoops && amountToSupply > 1e4; i++) {
+            // FIX C-05: Per-operation approval before each Morpho interaction
+            usdc.forceApprove(address(morpho), amountToSupply);
             // Supply USDC as collateral
             morpho.supplyCollateral(marketParams, amountToSupply, address(this), "");
             totalSupplied += amountToSupply;
@@ -505,15 +516,15 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Deleverage to free up principal
-     * @dev FIX C-STRAT-02: Return actual freed amount, not inflated collateral withdrawn
-     *      Previously counted ALL withdrawn collateral as "freed" but most was used for repayment
+     * @dev Returns actual freed amount based on ending balance, not inflated
+     *      collateral withdrawn (most is used for repayment)
      * @param principalNeeded Amount of principal to free
      * @return freed Amount actually freed and available for transfer
      */
     function _deleverage(uint256 principalNeeded) internal returns (uint256 freed) {
         IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
         
-        // FIX: Track starting balance to calculate actual net freed
+        // Track starting balance to calculate actual net freed
         uint256 startingBalance = usdc.balanceOf(address(this));
         
         // Calculate current borrow amount
@@ -532,7 +543,6 @@ contract MorphoLoopStrategy is
             uint256 toWithdraw = maxWithdraw > principalNeeded ? principalNeeded : maxWithdraw;
             
             morpho.withdrawCollateral(marketParams, toWithdraw, address(this), address(this));
-            // FIX: Don't count as freed here - calculate at end based on actual balance
 
             // Use withdrawn funds to repay debt
             uint256 balance = usdc.balanceOf(address(this));
@@ -540,6 +550,8 @@ contract MorphoLoopStrategy is
                 // Only use newly withdrawn funds for repayment
                 uint256 available = balance - startingBalance;
                 uint256 repayAmount = available > currentBorrow ? currentBorrow : available;
+                // FIX C-05: Per-operation approval before repay
+                usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
                 currentBorrow -= repayAmount;
             }
@@ -549,18 +561,17 @@ contract MorphoLoopStrategy is
             if (currentBalance >= startingBalance + principalNeeded) break;
         }
         
-        // FIX C-STRAT-02: Return actual net increase in balance, not total collateral withdrawn
-        // This is what's actually available for transfer
+        // Return actual net increase in balance (what's available for transfer)
         uint256 endingBalance = usdc.balanceOf(address(this));
         freed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
     }
 
     /**
      * @notice Full deleverage - repay all debt and withdraw all collateral
-     * @dev FIX C-STRAT-02: Return actual freed amount based on ending balance
+     * @dev Returns actual freed amount based on ending balance
      */
     function _fullDeleverage() internal returns (uint256 totalFreed) {
-        // FIX: Track starting balance to calculate actual net freed
+        // Track starting balance to calculate actual net freed
         uint256 startingBalance = usdc.balanceOf(address(this));
         
         for (uint256 i = 0; i < MAX_LOOPS * 2; i++) {
@@ -577,7 +588,6 @@ contract MorphoLoopStrategy is
             if (currentBorrow == 0) {
                 if (pos.collateral > 0) {
                     morpho.withdrawCollateral(marketParams, pos.collateral, address(this), address(this));
-                    // FIX: Don't count here - calculate at end
                 }
                 break;
             }
@@ -586,18 +596,19 @@ contract MorphoLoopStrategy is
             uint256 maxWithdraw = _maxWithdrawable();
             if (maxWithdraw > 0) {
                 morpho.withdrawCollateral(marketParams, maxWithdraw, address(this), address(this));
-                // FIX: Don't count here - calculate at end
             }
 
             // Repay with available balance
             uint256 balance = usdc.balanceOf(address(this));
             if (balance > 0) {
                 uint256 repayAmount = balance > currentBorrow ? currentBorrow : balance;
+                // FIX C-05: Per-operation approval before repay
+                usdc.forceApprove(address(morpho), repayAmount);
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }
         }
         
-        // FIX C-STRAT-02: Return actual net increase in balance
+        // Return actual net increase in balance
         uint256 endingBalance = usdc.balanceOf(address(this));
         totalFreed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
     }
@@ -651,7 +662,6 @@ contract MorphoLoopStrategy is
 
         // Health factor = (collateral * liquidationLTV) / borrow
         uint256 liquidationLtv = marketParams.lltv; // Already in WAD
-        // FIX L-02: Removed WAD/WAD no-op (was dividing and multiplying by WAD)
         healthFactor = (pos.collateral * liquidationLtv) / currentBorrow;
     }
 
@@ -723,7 +733,6 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Update profitability thresholds for looping
-     * @dev FIX CRITICAL: Allows strategist to tune when looping is profitable
      * @param _maxBorrowRate Maximum borrow rate (annualized, 18 decimals) to allow looping
      * @param _minSupplyRate Minimum supply rate (annualized, 18 decimals) required
      */
@@ -800,12 +809,13 @@ contract MorphoLoopStrategy is
     // STORAGE GAP FOR UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
     
-    /// @dev FIX HIGH: Storage gap for future upgrades - prevents storage collision
+    /// @dev Storage gap for future upgrades — prevents storage collision
     uint256[40] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // UPGRADES
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address newImplementation) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address newImplementation) internal override onlyTimelock {}
 }

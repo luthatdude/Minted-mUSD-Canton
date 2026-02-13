@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Leverage Vault
 // Automatic multi-loop leverage with Uniswap V3 integration
 
@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./TimelockGoverned.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -39,7 +40,6 @@ interface ICollateralVault {
         bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps
     );
     function depositFor(address user, address token, uint256 amount) external;
-    // FIX C-04: Match actual CollateralVault 5-param signature (was missing skipHealthCheck)
     function withdrawFor(address user, address token, uint256 amount, address recipient, bool skipHealthCheck) external;
 }
 
@@ -65,8 +65,7 @@ interface IBorrowModule {
 /// @notice Automatic multi-loop leverage with integrated Uniswap V3 swaps.
 ///         Users can open leveraged positions in a single transaction.
 /// @dev Integrates with CollateralVault, BorrowModule, and Uniswap V3.
-/// FIX H-03: Added Pausable for emergency controls
-contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
+contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
     using SafeERC20 for IERC20;
 
     bytes32 public constant LEVERAGE_ADMIN_ROLE = keccak256("LEVERAGE_ADMIN_ROLE");
@@ -158,7 +157,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     event TokenEnabled(address indexed token, uint24 poolFee);
     event TokenDisabled(address indexed token);
 
-    /// @notice FIX M-01: Event for direct mUSD repayment close (no swap needed)
     event LeverageClosedWithDirectRepay(
         address indexed user,
         address indexed collateralToken,
@@ -167,7 +165,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         uint256 musdProvidedByUser
     );
 
-    /// @notice FIX S-H03: Emitted when emergency close debt repayment fails
     event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
 
     // ============================================================
@@ -179,7 +176,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         address _collateralVault,
         address _borrowModule,
         address _priceOracle,
-        address _musd
+        address _musd,
+        address _timelock
     ) {
         require(_swapRouter != address(0), "INVALID_ROUTER");
         require(_collateralVault != address(0), "INVALID_VAULT");
@@ -203,6 +201,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+
+        // S-H-03: Initialize timelock for config changes
+        _setTimelock(_timelock);
     }
 
     // ============================================================
@@ -217,11 +218,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @return totalCollateral Total collateral after loops
     /// @return totalDebt Total mUSD debt
     /// @return loopsExecuted Number of loops completed
+    /// @param userDeadline FIX S-L-02: User-supplied deadline for swaps (0 = use default 300s)
     function openLeveragedPosition(
         address collateralToken,
         uint256 initialAmount,
         uint256 targetLeverageX10,
-        uint256 maxLoopsOverride
+        uint256 maxLoopsOverride,
+        uint256 userDeadline
     ) external nonReentrant whenNotPaused returns (
         uint256 totalCollateral,
         uint256 totalDebt,
@@ -258,7 +261,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             collateralToken,
             initialAmount,
             targetLeverageX10,
-            loopLimit
+            loopLimit,
+            userDeadline
         );
 
         // Store position
@@ -290,8 +294,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Close leveraged position - repay debt and withdraw collateral
     /// @param minCollateralOut Minimum collateral to receive (slippage protection)
     /// @return collateralReturned Amount of collateral returned to user
-    /// @dev FIX M-01: If swap fails, use closeLeveragedPositionWithMusd() instead
-    /// FIX S-M12: Added whenNotPaused to prevent close operations during emergency pause
     function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         require(pos.totalCollateral > 0, "NO_POSITION");
@@ -314,25 +316,21 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
                 collateralToSell = totalCollateralInVault;
             }
 
-            // FIX: Actually withdraw collateral from vault to this contract
-            // FIX C-04: Pass skipHealthCheck=true — atomic close repays debt in same tx
             collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
 
             // Swap collateral → mUSD
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell);
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
             require(musdReceived >= debtToRepay, "INSUFFICIENT_MUSD_FROM_SWAP");
 
-            // FIX CRITICAL: Use repayFor() to repay the USER's debt, not the vault's
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repayFor(msg.sender, debtToRepay);
 
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // FIX S-C02: Try to swap excess mUSD back to collateral.
                 // If swap fails (returns 0), transfer the mUSD directly to user
                 // instead of leaving it trapped in the contract.
-                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd);
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, 0);
                 if (swappedCollateral == 0) {
                     // Swap failed — return mUSD directly to user
                     IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
@@ -340,10 +338,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             }
         }
 
-        // FIX: Withdraw ALL remaining collateral from vault to user
         uint256 remainingCollateral = collateralVault.deposits(msg.sender, collateralToken);
         if (remainingCollateral > 0) {
-            // FIX C-04: skipHealthCheck=true — debt already repaid above
             collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender, true);
         }
         
@@ -375,14 +371,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         return collateralReturned;
     }
 
-    /// @notice FIX M-01: Close leveraged position by providing mUSD directly
     /// @dev Use this if closeLeveragedPosition() fails due to swap issues.
     ///      User provides mUSD to repay debt, receives ALL collateral back.
     ///      This completely eliminates swap failure risk.
+    ///      Second param reserved for deadline compatibility (unused, no swaps in this path).
     /// @param musdAmount Amount of mUSD to provide for debt repayment
     /// @return collateralReturned Amount of collateral returned to user
-    /// FIX S-M13: Added whenNotPaused to prevent close operations during emergency pause
-    function closeLeveragedPositionWithMusd(uint256 musdAmount) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
+    function closeLeveragedPositionWithMusd(uint256 musdAmount, uint256 /* userDeadline */) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         require(pos.totalCollateral > 0, "NO_POSITION");
 
@@ -396,7 +391,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
             // Pull mUSD from user
             IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), musdAmount);
 
-            // FIX CRITICAL: Use repayFor() to repay the USER's debt, not the vault's
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
             borrowModule.repayFor(msg.sender, debtToRepay);
 
@@ -410,7 +404,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         // Withdraw ALL collateral from vault directly to user
         uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);
         if (totalCollateralInVault > 0) {
-            // FIX C-04: skipHealthCheck=true — debt already repaid above
             collateralVault.withdrawFor(msg.sender, collateralToken, totalCollateralInVault, msg.sender, true);
         }
 
@@ -446,7 +439,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         address collateralToken,
         uint256 currentCollateral,
         uint256 targetLeverageX10,
-        uint256 loopLimit
+        uint256 loopLimit,
+        uint256 userDeadline
     ) internal returns (uint256 totalCollateral, uint256 totalDebt, uint256 loopsExecuted) {
         totalCollateral = currentCollateral;
         totalDebt = 0;
@@ -454,31 +448,31 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
 
         for (uint256 i = 0; i < loopLimit; i++) {
             // Check if we've reached target leverage
-            uint256 currentLeverageX10 = (totalCollateral * 10) / currentCollateral;
-            if (currentLeverageX10 >= targetLeverageX10) break;
+            if ((totalCollateral * 10) / currentCollateral >= targetLeverageX10) break;
 
             // Calculate remaining borrow capacity
             uint256 borrowable = borrowModule.maxBorrow(user);
             if (borrowable < minBorrowPerLoop) break;
 
             // Cap borrow to reach target leverage
-            uint256 targetDebt = _calculateTargetDebt(currentCollateral, totalCollateral, targetLeverageX10, collateralToken);
-            uint256 toBorrow = targetDebt > totalDebt ? targetDebt - totalDebt : 0;
-            if (toBorrow > borrowable) toBorrow = borrowable;
-            if (toBorrow < minBorrowPerLoop) break;
+            {
+                uint256 targetDebt = _calculateTargetDebt(currentCollateral, totalCollateral, targetLeverageX10, collateralToken);
+                uint256 toBorrow = targetDebt > totalDebt ? targetDebt - totalDebt : 0;
+                if (toBorrow > borrowable) toBorrow = borrowable;
+                if (toBorrow < minBorrowPerLoop) break;
 
-            // Borrow mUSD (minted to this contract for swapping)
-            borrowModule.borrowFor(user, toBorrow);
-            totalDebt += toBorrow;
+                // Borrow mUSD (minted to this contract for swapping)
+                borrowModule.borrowFor(user, toBorrow);
+                totalDebt += toBorrow;
 
-            // FIX C-3: Swap mUSD → collateral — revert on failure to prevent orphaned debt
-            uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow);
-            require(collateralReceived > 0, "SWAP_FAILED_ORPHANED_DEBT");
+                uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow, 0, userDeadline);
+                require(collateralReceived > 0, "SWAP_FAILED_ORPHANED_DEBT");
 
-            // Deposit new collateral
-            IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
-            collateralVault.depositFor(user, collateralToken, collateralReceived);
-            totalCollateral += collateralReceived;
+                // Deposit new collateral
+                IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
+                collateralVault.depositFor(user, collateralToken, collateralReceived);
+                totalCollateral += collateralReceived;
+            }
 
             loopsExecuted++;
         }
@@ -509,15 +503,21 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Swap mUSD to collateral via Uniswap V3
-    function _swapMusdToCollateral(address collateralToken, uint256 musdAmount) internal returns (uint256 collateralReceived) {
+    /// @param userMinOut FIX S-M-03: User-supplied minimum output for sandwich protection (0 = oracle only)
+    /// @param userDeadline FIX S-L-02: User-supplied deadline (0 = default 300s)
+    function _swapMusdToCollateral(address collateralToken, uint256 musdAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 collateralReceived) {
         // slither-disable-next-line incorrect-equality
         if (musdAmount == 0) return 0;
 
-        // Get expected output for slippage calculation
+        // FIX S-M-03: Use max(oracleMin, userMinOut) — oracle provides safety floor,
+        // user can set tighter slippage to protect against sandwich attacks
         uint256 expectedOut = _getCollateralForMusd(collateralToken, musdAmount);
-        uint256 minOut = (expectedOut * (10000 - maxSlippageBps)) / 10000;
+        uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;
+        uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;
 
-        // FIX M-6: Use forceApprove for consistency
+        // FIX S-L-02: User-supplied deadline prevents miner timestamp manipulation
+        uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;
+
         IERC20(address(musd)).forceApprove(address(swapRouter), musdAmount);
 
         // Get pool fee for this token
@@ -531,7 +531,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
                 tokenOut: collateralToken,
                 fee: poolFee,
                 recipient: address(this),
-                deadline: block.timestamp + 300, // 5 min deadline
+                deadline: deadline,
                 amountIn: musdAmount,
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0
@@ -539,7 +539,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         ) returns (uint256 amountOut) {
             collateralReceived = amountOut;
         } catch {
-            // FIX M-02: Clear dangling approval on swap failure (defense-in-depth)
             IERC20(address(musd)).forceApprove(address(swapRouter), 0);
             collateralReceived = 0;
         }
@@ -548,14 +547,19 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Swap collateral to mUSD via Uniswap V3
-    /// FIX C-1: Revert on swap failure instead of returning 0 to prevent fund loss
-    function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount) internal returns (uint256 musdReceived) {
+    /// @param userMinOut FIX S-M-03: User-supplied minimum output (0 = oracle only)
+    /// @param userDeadline FIX S-L-02: User-supplied deadline (0 = default 300s)
+    function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 musdReceived) {
         // slither-disable-next-line incorrect-equality
         if (collateralAmount == 0) return 0;
 
-        // Get expected output
+        // FIX S-M-03: Use max(oracleMin, userMinOut) for sandwich protection
         uint256 expectedOut = priceOracle.getValueUsd(collateralToken, collateralAmount);
-        uint256 minOut = (expectedOut * (10000 - maxSlippageBps)) / 10000;
+        uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;
+        uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;
+
+        // FIX S-L-02: User-supplied deadline
+        uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;
 
         // Approve router
         IERC20(collateralToken).forceApprove(address(swapRouter), collateralAmount);
@@ -564,32 +568,28 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         uint24 poolFee = tokenPoolFees[collateralToken];
         if (poolFee == 0) poolFee = defaultPoolFee;
 
-        // FIX C-1: Execute swap - REVERT on failure, do not silently return 0
         musdReceived = swapRouter.exactInputSingle(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: collateralToken,
                 tokenOut: address(musd),
                 fee: poolFee,
                 recipient: address(this),
-                deadline: block.timestamp + 300,
+                deadline: deadline,
                 amountIn: collateralAmount,
                 amountOutMinimum: minOut,
                 sqrtPriceLimitX96: 0
             })
         );
         
-        // FIX C-1: Explicit check for zero output
         require(musdReceived > 0, "SWAP_RETURNED_ZERO");
 
         return musdReceived;
     }
 
     /// @notice Get collateral amount for given mUSD amount (via oracle)
-    /// FIX L-05: Handle tokens with non-18 decimals (e.g., WBTC has 8)
     function _getCollateralForMusd(address collateralToken, uint256 musdAmount) internal view returns (uint256) {
         // mUSD is 1:1 with USD, so musdAmount = USD value
         // Get collateral price in USD
-        // FIX L-05: Query actual token decimals instead of assuming 18
         uint256 tokenDecimals = IERC20Metadata(collateralToken).decimals();
         uint256 oneUnit = 10 ** tokenDecimals;
         uint256 oneUnitValue = priceOracle.getValueUsd(collateralToken, oneUnit);
@@ -607,7 +607,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         return positions[user];
     }
 
-    /// @notice FIX M-01: Get the mUSD amount needed to close a position via closeLeveragedPositionWithMusd()
     /// @param user The user's address
     /// @return musdNeeded Amount of mUSD required to repay debt and close position
     function getMusdNeededToClose(address user) external view returns (uint256 musdNeeded) {
@@ -659,12 +658,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Update leverage configuration
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
     function setConfig(
         uint256 _maxLoops,
         uint256 _minBorrowPerLoop,
         uint24 _defaultPoolFee,
         uint256 _maxSlippageBps
-    ) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+    ) external onlyTimelock {
         require(_maxLoops > 0 && _maxLoops <= 20, "INVALID_MAX_LOOPS");
         require(_maxSlippageBps <= 500, "SLIPPAGE_TOO_HIGH"); // Max 5%
 
@@ -678,7 +678,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Set maximum allowed leverage (toggle between presets: 1.5x, 2x, 2.5x, 3x)
     /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
-    function setMaxLeverage(uint256 _maxLeverageX10) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
+    function setMaxLeverage(uint256 _maxLeverageX10) external onlyTimelock {
         require(_maxLeverageX10 >= 10 && _maxLeverageX10 <= 40, "INVALID_MAX_LEVERAGE"); // 1x to 4x range
         uint256 oldMax = maxLeverageX10;
         maxLeverageX10 = _maxLeverageX10;
@@ -707,40 +708,41 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
-    /// @notice FIX C-4: Emergency close a position when normal close fails (e.g., bad debt)
-    /// @dev Admin can forcibly close, returning whatever collateral remains to the user.
-    ///      Debt is written off — protocol takes the loss rather than trapping user funds.
+    /// @dev FIX H-05: Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
+    ///      Remaining collateral is returned to the user as-is to minimize swap losses.
     /// @param user The user whose position to emergency-close
     function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         LeveragePosition storage pos = positions[user];
         require(pos.totalCollateral > 0, "NO_POSITION");
 
         address collateralToken = pos.collateralToken;
+        uint256 debtToRepay = borrowModule.totalDebt(user);
 
-        // Withdraw all collateral from vault to this contract
+        // Step 1: Withdraw all collateral from vault to THIS contract (not user yet)
         uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);
         if (totalCollateralInVault > 0) {
-            // FIX C-04: skipHealthCheck=true — emergency close, debt repaid below
             collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this), true);
         }
 
-        // Attempt to repay as much debt as possible
-        uint256 debtToRepay = borrowModule.totalDebt(user);
+        // Step 2: Only swap the collateral needed to cover debt (+ buffer)
         if (debtToRepay > 0 && totalCollateralInVault > 0) {
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, totalCollateralInVault);
+            // Estimate collateral needed for debt using oracle, add 10% buffer for slippage
+            uint256 collateralNeeded = _getCollateralForMusd(collateralToken, debtToRepay);
+            collateralNeeded = (collateralNeeded * 11000) / 10000; // +10% buffer
+            // Cap at available collateral
+            uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
+
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, 0, 0);
             if (musdReceived > 0) {
                 uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
-                // FIX S-C02: Use repayFor to reduce USER's debt, not vault's debt
-                // Previously called repay() which operated on msg.sender (vault), leaving user debt intact
-                // FIX S-H03: Emit event on failure instead of silent catch
                 try borrowModule.repayFor(user, repayAmount) {} catch {
                     emit EmergencyRepayFailed(user, repayAmount, musdReceived);
                 }
             }
         }
 
-        // Send any remaining collateral + mUSD back to the user
+        // Step 3: AFTER debt repayment, return remaining assets to user
         uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));
         if (remainingCollateral > 0) {
             IERC20(collateralToken).safeTransfer(user, remainingCollateral);
@@ -755,7 +757,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //                  EMERGENCY CONTROLS (FIX H-03)
+    //                  EMERGENCY CONTROLS
     // ============================================================
 
     /// @notice Pause all leverage operations

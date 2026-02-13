@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // Minted mUSD Protocol - Interest Rate Model
 // Compound-style utilization-based interest rate curve
 
@@ -77,6 +77,8 @@ contract InterestRateModel is AccessControl {
     /// @notice Initialize with default parameters
     /// @param _admin The admin address for rate updates
     constructor(address _admin) {
+        // FIX S-L-04: Validate admin address to prevent permanently bricked governance
+        require(_admin != address(0), "INVALID_ADMIN");
         // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
         // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
         baseRateBps = 200;           // 2% base rate

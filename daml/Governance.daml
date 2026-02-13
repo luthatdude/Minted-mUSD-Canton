@@ -121,6 +121,7 @@ template MultiSigProposal
     actionType : ActionType
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
+    targetModule : Text                 -- FIX C-DAML-03: Target module for scoped governance
     payloadHash : Text                  -- SHA-256 of payload for verification
     requiredApprovals : Int             -- Threshold for this action type
     approvals : Set.Set Party           -- Collected approvals
@@ -128,6 +129,7 @@ template MultiSigProposal
     proposedAt : Time
     expiresAt : Time
     timelockEndsAt : Optional Time      -- Set when approved
+    timelockDuration : RelTime
     status : ProposalStatus
     observers : [Party]
   where
@@ -157,9 +159,16 @@ template MultiSigProposal
 
         let newApprovals = Set.insert approver approvals
         let isApproved = Set.size newApprovals >= requiredApprovals
-        let newTimelockEnds = if isApproved
-              then Some (addRelTime now (hours 24))  -- 24h timelock
-              else None
+        -- DAML-M-09: Use timelockDuration from GovernanceConfig instead of proposal field
+        -- Prevents proposers from setting an arbitrarily short timelock
+        newTimelockEnds <- if isApproved then do
+          configOpt <- lookupByKey @GovernanceConfig operator
+          case configOpt of
+            None -> abort "GOVERNANCE_CONFIG_NOT_FOUND"
+            Some cfgCid -> do
+              cfg <- fetch cfgCid
+              return (Some (addRelTime now cfg.timelockDuration))
+        else return None
 
         create this with
           approvals = newApprovals
@@ -209,6 +218,7 @@ template MultiSigProposal
           description
           payload
           payloadHash
+          targetModule
           approvers = Set.toList approvals
           executedBy = executor
           executedAt = now
@@ -257,6 +267,8 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "ALREADY_MINTER" (not (newMinter `elem` map fst minters))
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         create this with
           minters = (newMinter, quota) :: minters
@@ -271,16 +283,19 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minterToRemove `elem` map fst minters)
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         create this with
           minters = filter (\(p, _) -> p /= minterToRemove) minters
 
     -- | Use minting quota (called during mint operations)
+    -- DAML-M-04: Operator-controlled — prevents minters from bypassing quota enforcement
     choice MinterRegistry_UseMintQuota : ContractId MinterRegistry
       with
         minter : Party
         amount : Decimal
-      controller minter
+      controller operator
       do
         assertMsg "NOT_AUTHORIZED_MINTER" (minter `elem` map fst minters)
         
@@ -305,6 +320,8 @@ template MinterRegistry
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == MinterAuthorization)
         assertMsg "NOT_A_MINTER" (minter `elem` map fst minters)
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         
         let updateQuota (p, q) = if p == minter then (p, q + additionalQuota) else (p, q)
         create this with
@@ -314,8 +331,9 @@ template MinterRegistry
 --                     4. GOVERNANCE ACTION LOG
 -- ============================================================
 
--- | GovernanceActionLog - Immutable record of executed governance actions.
--- Provides permanent audit trail for compliance.
+-- | GovernanceActionLog - Record of executed governance actions.
+-- FIX C-DAML-01: Added ConsumeProof choice for one-time use and targetModule for scoping.
+-- After execution, the proof must be consumed to prevent replay across modules.
 template GovernanceActionLog
   with
     operator : Party
@@ -324,13 +342,18 @@ template GovernanceActionLog
     description : Text
     payload : Text
     payloadHash : Text
+    targetModule : Text           -- FIX C-DAML-03: Module scope to prevent cross-module replay
     approvers : [Party]
     executedBy : Party
     executedAt : Time
   where
     signatory operator, executedBy
 
-    -- No choices - immutable audit record
+    -- FIX C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
+    -- Returns the log data so the caller can verify actionType and targetModule.
+    choice ConsumeProof : GovernanceActionLog
+      controller operator
+      do return this
 
 -- ============================================================
 --                     5. EMERGENCY PAUSE
@@ -347,6 +370,9 @@ template EmergencyPauseState
     pausedBy : Optional Party
     pauseReason : Optional Text
     lastUpdated : Time
+    -- DAML-M-02: Multi-guardian pause threshold (symmetric with resume)
+    pauseThreshold : Int              -- Number of guardians required to pause
+    pauseApprovals : Set.Set Party    -- Guardians who have approved current pause request
   where
     signatory operator
     observer guardians
@@ -354,7 +380,10 @@ template EmergencyPauseState
     key operator : Party
     maintainer key
 
-    -- | Trigger emergency pause (any guardian)
+    ensure pauseThreshold > 0 && pauseThreshold <= length guardians
+
+    -- | Trigger emergency pause (requires pauseThreshold guardian approvals)
+    -- DAML-M-02: Now requires multi-guardian approval instead of single-guardian trigger
     choice EmergencyPause_Trigger : ContractId EmergencyPauseState
       with
         guardian : Party
@@ -364,14 +393,24 @@ template EmergencyPauseState
         assertMsg "NOT_GUARDIAN" (guardian `elem` guardians)
         assertMsg "ALREADY_PAUSED" (not isPaused)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
+        assertMsg "ALREADY_VOTED_PAUSE" (not (Set.member guardian pauseApprovals))
         now <- getTime
         
-        create this with
-          isPaused = True
-          pausedAt = Some now
-          pausedBy = Some guardian
-          pauseReason = Some reason
-          lastUpdated = now
+        let newApprovals = Set.insert guardian pauseApprovals
+        let shouldPause = Set.size newApprovals >= pauseThreshold
+        
+        if shouldPause then
+          create this with
+            isPaused = True
+            pausedAt = Some now
+            pausedBy = Some guardian
+            pauseReason = Some reason
+            pauseApprovals = Set.empty
+            lastUpdated = now
+        else
+          create this with
+            pauseApprovals = newApprovals
+            lastUpdated = now
 
     -- | Unpause (requires governance proposal)
     choice EmergencyPause_Resume : ContractId EmergencyPauseState
@@ -382,6 +421,8 @@ template EmergencyPauseState
         proof <- fetch governanceProofCid
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         assertMsg "NOT_PAUSED" isPaused
+        -- DAML-H-01: Archive proof after use to prevent replay
+        archive governanceProofCid
         now <- getTime
         
         create this with
@@ -389,6 +430,7 @@ template EmergencyPauseState
           pausedAt = None
           pausedBy = None
           pauseReason = None
+          pauseApprovals = Set.empty
           lastUpdated = now
 
     -- | Check pause status (nonconsuming)

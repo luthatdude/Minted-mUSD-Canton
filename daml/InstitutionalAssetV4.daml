@@ -1,5 +1,5 @@
 module InstitutionalAssetV4 where
--- FIX IA-L02: Use DA.Optional.fromSome instead of custom fromSome'
+-- Use DA.Optional.fromSome instead of custom fromSome'
 import DA.Optional (isSome, isNone, fromSome)
 import DA.List (dedup, sort)
 
@@ -13,7 +13,7 @@ template Instrument with
     registryAuthority : Party   -- The entity allowed to maintain the Whitelist
   where
     signatory depository, issuer
-    -- FIX IA-L01: Bound decimalScale to valid range
+    -- Bound decimalScale to valid range
     ensure decimalScale >= 0 && decimalScale <= 18
     -- Key allows lookups by ID without needing the contract CID
     key (depository, id) : (Party, Text)
@@ -28,7 +28,7 @@ template AssetRegistry with
   where
     signatory authority
     observer authorizedParties
-    -- FIX IA-M02: Bound authorized parties list to prevent O(n) DoS
+    -- Bound authorized parties list to prevent O(n) DoS
     ensure length authorizedParties > 0 && length authorizedParties <= 10000
     key (authority, instrumentId) : (Party, Text)
     maintainer key._1
@@ -59,7 +59,7 @@ template Asset with
   where
     signatory issuer, owner
     observer observers, depository
-    -- FIX IA-M04: Bound metadata list to prevent unbounded growth
+    -- Bound metadata list to prevent unbounded growth
     ensure amount > 0.0 && length metadata <= 100
 
     -- --- SECURE COMPLIANT TRANSFER ---
@@ -92,7 +92,7 @@ template Asset with
         create this with lock = Some (Lock with delegate; reason)
 
     choice Asset_Unlock : ContractId Asset
-      -- FIX IA-H03: Use fromSome from DA.Optional (safe here because of guard in body)
+      -- Use fromSome from DA.Optional (safe here because of guard in body)
       controller (if isSome lock then (fromSome lock).delegate else owner)
       do
         -- Prevent "CID Churn". Unlock cannot be called if no lock exists.
@@ -105,7 +105,7 @@ template Asset with
       controller owner
       do
         assertMsg "Cannot split a locked asset" (isNone lock)
-        -- FIX IA-H02: Validate split amount is strictly positive
+        -- Validate split amount is strictly positive
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
         (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
         -- Numerical Stability: Uses decimal exponentiation to validate precision.
@@ -138,7 +138,7 @@ template Asset with
 
     -- --- REGULATORY / EMERGENCY ---
     -- Allows the issuer (the debtor) to move the asset under court order or regulatory requirement.
-    -- FIX IA-C01: Emergency transfer now requires compliance check via registry
+    -- Emergency transfer now requires compliance check via registry
     choice Asset_EmergencyTransfer : ContractId Asset
       with
         targetOwner : Party
@@ -146,9 +146,9 @@ template Asset with
         registryCid : ContractId AssetRegistry
       controller issuer
       do
-        -- FIX IA-M03: Require non-empty reason for audit trail
+        -- Require non-empty reason for audit trail
         assertMsg "REASON_REQUIRED" (reason /= "")
-        -- FIX IA-C01: Verify target is authorized per compliance whitelist
+        -- Verify target is authorized per compliance whitelist
         (_, instrument) <- fetchByKey @Instrument (depository, instrumentId)
         registry <- fetch registryCid
         assertMsg "Registry Authority mismatch" (registry.authority == instrument.registryAuthority)
@@ -182,7 +182,7 @@ template TransferProposal with
       do
         create asset -- Reverts to original owner
 
-    -- FIX IA-H01: Allow original owner to cancel pending proposals (prevents liveness lockup)
+    -- Allow original owner to cancel pending proposals (prevents liveness lockup)
     choice TransferProposal_Cancel : ContractId Asset
       controller asset.owner
       do

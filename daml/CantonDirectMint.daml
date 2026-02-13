@@ -20,7 +20,8 @@ import DA.Time
 import DA.Set qualified as Set
 import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
-import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -52,11 +53,15 @@ template CantonUSDC
       controller owner
       do create this with privacyObservers = newObservers
 
+    -- DAML-M-05: Compliance check on transfer recipient (matches MUSD behavior)
     choice CantonUSDC_Transfer : ContractId CantonUSDCTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- DAML-M-05: Validate recipient is not blacklisted/frozen
+        exercise complianceRegistryCid ValidateMint with minter = newOwner
         create CantonUSDCTransferProposal with
           usdc = this
           newOwner
@@ -195,12 +200,16 @@ template CantonMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    -- FIX DL-C1: Use proposal pattern for safe dual-signatory transfers
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- FIX D-M08: Validate sender and recipient against compliance registry
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create CantonMUSDTransferProposal with
           musd = this
           newOwner
@@ -227,12 +236,41 @@ template CantonMUSD
         archive otherCid
         create this with amount = amount + other.amount
 
+    -- Owner must consent to burns via CantonMUSDBurnProposal (below).
+    -- Only the RedemptionService (exercised by owner) can call this directly.
     choice CantonMUSD_Burn : ()
-      controller issuer
+      controller issuer, owner
       do
         return ()
 
--- | FIX DL-C1: Transfer proposal for CantonMUSD (dual-signatory safe)
+-- Prevents unilateral burns. For compliance freezes, use separate FreezeProposal.
+template CantonMUSDBurnProposal
+  with
+    musdCid : ContractId CantonMUSD
+    musd : CantonMUSD
+    reason : Text
+  where
+    signatory musd.issuer
+    observer musd.owner
+
+    -- Owner accepts the burn
+    choice CantonMUSDBurnProposal_Accept : ()
+      controller musd.owner
+      do
+        exercise musdCid CantonMUSD_Burn
+
+    -- Owner rejects the burn
+    choice CantonMUSDBurnProposal_Reject : ()
+      controller musd.owner
+      do
+        return ()
+
+    -- Issuer can cancel their own proposal
+    choice CantonMUSDBurnProposal_Cancel : ()
+      controller musd.issuer
+      do
+        return ()
+
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonMUSDTransferProposal
   with
@@ -293,6 +331,20 @@ template BridgeOutRequest
         assertMsg "MUST_BE_PENDING" (status == "pending")
         create this with status = "failed"
 
+    -- | DAML-M-08: Refund user's USDC after a failed bridge-out.
+    -- Uses `operator` (the signatory/canonical issuer) — prevents arbitrary issuer injection.
+    choice BridgeOut_Refund : ContractId CantonUSDC
+      with
+        refundObservers : [Party]
+      controller operator
+      do
+        assertMsg "MUST_BE_FAILED" (status == "failed")
+        create CantonUSDC with
+          issuer = operator
+          owner = user
+          amount = amount
+          privacyObservers = refundObservers
+
 -- ============================================================
 --                     SECTION 4: RESERVE TRACKER
 -- ============================================================
@@ -304,6 +356,7 @@ template BridgeOutRequest
 template ReserveTracker
   with
     operator : Party
+    governance : Party
     totalDeposited : Money      -- Total USDC ever deposited via Canton mint
     totalRedeemed : Money       -- Total USDC ever redeemed back
     totalBridgedOut : Money     -- Total successfully bridged to Ethereum
@@ -311,7 +364,7 @@ template ReserveTracker
     cantonMUSDSupply : Money    -- Current outstanding Canton mUSD
     lastUpdated : Time
   where
-    signatory operator
+    signatory operator, governance
 
     ensure totalDeposited >= 0.0
         && totalRedeemed >= 0.0
@@ -323,7 +376,7 @@ template ReserveTracker
     choice Reserve_RecordDeposit : ContractId ReserveTracker
       with
         depositAmount : Money
-      controller operator
+      controller operator, governance
       do
         now <- getTime
         create this with
@@ -335,7 +388,7 @@ template ReserveTracker
     choice Reserve_RecordRedemption : ContractId ReserveTracker
       with
         redeemAmount : Money
-      controller operator
+      controller operator, governance
       do
         assertMsg "INSUFFICIENT_SUPPLY" (cantonMUSDSupply >= redeemAmount)
         now <- getTime
@@ -348,7 +401,7 @@ template ReserveTracker
     choice Reserve_RecordBridgeOut : ContractId ReserveTracker
       with
         bridgeAmount : Money
-      controller operator
+      controller operator, governance
       do
         now <- getTime
         create this with
@@ -359,7 +412,7 @@ template ReserveTracker
     choice Reserve_RecordBridgeIn : ContractId ReserveTracker
       with
         bridgeAmount : Money
-      controller operator
+      controller operator, governance
       do
         now <- getTime
         create this with
@@ -398,15 +451,21 @@ template CantonDirectMintService
     dailyMinted : Money          -- Cumulative mints in current window
     dailyBurned : Money          -- Cumulative burns in current window (offsets mints)
     lastRateLimitReset : Time    -- Timestamp of last window reset
-    -- Compliance hook (optional — None disables compliance checks)
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    -- DAML-H-04: Compliance hook is mandatory — cannot be bypassed
+    -- To disable compliance in development, deploy a permissive registry
+    complianceRegistryCid : ContractId ComplianceRegistry
     -- Master Participation Agreement reference (embedded in every minted token)
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
+    serviceName : Text           -- FIX D-M02: Unique service name for lookupByKey
   where
     signatory operator
     observer usdcIssuer, authorizedMinters
+
+    -- FIX D-M02: Contract key for cross-module supply cap coordination
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -418,9 +477,8 @@ template CantonDirectMintService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
-        -- Compliance check: verify minter is not blacklisted
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateMint with minter = user
+        -- DAML-H-04: Mandatory compliance check
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         usdc <- fetch usdcCid
         assertMsg "USDC_ISSUER_MISMATCH" (usdc.issuer == usdcIssuer)
@@ -446,7 +504,6 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        -- FIX: CantonUSDC_Transfer now returns proposal; accept it
         usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
@@ -470,7 +527,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
         -- Without this, old instances remain active with stale state,
         -- allowing users to bypass supply cap and rate limits
         archive self
@@ -487,7 +543,6 @@ template CantonDirectMintService
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
-    -- FIX: USDCx must be bridged to Ethereum Treasury so it can earn yield via
     -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
     -- and deposits into TreasuryV2.
     choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
@@ -500,8 +555,7 @@ template CantonDirectMintService
         assertMsg "USDCX_MINTING_DISABLED" (isSome usdcxIssuer)
 
         -- Compliance check: verify minter is not blacklisted
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateMint with minter = user
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         usdcx <- fetch usdcxCid
         let expectedIssuer = fromSome usdcxIssuer
@@ -541,7 +595,6 @@ template CantonDirectMintService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX: Emit bridge-out request to convert USDCx → USDC in Ethereum Treasury
         -- The relay will:
         --   1. Redeem USDCx via xReserve → receive USDC on Ethereum
         --   2. Deposit USDC into TreasuryV2 for yield generation
@@ -556,7 +609,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         -- Update service state including rate limit tracking
@@ -583,8 +635,7 @@ template CantonDirectMintService
         assertMsg "SERVICE_PAUSED" (not paused)
 
         -- Compliance check: verify redeemer is not blacklisted or frozen
-        whenSome complianceRegistryCid $ \cid ->
-          exercise cid ValidateRedemption with redeemer = user
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
 
         musd <- fetch musdCid
         assertMsg "MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
@@ -617,7 +668,6 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
 
         newService <- create this with
@@ -630,53 +680,70 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
-    -- FIX D-M02: Added rate limiting - cap changes limited to 20% per update
+    -- FIX HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
+    -- FIX C-DAML-03: Governance proof required for supply cap changes
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        -- FIX: Consume governance proof to prevent replay
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
-        -- FIX D-M02: Limit cap changes to max 20% increase per update
         let maxIncrease = supplyCap * 1.2
         assertMsg "CAP_INCREASE_TOO_LARGE" (newCap <= maxIncrease)
-        -- FIX CRITICAL: Archive old service before creating new one
+        now <- getTime
+        let cooldownRel = hours 24
+        let elapsed = subTime now lastRateLimitReset
+        assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
         archive self
-        create this with supplyCap = newCap
+        create this with supplyCap = newCap, lastRateLimitReset = now
 
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with paused = newPaused
 
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with dailyMintLimit = newLimit
 
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
-        newRegistryCid : Optional (ContractId ComplianceRegistry)
+        newRegistryCid : ContractId ComplianceRegistry
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         archive self
         create this with complianceRegistryCid = newRegistryCid
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
+      with
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        -- FIX CRITICAL: Archive old service before creating new one
         archive self
         create this with accumulatedFees = 0.0
 
@@ -719,4 +786,53 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
+
+-- ============================================================
+--                     SECTION 7: BURN RATE LIMITER
+-- ============================================================
+
+-- | FIX C-DAML-02: BurnRateLimiter — rate-limits mUSD burns to prevent
+-- flash-unwind attacks on loop positions. Tracks daily burn volume
+-- and enforces a maximum per 24h window.
+template BurnRateLimiter
+  with
+    operator : Party
+    dailyBurnLimit : Money         -- Max mUSD burned per 24h window
+    dailyBurned : Money            -- Burns in current window
+    lastResetTime : Time           -- Window start
+  where
+    signatory operator
+
+    key operator : Party
+    maintainer key
+
+    ensure dailyBurnLimit > 0.0 && dailyBurned >= 0.0
+
+    -- | Record a burn and enforce rate limit
+    choice BurnLimit_RecordBurn : ContractId BurnRateLimiter
+      with
+        burnAmount : Money
+      controller operator
+      do
+        assertMsg "BURN_AMOUNT_POSITIVE" (burnAmount > 0.0)
+        now <- getTime
+        let windowElapsed = subTime now lastResetTime
+        let oneDayRel = hours 24
+        let (resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, now)
+              else (dailyBurned, lastResetTime)
+        assertMsg "DAILY_BURN_LIMIT_EXCEEDED" (resetBurned + burnAmount <= dailyBurnLimit)
+        create this with
+          dailyBurned = resetBurned + burnAmount
+          lastResetTime = resetTime
+
+    -- | Update daily burn limit (operator-controlled)
+    choice BurnLimit_UpdateLimit : ContractId BurnRateLimiter
+      with
+        newLimit : Money
+      controller operator
+      do
+        assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
+        create this with dailyBurnLimit = newLimit
 

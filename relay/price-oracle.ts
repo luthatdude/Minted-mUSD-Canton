@@ -22,7 +22,10 @@
  */
 
 import Ledger from "@daml/ledger";
-import { readSecret } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -76,6 +79,10 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
   maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
 };
+
+// INFRA-H-06: Enforce HTTPS for all external API endpoints in production
+requireHTTPS(DEFAULT_CONFIG.tradecraftBaseUrl, "TRADECRAFT_URL");
+requireHTTPS(DEFAULT_CONFIG.templeBaseUrl, "TEMPLE_URL");
 
 // ============================================================
 //                     PRICE SOURCE TYPES
@@ -319,10 +326,21 @@ export class PriceOracleService {
       throw new Error("CANTON_PARTY not configured");
     }
 
+    // INFRA-H-01 / INF-01: TLS by default for Canton ledger connection
+    // INF-01 FIX: Reject cleartext HTTP in production — matches relay-service.ts TLS pattern
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
+        "Canton ledger connections must use TLS. Remove CANTON_USE_TLS or set to 'true'."
+      );
+    }
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
+
     this.ledger = new Ledger({
       token: this.config.cantonToken,
-      httpBaseUrl: `http://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `ws://${this.config.cantonHost}:${this.config.cantonPort}`,
+      httpBaseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      wsBaseUrl: `${wsProtocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
     });
 
     console.log(`[PriceOracle] Connected to Canton ledger at ${this.config.cantonHost}:${this.config.cantonPort}`);
@@ -385,8 +403,31 @@ export class PriceOracleService {
       }
     }
 
-    // Pick result: Tradecraft > Temple > error
+    // FIX OR-01: Multi-provider averaging for robustness
+    // When both sources are available and within divergence threshold, use their
+    // average instead of preferring a single source. This prevents manipulation
+    // of any single DEX from fully controlling the oracle price.
+    if (tradecraftResult && templeResult) {
+      const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
+      console.log(
+        `[PriceOracle] 🔀 Multi-provider average: $${avgPrice.toFixed(6)} ` +
+        `(Tradecraft: $${tradecraftResult.price.toFixed(6)}, Temple: $${templeResult.price.toFixed(6)})`
+      );
+      return {
+        price: avgPrice,
+        source: "multi-provider-avg(tradecraft+temple)",
+        timestamp: new Date(),
+      };
+    }
+
+    // Single-source fallback: Tradecraft > Temple > error
     const result = tradecraftResult || templeResult;
+    if (result) {
+      console.warn(
+        `[PriceOracle] ⚠️  Single-source price from ${result.source}. ` +
+        `Multi-provider averaging unavailable — other source down.`
+      );
+    }
     if (!result) {
       // Circuit breaker check
       const totalFailures =
@@ -404,7 +445,7 @@ export class PriceOracleService {
       throw new Error("All price sources unavailable");
     }
 
-    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass (FIX NEW-PO-01)
+    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass
     return result;
   }
 

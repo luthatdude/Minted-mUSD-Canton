@@ -8,4 +8,3 @@ dependencies:
   - daml-script
 build-options:
   - --ghc-option=-Wno-unused-imports
-  - --ghc-option=-Wno-redundant-imports

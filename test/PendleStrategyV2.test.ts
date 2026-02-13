@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
-import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 describe("PendleStrategyV2", function () {
   async function deployFixture() {
@@ -25,7 +25,7 @@ describe("PendleStrategyV2", function () {
 
     // Deploy PendleMarketSelector as upgradeable
     const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address], {
+    const marketSelector = await upgrades.deployProxy(PendleMarketSelector, [admin.address, admin.address], {
       kind: "uups",
       initializer: "initialize",
     });
@@ -281,6 +281,9 @@ describe("PendleStrategyV2", function () {
       const { strategy, admin } = await loadFixture(deployFixture);
 
       const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
+      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+      await strategy.connect(admin).requestUpgrade(newImpl);
+      await time.increase(48 * 3600);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), PendleStrategyV2Next);
 
       expect(await upgraded.getAddress()).to.equal(await strategy.getAddress());
@@ -297,14 +300,17 @@ describe("PendleStrategyV2", function () {
     });
 
     it("Should preserve state after upgrade", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, admin, strategist } = await loadFixture(deployFixture);
 
       // Set some state
       await strategy.connect(strategist).setSlippage(75);
       expect(await strategy.slippageBps()).to.equal(75);
 
-      // Upgrade
+      // Upgrade with timelock
       const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
+      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+      await strategy.connect(admin).requestUpgrade(newImpl);
+      await time.increase(48 * 3600);
       const upgraded = await upgrades.upgradeProxy(await strategy.getAddress(), PendleStrategyV2Next);
 
       // Check state preserved
@@ -413,6 +419,288 @@ describe("PendleStrategyV2", function () {
       const minThreshold = 1 * 24 * 60 * 60; // 1 day
       await strategy.connect(strategist).setRolloverThreshold(minThreshold);
       expect(await strategy.rolloverThreshold()).to.equal(minThreshold);
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — setPtDiscountRate
+  // ================================================================
+
+  describe("PT Discount Rate", function () {
+    it("Should set PT discount rate as strategist", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await strategy.connect(strategist).setPtDiscountRate(500); // 5%
+      expect(await strategy.ptDiscountRateBps()).to.equal(500);
+    });
+
+    it("Should emit PtDiscountRateUpdated event", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await expect(strategy.connect(strategist).setPtDiscountRate(750))
+        .to.emit(strategy, "PtDiscountRateUpdated")
+        .withArgs(1000, 750); // old=1000 (default 10%), new=750
+    });
+
+    it("Should reject discount rate above 50%", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(strategist).setPtDiscountRate(5001)
+      ).to.be.revertedWith("DISCOUNT_TOO_HIGH");
+    });
+
+    it("Should allow zero discount rate", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await strategy.connect(strategist).setPtDiscountRate(0);
+      expect(await strategy.ptDiscountRateBps()).to.equal(0);
+    });
+
+    it("Should allow max 50% discount rate", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await strategy.connect(strategist).setPtDiscountRate(5000);
+      expect(await strategy.ptDiscountRateBps()).to.equal(5000);
+    });
+
+    it("Should reject non-strategist setting discount rate", async function () {
+      const { strategy, user1 } = await loadFixture(deployFixture);
+
+      await expect(strategy.connect(user1).setPtDiscountRate(500))
+        .to.be.reverted;
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — requestUpgrade / cancelUpgrade timelocks
+  // ================================================================
+
+  describe("Upgrade Timelock", function () {
+    it("Should request an upgrade and set pending implementation", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
+
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
+      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+
+      await expect(strategy.connect(admin).requestUpgrade(newImpl))
+        .to.emit(strategy, "UpgradeRequested");
+
+      expect(await strategy.pendingImplementation()).to.equal(newImpl);
+      expect(await strategy.upgradeRequestTime()).to.be.gt(0);
+    });
+
+    it("Should reject upgrade request with zero address", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(admin).requestUpgrade(ethers.ZeroAddress)
+      ).to.be.revertedWith("ZERO_ADDRESS");
+    });
+
+    it("Should reject upgrade request from non-admin", async function () {
+      const { strategy, user1 } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(user1).requestUpgrade(ethers.Wallet.createRandom().address)
+      ).to.be.reverted;
+    });
+
+    it("Should cancel a pending upgrade", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
+
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
+      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+
+      await strategy.connect(admin).requestUpgrade(newImpl);
+      expect(await strategy.pendingImplementation()).to.equal(newImpl);
+
+      await expect(strategy.connect(admin).cancelUpgrade())
+        .to.emit(strategy, "UpgradeCancelled");
+
+      expect(await strategy.pendingImplementation()).to.equal(ethers.ZeroAddress);
+      expect(await strategy.upgradeRequestTime()).to.equal(0);
+    });
+
+    it("Should reject cancel from non-admin", async function () {
+      const { strategy, admin, user1 } = await loadFixture(deployFixture);
+
+      const PendleStrategyV2Next = await ethers.getContractFactory("PendleStrategyV2");
+      const newImpl = await upgrades.prepareUpgrade(await strategy.getAddress(), PendleStrategyV2Next) as string;
+
+      await strategy.connect(admin).requestUpgrade(newImpl);
+
+      await expect(strategy.connect(user1).cancelUpgrade()).to.be.reverted;
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — needsRollover / shouldRollover / timeToExpiry
+  // ================================================================
+
+  describe("Rollover View Functions", function () {
+    it("Should return true for shouldRollover when no market is set", async function () {
+      const { strategy } = await loadFixture(deployFixture);
+
+      // No market set yet → should need rollover
+      expect(await strategy.shouldRollover()).to.be.true;
+    });
+
+    it("Should return 0 timeToExpiry when no market is set", async function () {
+      const { strategy } = await loadFixture(deployFixture);
+
+      expect(await strategy.timeToExpiry()).to.equal(0);
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — setActive with guardian role
+  // ================================================================
+
+  describe("Guardian setActive", function () {
+    it("Should allow guardian to deactivate strategy", async function () {
+      const { strategy, guardian } = await loadFixture(deployFixture);
+
+      await strategy.connect(guardian).setActive(false);
+      expect(await strategy.active()).to.be.false;
+      expect(await strategy.isActive()).to.be.false;
+    });
+
+    it("Should allow guardian to reactivate strategy", async function () {
+      const { strategy, guardian } = await loadFixture(deployFixture);
+
+      await strategy.connect(guardian).setActive(false);
+      await strategy.connect(guardian).setActive(true);
+      expect(await strategy.active()).to.be.true;
+    });
+
+    it("Should reject setActive from non-guardian", async function () {
+      const { strategy, user1 } = await loadFixture(deployFixture);
+
+      await expect(strategy.connect(user1).setActive(false)).to.be.reverted;
+    });
+
+    it("Should reject strategist from calling setActive (needs GUARDIAN_ROLE)", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      // Strategist has STRATEGIST_ROLE but not GUARDIAN_ROLE
+      await expect(strategy.connect(strategist).setActive(false)).to.be.reverted;
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — setRolloverThreshold edge cases
+  // ================================================================
+
+  describe("Rollover Threshold Edge Cases", function () {
+    it("Should reject zero rollover threshold", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(strategist).setRolloverThreshold(0)
+      ).to.be.revertedWith("INVALID_THRESHOLD");
+    });
+
+    it("Should allow max rollover threshold (30 days)", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      const maxThreshold = 30 * 24 * 60 * 60; // 30 days
+      await strategy.connect(strategist).setRolloverThreshold(maxThreshold);
+      expect(await strategy.rolloverThreshold()).to.equal(maxThreshold);
+    });
+
+    it("Should emit RolloverThresholdUpdated event", async function () {
+      const { strategy, strategist } = await loadFixture(deployFixture);
+
+      const defaultThreshold = 7 * 24 * 60 * 60;
+      const newThreshold = 14 * 24 * 60 * 60;
+
+      await expect(strategy.connect(strategist).setRolloverThreshold(newThreshold))
+        .to.emit(strategy, "RolloverThresholdUpdated")
+        .withArgs(defaultThreshold, newThreshold);
+    });
+
+    it("Should reject non-strategist from setting rollover threshold", async function () {
+      const { strategy, user1 } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(user1).setRolloverThreshold(86400)
+      ).to.be.reverted;
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — recoverToken
+  // ================================================================
+
+  describe("Recover Token", function () {
+    it("Should recover random stuck tokens", async function () {
+      const { strategy, admin, usdc } = await loadFixture(deployFixture);
+
+      // Deploy a random token and send it to the strategy
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const randomToken = await MockERC20.deploy("Random", "RND", 18);
+      const amount = ethers.parseEther("100");
+      await randomToken.mint(await strategy.getAddress(), amount);
+
+      const balBefore = await randomToken.balanceOf(admin.address);
+      await strategy.connect(admin).recoverToken(await randomToken.getAddress(), admin.address);
+      const balAfter = await randomToken.balanceOf(admin.address);
+
+      expect(balAfter - balBefore).to.equal(amount);
+    });
+
+    it("Should reject recovering USDC", async function () {
+      const { strategy, admin, usdc } = await loadFixture(deployFixture);
+
+      await expect(
+        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address)
+      ).to.be.revertedWith("Cannot recover USDC");
+    });
+
+    it("Should reject non-admin from recovering tokens", async function () {
+      const { strategy, user1 } = await loadFixture(deployFixture);
+
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const randomToken = await MockERC20.deploy("Random", "RND", 18);
+
+      await expect(
+        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address)
+      ).to.be.reverted;
+    });
+  });
+
+  // ================================================================
+  //  NEW COVERAGE TESTS — isActive view function
+  // ================================================================
+
+  describe("isActive View Function", function () {
+    it("Should return true when active and not paused", async function () {
+      const { strategy } = await loadFixture(deployFixture);
+
+      expect(await strategy.isActive()).to.be.true;
+    });
+
+    it("Should return false when paused", async function () {
+      const { strategy, guardian } = await loadFixture(deployFixture);
+
+      await strategy.connect(guardian).pause();
+      expect(await strategy.isActive()).to.be.false;
+    });
+
+    it("Should return false when inactive", async function () {
+      const { strategy, guardian } = await loadFixture(deployFixture);
+
+      await strategy.connect(guardian).setActive(false);
+      expect(await strategy.isActive()).to.be.false;
+    });
+
+    it("Should return false when both paused and inactive", async function () {
+      const { strategy, guardian } = await loadFixture(deployFixture);
+
+      await strategy.connect(guardian).setActive(false);
+      await strategy.connect(guardian).pause();
+      expect(await strategy.isActive()).to.be.false;
     });
   });
 });

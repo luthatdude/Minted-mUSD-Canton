@@ -18,9 +18,17 @@ import { ContractId } from "@daml/types";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 // FIX B-H07: Use readAndValidatePrivateKey for secp256k1 range validation
-import { readSecret, readAndValidatePrivateKey } from "./utils";
+// INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
+// FIX H-07: KMS-based Ethereum transaction signer (key never enters Node.js memory)
+import { createEthereumSigner } from "./kms-ethereum-signer";
+// FIX C-05: Cryptographic entropy for attestation ID unpredictability
+import * as crypto from "crypto";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -37,7 +45,10 @@ interface RelayConfig {
   ethereumRpcUrl: string;
   bridgeContractAddress: string;
   treasuryAddress: string;     // Treasury for auto-deploy trigger
-  relayerPrivateKey: string;   // Hot wallet for gas
+  relayerPrivateKey: string;   // Hot wallet for gas (deprecated: use KMS)
+  // FIX H-07: KMS key for Ethereum transaction signing (key never in memory)
+  relayerKmsKeyId: string;     // AWS KMS key ARN for relay signing
+  awsRegion: string;           // AWS region for KMS
 
   // FIX CRITICAL: Mapping from DAML Party ID to Ethereum address
   // Without this, signature validation ALWAYS fails because we compared
@@ -49,6 +60,8 @@ interface RelayConfig {
   maxRetries: number;
   confirmations: number;
   triggerAutoDeploy: boolean;  // Whether to trigger auto-deploy after bridge
+  // FIX INFRA-04: Fallback RPC URLs for relay redundancy
+  fallbackRpcUrls: string[];
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -59,11 +72,23 @@ const DEFAULT_CONFIG: RelayConfig = {
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
 
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01 / INFRA-H-03: No insecure fallback — require explicit RPC URL in production
+  // Read from Docker secret first (contains API keys), fallback to env var
+  ethereumRpcUrl: (() => {
+    const url = readSecret("ethereum_rpc_url", "ETHEREUM_RPC_URL");
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required");
+    if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
+      throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
+    }
+    return url;
+  })(),
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   // FIX B-H07: Validate private key is in valid secp256k1 range
   relayerPrivateKey: readAndValidatePrivateKey("relayer_private_key", "RELAYER_PRIVATE_KEY"),
+  // FIX H-07: KMS key for Ethereum transaction signing
+  relayerKmsKeyId: readSecret("relayer_kms_key_id", "RELAYER_KMS_KEY_ID"),
+  awsRegion: process.env.AWS_REGION || "us-east-1",
 
   // FIX CRITICAL: Map DAML Party → Ethereum address
   // Load from JSON config file or environment
@@ -82,6 +107,11 @@ const DEFAULT_CONFIG: RelayConfig = {
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
   confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
   triggerAutoDeploy: process.env.TRIGGER_AUTO_DEPLOY !== "false",  // Default enabled
+  // FIX INFRA-04: Fallback RPC URLs for relay redundancy
+  fallbackRpcUrls: (process.env.FALLBACK_RPC_URLS || "")
+    .split(",")
+    .filter(Boolean)
+    .map(url => url.trim()),
 };
 
 // ============================================================
@@ -98,6 +128,8 @@ interface AttestationPayload {
   nonce: string;
   chainId: string;
   expiresAt: string;  // ISO timestamp
+  entropy: string;    // FIX C-05: Hex-encoded entropy from aggregator
+  cantonStateHash: string;  // FIX INFRA-03: Canton ledger state hash for on-chain verification
 }
 
 interface AttestationRequest {
@@ -114,6 +146,7 @@ interface ValidatorSignature {
   aggregator: string;
   ecdsaSignature: string;
   nonce: string;
+  cantonStateHash: string;  // FIX P1-CODEX: Canton state hash from validator verification
 }
 
 // ============================================================
@@ -128,7 +161,9 @@ const BRIDGE_ABI = [
           { "name": "id", "type": "bytes32" },
           { "name": "cantonAssets", "type": "uint256" },
           { "name": "nonce", "type": "uint256" },
-          { "name": "timestamp", "type": "uint256" }
+          { "name": "timestamp", "type": "uint256" },
+          { "name": "entropy", "type": "bytes32" },
+          { "name": "cantonStateHash", "type": "bytes32" }
         ],
         "name": "att",
         "type": "tuple"
@@ -182,17 +217,30 @@ class RelayService {
   private config: RelayConfig;
   private ledger: Ledger;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
-  private bridgeContract: ethers.Contract;
+  private wallet!: ethers.Signer;  // FIX H-07: Abstract signer (KMS or raw)
+  private bridgeContract!: ethers.Contract;
   // FIX M-18: Bounded cache with eviction
   private processedAttestations: Set<string> = new Set();
   private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
 
+  // FIX INFRA-04: Fallback RPC providers for relay redundancy
+  private fallbackProviders: ethers.JsonRpcProvider[] = [];
+  private activeProviderIndex: number = 0;
+  private consecutiveFailures: number = 0;
+  private readonly MAX_CONSECUTIVE_FAILURES = 3;
+
   constructor(config: RelayConfig) {
     this.config = config;
 
     // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    // INF-01 FIX: Reject cleartext HTTP in production
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
+        "Canton ledger connections must use TLS. Remove CANTON_USE_TLS or set to 'true'."
+      );
+    }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -203,18 +251,43 @@ class RelayService {
 
     // Initialize Ethereum connection
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.relayerPrivateKey, this.provider);
-    this.bridgeContract = new ethers.Contract(
-      config.bridgeContractAddress,
-      BRIDGE_ABI,
-      this.wallet
-    );
+    // FIX INFRA-04: Initialize fallback RPC providers
+    if (config.fallbackRpcUrls && config.fallbackRpcUrls.length > 0) {
+      for (const url of config.fallbackRpcUrls) {
+        this.fallbackProviders.push(new ethers.JsonRpcProvider(url));
+      }
+      console.log(`[Relay] ${this.fallbackProviders.length} fallback RPC providers configured`);
+    }
+    // FIX H-07: Wallet initialized asynchronously via initSigner()
+    // to support KMS-based signing (key never enters Node.js memory)
 
     console.log(`[Relay] Initialized`);
     console.log(`[Relay] Canton: ${config.cantonHost}:${config.cantonPort}`);
-    console.log(`[Relay] Ethereum: ${config.ethereumRpcUrl}`);
+    // FIX P2-CODEX: Sanitize RPC URL in logs to prevent API key leakage
+    console.log(`[Relay] Ethereum: ${sanitizeUrl(config.ethereumRpcUrl)}`);
     console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
-    console.log(`[Relay] Relayer: ${this.wallet.address}`);
+  }
+
+  /**
+   * FIX H-07: Initialize Ethereum signer (KMS or raw key)
+   * Must be called before start()
+   */
+  async initSigner(): Promise<void> {
+    this.wallet = await createEthereumSigner(
+      {
+        kmsKeyId: this.config.relayerKmsKeyId,
+        awsRegion: this.config.awsRegion,
+        privateKey: this.config.relayerPrivateKey,
+      },
+      this.provider
+    );
+    this.bridgeContract = new ethers.Contract(
+      this.config.bridgeContractAddress,
+      BRIDGE_ABI,
+      this.wallet
+    );
+    const address = await this.wallet.getAddress();
+    console.log(`[Relay] Relayer: ${address}`);
   }
 
   /**
@@ -222,6 +295,9 @@ class RelayService {
    */
   async start(): Promise<void> {
     console.log("[Relay] Starting...");
+
+    // FIX H-07: Initialize signer (KMS or raw key)
+    await this.initSigner();
     
     // FIX B-C03: Validate validator addresses against on-chain roles before starting
     await this.validateValidatorAddresses();
@@ -235,8 +311,18 @@ class RelayService {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
+        // Reset failure counter on success
+        this.consecutiveFailures = 0;
       } catch (error) {
         console.error("[Relay] Poll error:", error);
+        // FIX INFRA-04: Failover to backup RPC on consecutive failures
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
+          console.warn(
+            `[Relay] ${this.consecutiveFailures} consecutive failures — attempting provider failover`
+          );
+          await this.switchToFallbackProvider();
+        }
       }
       await this.sleep(this.config.pollIntervalMs);
     }
@@ -272,6 +358,43 @@ class RelayService {
     }
     
     console.log(`[Relay] All ${validatorEntries.length} validator addresses verified on-chain`);
+  }
+
+  /**
+   * FIX INFRA-04: Switch to the next fallback RPC provider on consecutive failures.
+   * Re-initializes the signer against the new provider so all subsequent
+   * contract calls go through the healthy endpoint.
+   */
+  private async switchToFallbackProvider(): Promise<boolean> {
+    if (this.fallbackProviders.length === 0) {
+      console.warn("[Relay] No fallback RPC providers configured — cannot failover");
+      return false;
+    }
+
+    const nextIndex = (this.activeProviderIndex + 1) % (this.fallbackProviders.length + 1);
+
+    // Index 0 = primary, 1..N = fallback providers
+    if (nextIndex === 0) {
+      console.log("[Relay] Cycling back to primary RPC provider");
+      this.provider = new ethers.JsonRpcProvider(this.config.ethereumRpcUrl);
+    } else {
+      const fallbackUrl = this.config.fallbackRpcUrls[nextIndex - 1];
+      console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${fallbackUrl}`);
+      this.provider = this.fallbackProviders[nextIndex - 1];
+    }
+
+    this.activeProviderIndex = nextIndex;
+    this.consecutiveFailures = 0;
+
+    // Re-initialise signer + contract against the new provider
+    try {
+      await this.initSigner();
+      console.log("[Relay] Signer re-initialised on new provider");
+      return true;
+    } catch (err: any) {
+      console.error(`[Relay] Failed to re-init signer on fallback: ${err.message}`);
+      return false;
+    }
   }
 
   /**
@@ -441,8 +564,32 @@ class RelayService {
         throw new Error(`CHAIN_ID_MISMATCH: expected ${expectedChainId}, got ${payloadChainId}`);
       }
 
-      // Convert attestation ID to bytes32
-      const idBytes32 = ethers.id(attestationId);
+      // FIX C-05: Compute entropy and derive attestation ID first (needed for on-chain checks)
+      const entropy = payload.entropy
+        ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
+        : ethers.hexlify(new Uint8Array(crypto.randomBytes(32)));
+      // FIX INFRA-03: Read cantonStateHash from payload
+      const cantonStateHash = payload.cantonStateHash
+        ? (payload.cantonStateHash.startsWith("0x") ? payload.cantonStateHash : "0x" + payload.cantonStateHash)
+        : ethers.ZeroHash;
+      const cantonAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
+      const nonce = BigInt(payload.nonce);
+      const expiresAtMs = new Date(payload.expiresAt).getTime();
+      if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
+        throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
+      }
+      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
+      if (timestampSec <= 0) {
+        throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
+      }
+      const chainId = expectedChainId;
+      // FIX P1-CODEX: ID derivation matches BLEBridgeV9.computeAttestationId()
+      // On-chain: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))
+      // cantonStateHash already extracted from payload at line 572
+      const idBytes32 = ethers.solidityPackedKeccak256(
+        ["uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+        [nonce, cantonAssets, BigInt(timestampSec), entropy, cantonStateHash, chainId, this.config.bridgeContractAddress]
+      );
 
       // Check if already used on-chain
       const isUsed = await this.bridgeContract.usedAttestationIds(idBytes32);
@@ -453,27 +600,21 @@ class RelayService {
       }
 
       // Format signatures for Ethereum
-      const messageHash = this.buildMessageHash(payload, idBytes32);
+      const messageHash = this.buildMessageHash(payload, idBytes32, cantonStateHash);
       const formattedSigs = await this.formatSignatures(validatorSigs, messageHash);
 
       // Sort signatures by signer address (required by BLEBridgeV9)
       const sortedSigs = sortSignaturesBySignerAddress(formattedSigs, messageHash);
 
-      // Build attestation struct
-      // FIX B-M01: Validate timestamp to prevent negative values from expiresAt - 3600
-      const expiresAtMs = new Date(payload.expiresAt).getTime();
-      if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
-        throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
-      }
-      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
-      if (timestampSec <= 0) {
-        throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
-      }
+      // Build attestation struct (entropy and ID already computed above)
+      // FIX INFRA-03: Include cantonStateHash to bind attestation to Canton ledger state
       const attestation = {
         id: idBytes32,
-        cantonAssets: ethers.parseUnits(payload.globalCantonAssets, 18),
-        nonce: BigInt(payload.nonce),
+        cantonAssets: cantonAssets,
+        nonce: nonce,
         timestamp: BigInt(timestampSec),
+        entropy: entropy,
+        cantonStateHash: cantonStateHash,
       };
 
       // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
@@ -551,19 +692,32 @@ class RelayService {
 
   /**
    * Build the message hash that validators signed
+   * FIX C-05: Includes entropy in hash to match BLEBridgeV9 verification
+   * FIX P1-CODEX: Includes cantonStateHash to match on-chain signature verification
    */
-  private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
+  private buildMessageHash(payload: AttestationPayload, idBytes32: string, cantonStateHash?: string): string {
     // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
 
+    // FIX C-05: Read entropy from payload for inclusion in hash
+    const entropy = payload.entropy
+      ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
+      : ethers.ZeroHash;
+
+    // FIX P1-CODEX: cantonStateHash already received as parameter (formatted by caller)
+    const stateHash = cantonStateHash || ethers.ZeroHash;
+
+    // Matches on-chain: keccak256(abi.encodePacked(id, cantonAssets, nonce, timestamp, entropy, cantonStateHash, chainid, address))
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
         // FIX B-M01: Use validated timestamp calculation consistent with bridgeAttestation
         BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
+        entropy,
+        stateHash,
         chainId,
         this.config.bridgeContractAddress,
       ]
@@ -754,6 +908,8 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         processedCount: (relay as any).processedAttestations.size,
+        activeProviderIndex: (relay as any).activeProviderIndex,
+        consecutiveFailures: (relay as any).consecutiveFailures,
       }));
     } else {
       res.writeHead(404);
@@ -788,12 +944,17 @@ async function main(): Promise<void> {
   if (!ethers.isAddress(DEFAULT_CONFIG.bridgeContractAddress)) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS is not a valid Ethereum address");
   }
-  if (!DEFAULT_CONFIG.relayerPrivateKey) {
-    throw new Error("RELAYER_PRIVATE_KEY not set");
+  if (!DEFAULT_CONFIG.relayerPrivateKey && !DEFAULT_CONFIG.relayerKmsKeyId) {
+    throw new Error("Either RELAYER_PRIVATE_KEY or RELAYER_KMS_KEY_ID must be set");
   }
-  // FIX H-9: Validate private key format before wallet creation
-  if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
-    throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+  // FIX H-07: Prefer KMS in production
+  if (DEFAULT_CONFIG.relayerKmsKeyId) {
+    console.log("[Main] Using AWS KMS for Ethereum signing (H-07: key never in memory)");
+  } else {
+    // FIX H-9: Validate private key format before wallet creation
+    if (!/^(0x)?[0-9a-fA-F]{64}$/.test(DEFAULT_CONFIG.relayerPrivateKey)) {
+      throw new Error("RELAYER_PRIVATE_KEY has invalid format (expected 64 hex chars)");
+    }
   }
   if (!DEFAULT_CONFIG.cantonParty) {
     throw new Error("CANTON_PARTY not set");

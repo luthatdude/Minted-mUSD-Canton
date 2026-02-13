@@ -9,6 +9,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { timelockSetFeed, timelockRemoveFeed, timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockSetSMUSD, timelockSetTreasury, timelockSetInterestRate, timelockSetMinDebt, timelockSetCloseFactor, timelockSetFullLiquidationThreshold, timelockAddStrategy, timelockRemoveStrategy, timelockSetFeeConfig, timelockSetReserveBps, timelockSetFees, timelockSetFeeRecipient } from "./helpers/timelock";
 
 describe("LiquidationEngine", function () {
   async function deployLiquidationFixture() {
@@ -31,7 +32,7 @@ describe("LiquidationEngine", function () {
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // 8 decimals, $2000
 
     // Configure oracle feed (token, feed, stalePeriod, tokenDecimals)
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
@@ -143,7 +144,7 @@ describe("LiquidationEngine", function () {
       // New collateral value: 10 * 1500 = $15,000
       // Health factor = (15000 * 0.80) / 14000 = 0.857 < 1.0
       await ethFeed.setAnswer(150000000000n); // $1500
-      // FIX: Update circuit breaker cache after price change
+      // Update circuit breaker cache after price change
       await priceOracle.updatePrice(await weth.getAddress());
 
       expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
@@ -399,7 +400,7 @@ describe("LiquidationEngine", function () {
     it("Should allow admin to update close factor", async function () {
       const { liquidationEngine, owner } = await loadFixture(deployLiquidationFixture);
 
-      await liquidationEngine.connect(owner).setCloseFactor(6000); // 60%
+      await timelockSetCloseFactor(liquidationEngine, owner, 6000); // 60%
       expect(await liquidationEngine.closeFactorBps()).to.equal(6000);
     });
 
@@ -414,7 +415,7 @@ describe("LiquidationEngine", function () {
     it("Should allow admin to update full liquidation threshold", async function () {
       const { liquidationEngine, owner } = await loadFixture(deployLiquidationFixture);
 
-      await liquidationEngine.connect(owner).setFullLiquidationThreshold(4000); // 40%
+      await timelockSetFullLiquidationThreshold(liquidationEngine, owner, 4000); // 40%
       expect(await liquidationEngine.fullLiquidationThreshold()).to.equal(4000);
     });
 

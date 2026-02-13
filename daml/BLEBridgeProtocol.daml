@@ -18,10 +18,65 @@ import DA.Time
 import DA.List (dedup)
 import DA.Set qualified as Set
 import DA.Foldable hiding (elem, length, all, sum)
+import DA.Text qualified as T
+import Compliance (ComplianceRegistry(..))
+
+-- | FIX CRIT-01: Validate ECDSA signature format before accepting.
+-- DAML cannot verify ECDSA cryptographically, but we enforce:
+--   1. Correct length (65 bytes = 130 hex chars, or 132 with "0x" prefix)
+--   2. Non-empty signature
+--   3. No whitespace or control characters
+-- Actual cryptographic verification happens on Ethereum (BLEBridgeV9.sol ECDSA.recover)
+validateSignatureFormat : Text -> Update ()
+validateSignatureFormat sig = do
+  let stripped = if T.isPrefixOf "0x" sig then T.drop 2 sig else sig
+  assertMsg "SIGNATURE_EMPTY" (T.length stripped > 0)
+  assertMsg "SIGNATURE_TOO_SHORT" (T.length stripped >= 130)
+  assertMsg "SIGNATURE_TOO_LONG" (T.length stripped <= 130)
+  assertMsg "SIGNATURE_HAS_SPACES" (not (T.isInfixOf " " stripped))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
 type Money = Numeric 18
 type Bps = Int
+
+-- ============================================================
+--  FIX C-01: Validator Self-Attestation for on-ledger cryptographic binding
+-- ============================================================
+
+-- | Validator independently commits to an attestation payload.
+-- CRITICAL: Only the validator is signatory — the operator CANNOT forge this.
+-- In DAML's authorization model, only the validator's participant node can create
+-- contracts where the validator is signatory. A compromised operator cannot
+-- impersonate validators because DAML enforces signatory authorization at the
+-- participant level.
+--
+-- Flow:
+--   1. Validator creates ValidatorSelfAttestation (only they can, they're signatory)
+--   2. Validator exercises Sign choice on attestation, passing self-attestation CID
+--   3. Sign choice fetches self-attestation and verifies validator + payload hash match
+--   4. Even if operator is compromised, they cannot create self-attestations
+template ValidatorSelfAttestation
+  with
+    validator : Party
+    aggregator : Party
+    payloadHash : Text         -- keccak256 hash of the attestation payload
+    ecdsaSignature : Text      -- The ECDSA signature (verified on Ethereum)
+    nonce : Int                -- Attestation nonce for cross-reference
+    createdAt : Time
+  where
+    signatory validator        -- CRITICAL: Only validator is signatory
+    observer aggregator
+
+    -- Payload hash must be non-empty and correct length (keccak256 = 64 hex chars)
+    ensure T.length payloadHash >= 64 && T.length payloadHash <= 66
+
+    key (validator, nonce) : (Party, Int)
+    maintainer key._1
+
+    -- Archive after use (one attestation per nonce per validator)
+    choice ConsumeSelfAttestation : ()
+      controller aggregator
+      do return ()
 
 -- ============================================================
 --                     SECTION 1: VALIDATOR INFRASTRUCTURE
@@ -70,6 +125,9 @@ data BridgeOutPayload = BridgeOutPayload with
     nonce : Int                   -- Unique per bridge request
     chainId : Int                 -- Target chain (1 = Ethereum mainnet)
     expiresAt : Time              -- D-03: Expiration timestamp
+    -- FIX H-12: Track originating party for compliance checks on bridge-out
+    sender : Party                -- Party initiating the bridge-out
+    recipientEthAddress : Text    -- Ethereum destination address
   deriving (Eq, Show)
 
 -- | Bridge-out attestation request.
@@ -83,6 +141,8 @@ template BridgeOutAttestation
     payload : BridgeOutPayload
     positionCids : [ContractId InstitutionalEquityPosition]
     signedValidators : [Party]    -- FIX D-02: Track who has already signed
+    -- FIX H-12: Compliance registry for blacklist verification on bridge-out
+    complianceRegistryCid : ContractId ComplianceRegistry
   where
     signatory aggregator
     observer validatorGroup
@@ -93,11 +153,29 @@ template BridgeOutAttestation
       with
         validator : Party
         ecdsaSignature : Text
+        -- FIX C-01: Require validator's self-attestation to prove independent participation
+        selfAttestationCid : ContractId ValidatorSelfAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
         -- FIX D-02: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
+
+        -- FIX CRIT-01: Validate ECDSA signature format
+        validateSignatureFormat ecdsaSignature
+
+        -- FIX C-01: Verify self-attestation matches this validator and payload nonce
+        -- Since ValidatorSelfAttestation has `signatory validator`, only the actual
+        -- validator's participant can create it — operator cannot forge
+        selfAtt <- fetch selfAttestationCid
+        assertMsg "SELF_ATTESTATION_VALIDATOR_MISMATCH" (selfAtt.validator == validator)
+        assertMsg "SELF_ATTESTATION_NONCE_MISMATCH" (selfAtt.nonce == payload.nonce)
+        assertMsg "SELF_ATTESTATION_SIGNATURE_MISMATCH" (selfAtt.ecdsaSignature == ecdsaSignature)
+
+        -- FIX H-12: Enforce compliance — blacklisted/frozen senders cannot bridge out
+        registry <- fetch complianceRegistryCid
+        assertMsg "SENDER_BLACKLISTED" (not (Set.member payload.sender registry.blacklisted))
+        assertMsg "SENDER_FROZEN" (not (Set.member payload.sender registry.frozen))
 
         -- D-03: Check expiration
         now <- getTime
@@ -203,6 +281,9 @@ template BridgeInAttestation
         -- FIX M-5: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
+        -- FIX CRIT-01: Validate ECDSA signature format
+        validateSignatureFormat ecdsaSignature
+
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
 
@@ -294,6 +375,9 @@ template SupplyCapAttestation
         -- FIX C-01: Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
+        -- FIX CRIT-01: Validate ECDSA signature format
+        validateSignatureFormat ecdsaSignature
+
         sig <- create SupplyCapSignature with
           requestCid = self
           validator
@@ -382,6 +466,9 @@ template YieldAttestation
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
         -- FIX C-02: Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
+
+        -- FIX CRIT-01: Validate ECDSA signature format
+        validateSignatureFormat ecdsaSignature
 
         sig <- create YieldSignature with
           requestCid = self

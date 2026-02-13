@@ -41,6 +41,7 @@ describe("BLEBridgeV9", function () {
       await musd.getAddress(),
       COLLATERAL_RATIO,
       DAILY_CAP_LIMIT,
+      deployer.address
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -53,6 +54,10 @@ describe("BLEBridgeV9", function () {
     await musd.grantRole(BRIDGE_ROLE, await bridge.getAddress());
     await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     await bridge.grantRole(EMERGENCY_ROLE, emergency.address);
+
+    // Grant RELAYER_ROLE so deployer can call processAttestation()
+    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    await bridge.grantRole(RELAYER_ROLE, deployer.address);
 
     for (const v of validators) {
       await bridge.grantRole(VALIDATOR_ROLE, v.address);
@@ -96,28 +101,28 @@ describe("BLEBridgeV9", function () {
     it("Should reject initialization with zero minSigs", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: Now requires >= 2
+        upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // Now requires >= 2
     });
 
-    it("Should reject initialization with one minSig (FIX C-01)", async function () {
+    it("Should reject initialization with one minSig", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // FIX C-01: At least 2 required
+        upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
+      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // At least 2 required
     });
 
     it("Should reject initialization with zero MUSD address", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, ethers.ZeroAddress, COLLATERAL_RATIO, DAILY_CAP_LIMIT])
+        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, ethers.ZeroAddress, COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
       ).to.be.revertedWith("INVALID_MUSD_ADDRESS");
     });
 
     it("Should reject initialization with ratio below 100%", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, await musd.getAddress(), 9999, DAILY_CAP_LIMIT])
+        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, await musd.getAddress(), 9999, DAILY_CAP_LIMIT, deployer.address])
       ).to.be.revertedWith("RATIO_BELOW_100_PERCENT");
     });
   });
@@ -248,7 +253,7 @@ describe("BLEBridgeV9", function () {
       };
 
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
-      // FIX B-C04: Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
+      // Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
       await expect(bridge.processAttestation(attestation2, sigs2))
         .to.be.revertedWith("ATTESTATION_TOO_CLOSE");
     });

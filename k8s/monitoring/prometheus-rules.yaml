@@ -1,0 +1,262 @@
+# Minted Protocol - Prometheus Alerting Rules
+# INFRA-H-03: Security alerting for rate limits, auth failures, TLS errors,
+# bridge anomalies, and service availability.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: minted-security-alerts
+  namespace: musd-canton
+  labels:
+    app: minted
+    component: monitoring
+    prometheus: kube-prometheus
+spec:
+  groups:
+    # ──────────────────────────────────────────────────
+    #  1. NGINX / API Gateway Alerts
+    # ──────────────────────────────────────────────────
+    - name: nginx-security
+      rules:
+        - alert: HighRateLimitHits
+          expr: |
+            sum(rate(nginx_http_requests_total{status="429"}[5m])) > 10
+          for: 5m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "High rate of 429 responses — possible DDoS or abuse"
+            description: "More than 10 rate-limited requests/sec sustained for 5 minutes."
+
+        - alert: TLSHandshakeFailures
+          expr: |
+            sum(rate(nginx_ssl_handshakes_failed[5m])) > 5
+          for: 3m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Elevated TLS handshake failures"
+            description: "Possible TLS downgrade attack or misconfigured clients."
+
+        - alert: HTTP5xxSpike
+          expr: |
+            sum(rate(nginx_http_requests_total{status=~"5.."}[5m]))
+              / sum(rate(nginx_http_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "More than 5% of requests returning 5xx errors"
+            description: "Backend error rate exceeds 5% — investigate Canton participant or JSON API."
+
+        - alert: UnauthorizedAccessAttempts
+          expr: |
+            sum(rate(nginx_http_requests_total{status="401"}[5m])) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Sustained 401 Unauthorized responses"
+            description: "Possible credential brute-force or expired JWT tokens."
+
+        - alert: ForbiddenAccessAttempts
+          expr: |
+            sum(rate(nginx_http_requests_total{status="403"}[5m])) > 10
+          for: 3m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Elevated 403 Forbidden responses — admin endpoint probing"
+            description: "Clients attempting to access restricted admin or party endpoints."
+
+    # ──────────────────────────────────────────────────
+    #  2. Canton Participant Alerts
+    # ──────────────────────────────────────────────────
+    - name: canton-participant
+      rules:
+        - alert: CantonParticipantDown
+          expr: up{job="canton-participant"} == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Canton participant is down"
+            description: "Canton participant pod has been unreachable for 2 minutes."
+
+        - alert: CantonHighLatency
+          expr: |
+            histogram_quantile(0.99, rate(canton_ledger_api_request_duration_seconds_bucket[5m])) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Canton Ledger API P99 latency > 5s"
+            description: "Possible contention or participant overload."
+
+        - alert: CantonDBConnectionPoolExhausted
+          expr: |
+            canton_db_pool_active_connections / canton_db_pool_max_connections > 0.9
+          for: 3m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Canton DB connection pool > 90% utilized"
+            description: "Database connection exhaustion imminent."
+
+    # ──────────────────────────────────────────────────
+    #  3. Bridge / Relay Security Alerts
+    # ──────────────────────────────────────────────────
+    - name: bridge-security
+      rules:
+        - alert: BridgeRelayDown
+          expr: up{job="bridge-relay"} == 0
+          for: 3m
+          labels:
+            severity: critical
+            team: bridge
+          annotations:
+            summary: "Bridge relay service is down"
+            description: "Bridge attestations are not being processed."
+
+        - alert: HighBridgeVolume
+          expr: |
+            sum(rate(bridge_requests_total[1h])) > 100
+          for: 15m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Abnormally high bridge request volume"
+            description: "Possible bridge exploitation or unusually high mint/redeem activity."
+
+        - alert: BridgeValidationFailures
+          expr: |
+            sum(rate(bridge_validation_failures_total[5m])) > 0
+          for: 1m
+          labels:
+            severity: critical
+            team: security
+          annotations:
+            summary: "Bridge validation failures detected"
+            description: "Attestations failing validation — possible forgery attempt."
+
+        - alert: ValidatorSigningRateLimitHit
+          expr: |
+            sum(rate(validator_signing_rate_limit_hits_total[5m])) > 0
+          for: 1m
+          labels:
+            severity: warning
+            team: security
+          annotations:
+            summary: "Validator signing rate limit triggered"
+            description: "A validator node hit its per-hour signing limit (50/hr)."
+
+    # ──────────────────────────────────────────────────
+    #  4. Price Oracle Alerts
+    # ──────────────────────────────────────────────────
+    - name: price-oracle
+      rules:
+        - alert: PriceOracleCircuitBreakerOpen
+          expr: |
+            price_oracle_circuit_breaker_open == 1
+          for: 1m
+          labels:
+            severity: critical
+            team: oracle
+          annotations:
+            summary: "Price oracle circuit breaker is OPEN"
+            description: "All price sources have failed — oracle is paused. New borrows will be blocked by feed staleness."
+
+        - alert: PriceSourceDivergence
+          expr: |
+            abs(tradecraft_price - temple_price) / tradecraft_price > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            team: oracle
+          annotations:
+            summary: "Tradecraft vs Temple price divergence > 5%"
+            description: "Price sources are diverging — possible manipulation or stale feed."
+
+        - alert: PriceFeedStale
+          expr: |
+            time() - price_feed_last_update_timestamp > 3600
+          for: 5m
+          labels:
+            severity: warning
+            team: oracle
+          annotations:
+            summary: "Price feed has not been updated in > 1 hour"
+            description: "Stale price feed will block new borrows (by design). Investigate oracle service."
+
+    # ──────────────────────────────────────────────────
+    #  5. Database & Storage Alerts
+    # ──────────────────────────────────────────────────
+    - name: postgres-alerts
+      rules:
+        - alert: PostgresDown
+          expr: up{job="postgres"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "PostgreSQL database is down"
+            description: "Canton participant will lose ledger persistence."
+
+        - alert: PostgresHighConnections
+          expr: |
+            pg_stat_activity_count > 80
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PostgreSQL active connections > 80"
+            description: "Approaching max_connections limit. Consider connection pooling."
+
+        - alert: PostgresDiskUsageHigh
+          expr: |
+            (node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"} - node_filesystem_avail_bytes{mountpoint="/var/lib/postgresql"})
+              / node_filesystem_size_bytes{mountpoint="/var/lib/postgresql"} > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PostgreSQL disk usage > 85%"
+            description: "Disk filling up — schedule backup rotation or volume expansion."
+
+    # ──────────────────────────────────────────────────
+    #  6. Pod Security Alerts
+    # ──────────────────────────────────────────────────
+    - name: pod-security
+      rules:
+        - alert: PodRestartLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="musd-canton"}[1h]) > 5
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod in musd-canton namespace is restart-looping"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has restarted > 5 times in 1 hour."
+
+        - alert: PodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{namespace="musd-canton", reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod OOM-killed in musd-canton namespace"
+            description: "Container {{ $labels.container }} was OOM-killed. Increase resource limits."
