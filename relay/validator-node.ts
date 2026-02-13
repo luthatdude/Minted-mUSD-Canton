@@ -1,5 +1,11 @@
 /**
- * Minted Protocol - Canton Validator Node
+ * Minted Protocol - Canton Validator Node (V1 — DEPRECATED)
+ *
+ * @deprecated Use validator-node-v2.ts instead. V1 message hashes use 7 parameters
+ *             and do NOT include cantonStateHash. V2 uses 8 parameters matching
+ *             BLEBridgeV9's updated signature verification. If any active validator
+ *             runs V1 while others run V2, their signatures will produce different
+ *             hashes, potentially dropping below the minSignatures threshold.
  *
  * Watches for AttestationRequest contracts and signs them using AWS KMS.
  *
@@ -23,6 +29,13 @@ import * as fs from "fs";
 
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
+
+// FIX H-07: Warn operators that V1 is deprecated and incompatible with V2 signatures
+console.warn(
+  "[DEPRECATED] validator-node.ts (V1) uses a 7-parameter message hash WITHOUT cantonStateHash. " +
+  "V2 uses 8 parameters. Mixed V1/V2 validators will produce incompatible signatures. " +
+  "Migrate all validators to validator-node-v2.ts before enabling cantonStateHash verification."
+);
 
 // ============================================================
 //                     CONFIGURATION
