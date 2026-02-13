@@ -22,7 +22,7 @@ module CantonLoopStrategy where
 import DA.Time
 import CantonDirectMint (Money, Bps)
 import CantonLending (CantonLendingService(..), EscrowedCollateral(..), CollateralType(..))
-import Compliance (ComplianceRegistry(..), IsCompliant(..))
+import Compliance (ComplianceRegistry(..), IsCompliant(..), ValidateMint(..), ValidateRedemption(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
@@ -125,9 +125,11 @@ template CantonLoopStrategyService
         assertMsg "DEPOSIT_POSITIVE" (depositAmount > 0.0)
         assertMsg "INVALID_SLIPPAGE" (slippageTolerance >= 0 && slippageTolerance <= 500)
 
-        -- H-04: Compliance check — user must not be blacklisted or frozen
-        exercise complianceRegistryCid IsCompliant
-          with party = user; caller = operator
+        -- FIX C-2: Use ValidateMint instead of IsCompliant.
+        -- IsCompliant returns Bool but the return value was discarded, making the check a no-op.
+        -- ValidateMint uses assertMsg internally and reverts on blacklisted parties.
+        exercise complianceRegistryCid ValidateMint
+          with minter = user
 
         now <- getTime
 
@@ -180,9 +182,11 @@ template CantonLoopStrategyService
       do
         assertMsg "STRATEGY_PAUSED" (not paused)
 
-        -- H-04: Compliance check
-        exercise complianceRegistryCid IsCompliant
-          with party = user; caller = operator
+        -- FIX C-2: Use ValidateRedemption instead of IsCompliant.
+        -- ValidateRedemption asserts on blacklisted AND frozen parties.
+        -- IsCompliant was a passive Bool query whose return value was discarded.
+        exercise complianceRegistryCid ValidateRedemption
+          with redeemer = user
 
         pos <- fetch positionCid
         assertMsg "NOT_POSITION_OWNER" (pos.user == user)

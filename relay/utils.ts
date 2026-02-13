@@ -205,20 +205,12 @@ export async function createSigner(
 
       console.log(`[KMS] Signer initialised — address ${address}`);
 
-      // Return an ethers VoidSigner (read-only address) wrapped so that
-      // sendTransaction will use KMS to sign.  Full KMS signer integration
-      // is non-trivial; for production the @aws-sdk/client-kms SignCommand
-      // flow should be wrapped in a custom AbstractSigner. For now we log
-      // the successful KMS init and return a Wallet fallback if a raw key
-      // is also present, giving operators time to migrate fully.
-      const rawKey = readAndValidatePrivateKey(secretName, envVar);
-      if (rawKey) {
-        console.warn("[KMS] Raw private key also present — using KMS address-verified local signer");
-        return new ethers.Wallet(rawKey, provider);
-      }
-
-      // If no raw key, return a VoidSigner (will fail on write ops until
-      // full KMS signer is integrated)
+      // FIX C-6: Do NOT load raw private key when KMS is configured.
+      // Previously the code loaded the raw key into a Wallet even with KMS present,
+      // completely defeating the purpose of KMS (key stays in heap memory).
+      // Return a VoidSigner for now — full KMS AbstractSigner integration is required
+      // before production write operations will work without a raw key.
+      console.warn("[KMS] Using VoidSigner — full KMS AbstractSigner required for write ops");
       return new ethers.VoidSigner(address, provider);
     } catch (err) {
       console.error(`[KMS] Failed to initialise KMS signer: ${(err as Error).message}`);
@@ -232,11 +224,21 @@ export async function createSigner(
     throw new Error(`FATAL: Neither KMS_KEY_ID nor ${envVar} is configured`);
   }
 
+  // FIX C-6: In production, raw private keys must not be used.
+  // JS strings are immutable — the key persists in V8 heap memory until GC,
+  // making it extractable via memory dumps (/proc/pid/mem, core dumps, heap snapshots).
+  // KMS keeps the private key inside the HSM boundary and never exposes it to the process.
   if (process.env.NODE_ENV === "production") {
-    console.warn(
-      `[SECURITY] Using raw private key for signer — migrate to KMS_KEY_ID for production security`,
+    throw new Error(
+      `SECURITY: Raw private key usage is FORBIDDEN in production. ` +
+      `Configure KMS_KEY_ID for HSM-backed signing. ` +
+      `See kms-ethereum-signer.ts for setup instructions.`
     );
   }
+
+  console.warn(
+    `[SECURITY] Using raw private key for signer — acceptable in ${process.env.NODE_ENV || "development"} only`,
+  );
 
   return new ethers.Wallet(key, provider);
 }

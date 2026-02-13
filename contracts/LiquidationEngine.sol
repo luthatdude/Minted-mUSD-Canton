@@ -124,11 +124,13 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Liquidate an undercollateralized position
-    /// @dev FIX H-04: CALLER MUST approve this contract to spend their mUSD before calling.
-    ///      Because `musd.burn(msg.sender, amount)` is called by this contract (not by msg.sender),
-    ///      MUSD.burn() sees `from != msg.sender` and invokes `_spendAllowance()`.
-    ///      Without approval, every liquidation call will revert with "ERC20: insufficient allowance".
-    ///      Recommended: `IERC20(musd).approve(address(liquidationEngine), type(uint256).max)`
+    /// @dev FIX H-04 — LIQUIDATOR PREREQUISITES:
+    ///      1. Hold sufficient mUSD to cover `debtToRepay`
+    ///      2. Approve this contract (LiquidationEngine) to spend mUSD via
+    ///         `IERC20(musd).approve(address(liquidationEngine), amount)`
+    ///      Because `musd.burn(msg.sender, amount)` is called by this contract
+    ///      (not by msg.sender), MUSD.burn() sees `from != msg.sender` and
+    ///      invokes `_spendAllowance()`. Without approval, liquidation reverts.
     /// @param borrower The address of the undercollateralized borrower
     /// @param collateralToken The collateral token to seize
     /// @param debtToRepay Amount of mUSD debt to repay on behalf of borrower
@@ -150,8 +152,13 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
         require(seizeAmount > 0, "NOTHING_TO_SEIZE");
 
-        // Execute: burn → seize → reduceDebt (CEI pattern)
-        musd.burn(msg.sender, actualRepay);
+        // FIX H-04: Explicit transferFrom + burn-from-self pattern.
+        // Previously called musd.burn(msg.sender, actualRepay) which, in MUSD.sol context,
+        // had msg.sender = this contract and from = liquidator, triggering an undocumented
+        // _spendAllowance(liquidator, LiquidationEngine, amount) check.
+        // New flow: standard ERC-20 pull + self-burn (no hidden allowance semantics).
+        IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), actualRepay);
+        musd.burn(address(this), actualRepay);
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
         borrowModule.reduceDebt(borrower, actualRepay);
 

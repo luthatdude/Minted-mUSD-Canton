@@ -1,13 +1,53 @@
-// CollateralVault event handlers for The Graph subgraph
-// FIX H-06: Populated stub file (was 0-byte)
+import {
+  Deposited as DepositedEv,
+  Withdrawn as WithdrawnEv,
+  Seized as SeizedEv,
+} from "../generated/CollateralVault/CollateralVault";
+import { CollateralDeposit, CollateralWithdrawal } from "../generated/schema";
+import { generateEventId } from "./helpers";
 
-export { };
+export function handleDeposited(event: DepositedEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new CollateralDeposit(id);
+  entity.user = event.params.user;
+  entity.token = event.params.token;
+  entity.amount = event.params.amount;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}
 
-// TODO: Implement handlers for CollateralVault events:
-// - handleDeposited(event: Deposited): Track collateral deposits per user/token
-// - handleWithdrawn(event: Withdrawn): Track collateral withdrawals
-// - handleSeized(event: Seized): Track liquidation seizures
-// - handleCollateralAdded(event: CollateralAdded): Track new collateral types
-// - handleCollateralUpdated(event: CollateralUpdated): Track config changes
-// - handleCollateralDisabled(event: CollateralDisabled): Track disabled collateral
-// - handleCollateralEnabled(event: CollateralEnabled): Track re-enabled collateral
+export function handleWithdrawn(event: WithdrawnEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new CollateralWithdrawal(id);
+  entity.user = event.params.user;
+  entity.token = event.params.token;
+  entity.amount = event.params.amount;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}
+
+export function handleSeized(event: SeizedEv): void {
+  // Seizure = forced withdrawal during liquidation — track as withdrawal
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new CollateralWithdrawal(id);
+  entity.user = event.params.user;
+  entity.token = event.params.token;
+  entity.amount = event.params.amount;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}

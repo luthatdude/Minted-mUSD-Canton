@@ -145,7 +145,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                    ADMIN FUNCTIONS
     // ============================================================
 
-    function setMUSDToken(address _musdToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev FIX C-5: Moved from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// A compromised admin could swap to a malicious mUSD contract and mint unlimited tokens.
+    /// Now requires 48h timelock delay via MintedTimelockController.
+    function setMUSDToken(address _musdToken) external onlyRole(TIMELOCK_ROLE) {
         require(_musdToken != address(0), "INVALID_ADDRESS");
         emit MUSDTokenUpdated(address(musdToken), _musdToken);
         musdToken = IMUSD(_musdToken);
@@ -153,14 +156,18 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     /// @notice Set minimum validator signatures required
     /// @dev Enforces min=2 and max=10 to prevent single-point compromise or lockup
-    function setMinSignatures(uint256 _minSigs) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev FIX C-5: Moved from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// Lowering min signatures reduces the compromise threshold for supply cap manipulation.
+    function setMinSignatures(uint256 _minSigs) external onlyRole(TIMELOCK_ROLE) {
         require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
         require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH");
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
 
-    function setDailyCapIncreaseLimit(uint256 _limit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev FIX C-5: Moved from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// Removing rate limits allows a fraudulent attestation to inflate supply cap instantly.
+    function setDailyCapIncreaseLimit(uint256 _limit) external onlyRole(TIMELOCK_ROLE) {
         require(_limit > 0, "INVALID_LIMIT");
         emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
         dailyCapIncreaseLimit = _limit;
@@ -181,9 +188,9 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         emit AttestationsMigrated(attestationIds.length, previousBridge);
     }
 
-    // Ratio changes are applied immediately but emit event for monitoring.
-    // For production, this should be behind a timelock contract.
-    function setCollateralRatio(uint256 _ratioBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev FIX C-5: Moved from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// Ratio reductions increase the supply cap, which must be timelocked.
+    function setCollateralRatio(uint256 _ratioBps) external onlyRole(TIMELOCK_ROLE) {
         // Rate-limit ratio changes to once per day
         require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
         require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");

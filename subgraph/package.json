@@ -1,0 +1,22 @@
+{
+  "name": "minted-musd-subgraph",
+  "version": "1.0.0",
+  "description": "Subgraph for Minted mUSD protocol — indexes critical on-chain events for monitoring and audit trails",
+  "license": "MIT",
+  "scripts": {
+    "codegen": "graph codegen",
+    "build": "graph codegen && graph build",
+    "deploy:studio": "graph deploy --studio minted-musd",
+    "deploy:hosted": "graph deploy --product hosted-service minted/minted-musd",
+    "create:local": "graph create --node http://localhost:8020/ minted-musd",
+    "deploy:local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 minted-musd",
+    "test": "graph test"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-cli": "^0.71.0",
+    "@graphprotocol/graph-ts": "^0.35.1"
+  },
+  "devDependencies": {
+    "matchstick-as": "^0.6.0"
+  }
+}

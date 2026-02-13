@@ -334,6 +334,13 @@ template MinterRegistry
 -- | GovernanceActionLog - Record of executed governance actions.
 -- FIX C-DAML-01: Added ConsumeProof choice for one-time use and targetModule for scoping.
 -- After execution, the proof must be consumed to prevent replay across modules.
+-- | FIX D-H-01: Changed signatory from (operator, executedBy) to (operator) only.
+-- Previously, MinterRegistry_AddMinter, MinterRegistry_RemoveMinter, MinterRegistry_ReplenishQuota,
+-- and EmergencyPause_Resume all call `archive governanceProofCid` within choices controlled
+-- by `operator` alone. DAML requires ALL signatories to authorize an archive. When
+-- executedBy ≠ operator (a governor executed the proposal), the archive would fail at runtime,
+-- blocking all governance-gated operations and creating governance proof replay risk.
+-- executedBy is now an observer for audit trail visibility without blocking archives.
 template GovernanceActionLog
   with
     operator : Party
@@ -347,7 +354,8 @@ template GovernanceActionLog
     executedBy : Party
     executedAt : Time
   where
-    signatory operator, executedBy
+    signatory operator
+    observer executedBy
 
     -- FIX C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
     -- Returns the log data so the caller can verify actionType and targetModule.
