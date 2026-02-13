@@ -504,7 +504,7 @@ template CantonDirectMintService
 
         -- Transfer USDC to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator
+        usdcProposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = operator; complianceRegistryCid
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
         -- Mint Canton mUSD to user (1:1 minus fee)
@@ -768,6 +768,7 @@ template RedemptionRequest
     choice Redemption_Fulfill : (ContractId RedemptionRequest, ContractId CantonUSDC)
       with
         usdcCid : ContractId CantonUSDC
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller operator
       do
         assertMsg "ALREADY_FULFILLED" (not fulfilled)
@@ -777,11 +778,11 @@ template RedemptionRequest
         -- Split exact amount if needed, then accept transfer proposal
         payoutCid <- if usdc.amount == usdcOwed
           then do
-            proposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = user
+            proposal <- exercise usdcCid CantonUSDC_Transfer with newOwner = user; complianceRegistryCid
             exercise proposal CantonUSDCTransferProposal_Accept
           else do
             (exact, _remainder) <- exercise usdcCid CantonUSDC_Split with splitAmount = usdcOwed
-            proposal <- exercise exact CantonUSDC_Transfer with newOwner = user
+            proposal <- exercise exact CantonUSDC_Transfer with newOwner = user; complianceRegistryCid
             exercise proposal CantonUSDCTransferProposal_Accept
 
         fulfilledReq <- create this with fulfilled = True

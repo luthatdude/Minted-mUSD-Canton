@@ -13,7 +13,7 @@ import DA.List (head)
 import UserPrivacySettings
 import CantonDirectMint (CantonMUSD(..), CantonUSDC(..), USDCx(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLending (EscrowedCollateral(..), CantonDebtPosition(..), CollateralType(..))
 
 -- ============================================================
