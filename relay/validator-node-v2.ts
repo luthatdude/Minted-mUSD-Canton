@@ -301,6 +301,10 @@ class ValidatorNode {
     }
 
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    // FIX TS-H-03-NEW: Block plaintext Canton connections in production
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error("[ValidatorV2] CANTON_USE_TLS=false is not allowed in production");
+    }
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
       token: config.cantonLedgerToken,
