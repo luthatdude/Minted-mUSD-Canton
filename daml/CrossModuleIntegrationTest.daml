@@ -94,6 +94,7 @@ testMintStakeUnstakeFlow = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 0.0
       globalSharePrice = 1.0
       globalTotalAssets = 0.0
@@ -241,6 +242,7 @@ testSharePriceSyncWithinBounds = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -261,6 +263,8 @@ testSharePriceSyncWithinBounds = do
       newGlobalTotalAssets = 105.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "a]b]c]d]e]f]0123456789abcdef0123456789abcdef0123456789abcdef01234567"
+      validatorCount = 3
 
   -- Verify the price was applied
   price <- submit operator do
@@ -284,6 +288,7 @@ testSharePriceIncreaseTooLargeRejected = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -304,6 +309,8 @@ testSharePriceIncreaseTooLargeRejected = do
       newGlobalTotalAssets = 115.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      validatorCount = 3
   debug "✅ Integration 4: Share price increase >10% rejected (FIX D-M09)"
 
 -- ============================================================
@@ -322,6 +329,7 @@ testSharePriceDecreaseTooLargeRejected = do
   stakingCid <- submit operator do
     createCmd CantonStakingService with
       operator
+      governance = operator
       totalShares = 100.0
       globalSharePrice = 1.0
       globalTotalAssets = 100.0
@@ -342,6 +350,8 @@ testSharePriceDecreaseTooLargeRejected = do
       newGlobalTotalAssets = 85.0
       newGlobalTotalShares = 100.0
       epochNumber = 1
+      attestationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+      validatorCount = 3
   debug "✅ Integration 5: Share price decrease >10% rejected"
 
 -- ============================================================
