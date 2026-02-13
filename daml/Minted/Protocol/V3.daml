@@ -613,12 +613,26 @@ template Vault
           requester = owner
           maxStaleness = hours 1
         
+        -- DAML-C-02: Route initial borrowAmount through supply service
+        (newSupplyServiceCid, initialMusdCid) <- exercise supplyServiceCid SupplyService_VaultMint with
+          borrower = owner
+          borrowAmount = borrowAmount
+          agreementHash = agreementHash
+          agreementUri = agreementUri
+
+        -- Swap initial mUSD for collateral via DEX
+        (initialPoolCid, initialColOut) <- exercise poolCid Swap_mUSD_For_Collateral with
+          musdCid = initialMusdCid
+          receiver = owner
+
+        let initialCol = newCollateral + initialColOut
+
         -- Recursive leverage loop
         let loopFn (col, debt, pCid, svcCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
               let borrowable = maxDebt - debt
-              if borrowable < 1.0 
+              if borrowable < 1.0
                 then return (col, debt, pCid, svcCid)
                 else do
                   (newSvcCid, musdCid) <- exercise svcCid SupplyService_VaultMint with
@@ -631,8 +645,8 @@ template Vault
                     musdCid = musdCid
                     receiver = owner
                   return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
-        
-        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (newCollateral, principalDebt + borrowAmount, poolCid, supplyServiceCid) [1..loops]
+
+        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (initialCol, principalDebt + borrowAmount, initialPoolCid, newSupplyServiceCid) [1..loops]
         
         -- Health check
         let finalValue = finalCol * price
@@ -720,9 +734,15 @@ template Vault
         liquidator : Party
         repayAmount : Money
         oracleCid : ContractId PriceOracle
+        musdCid : ContractId MintedMUSD
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
+
+        -- DAML-C-01: Fetch and validate mUSD token for burn
+        musd <- fetch musdCid
+        assertMsg "LIQUIDATOR_NOT_MUSD_OWNER" (musd.owner == liquidator)
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
 
         -- Calculate current debt with interest
         now <- getTime
@@ -744,10 +764,23 @@ template Vault
         
         -- Close factor limits max repayment
         let maxRepay = totalDebt * intToNumeric config.closeFactorBps / 10000.0
-        let actualRepay = if totalDebt < config.dustThreshold 
+        let actualRepay = if totalDebt < config.dustThreshold
                           then totalDebt  -- Full liquidation for dust
                           else min repayAmount maxRepay
-        
+
+        -- DAML-C-01: Verify mUSD covers repayment, archive, and return change
+        assertMsg "INSUFFICIENT_MUSD" (musd.amount >= actualRepay)
+        archive musdCid
+        when (musd.amount > actualRepay) do
+          void $ create MintedMUSD with
+            issuer = musd.issuer
+            owner = liquidator
+            amount = musd.amount - actualRepay
+            blacklisted = musd.blacklisted
+            agreementHash = musd.agreementHash
+            agreementUri = musd.agreementUri
+            observers = musd.observers
+
         -- Calculate collateral seized with penalty
         let seizeValue = actualRepay * (10000.0 + intToNumeric config.liquidationPenaltyBps) / 10000.0
         let seizeAmount = seizeValue / price
