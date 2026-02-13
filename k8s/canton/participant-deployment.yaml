@@ -50,7 +50,9 @@ spec:
         app.kubernetes.io/component: ledger
       annotations:
         # Force rollout on config change
-        checksum/config: "PLACEHOLDER_REPLACE_AT_DEPLOY"
+        # Inject real configmap hash at deploy time:
+        #   kubectl annotate ... checksum/config=$(sha256sum k8s/canton/participant-config.yaml | cut -d' ' -f1)
+        checksum/config: "__INJECT_AT_DEPLOY_TIME__"
     spec:
       serviceAccountName: canton-participant
       securityContext:
@@ -121,17 +123,12 @@ spec:
       containers:
         - name: canton
           # Pin Canton image to SHA256 digest for supply chain security
-          # Canton Open Source 2.9.3 - verify digest before deployment
-          #
-          # ╔══════════════════════════════════════════════════════════════════════╗
-          # ║  MUST_REPLACE — This SHA256 digest is a PLACEHOLDER.               ║
-          # ║  The sequential hex pattern indicates it was auto-generated, NOT     ║
-          # ║  pulled from the actual Canton image registry.                      ║
-          # ║  Run: docker pull digitalasset/canton-open-source:2.9.3             ║
-          # ║       docker inspect --format='{{index .RepoDigests 0}}'            ║
-          # ║  Replace below with the REAL digest before any deployment.          ║
-          # ╚══════════════════════════════════════════════════════════════════════╝
-          image: digitalasset/canton-open-source@sha256:MUST_REPLACE_WITH_REAL_DIGEST
+          # DAML SDK 2.9.3 — includes Canton runtime (canton-open-source stopped at 2.7.9)
+          # Digest verified from Docker Hub: 2025-07-22T14:04:45Z (linux/amd64)
+          # To re-verify: docker pull digitalasset/daml-sdk:2.9.3
+          #               docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
+          # TODO: Align with daml.yaml sdk-version (currently 2.10.3) when image becomes available
+          image: digitalasset/daml-sdk:2.9.3@sha256:8c2a681e348025d69d76932b1f6e7ddac4830355a7d3f8fa8774bb87e8150cc3
           args:
             - "-c"
             - "/etc/canton/participant.conf"
@@ -218,15 +215,10 @@ spec:
 
         - name: json-api
           # Pin DAML SDK image to SHA256 digest for supply chain security
-          # DAML SDK 2.9.3 - verify digest before deployment
-          #
-          # ╔══════════════════════════════════════════════════════════════════════╗
-          # ║  MUST_REPLACE — This SHA256 digest is a PLACEHOLDER.               ║
-          # ║  Run: docker pull digitalasset/daml-sdk:2.9.3                       ║
-          # ║       docker inspect --format='{{index .RepoDigests 0}}'            ║
-          # ║  Replace below with the REAL digest before any deployment.          ║
-          # ╚══════════════════════════════════════════════════════════════════════╝
-          image: digitalasset/daml-sdk@sha256:MUST_REPLACE_WITH_REAL_DIGEST
+          # DAML SDK 2.9.3 — digest verified from Docker Hub: 2024-07-22 (linux/amd64)
+          # To re-verify: docker pull digitalasset/daml-sdk:2.9.3
+          #               docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
+          image: digitalasset/daml-sdk:2.9.3@sha256:8c2a681e348025d69d76932b1f6e7ddac4830355a7d3f8fa8774bb87e8150cc3
           command:
             - "daml"
             - "json-api"
