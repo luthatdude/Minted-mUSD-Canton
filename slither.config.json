@@ -4,7 +4,9 @@
     "pragma",
     "solc-version",
     "cache-array-length",
-    "cyclomatic-complexity"
+    "cyclomatic-complexity",
+    "assembly",
+    "uninitialized-local"
   ],
   "filter_paths": "node_modules,contracts/mocks",
   "exclude_optimization": true
