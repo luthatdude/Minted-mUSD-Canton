@@ -54,6 +54,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -76,6 +77,7 @@ describe('SkySUSDSStrategy', function () {
           await mockSUsds.getAddress(),
           treasury.address,
           admin.address,
+          admin.address,
         ],
         { kind: 'uups' }
       )
@@ -93,6 +95,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -103,6 +106,7 @@ describe('SkySUSDSStrategy', function () {
         await usds.getAddress(),
         await mockPsm.getAddress(),
         await mockSUsds.getAddress(),
+        attacker.address,
         attacker.address,
         attacker.address,
       )
@@ -119,6 +123,7 @@ describe('SkySUSDSStrategy', function () {
         await mockPsm.getAddress(),
         await mockSUsds.getAddress(),
         treasury.address,
+        admin.address,
         admin.address,
       ],
       { kind: 'uups' }
@@ -141,6 +146,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -160,6 +166,7 @@ describe('SkySUSDSStrategy', function () {
         await mockPsm.getAddress(),
         await mockSUsds.getAddress(),
         treasury.address,
+        admin.address,
         admin.address,
       ],
       { kind: 'uups' }
@@ -184,6 +191,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -207,6 +215,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -229,6 +238,7 @@ describe('SkySUSDSStrategy', function () {
         await mockSUsds.getAddress(),
         treasury.address,
         admin.address,
+        admin.address,
       ],
       { kind: 'uups' }
     );
@@ -248,6 +258,7 @@ describe('SkySUSDSStrategy', function () {
         await mockPsm.getAddress(),
         await mockSUsds.getAddress(),
         treasury.address,
+        admin.address,
         admin.address,
       ],
       { kind: 'uups' }
