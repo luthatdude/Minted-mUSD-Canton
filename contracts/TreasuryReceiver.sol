@@ -95,7 +95,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
 
     /// @notice Aggregate pending USDC amount per recipient.
     mapping(address => uint256) public pendingCredits;
-    
+
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
     
