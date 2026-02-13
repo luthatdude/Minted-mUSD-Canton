@@ -121,6 +121,7 @@ template MultiSigProposal
     actionType : ActionType
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
+    targetModule : Text                 -- FIX C-DAML-03: Target module for scoped governance
     payloadHash : Text                  -- SHA-256 of payload for verification
     requiredApprovals : Int             -- Threshold for this action type
     approvals : Set.Set Party           -- Collected approvals
@@ -217,6 +218,7 @@ template MultiSigProposal
           description
           payload
           payloadHash
+          targetModule
           approvers = Set.toList approvals
           executedBy = executor
           executedAt = now
@@ -329,8 +331,9 @@ template MinterRegistry
 --                     4. GOVERNANCE ACTION LOG
 -- ============================================================
 
--- | GovernanceActionLog - Immutable record of executed governance actions.
--- Provides permanent audit trail for compliance.
+-- | GovernanceActionLog - Record of executed governance actions.
+-- FIX C-DAML-01: Added ConsumeProof choice for one-time use and targetModule for scoping.
+-- After execution, the proof must be consumed to prevent replay across modules.
 template GovernanceActionLog
   with
     operator : Party
@@ -339,13 +342,18 @@ template GovernanceActionLog
     description : Text
     payload : Text
     payloadHash : Text
+    targetModule : Text           -- FIX C-DAML-03: Module scope to prevent cross-module replay
     approvers : [Party]
     executedBy : Party
     executedAt : Time
   where
     signatory operator, executedBy
 
-    -- No choices - immutable audit record
+    -- FIX C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
+    -- Returns the log data so the caller can verify actionType and targetModule.
+    choice ConsumeProof : GovernanceActionLog
+      controller operator
+      do return this
 
 -- ============================================================
 --                     5. EMERGENCY PAUSE
