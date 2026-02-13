@@ -43,9 +43,6 @@ contract ForkTest is Test {
     address constant ETH_USD_FEED = 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419;
     address constant BTC_USD_FEED = 0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c;
 
-    // Whale addresses for impersonation
-    address constant USDC_WHALE = 0x47ac0Fb4F2D84898e4D9E7b4DaB3C24507a6D503;
-
     modifier onlyFork() {
         // Skip if not running on a fork
         try vm.activeFork() returns (uint256) {
@@ -106,13 +103,11 @@ contract ForkTest is Test {
     function test_fork_morphoBlueSupplyWithdraw() public onlyFork {
         uint256 supplyAmount = 10_000e6; // 10K USDC
 
-        // Get USDC from whale
-        vm.startPrank(USDC_WHALE);
-        IERC20(USDC).transfer(address(this), supplyAmount);
-        vm.stopPrank();
+        // Fund test contract with USDC via deal()
+        deal(USDC, address(this), supplyAmount);
 
         uint256 balanceBefore = IERC20(USDC).balanceOf(address(this));
-        assertGe(balanceBefore, supplyAmount, "Insufficient USDC from whale");
+        assertGe(balanceBefore, supplyAmount, "Insufficient USDC after deal");
 
         // Approve Morpho
         IERC20(USDC).approve(MORPHO_BLUE, supplyAmount);
@@ -135,10 +130,8 @@ contract ForkTest is Test {
     function test_fork_skyPsmAndSusdsDeposit() public onlyFork {
         uint256 usdcAmount = 10_000e6; // 10K USDC
 
-        // Get USDC
-        vm.startPrank(USDC_WHALE);
-        IERC20(USDC).transfer(address(this), usdcAmount);
-        vm.stopPrank();
+        // Fund test contract with USDC via deal()
+        deal(USDC, address(this), usdcAmount);
 
         // Verify PSM and sUSDS contracts exist
         uint256 psmCodeSize;
@@ -189,9 +182,8 @@ contract ForkTest is Test {
     function test_fork_uniswapSwapUsdcToWeth() public onlyFork {
         uint256 swapAmount = 1000e6; // 1000 USDC
 
-        vm.startPrank(USDC_WHALE);
-        IERC20(USDC).transfer(address(this), swapAmount);
-        vm.stopPrank();
+        // Fund test contract with USDC via deal()
+        deal(USDC, address(this), swapAmount);
 
         IERC20(USDC).approve(UNI_ROUTER, swapAmount);
 
@@ -226,10 +218,8 @@ contract ForkTest is Test {
     function test_fork_fullLeveragePath() public onlyFork {
         uint256 startAmount = 5000e6; // 5000 USDC
 
-        // Get USDC
-        vm.startPrank(USDC_WHALE);
-        IERC20(USDC).transfer(address(this), startAmount);
-        vm.stopPrank();
+        // Fund test contract with USDC via deal()
+        deal(USDC, address(this), startAmount);
 
         // Step 1: Verify oracle price
         (, int256 ethPrice,,, ) = IAggregatorV3(ETH_USD_FEED).latestRoundData();
