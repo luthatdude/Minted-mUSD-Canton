@@ -681,7 +681,7 @@ template CantonDirectMintService
       controller operator
       do
         -- FIX: Consume governance proof to prevent replay
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
@@ -706,7 +706,7 @@ template CantonDirectMintService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
@@ -718,7 +718,7 @@ template CantonDirectMintService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         create this with complianceRegistryCid = newRegistryCid
@@ -728,7 +728,7 @@ template CantonDirectMintService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)

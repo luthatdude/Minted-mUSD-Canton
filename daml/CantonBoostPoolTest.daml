@@ -1094,16 +1094,28 @@ test_CantonCoinTransfer = script do
   operator <- allocateParty "Operator"
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
+  regulator <- allocateParty "Regulator"
 
   cantonCid <- createCanton operator alice 500.0
+
+  -- DAML-H-01 FIX: Create compliance registry for transfer validation
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
 
   -- Alice proposes transfer to Bob
   proposalCid <- submit alice do
     exerciseCmd cantonCid CantonCoin_Transfer with newOwner = bob
 
-  -- Bob accepts
+  -- Bob accepts (now requires compliance registry)
   newCantonCid <- submit bob do
-    exerciseCmd proposalCid CantonCoinTransferProposal_Accept
+    exerciseCmd proposalCid CantonCoinTransferProposal_Accept with
+      complianceRegistryCid = complianceCid
 
   debug "TEST 17 PASSED: Canton coin transfer proposal"
   pure ()

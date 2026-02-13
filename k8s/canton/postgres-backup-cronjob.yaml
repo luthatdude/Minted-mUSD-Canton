@@ -105,6 +105,25 @@ spec:
                   pg_restore --list "${BACKUP_FILE}" > /dev/null 2>&1
                   echo "[$(date -u)] Backup integrity check passed."
 
+                  # INFRA-H-02 FIX: Upload backup to off-cluster storage (S3/GCS)
+                  # Ensures disaster recovery even if the entire cluster is lost
+                  if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+                    S3_KEY="canton-backups/${BACKUP_FILE##*/}"
+                    echo "[$(date -u)] Uploading to s3://${BACKUP_S3_BUCKET}/${S3_KEY}..."
+                    aws s3 cp "${BACKUP_FILE}" "s3://${BACKUP_S3_BUCKET}/${S3_KEY}" \
+                      --sse aws:kms \
+                      --storage-class STANDARD_IA \
+                      --only-show-errors
+                    echo "[$(date -u)] S3 upload complete."
+                  elif [ -n "${BACKUP_GCS_BUCKET:-}" ]; then
+                    GCS_KEY="canton-backups/${BACKUP_FILE##*/}"
+                    echo "[$(date -u)] Uploading to gs://${BACKUP_GCS_BUCKET}/${GCS_KEY}..."
+                    gsutil cp "${BACKUP_FILE}" "gs://${BACKUP_GCS_BUCKET}/${GCS_KEY}"
+                    echo "[$(date -u)] GCS upload complete."
+                  else
+                    echo "[$(date -u)] WARNING: No BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET set — backup is on-cluster only!"
+                  fi
+
                   # Prune backups older than 30 days
                   echo "[$(date -u)] Pruning backups older than 30 days..."
                   find /backups -name "canton_backup_*.sql.gz" -mtime +30 -delete -print
@@ -122,6 +141,19 @@ spec:
                   value: canton
                 # INFRA-H-05: DB credentials read from volume-mounted secrets at /run/secrets/
                 # PGUSER and PGPASSWORD are set from files by the entrypoint script below
+                # INFRA-H-02 FIX: Off-cluster backup bucket configuration
+                - name: BACKUP_S3_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: backup-config
+                      key: s3-bucket
+                      optional: true
+                - name: BACKUP_GCS_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: backup-config
+                      key: gcs-bucket
+                      optional: true
               resources:
                 requests:
                   cpu: 100m

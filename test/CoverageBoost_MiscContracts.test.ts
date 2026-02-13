@@ -406,6 +406,8 @@ describe("CoverageBoost — Misc Contracts", function () {
 
       // Grant PAUSER_ROLE
       await liquidationEngine.grantRole(await liquidationEngine.PAUSER_ROLE(), pauser.address);
+      // SOL-H-01: Grant TIMELOCK_ROLE to deployer for admin setters (setCloseFactor, setFullLiquidationThreshold)
+      await liquidationEngine.grantRole(await liquidationEngine.TIMELOCK_ROLE(), owner.address);
 
       // Mint tokens
       await weth.mint(user1.address, ethers.parseEther("100"));

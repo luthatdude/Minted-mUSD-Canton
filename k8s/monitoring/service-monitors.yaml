@@ -12,7 +12,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: canton-participant
+      # INFRA-H-01 FIX: Use standard K8s label to match deployment labels
+      app.kubernetes.io/name: canton-participant
   endpoints:
     - port: metrics
       interval: 15s
@@ -35,7 +36,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: nginx-proxy
+      # INFRA-H-01 FIX: Use standard K8s label
+      app.kubernetes.io/name: nginx-proxy
   endpoints:
     - port: metrics
       interval: 15s
@@ -56,7 +58,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: canton-postgres
+      # INFRA-H-01 FIX: Use standard K8s label
+      app.kubernetes.io/name: canton-postgres
   endpoints:
     - port: metrics
       interval: 30s
@@ -78,7 +81,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: bridge-relay
+      # INFRA-H-01 FIX: Use standard K8s label to match deployment labels
+      app.kubernetes.io/name: bridge-relay
   podMetricsEndpoints:
     - port: health
       interval: 15s
@@ -98,7 +102,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: price-oracle
+      # INFRA-H-01 FIX: Use standard K8s label
+      app.kubernetes.io/name: price-oracle
   podMetricsEndpoints:
     - port: health
       interval: 15s
@@ -118,7 +123,8 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: yield-sync
+      # INFRA-H-01 FIX: Use standard K8s label
+      app.kubernetes.io/name: yield-sync
   podMetricsEndpoints:
     - port: health
       interval: 30s

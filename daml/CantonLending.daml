@@ -1308,7 +1308,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
@@ -1326,7 +1326,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
@@ -1346,7 +1346,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
@@ -1358,7 +1358,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
@@ -1370,7 +1370,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
@@ -1383,7 +1383,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
@@ -1405,7 +1405,7 @@ template CantonLendingService
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         create this with complianceRegistryCid = newRegistryCid
