@@ -527,10 +527,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        -- Without this, old instances remain active with stale state,
-        -- allowing users to bypass supply cap and rate limits
-        archive self
-
         -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
@@ -609,8 +605,6 @@ template CantonDirectMintService
           status = "pending"
           validators = validators
 
-        archive self
-
         -- Update service state including rate limit tracking
         newService <- create this with
           currentSupply = currentSupply + netAmount
@@ -668,8 +662,6 @@ template CantonDirectMintService
               then (0.0, 0.0, now)
               else (dailyMinted, dailyBurned, lastRateLimitReset)
 
-        archive self
-
         newService <- create this with
           currentSupply = currentSupply - musd.amount
           accumulatedFees = accumulatedFees + feeAmount
@@ -699,7 +691,6 @@ template CantonDirectMintService
         let cooldownRel = hours 24
         let elapsed = subTime now lastRateLimitReset
         assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
-        archive self
         create this with supplyCap = newCap, lastRateLimitReset = now
 
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
@@ -707,7 +698,6 @@ template CantonDirectMintService
         newPaused : Bool
       controller operator
       do
-        archive self
         create this with paused = newPaused
 
     choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
@@ -720,7 +710,6 @@ template CantonDirectMintService
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
-        archive self
         create this with dailyMintLimit = newLimit
 
     choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
@@ -732,7 +721,6 @@ template CantonDirectMintService
         proof <- exercise governanceProofCid ConsumeProof
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
-        archive self
         create this with complianceRegistryCid = newRegistryCid
 
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
@@ -744,7 +732,6 @@ template CantonDirectMintService
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         assertMsg "NO_FEES_TO_WITHDRAW" (accumulatedFees > 0.0)
-        archive self
         create this with accumulatedFees = 0.0
 
 -- ============================================================
