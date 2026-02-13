@@ -275,10 +275,10 @@ describe("MorphoLoopStrategy", function () {
     });
 
     it("Should unpause operations", async function () {
-      const { strategy, admin, guardian } = await loadFixture(deployFixture);
+      const { strategy, guardian, timelockSigner } = await loadFixture(deployFixture);
 
       await strategy.connect(guardian).pause();
-      await strategy.connect(admin).unpause();
+      await strategy.connect(timelockSigner).unpause();
       expect(await strategy.paused()).to.be.false;
     });
 
