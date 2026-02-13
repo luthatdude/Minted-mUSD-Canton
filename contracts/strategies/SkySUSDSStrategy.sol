@@ -410,6 +410,9 @@ contract SkySUSDSStrategy is
             uint256 usdsOut = sUsds.redeem(shares, address(this), address(this));
             uint256 usdcAmount = usdsOut / USDC_TO_USDS_SCALE;
             if (usdcAmount > 0) {
+                // FIX C-REL-01: Add missing USDS approval for PSM buyGem
+                // Without this approval the PSM cannot pull USDS, causing emergencyWithdraw to revert
+                usds.forceApprove(address(psm), usdsOut);
                 psm.buyGem(address(this), usdcAmount);
             }
             usdcRecovered = usdc.balanceOf(address(this));

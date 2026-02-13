@@ -308,7 +308,7 @@ main() {
     echo "   kubectl logs -f deployment/canton-participant -n musd-canton"
     echo ""
     echo "4. Access Ledger API:"
-    echo "   grpcurl -plaintext $STATIC_IP:5011 list"
+    echo "   grpcurl -cert admin-client.crt -key tls.key -cacert ca.crt $STATIC_IP:5011 list"
     echo ""
 }
 

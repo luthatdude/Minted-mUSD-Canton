@@ -609,6 +609,10 @@ contract PendleStrategyV2 is
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
+        // FIX C-REL-01: Add missing USDC approval for Pendle Router during rollover
+        // Without this approval the router cannot pull USDC, causing rollover deposits to revert
+        usdc.forceApprove(PENDLE_ROUTER, usdcAmount);
+
         uint256 minPtOut = (usdcAmount * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
