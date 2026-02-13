@@ -6,9 +6,9 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
-import "../TimelockGoverned.sol";
 
 /**
  * @title PendleStrategyV2
@@ -201,8 +201,7 @@ contract PendleStrategyV2 is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable,
-    TimelockGoverned
+    UUPSUpgradeable
 {
     using SafeERC20 for IERC20;
 
@@ -229,7 +228,6 @@ contract PendleStrategyV2 is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
-    // TIMELOCK_ROLE replaced by TimelockGoverned — upgrades go through MintedTimelockController
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -271,7 +269,7 @@ contract PendleStrategyV2 is
     /// @notice Slippage tolerance in basis points
     uint256 public slippageBps;
 
-    /// @notice Configurable PT discount rate in BPS (default 1000 = 10%)
+    /// @notice FIX M-02: Configurable PT discount rate in BPS (default 1000 = 10%)
     /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
     uint256 public ptDiscountRateBps;
 
@@ -326,19 +324,16 @@ contract PendleStrategyV2 is
         address _marketSelector,
         address _treasury,
         address _admin,
-        string calldata _category,
-        address _timelock
+        string calldata _category
     ) external initializer {
         if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0)) {
             revert ZeroAddress();
         }
-        require(_timelock != address(0), "ZERO_TIMELOCK");
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
-        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         marketSelector = IPendleMarketSelector(_marketSelector);
@@ -347,7 +342,7 @@ contract PendleStrategyV2 is
         // Default settings
         rolloverThreshold = DEFAULT_ROLLOVER_THRESHOLD;
         slippageBps = 50; // 0.5% default slippage
-        ptDiscountRateBps = 1000; // 10% default, configurable
+        ptDiscountRateBps = 1000; // FIX M-02: 10% default, now configurable
         active = true;
 
         // Setup roles
@@ -355,10 +350,9 @@ contract PendleStrategyV2 is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
-        // TimelockGoverned replaces TIMELOCK_ROLE — upgrades go through MintedTimelockController
 
-        // FIX HIGH-07: Removed infinite USDC approval from initialize().
-        // Per-operation approvals are set in deposit() and _selectNewMarket()
+        // Approve router for USDC
+        usdc.forceApprove(PENDLE_ROUTER, type(uint256).max);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -383,15 +377,14 @@ contract PendleStrategyV2 is
         // Transfer USDC from treasury
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
-        // FIX HIGH-07: Per-operation approval (replaces infinite approval)
-        usdc.forceApprove(PENDLE_ROUTER, amount);
-
-        // Swap USDC → PT via Pendle Router
-        uint256 minPtOut = (amount * (BPS - slippageBps)) / BPS;
+        // Swap USDC → PT via Pendle Router.
+        // Use normalized PT expectation (including decimal scaling) for bounds.
+        uint256 expectedPtOut = _usdcToPt(amount);
+        uint256 minPtOut = (expectedPtOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
             guessMin: minPtOut,
-            guessMax: amount * 2, // PT can be worth more than underlying
+            guessMax: expectedPtOut * 2, // PT can be worth more than underlying
             guessOffchain: 0,
             maxIteration: 256,
             eps: 1e14 // 0.01% precision
@@ -550,7 +543,8 @@ contract PendleStrategyV2 is
 
     /**
      * @notice Keeper function to trigger rollover
-     * @dev Only STRATEGIST or GUARDIAN can trigger to prevent front-running
+     * @dev FIX HIGH: Added access control - only STRATEGIST or GUARDIAN can trigger
+     * @dev Previously permissionless, allowing front-running attacks
      */
     function triggerRollover() external nonReentrant onlyRole(STRATEGIST_ROLE) {
         if (!_shouldRollover()) revert RolloverNotNeeded();
@@ -603,21 +597,17 @@ contract PendleStrategyV2 is
         (,, address yt) = IPendleMarket(bestMarket).readTokens();
         currentYT = yt;
 
-        // Approve PT for router (per-operation, set before each withdrawal)
-        // FIX HIGH-07: Approval deferred to withdrawal functions instead of blanket max
-        // IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // Approve PT for router
+        IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
-        // FIX C-REL-01: Add missing USDC approval for Pendle Router during rollover
-        // Without this approval the router cannot pull USDC, causing rollover deposits to revert
-        usdc.forceApprove(PENDLE_ROUTER, usdcAmount);
-
-        uint256 minPtOut = (usdcAmount * (BPS - slippageBps)) / BPS;
+        uint256 expectedPtOut = _usdcToPt(usdcAmount);
+        uint256 minPtOut = (expectedPtOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.ApproxParams memory approx = IPendleRouter.ApproxParams({
             guessMin: minPtOut,
-            guessMax: usdcAmount * 2,
+            guessMax: expectedPtOut * 2,
             guessOffchain: 0,
             maxIteration: 256,
             eps: 1e14
@@ -651,15 +641,11 @@ contract PendleStrategyV2 is
     function _redeemPt(uint256 ptAmount) internal returns (uint256 usdcOut) {
         if (ptAmount == 0) return 0;
 
-        // FIX HIGH-07: Per-operation PT approval for router (replaces infinite approval)
-        if (currentPT != address(0)) {
-            IERC20(currentPT).forceApprove(PENDLE_ROUTER, ptAmount);
-        }
-
         IPendleMarket market = IPendleMarket(currentMarket);
         bool expired = market.isExpired();
 
-        uint256 minUsdcOut = (ptAmount * (BPS - slippageBps)) / BPS;
+        uint256 expectedUsdcOut = _ptToUsdc(ptAmount);
+        uint256 minUsdcOut = (expectedUsdcOut * (BPS - slippageBps)) / BPS;
 
         IPendleRouter.TokenOutput memory output = IPendleRouter.TokenOutput({
             tokenOut: address(usdc),
@@ -697,9 +683,10 @@ contract PendleStrategyV2 is
     }
 
     function _ptToUsdc(uint256 ptAmount) internal view returns (uint256) {
+        uint256 usdcEquivalent = _scalePtToUsdcDecimals(ptAmount);
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
             // At or after maturity, PT = 1:1 underlying
-            return ptAmount;
+            return usdcEquivalent;
         }
 
         // Before maturity, PT trades at discount
@@ -707,27 +694,25 @@ contract PendleStrategyV2 is
         uint256 timeRemaining = currentExpiry - block.timestamp;
         uint256 secondsPerYear = 365 days;
 
-        // FIX CRIT-04: Cap timeRemaining and enforce discount rate bounds
-        // to prevent PT valuation manipulation via extreme parameters
+        // Simple approximation: PT discount = impliedRate * timeRemaining
+        // For ~11% APY with 6 months to go: discount ≈ 5.5%
+        // PT value = underlying * (1 - discount)
+        // This is a simplification; actual value requires oracle
         if (timeRemaining > secondsPerYear) {
             timeRemaining = secondsPerYear;
         }
 
-        // Use configurable discount rate with safety bounds
-        // FIX CRIT-04: ptDiscountRateBps is capped at 2000 bps (20%) in setPtDiscountRate
+        // FIX M-02: Use configurable discount rate instead of hardcoded 10%
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
-        // FIX CRIT-04: Cap effective discount at 30% to prevent extreme undervaluation
-        if (discountBps > 3000) {
-            discountBps = 3000;
-        }
         uint256 valueBps = BPS - discountBps;
 
-        return (ptAmount * valueBps) / BPS;
+        return (usdcEquivalent * valueBps) / BPS;
     }
 
     function _usdcToPt(uint256 usdcAmount) internal view returns (uint256) {
+        uint256 ptEquivalent = _scaleUsdcToPtDecimals(usdcAmount);
         if (currentExpiry == 0 || block.timestamp >= currentExpiry) {
-            return usdcAmount;
+            return ptEquivalent;
         }
 
         uint256 timeRemaining = currentExpiry - block.timestamp;
@@ -736,12 +721,43 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // Use configurable discount rate
+        // FIX M-02: Use configurable discount rate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
-        // PT needed = usdc / (PT value per usdc)
-        return (usdcAmount * BPS) / valueBps;
+        // PT needed = usdc-equivalent / (PT value per usdc)
+        return (ptEquivalent * BPS) / valueBps;
+    }
+
+    function _scaleUsdcToPtDecimals(uint256 usdcAmount) internal view returns (uint256) {
+        if (currentPT == address(0)) return usdcAmount;
+
+        uint8 usdcDecimals = IERC20Metadata(address(usdc)).decimals();
+        uint8 ptDecimals = IERC20Metadata(currentPT).decimals();
+        if (ptDecimals == usdcDecimals) return usdcAmount;
+
+        if (ptDecimals > usdcDecimals) {
+            return usdcAmount * _pow10(ptDecimals - usdcDecimals);
+        }
+        return usdcAmount / _pow10(usdcDecimals - ptDecimals);
+    }
+
+    function _scalePtToUsdcDecimals(uint256 ptAmount) internal view returns (uint256) {
+        if (currentPT == address(0)) return ptAmount;
+
+        uint8 usdcDecimals = IERC20Metadata(address(usdc)).decimals();
+        uint8 ptDecimals = IERC20Metadata(currentPT).decimals();
+        if (ptDecimals == usdcDecimals) return ptAmount;
+
+        if (ptDecimals > usdcDecimals) {
+            return ptAmount / _pow10(ptDecimals - usdcDecimals);
+        }
+        return ptAmount * _pow10(usdcDecimals - ptDecimals);
+    }
+
+    function _pow10(uint8 exponent) internal pure returns (uint256) {
+        require(exponent <= 77, "DECIMALS_TOO_LARGE");
+        return 10 ** uint256(exponent);
     }
 
     function _emptyLimitOrder() internal pure returns (IPendleRouter.LimitOrderData memory) {
@@ -771,11 +787,10 @@ contract PendleStrategyV2 is
     /**
      * @notice Set PT discount rate for NAV valuation
      * @param _discountBps New discount rate in BPS (e.g., 1000 = 10%, 500 = 5%)
-     * @dev Allows adjusting PT discount rate to match current market implied APY
+     * @dev FIX M-02: Allows adjusting PT discount rate to match current market implied APY
      */
     function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
-        /// @notice FIX CRIT-04: Cap discount rate at 20% to prevent PT valuation manipulation
-        require(_discountBps <= 2000, "DISCOUNT_TOO_HIGH"); // Max 20% (was 50%)
+        require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
         emit PtDiscountRateUpdated(ptDiscountRateBps, _discountBps);
         ptDiscountRateBps = _discountBps;
     }
@@ -849,6 +864,5 @@ contract PendleStrategyV2 is
     // UUPS UPGRADE
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice FIX CRIT-06: Only MintedTimelockController can authorize upgrades (48h delay enforced)
-    function _authorizeUpgrade(address) internal override onlyTimelock {}
+    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
 }
