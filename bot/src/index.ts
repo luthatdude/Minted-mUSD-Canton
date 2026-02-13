@@ -97,7 +97,12 @@ function loadConfig() {
     priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
     musd: process.env.MUSD_ADDRESS!,
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
-    minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
+    // TS-H-01 FIX: Use Number() + validation instead of parseFloat
+    minProfitUsd: (() => {
+      const v = Number(process.env.MIN_PROFIT_USD || "50");
+      if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+      return v;
+    })(),
     gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20", 10),
     maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
     useFlashbots: process.env.USE_FLASHBOTS === "true",
