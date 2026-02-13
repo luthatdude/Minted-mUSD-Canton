@@ -127,7 +127,7 @@ class YieldKeeper {
   constructor(config: KeeperConfig) {
     this.config = config;
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    // FIX C-07: Signer is initialised asynchronously via init()
+    // Signer is initialised asynchronously via init()
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
       TREASURY_ABI,
@@ -150,7 +150,7 @@ class YieldKeeper {
    * Start the keeper loop
    */
   async start(): Promise<void> {
-    // FIX C-07: Initialise signer (KMS or fallback)
+    // Initialise signer (KMS or fallback)
     await this.init();
     console.log("🚀 Yield Keeper starting...");
     console.log(`   Treasury: ${this.config.treasuryAddress}`);

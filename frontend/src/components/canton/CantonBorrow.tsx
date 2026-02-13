@@ -1,4 +1,4 @@
-// FIX P2-CODEX: Stub component — previously zero-byte file that broke frontend build.
+// Stub component — previously zero-byte file that broke frontend build.
 // Imported by pages/index.tsx and components/canton/index.ts.
 
 import React from "react";

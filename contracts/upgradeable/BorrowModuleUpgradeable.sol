@@ -96,7 +96,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  event BadDebtSocialized(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
 
  // ═══════════════════════════════════════════════════════════════════════
- // FIX H-04: DEPRECATED — Legacy in-contract timelock variables.
+ // DEPRECATED — Legacy in-contract timelock variables.
  // These are no longer used since the contract now uses MintedTimelockController.
  // Kept to preserve storage layout for upgradeable contract compatibility.
  // DO NOT use these variables; use MintedTimelockController for all governance.
@@ -582,7 +582,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  totalBorrowsBeforeAccrual = totalBorrows;
  totalBorrows += interest;
  
- // FIX CRIT-03: Use effective borrows (excluding unrouted interest) for utilization.
+ // Use effective borrows (excluding unrouted interest) for utilization.
  // Unrouted interest inflates totalBorrows without corresponding mUSD supply,
  // creating phantom debt that artificially raises the utilization rate.
  uint256 effectiveBorrows = totalBorrows > unroutedInterest ? totalBorrows - unroutedInterest : totalBorrows;

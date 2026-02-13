@@ -269,7 +269,7 @@ contract PendleStrategyV2 is
     /// @notice Slippage tolerance in basis points
     uint256 public slippageBps;
 
-    /// @notice FIX M-02: Configurable PT discount rate in BPS (default 1000 = 10%)
+    /// @notice Configurable PT discount rate in BPS (default 1000 = 10%)
     /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
     uint256 public ptDiscountRateBps;
 
@@ -342,7 +342,7 @@ contract PendleStrategyV2 is
         // Default settings
         rolloverThreshold = DEFAULT_ROLLOVER_THRESHOLD;
         slippageBps = 50; // 0.5% default slippage
-        ptDiscountRateBps = 1000; // FIX M-02: 10% default, now configurable
+        ptDiscountRateBps = 1000; // 10% default, configurable
         active = true;
 
         // Setup roles
@@ -543,8 +543,7 @@ contract PendleStrategyV2 is
 
     /**
      * @notice Keeper function to trigger rollover
-     * @dev FIX HIGH: Added access control - only STRATEGIST or GUARDIAN can trigger
-     * @dev Previously permissionless, allowing front-running attacks
+     * @dev Only STRATEGIST or GUARDIAN can trigger rollover
      */
     function triggerRollover() external nonReentrant onlyRole(STRATEGIST_ROLE) {
         if (!_shouldRollover()) revert RolloverNotNeeded();
@@ -702,7 +701,7 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // FIX M-02: Use configurable discount rate instead of hardcoded 10%
+        // Use configurable discount rate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
@@ -721,7 +720,7 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // FIX M-02: Use configurable discount rate
+        // Use configurable discount rate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
@@ -787,7 +786,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Set PT discount rate for NAV valuation
      * @param _discountBps New discount rate in BPS (e.g., 1000 = 10%, 500 = 5%)
-     * @dev FIX M-02: Allows adjusting PT discount rate to match current market implied APY
+     * @dev Allows adjusting PT discount rate to match current market implied APY
      */
     function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
         require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
