@@ -19,7 +19,7 @@ export interface BotConfig {
 }
 
 export const DEFAULT_CONFIG: BotConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "",
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS) || 30_000,
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
@@ -32,7 +32,7 @@ export const DEFAULT_CONFIG: BotConfig = {
  */
 export function validateConfig(config: BotConfig): void {
   if (!config.ethereumRpcUrl) {
-    throw new Error("ETHEREUM_RPC_URL is required");
+    throw new Error("ETHEREUM_RPC_URL environment variable is required");
   }
   if (config.environment === "production" && !config.ethereumRpcUrl.startsWith("https://")) {
     throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
