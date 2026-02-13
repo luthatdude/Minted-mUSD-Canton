@@ -326,8 +326,14 @@ export class OracleKeeper {
   ): Promise<number | null> {
     const url = this.config.externalFeedUrl.replace("{symbol}", symbol.toLowerCase());
     // INFRA-H-06: Validate external feed URL uses HTTPS
-    if (!url.startsWith(\"https://\")) {
-      logger.warn(`${symbol} — external feed URL does not use HTTPS: ${url.substring(0, 50)}`);\n      if (process.env.NODE_ENV === \"production\") {\n        logger.error(`${symbol} — HTTPS required for external feeds in production`);\n        return null;\n      }\n    }\n    try {
+    if (!url.startsWith("https://")) {
+      logger.warn(`${symbol} — external feed URL does not use HTTPS: ${url.substring(0, 50)}`);
+      if (process.env.NODE_ENV === "production") {
+        logger.error(`${symbol} — HTTPS required for external feeds in production`);
+        return null;
+      }
+    }
+    try {
       const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!resp.ok) return null;
       const data = await resp.json();
