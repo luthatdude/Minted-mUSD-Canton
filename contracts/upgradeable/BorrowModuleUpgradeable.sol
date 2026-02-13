@@ -104,28 +104,28 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
 
  uint256 public constant ADMIN_DELAY = 48 hours;
 
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  address public pendingInterestRateModel;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingInterestRateModelTime;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  address public pendingSMUSD;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingSMUSDTime;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  address public pendingTreasury;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingTreasuryTime;
 
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingInterestRate;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingInterestRateTime;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  bool public pendingInterestRateSet; // distinguish 0-value from unset
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingMinDebt;
- /// @deprecated Use MintedTimelockController instead
+ /// @dev DEPRECATED: Use MintedTimelockController instead
  uint256 public pendingMinDebtTime;
 
  event InterestRateModelChangeRequested(address indexed model, uint256 readyAt);

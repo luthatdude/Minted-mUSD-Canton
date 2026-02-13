@@ -80,6 +80,15 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     // Set to 100 mUSD (18 decimals) to ensure liquidations are economically meaningful
     uint256 public constant MIN_LIQUIDATION_AMOUNT = 100e18;
 
+    /// @notice FIX S-M-02: Total bad debt accumulated when seizure is capped at available collateral
+    /// Bad debt = debt that cannot be recovered because the borrower has insufficient collateral
+    uint256 public totalBadDebt;
+
+    /// @notice Per-borrower bad debt for targeted write-off
+    mapping(address => uint256) public borrowerBadDebt;
+
+    event BadDebtRecorded(address indexed borrower, uint256 amount, uint256 totalBadDebtAfter);
+    event BadDebtSocialized(address indexed borrower, uint256 amount, uint256 totalBadDebtAfter);
     event Liquidation(
         address indexed liquidator,
         address indexed borrower,
@@ -125,79 +134,71 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     ) external nonReentrant whenNotPaused {
         require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
         require(debtToRepay > 0, "INVALID_AMOUNT");
-        // Prevent dust liquidations that waste gas and spam events
         require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
 
-        // Check position is liquidatable
-        // Use healthFactorUnsafe to bypass circuit breaker during price crashes.
-        // Standard healthFactor() reverts via getValueUsd() circuit breaker,
-        // blocking all liquidations during >20% price moves — exactly when they're needed most.
         uint256 hf = borrowModule.healthFactorUnsafe(borrower);
-        require(hf < 10000, "POSITION_HEALTHY"); // Health factor < 1.0
+        require(hf < 10000, "POSITION_HEALTHY");
 
-        // Determine max repayable amount
-        uint256 totalDebt = borrowModule.totalDebt(borrower);
-        uint256 maxRepay;
-
-        if (hf < fullLiquidationThreshold) {
-            // Position is severely undercollateralized — allow full liquidation
-            maxRepay = totalDebt;
-        } else {
-            // Normal liquidation — cap at close factor
-            maxRepay = (totalDebt * closeFactorBps) / 10000;
-        }
-
-        uint256 actualRepay = debtToRepay > maxRepay ? maxRepay : debtToRepay;
-
-        // Calculate collateral to seize
-        // Allow liquidation even if collateral token is disabled
-        // Disabled collateral positions must still be liquidatable for protocol safety
-        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
-
-        // Use getPriceUnsafe() for the liquidation path.
-        // During market crashes (>20% price drop), the circuit breaker blocks getPrice(),
-        // which would prevent liquidations and allow bad debt to accumulate.
-        // Liquidations MUST proceed using raw Chainlink data to protect the protocol.
-        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
-        require(collateralPrice > 0, "INVALID_PRICE");
-
-        // Convert USD value to collateral token amount accounting for token decimals.
-        // collateralPrice is USD per 1 full token (18 decimals).
-        // Combined calculation avoids divide-before-multiply precision loss:
-        // seizeAmount = actualRepay * (10000 + penaltyBps) * 10^D / (10000 * collateralPrice)
-        uint8 tokenDecimals = IERC20Decimals(collateralToken).decimals();
-        uint256 seizeAmount = (actualRepay * (10000 + penaltyBps) * (10 ** tokenDecimals)) / (10000 * collateralPrice);
-
-        // Cap at available collateral
-        uint256 available = vault.deposits(borrower, collateralToken);
-        if (seizeAmount > available) {
-            seizeAmount = available;
-            // Recalculate actual debt repaid based on available collateral
-            uint256 seizeValue = oracle.getValueUsdUnsafe(collateralToken, seizeAmount);
-            actualRepay = (seizeValue * 10000) / (10000 + penaltyBps);
-        }
+        uint256 actualRepay;
+        uint256 seizeAmount;
+        (actualRepay, seizeAmount) = _calculateLiquidation(borrower, collateralToken, debtToRepay, hf);
 
         require(seizeAmount > 0, "NOTHING_TO_SEIZE");
 
-        // Execute liquidation following CEI pattern.
-        // Order: burn (removes liquidator's mUSD) -> seize (moves collateral) -> reduceDebt (bookkeeping)
-        // If any call reverts, the entire transaction reverts atomically.
-
-        // 1. Liquidator pays mUSD (burns it)
-        // NOTE: This calls MUSD.burn(msg.sender, amount) which requires this contract
-        // to have LIQUIDATOR_ROLE on MUSD.sol. The burn is called BY this contract
-        // (which has the role) and burns FROM the liquidator's balance.
-        // IMPORTANT: The liquidator does NOT need to approve() this contract.
-        // MUSD.burn() with LIQUIDATOR_ROLE can burn from any address directly.
+        // Execute: burn → seize → reduceDebt (CEI pattern)
         musd.burn(msg.sender, actualRepay);
-
-        // 2. Seize collateral to liquidator (moved before reduceDebt for safer ordering)
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
-
-        // 3. Reduce borrower's debt (bookkeeping after all transfers complete)
         borrowModule.reduceDebt(borrower, actualRepay);
 
         emit Liquidation(msg.sender, borrower, collateralToken, actualRepay, seizeAmount);
+    }
+
+    /// @dev Internal calculation to avoid stack-too-deep in liquidate()
+    function _calculateLiquidation(
+        address borrower,
+        address collateralToken,
+        uint256 debtToRepay,
+        uint256 hf
+    ) internal returns (uint256 actualRepay, uint256 seizeAmount) {
+        uint256 totalDebt = borrowModule.totalDebt(borrower);
+        uint256 maxRepay = hf < fullLiquidationThreshold ? totalDebt : (totalDebt * closeFactorBps) / 10000;
+        actualRepay = debtToRepay > maxRepay ? maxRepay : debtToRepay;
+
+        (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
+        uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
+        require(collateralPrice > 0, "INVALID_PRICE");
+
+        seizeAmount = (actualRepay * (10000 + penaltyBps) * (10 ** IERC20Decimals(collateralToken).decimals())) / (10000 * collateralPrice);
+
+        // Cap at available collateral + track bad debt
+        (actualRepay, seizeAmount) = _capSeizureAndTrackBadDebt(
+            borrower, collateralToken, actualRepay, seizeAmount, penaltyBps
+        );
+    }
+
+    /// @dev FIX S-M-02: Cap seizure at available collateral and record any bad debt
+    function _capSeizureAndTrackBadDebt(
+        address borrower,
+        address collateralToken,
+        uint256 actualRepay,
+        uint256 seizeAmount,
+        uint256 penaltyBps
+    ) internal returns (uint256, uint256) {
+        uint256 available = vault.deposits(borrower, collateralToken);
+        if (seizeAmount > available) {
+            seizeAmount = available;
+            uint256 seizeValue = oracle.getValueUsdUnsafe(collateralToken, seizeAmount);
+            uint256 cappedRepay = (seizeValue * 10000) / (10000 + penaltyBps);
+
+            if (actualRepay > cappedRepay) {
+                uint256 badDebtAmount = actualRepay - cappedRepay;
+                totalBadDebt += badDebtAmount;
+                borrowerBadDebt[borrower] += badDebtAmount;
+                emit BadDebtRecorded(borrower, badDebtAmount, totalBadDebt);
+            }
+            actualRepay = cappedRepay;
+        }
+        return (actualRepay, seizeAmount);
     }
 
     // ============================================================
@@ -252,6 +253,19 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
         emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
+    }
+
+    /// @notice FIX S-M-02: Write off bad debt for a specific borrower
+    /// @dev Called after all collateral has been seized and position is fully underwater.
+    ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
+    function socializeBadDebt(address borrower) external onlyRole(ENGINE_ADMIN_ROLE) {
+        uint256 amount = borrowerBadDebt[borrower];
+        require(amount > 0, "NO_BAD_DEBT");
+        borrowerBadDebt[borrower] = 0;
+        totalBadDebt -= amount;
+        // Reduce the borrower's debt record in BorrowModule
+        borrowModule.reduceDebt(borrower, amount);
+        emit BadDebtSocialized(borrower, amount, totalBadDebt);
     }
 
     // ============================================================

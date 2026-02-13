@@ -243,10 +243,15 @@ template CantonStakingService
         newGlobalTotalAssets : Money  -- Total assets across both chains
         newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
+        attestationHash : Text        -- FIX D-M-02: Validator attestation hash (SHA-256 of price data)
+        validatorCount : Int          -- FIX D-M-02: Number of validators who signed this attestation
       controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
+        -- FIX D-M-02: Require BFT supermajority attestation (at least 3 validators)
+        assertMsg "ATTESTATION_HASH_REQUIRED" (attestationHash /= "")
+        assertMsg "INSUFFICIENT_VALIDATOR_ATTESTATION" (validatorCount >= 3)
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)

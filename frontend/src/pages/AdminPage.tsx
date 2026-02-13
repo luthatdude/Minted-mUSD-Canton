@@ -485,7 +485,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() =>
                 tx.send(() =>
-                  oracle!.setFeed(oracleToken, oracleFeed, BigInt(oracleStale), parseInt(oracleDecimals))
+                  oracle!.setFeed(oracleToken, oracleFeed, BigInt(oracleStale), parseInt(oracleDecimals), 0)
                 )
               }
               loading={tx.loading}

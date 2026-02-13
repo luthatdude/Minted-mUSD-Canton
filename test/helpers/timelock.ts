@@ -28,7 +28,7 @@ export async function timelockSetFeed(
   oracle: any, admin: HardhatEthersSigner,
   token: string, feed: string, stalePeriod: number, tokenDecimals: number
 ) {
-  await oracle.connect(admin).setFeed(token, feed, stalePeriod, tokenDecimals);
+  await oracle.connect(admin).setFeed(token, feed, stalePeriod, tokenDecimals, 0);
 }
 
 export async function timelockRemoveFeed(oracle: any, admin: HardhatEthersSigner, token: string) {
