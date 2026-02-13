@@ -97,6 +97,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Total interest paid to suppliers (for analytics)
     uint256 public totalInterestPaidToSuppliers;
+
+    /// @notice FIX S-M-01: Buffered interest that failed to route to SMUSD
+    /// Retried on next accrual to prevent phantom debt accumulation
+    uint256 public pendingInterest;
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -256,8 +260,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
+        // FIX S-L-06: Auto-close dust positions. If remaining debt would be
+        // below minDebt, force full repayment to prevent uneconomical dust.
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
@@ -301,8 +310,12 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
+        // FIX S-L-06: Auto-close dust positions in repayFor (same as repay)
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
             require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
         }
 
@@ -441,28 +454,39 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Add reserves to protocol
             protocolReserves += reserveAmount;
 
-            // Route supplier portion to SMUSD
-            // repay/liquidation paths. Interest is still tracked in totalBorrows.
+            // FIX S-M-01: Route supplier portion to SMUSD. Buffer unrouted interest
+            // so totalBorrows only increases when routing succeeds, preventing phantom debt.
+            bool routingSucceeded = false;
             if (supplierAmount > 0 && address(smusd) != address(0)) {
-                try musd.mint(address(this), supplierAmount) {
-                    // Approve and send to SMUSD
-                    IERC20(address(musd)).approve(address(smusd), supplierAmount);
-                    try smusd.receiveInterest(supplierAmount) {
-                        totalInterestPaidToSuppliers += supplierAmount;
-                        emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+                uint256 toRoute = supplierAmount + pendingInterest;
+                try musd.mint(address(this), toRoute) {
+                    // FIX S-L-01: Use forceApprove instead of raw approve
+                    IERC20(address(musd)).forceApprove(address(smusd), toRoute);
+                    try smusd.receiveInterest(toRoute) {
+                        totalInterestPaidToSuppliers += toRoute;
+                        pendingInterest = 0;
+                        routingSucceeded = true;
+                        emit InterestRoutedToSuppliers(toRoute, reserveAmount);
                     } catch (bytes memory reason) {
                         // SMUSD rejected — burn the minted tokens to keep supply clean
-                        musd.burn(address(this), supplierAmount);
-                        emit InterestRoutingFailed(supplierAmount, reason);
+                        musd.burn(address(this), toRoute);
+                        pendingInterest += supplierAmount;
+                        emit InterestRoutingFailed(toRoute, reason);
                     }
                 } catch (bytes memory reason) {
-                    // Supply cap hit — skip routing, interest still accrues as debt
+                    // Supply cap hit — buffer for retry
+                    pendingInterest += supplierAmount;
                     emit InterestRoutingFailed(supplierAmount, reason);
                 }
+            } else {
+                routingSucceeded = true; // No routing needed
             }
 
-            // Update total borrows to include accrued interest
-            totalBorrows += interest;
+            // FIX S-M-01: Only increase totalBorrows when interest is successfully routed
+            // This prevents phantom debt from inflating utilization rates
+            if (routingSucceeded) {
+                totalBorrows += interest;
+            }
             
             uint256 utilization = address(interestRateModel) != address(0)
                 ? interestRateModel.utilizationRate(totalBorrows, totalSupply)

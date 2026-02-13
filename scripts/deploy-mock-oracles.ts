@@ -69,17 +69,17 @@ async function main() {
   const priceOracle = await ethers.getContractAt("PriceOracle", CONTRACTS.PriceOracle);
 
   // Add WETH feed (18 decimals token, 3600s stale period)
-  const addEthTx = await priceOracle.setFeed(wethAddress, ethFeedAddress, 3600, 18);
+  const addEthTx = await priceOracle.setFeed(wethAddress, ethFeedAddress, 3600, 18, 0);
   await addEthTx.wait();
   console.log("   ✅ Added WETH/USD feed");
 
   // Add WBTC feed (8 decimals token)
-  const addBtcTx = await priceOracle.setFeed(wbtcAddress, btcFeedAddress, 3600, 8);
+  const addBtcTx = await priceOracle.setFeed(wbtcAddress, btcFeedAddress, 3600, 8, 0);
   await addBtcTx.wait();
   console.log("   ✅ Added WBTC/USD feed");
 
   // Add USDC feed (6 decimals token)
-  const addUsdcTx = await priceOracle.setFeed(CONTRACTS.MockUSDC, usdcFeedAddress, 3600, 6);
+  const addUsdcTx = await priceOracle.setFeed(CONTRACTS.MockUSDC, usdcFeedAddress, 3600, 6, 0);
   await addUsdcTx.wait();
   console.log("   ✅ Added USDC/USD feed");
 

@@ -396,7 +396,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await musd.connect(user1).approve(await leverageVault.getAddress(), debtWithBuffer);
 
       // Close with mUSD
-      await leverageVault.connect(user1).closeLeveragedPositionWithMusd(debtWithBuffer);
+      await leverageVault.connect(user1).closeLeveragedPositionWithMusd(debtWithBuffer, 0);
 
       // Position should be fully cleared
       const posAfter = await leverageVault.getPosition(user1.address);
@@ -424,7 +424,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await musd.connect(user1).approve(await leverageVault.getAddress(), insufficientAmount);
 
       await expect(
-        leverageVault.connect(user1).closeLeveragedPositionWithMusd(insufficientAmount)
+        leverageVault.connect(user1).closeLeveragedPositionWithMusd(insufficientAmount, 0)
       ).to.be.revertedWith("INSUFFICIENT_MUSD_PROVIDED");
     });
   });
@@ -490,7 +490,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(owner).pause();
 
       await expect(
-        leverageVault.connect(user1).closeLeveragedPositionWithMusd(ethers.parseEther("1000"))
+        leverageVault.connect(user1).closeLeveragedPositionWithMusd(ethers.parseEther("1000"), 0)
       ).to.be.reverted; // EnforcedPause
     });
 

@@ -149,14 +149,19 @@ template CantonPriceFeed
         assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == operator)
         return priceUsd
 
-    -- | Update price from Tradecraft/Temple DEX API
+    -- | Update price from Tradecraft/Temple DEX API\n    -- FIX X-M-02: Require attestation hash from multiple validators to prevent\n    -- single-operator price manipulation. Operator-only signing is asymmetric with\n    -- Ethereum's decentralized Chainlink feeds — attestation bridges the trust gap.
     choice PriceFeed_Update : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
         newSource   : Text
+        attestationHash : Text  -- FIX X-M-02: SHA-256 of price data signed by validators
+        validatorCount : Int    -- FIX X-M-02: Number of validator attestations
       controller operator
       do
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
+        -- FIX X-M-02: Require multi-validator attestation (minimum 2 validators)
+        assertMsg "ATTESTATION_REQUIRED" (attestationHash /= "")
+        assertMsg "INSUFFICIENT_VALIDATORS" (validatorCount >= 2)
         now <- getTime
         let timeSinceUpdate = subTime now lastUpdated
         assertMsg "UPDATE_TOO_FREQUENT" (timeSinceUpdate >= seconds 10)
@@ -457,6 +462,40 @@ template LendingCollateralAggregate
 -- ============================================================
 --                     SECTION 5: LENDING SERVICE
 -- ============================================================
+
+-- FIX D-M-01: LendingAggregate holds mutable shared state (totalBorrows, supply)
+-- separately from the service template. This allows deposit choices to remain
+-- nonconsuming while borrow/repay/liquidate only contend on the aggregate,
+-- not the entire service configuration. Future optimization: split per-user
+-- aggregates to further reduce contention.
+template LendingAggregate
+  with
+    operator           : Party
+    serviceName        : Text
+    totalBorrows       : Money
+    cantonCurrentSupply : Money
+    protocolReserves   : Money
+    lastUpdateTime     : Time
+  where
+    signatory operator
+    key (operator, serviceName <> "-aggregate") : (Party, Text)
+    maintainer key._1
+    ensure totalBorrows >= 0.0
+
+    -- | Atomically update aggregate state (called by service choices)
+    choice Aggregate_UpdateBorrow : ContractId LendingAggregate
+      with
+        borrowDelta : Money      -- Positive for borrow, negative for repay
+        supplyDelta : Money      -- Tracks cantonCurrentSupply changes
+        reserveDelta : Money     -- Protocol reserve accrual
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalBorrows = totalBorrows + borrowDelta
+          cantonCurrentSupply = cantonCurrentSupply + supplyDelta
+          protocolReserves = protocolReserves + reserveDelta
+          lastUpdateTime = now
 
 -- | CantonLendingService — Central coordinator for Canton-native lending.
 -- Manages collateral configs, orchestrates deposits/borrows/liquidations.

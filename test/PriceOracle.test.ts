@@ -63,25 +63,25 @@ describe("PriceOracle", function () {
 
     it("should reject zero token address", async function () {
       await expect(
-        oracle.connect(deployer).setFeed(ethers.ZeroAddress, await ethFeed.getAddress(), STALE_PERIOD, 18)
+        oracle.connect(deployer).setFeed(ethers.ZeroAddress, await ethFeed.getAddress(), STALE_PERIOD, 18, 0)
       ).to.be.revertedWith("INVALID_TOKEN");
     });
 
     it("should reject zero feed address", async function () {
       await expect(
-        oracle.connect(deployer).setFeed(WETH_ADDR, ethers.ZeroAddress, STALE_PERIOD, 18)
+        oracle.connect(deployer).setFeed(WETH_ADDR, ethers.ZeroAddress, STALE_PERIOD, 18, 0)
       ).to.be.revertedWith("INVALID_FEED");
     });
 
     it("should reject zero stale period", async function () {
       await expect(
-        oracle.connect(deployer).setFeed(WETH_ADDR, await ethFeed.getAddress(), 0, 18)
+        oracle.connect(deployer).setFeed(WETH_ADDR, await ethFeed.getAddress(), 0, 18, 0)
       ).to.be.revertedWith("INVALID_STALE_PERIOD");
     });
 
     it("should reject tokenDecimals > 18", async function () {
       await expect(
-        oracle.connect(deployer).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 19)
+        oracle.connect(deployer).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 19, 0)
       ).to.be.revertedWith("TOKEN_DECIMALS_TOO_HIGH");
     });
 
@@ -98,7 +98,7 @@ describe("PriceOracle", function () {
 
     it("should reject unauthorized feed changes", async function () {
       await expect(
-        oracle.connect(user).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18)
+        oracle.connect(user).setFeed(WETH_ADDR, await ethFeed.getAddress(), STALE_PERIOD, 18, 0)
       ).to.be.reverted;
     });
   });
