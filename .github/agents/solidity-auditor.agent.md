@@ -2,10 +2,7 @@
 name: solidity-auditor
 description: Solidity smart contract security auditor for the Minted mUSD protocol
 tools:
-  - read
-  - grep
-  - glob
-  - bash
+  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'figma/*', 'agent', 'pylance-mcp-server/*', 'ms-azuretools.vscode-containers/containerToolsConfig', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-python.python/installPythonPackage', 'ms-python.python/configurePythonEnvironment', 'todo']
 ---
 
 # Solidity Auditor Agent
@@ -47,7 +44,7 @@ For each finding:
 - Lines: X-Y
 - Description: What the issue is
 - Impact: What an attacker could exploit
-- Fix: Recommended remediation
+- Recommendation: Suggested remediation
 ```
 
 Severity levels: CRITICAL, HIGH, MEDIUM, LOW, INFO

@@ -90,7 +90,7 @@ testUnauthorizedTransfer = script do
 3. **Fuzz tests** — Random inputs for deposit/withdraw/mint/burn/liquidate
 4. **Edge case tests** — Zero amounts, max uint256, empty arrays, self-transfers
 5. **Integration tests** — Cross-contract interactions, full mint→stake→redeem flows
-6. **Regression tests** — Tests for every bug fix (prevent reintroduction)
+6. **Regression tests** — Tests for every resolved bug (prevent reintroduction)
 
 ## Coverage Requirements
 
@@ -103,7 +103,7 @@ testUnauthorizedTransfer = script do
 1. Read the code being tested — understand the function's purpose and edge cases
 2. Write the test FIRST (TDD when writing new features)
 3. Run the test — confirm it fails (red) or passes (green for existing code)
-4. If testing a fix, write the test that reproduces the bug first
+4. If testing a remediation, write the test that reproduces the bug first
 5. Run full suite to check for regressions: `forge test && npx hardhat test`
 6. Check coverage impact: `npx hardhat coverage`
 

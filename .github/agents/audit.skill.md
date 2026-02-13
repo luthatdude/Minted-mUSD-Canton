@@ -77,7 +77,7 @@ This skill provides five integrated audit capabilities. Select the appropriate m
 - **Description**: What the vulnerability is
 - **Impact**: What an attacker could do
 - **Proof of Concept**: Steps to exploit (if applicable)
-- **Recommendation**: How to fix it
+- **Recommendation**: How to remediate
 - **References**: CWE/SWC IDs, relevant documentation
 ```
 
@@ -86,9 +86,9 @@ This skill provides five integrated audit capabilities. Select the appropriate m
 ## Mode 2: Automated TDD & Validation (Iron Law)
 
 ### When to Use
-- Writing new features or fixing bugs
+- Writing new features or resolving bugs
 - Any code modification request during an audit
-- Validating that fixes for audit findings actually work
+- Validating that remediations for audit findings actually work
 
 ### The Iron Law
 
@@ -161,7 +161,7 @@ def test_should_raise_when_invalid_input():
         function_under_test(None)
 ```
 
-### Validation Checklist Before Marking Any Fix Complete
+### Validation Checklist Before Marking Any Remediation Complete
 - [ ] All new tests pass
 - [ ] All existing tests still pass (no regressions)
 - [ ] Edge cases are covered
@@ -228,7 +228,7 @@ def test_should_raise_when_invalid_input():
 - **Lines**: 100-180
 - **Severity**: High / Medium / Low
 - **Description**: What the smell is and why it matters
-- **Suggested Refactoring**: Specific steps to fix
+- **Suggested Refactoring**: Specific steps to remediate
 - **Effort Estimate**: Small (< 1hr) / Medium (1-4hr) / Large (4hr+)
 ```
 
@@ -335,7 +335,7 @@ Create at `docs/plans/audit-session-[YYYY-MM-DD].md`:
 ### Files Audited
 | File | Status | Findings | Notes |
 |------|--------|----------|-------|
-| `src/contracts/Token.sol` | ✅ Complete | 2 HIGH, 1 MEDIUM | Needs reentrancy fix |
+| `src/contracts/Token.sol` | ✅ Complete | 2 HIGH, 1 MEDIUM | Needs reentrancy guard |
 | `src/bridge/Bridge.sol` | 🔄 In Progress | 1 CRITICAL (partial) | Stopped at line 200 |
 | `src/utils/oracle.ts` | ⬜ Pending | - | - |
 
@@ -375,7 +375,7 @@ When asked for a comprehensive audit, run modes in this order:
 2. **Security Scan** (Mode 1): Find vulnerabilities first (highest priority)
 3. **Architecture Review** (Mode 4): Assess structural issues
 4. **Code Smell Detection** (Mode 3): Identify maintainability issues
-5. **Write Fix Tests** (Mode 2): For any fixes, follow the Iron Law
+5. **Write Regression Tests** (Mode 2): For any remediations, follow the Iron Law
 6. **Update Session** (Mode 5): Persist progress
 
 Always prioritize CRITICAL and HIGH findings. Present a summary table at the end of each session.

@@ -20,7 +20,7 @@ You are a technical writer specializing in DeFi protocol documentation. You main
 - `daml/**/*.daml` — DAML module documentation comments
 - `relay/`, `bot/`, `frontend/` — Service-level READMEs and inline docs
 - `docs/` — Architecture docs, audit reports, API references
-- `CLAUDE.md` — Claude Code project context
+- `AGENTS.md` — Agent team project context
 
 ## What You Do
 
