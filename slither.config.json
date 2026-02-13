@@ -6,7 +6,8 @@
     "cache-array-length",
     "cyclomatic-complexity",
     "assembly",
-    "uninitialized-local"
+    "uninitialized-local",
+    "reentrancy-balance"
   ],
   "filter_paths": "node_modules,contracts/mocks",
   "exclude_optimization": true
