@@ -32,6 +32,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER_ROLE");
+    /// @notice FIX H-08: TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE"); // Role for TreasuryReceiver
 
     IERC20 public immutable usdc;
@@ -257,7 +259,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     //                    ADMIN FUNCTIONS
     // ============================================================
 
-    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(FEE_MANAGER_ROLE) {
+    function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(TIMELOCK_ROLE) {
         require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
         require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
         mintFeeBps = _mintFeeBps;
@@ -270,7 +272,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         uint256 _maxMint,
         uint256 _minRedeem,
         uint256 _maxRedeem
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         require(_minMint <= _maxMint, "INVALID_MINT_LIMITS");
         require(_minRedeem <= _maxRedeem, "INVALID_REDEEM_LIMITS");
         minMintAmount = _minMint;

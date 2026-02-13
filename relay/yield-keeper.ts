@@ -12,7 +12,7 @@
  */
 
 import { ethers } from "ethers";
-import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity, createSigner } from "./utils";
 
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
@@ -119,7 +119,7 @@ const TREASURY_ABI = [
 
 class YieldKeeper {
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
   private config: KeeperConfig;
   private running: boolean = false;
@@ -127,19 +127,22 @@ class YieldKeeper {
   constructor(config: KeeperConfig) {
     this.config = config;
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    // FIX C-REL-01: Guard against raw private key usage in production
-    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
-      throw new Error(
-        "SECURITY: Raw private key usage is forbidden in production. " +
-        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
-        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
-      );
-    }
-    this.wallet = new ethers.Wallet(config.keeperPrivateKey, this.provider);
+    // FIX C-07: Signer is initialised asynchronously via init()
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
       TREASURY_ABI,
-      this.wallet
+      this.provider
+    );
+  }
+
+  /** Initialise the KMS-backed (or fallback) signer */
+  async init(): Promise<void> {
+    this.wallet = await createSigner(this.provider, "keeper_private_key", "KEEPER_PRIVATE_KEY");
+    // Re-bind treasury with signing capability
+    this.treasury = new ethers.Contract(
+      this.config.treasuryAddress,
+      TREASURY_ABI,
+      this.wallet,
     );
   }
 
@@ -147,9 +150,12 @@ class YieldKeeper {
    * Start the keeper loop
    */
   async start(): Promise<void> {
+    // FIX C-07: Initialise signer (KMS or fallback)
+    await this.init();
     console.log("🚀 Yield Keeper starting...");
     console.log(`   Treasury: ${this.config.treasuryAddress}`);
-    console.log(`   Keeper wallet: ${this.wallet.address}`);
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`   Keeper wallet: ${walletAddress}`);
     console.log(`   Poll interval: ${this.config.pollIntervalMs}ms`);
 
     // Verify connection and configuration

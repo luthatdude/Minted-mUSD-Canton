@@ -184,6 +184,11 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         // If any call reverts, the entire transaction reverts atomically.
 
         // 1. Liquidator pays mUSD (burns it)
+        // NOTE: This calls MUSD.burn(msg.sender, amount) which requires this contract
+        // to have LIQUIDATOR_ROLE on MUSD.sol. The burn is called BY this contract
+        // (which has the role) and burns FROM the liquidator's balance.
+        // IMPORTANT: The liquidator does NOT need to approve() this contract.
+        // MUSD.burn() with LIQUIDATOR_ROLE can burn from any address directly.
         musd.burn(msg.sender, actualRepay);
 
         // 2. Seize collateral to liquidator (moved before reduceDebt for safer ordering)

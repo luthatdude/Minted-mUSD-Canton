@@ -24,8 +24,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.722.0",
-    "@daml/ledger": "2.8.0",
-    "@daml/types": "2.8.0",
+    "@daml/ledger": "2.10.3",
+    "@daml/types": "2.10.3",
     "cross-spawn": "^7.0.5",
     "ethers": "^6.13.0",
     "glob": "^11.1.0",
