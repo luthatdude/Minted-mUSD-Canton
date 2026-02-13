@@ -1,3 +1,8 @@
+---
+name: audit
+description: "Comprehensive code and infrastructure auditing skill. Use when: (1) Scanning code for security vulnerabilities or exploits, (2) Running or enforcing test-driven development workflows, (3) Detecting code smells and suggesting refactors, (4) Reviewing architecture for scalability and security (Kubernetes, cloud-native, DevOps), (5) Conducting multi-file audits that require session persistence. Triggers on keywords: audit, vulnerability, security review, pentest, code smell, refactor, TDD, test coverage, architecture review, infrastructure review, codebase scan."
+---
+
 # Comprehensive Audit Skill
 
 This skill provides five integrated audit capabilities. Select the appropriate mode based on the task, or combine modes for a full-spectrum audit.
