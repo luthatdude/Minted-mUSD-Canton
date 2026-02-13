@@ -256,22 +256,40 @@ describe("TreasuryReceiver", function () {
       expect(await receiver.isVAAProcessed(vaaHash)).to.be.true;
     });
 
-    it("Should fallback to treasury when DirectMint fails", async function () {
+    it("Should queue a pending mint when DirectMint fails", async function () {
       const fixture = await loadFixture(deployFixture);
-      const { receiver, directMint, usdc, treasury } = fixture;
-      await setupReceiveAndMint(fixture);
+      const { receiver, directMint, usdc, user1 } = fixture;
+      const { vaaHash } = await setupReceiveAndMint(fixture);
 
       // Make DirectMint fail
       await directMint.setShouldFail(true);
 
-      const treasuryBalBefore = await usdc.balanceOf(treasury.address);
-
       await expect(receiver.receiveAndMint("0x01"))
-        .to.emit(receiver, "MintFallbackToTreasury");
+        .to.emit(receiver, "MintQueued")
+        .withArgs(user1.address, ethers.parseUnits("1000", 6), vaaHash);
 
-      // USDC should have gone to treasury
-      const treasuryBalAfter = await usdc.balanceOf(treasury.address);
-      expect(treasuryBalAfter - treasuryBalBefore).to.equal(ethers.parseUnits("1000", 6));
+      expect(await receiver.isVAAProcessed(vaaHash)).to.be.true;
+      expect(await receiver.pendingCredits(user1.address)).to.equal(ethers.parseUnits("1000", 6));
+      expect(await usdc.balanceOf(await receiver.getAddress())).to.equal(ethers.parseUnits("1000", 6));
+    });
+
+    it("Should allow recipient to claim queued mint once DirectMint recovers", async function () {
+      const fixture = await loadFixture(deployFixture);
+      const { receiver, directMint, user1 } = fixture;
+      const { vaaHash } = await setupReceiveAndMint(fixture);
+
+      // First attempt fails and is queued
+      await directMint.setShouldFail(true);
+      await receiver.receiveAndMint("0x01");
+
+      // Retry succeeds
+      await directMint.setShouldFail(false);
+      await expect(receiver.connect(user1).claimPendingMint(vaaHash))
+        .to.emit(receiver, "PendingMintClaimed");
+
+      expect(await receiver.pendingCredits(user1.address)).to.equal(0);
+      const pending = await receiver.pendingMints(vaaHash);
+      expect(pending.claimed).to.equal(true);
     });
 
     it("Should reject invalid VAA", async function () {
