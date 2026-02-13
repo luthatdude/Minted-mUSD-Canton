@@ -11,7 +11,7 @@ import DA.Optional (fromSome)
 import DA.Set qualified as Set
 import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLoopStrategy
 import Governance (GovernanceActionLog(..), ActionType(..))
 import Compliance

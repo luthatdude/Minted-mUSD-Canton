@@ -11,7 +11,7 @@ import DA.Date
 import DA.Optional (fromSome)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLending
 import Governance (GovernanceActionLog(..), ActionType(..))
 import DA.Set qualified as Set

@@ -25,7 +25,7 @@ import DA.Set qualified as Set
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Transfer(..), CantonUSDC(..), CantonDirectMintService(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
 import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_EmergencyUpdate(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
 
