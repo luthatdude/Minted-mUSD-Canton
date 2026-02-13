@@ -152,6 +152,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     error InsufficientNativeToken();
     error TransferFailed();
     error FeeTooHigh();
+    error DepositNotFound();
+    error AlreadyCompleted();
 
     // ============ Constructor ============
     
@@ -254,8 +256,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function markDepositComplete(uint64 sequence) external onlyRole(ROUTER_ADMIN_ROLE) {
         PendingDeposit storage pendingDep = pendingDeposits[sequence];
-        require(pendingDep.depositor != address(0), "DEPOSIT_NOT_FOUND");
-        require(!pendingDep.completed, "ALREADY_COMPLETED");
+        if (pendingDep.depositor == address(0)) revert DepositNotFound();
+        if (pendingDep.completed) revert AlreadyCompleted();
         pendingDep.completed = true;
         emit DepositCompleted(sequence, pendingDep.depositor, pendingDep.amount);
     }

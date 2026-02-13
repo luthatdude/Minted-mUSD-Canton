@@ -272,7 +272,7 @@ describe("Timelock Wiring — Findings #3 & #4", function () {
           [executor.address],
           ethers.ZeroAddress
         )
-      ).to.be.revertedWith("DELAY_TOO_SHORT");
+      ).to.be.revertedWithCustomError(TimelockFactory, "DelayTooShort");
     });
   });
 });

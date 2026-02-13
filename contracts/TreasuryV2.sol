@@ -401,7 +401,7 @@ contract TreasuryV2 is
 
             // Silent partial withdrawals can leave protocol in inconsistent state
             if (actualAmount < amount) {
-                revert("INSUFFICIENT_LIQUIDITY");
+                revert InsufficientLiquidity();
             }
 
             asset.safeTransfer(vault, actualAmount);

@@ -286,7 +286,7 @@ describe("SMUSDPriceAdapter", function () {
       it("should revert if min is zero", async function () {
         await expect(
           adapter.connect(admin).setSharePriceBounds(0, ethers.parseUnits("2.0", 8))
-        ).to.be.revertedWith("MIN_ZERO");
+        ).to.be.revertedWithCustomError(adapter, "MinZero");
       });
 
       it("should revert if max <= min", async function () {
@@ -295,7 +295,7 @@ describe("SMUSDPriceAdapter", function () {
             ethers.parseUnits("2.0", 8),
             ethers.parseUnits("1.0", 8)
           )
-        ).to.be.revertedWith("MAX_LTE_MIN");
+        ).to.be.revertedWithCustomError(adapter, "MaxLteMin");
       });
 
       it("should revert if max equals min", async function () {
@@ -304,7 +304,7 @@ describe("SMUSDPriceAdapter", function () {
             ethers.parseUnits("1.0", 8),
             ethers.parseUnits("1.0", 8)
           )
-        ).to.be.revertedWith("MAX_LTE_MIN");
+        ).to.be.revertedWithCustomError(adapter, "MaxLteMin");
       });
 
       it("should revert if max exceeds $10 cap", async function () {
@@ -313,7 +313,7 @@ describe("SMUSDPriceAdapter", function () {
             ethers.parseUnits("1.0", 8),
             ethers.parseUnits("11.0", 8)
           )
-        ).to.be.revertedWith("MAX_TOO_HIGH");
+        ).to.be.revertedWithCustomError(adapter, "MaxTooHigh");
       });
 
       it("should accept max at exactly $10 cap", async function () {

@@ -101,14 +101,14 @@ describe("CoverageBoost — DirectMintV2", function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
         F.deploy(await usdc.getAddress(), await musd.getAddress(), ethers.ZeroAddress, feeRecipient.address),
-      ).to.be.revertedWith("INVALID_TREASURY");
+      ).to.be.revertedWithCustomError(directMint, "InvalidTreasury");
     });
 
     it("Should revert when feeRecipient is zero address", async function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
         F.deploy(await usdc.getAddress(), await musd.getAddress(), await treasury.getAddress(), ethers.ZeroAddress),
-      ).to.be.revertedWith("INVALID_FEE_RECIPIENT");
+      ).to.be.revertedWithCustomError(directMint, "InvalidFeeRecipient");
     });
   });
 
@@ -147,14 +147,14 @@ describe("CoverageBoost — DirectMintV2", function () {
       const amt = ethers.parseUnits("100", USDC_DECIMALS);
       await expect(
         directMint.connect(minter).mintFor(ethers.ZeroAddress, amt),
-      ).to.be.revertedWith("INVALID_RECIPIENT");
+      ).to.be.revertedWithCustomError(directMint, "InvalidRecipient");
     });
 
     it("Should revert when below minimum mint", async function () {
       const tooSmall = ethers.parseUnits("0.5", USDC_DECIMALS);
       await expect(
         directMint.connect(minter).mintFor(user.address, tooSmall),
-      ).to.be.revertedWith("BELOW_MIN");
+      ).to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("Should revert when above maximum mint", async function () {
@@ -162,7 +162,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       const tooLarge = ethers.parseUnits("1500000", USDC_DECIMALS);
       await expect(
         directMint.connect(minter).mintFor(user.address, tooLarge),
-      ).to.be.revertedWith("ABOVE_MAX");
+      ).to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("Should revert when exceeding supply cap", async function () {
@@ -170,7 +170,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       const amt = ethers.parseUnits("200", USDC_DECIMALS);
       await expect(
         directMint.connect(minter).mintFor(user.address, amt),
-      ).to.be.revertedWith("EXCEEDS_SUPPLY_CAP");
+      ).to.be.revertedWithCustomError(directMint, "ExceedsSupplyCap");
     });
 
     it("Should revert when paused", async function () {
@@ -217,7 +217,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       );
 
       const musdAmount = ethers.parseEther("500"); // 500 mUSD → 500 USDC > 100
-      await expect(directMint.connect(user).redeem(musdAmount)).to.be.revertedWith("ABOVE_MAX");
+      await expect(directMint.connect(user).redeem(musdAmount)).to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("Should revert redeem when paused", async function () {
@@ -242,7 +242,7 @@ describe("CoverageBoost — DirectMintV2", function () {
 
       // fee = (1e12 * 1) / (1e12 * 10000) = 0 → minimum 1
       // usdcEquiv = 1, usdcOut = 1 - 1 = 0 → ZERO_OUTPUT
-      await expect(directMint.connect(user).redeem(musdAmount)).to.be.revertedWith("ZERO_OUTPUT");
+      await expect(directMint.connect(user).redeem(musdAmount)).to.be.revertedWithCustomError(directMint, "ZeroOutput");
     });
 
     it("Should correctly track redeem fees", async function () {
@@ -389,7 +389,7 @@ describe("CoverageBoost — DirectMintV2", function () {
 
   describe("setFees — validation branches", function () {
     it("setFees — should revert REDEEM_FEE_TOO_HIGH", async function () {
-      await expect(directMint.setFees(0, 600)).to.be.revertedWith("REDEEM_FEE_TOO_HIGH");
+      await expect(directMint.setFees(0, 600)).to.be.revertedWithCustomError(directMint, "RedeemFeeTooHigh");
     });
 
     it("setFees — both at max should succeed", async function () {
@@ -411,7 +411,7 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("setFeeRecipient — should revert with zero address", async function () {
       await expect(
         directMint.setFeeRecipient(ethers.ZeroAddress),
-      ).to.be.revertedWith("INVALID_RECIPIENT");
+      ).to.be.revertedWithCustomError(directMint, "InvalidRecipient");
     });
 
     it("setFeeRecipient — should update feeRecipient", async function () {
@@ -432,7 +432,7 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("setLimits — should revert INVALID_REDEEM_LIMITS (min > max)", async function () {
       await expect(
         directMint.setLimits(1, 1000, 1000, 100),
-      ).to.be.revertedWith("INVALID_REDEEM_LIMITS");
+      ).to.be.revertedWithCustomError(directMint, "InvalidRedeemLimits");
     });
 
     it("setLimits — should apply limits directly", async function () {
@@ -466,7 +466,7 @@ describe("CoverageBoost — DirectMintV2", function () {
 
   describe("Fee Withdrawal — uncovered paths", function () {
     it("withdrawFees — should revert NO_FEES when no mint fees accrued", async function () {
-      await expect(directMint.withdrawFees()).to.be.revertedWith("NO_FEES");
+      await expect(directMint.withdrawFees()).to.be.revertedWithCustomError(directMint, "NoFees");
     });
 
     it("withdrawFees — access control (non-FEE_MANAGER reverts)", async function () {
@@ -474,7 +474,7 @@ describe("CoverageBoost — DirectMintV2", function () {
     });
 
     it("withdrawRedeemFees — should revert NO_REDEEM_FEES when none accrued", async function () {
-      await expect(directMint.withdrawRedeemFees()).to.be.revertedWith("NO_REDEEM_FEES");
+      await expect(directMint.withdrawRedeemFees()).to.be.revertedWithCustomError(directMint, "NoRedeemFees");
     });
 
     it("withdrawRedeemFees — should transfer redeem fees to feeRecipient", async function () {
@@ -564,13 +564,13 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("Should revert when trying to recover USDC", async function () {
       await expect(
         directMint.recoverToken(await usdc.getAddress(), 1),
-      ).to.be.revertedWith("CANNOT_RECOVER_USDC");
+      ).to.be.revertedWithCustomError(directMint, "CannotRecoverUsdc");
     });
 
     it("Should revert when trying to recover mUSD", async function () {
       await expect(
         directMint.recoverToken(await musd.getAddress(), 1),
-      ).to.be.revertedWith("CANNOT_RECOVER_MUSD");
+      ).to.be.revertedWithCustomError(directMint, "CannotRecoverMusd");
     });
 
     it("Should revert for non-admin caller", async function () {
