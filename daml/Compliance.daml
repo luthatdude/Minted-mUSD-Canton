@@ -33,11 +33,6 @@ template ComplianceRegistry
 
     ensure regulator /= operator
 
-    -- Add contract key so other templates can look up the registry
-    -- rather than accepting a caller-supplied CID that could be None/forged
-    key (regulator, operator) : (Party, Party)
-    maintainer key._1
-
     -- | Add a party to the blacklist. Blacklisted parties cannot send or receive mUSD.
     choice BlacklistUser : ContractId ComplianceRegistry
       with
@@ -98,7 +93,7 @@ template ComplianceRegistry
 
     -- | Validate a mint transaction. Only the sender (minter) needs to be checked.
     -- Nonconsuming — can be called from DirectMint choices without archiving.
-    -- Changed controller to operator only. The operator acts on behalf of the
+    -- FIX CRITICAL: Changed controller to operator only. The operator acts on behalf of the
     -- regulator when exercising from CantonDirectMint. The regulator's policy is enforced
     -- by the blacklist/frozen data maintained on this contract (which only regulator can modify).
     nonconsuming choice ValidateMint : ()
@@ -113,7 +108,7 @@ template ComplianceRegistry
     -- | Validate a transfer between two parties.
     -- Checks both sender and receiver against blacklist.
     -- Also checks sender against freeze list (frozen can receive but not send).
-    -- Changed controller to operator only for cross-template compatibility.
+    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateTransfer : ()
       with
         sender : Party
@@ -125,7 +120,7 @@ template ComplianceRegistry
         assertMsg "SENDER_FROZEN" (not (Set.member sender frozen))
 
     -- | Validate a redemption (burn). Checks the redeemer is not blacklisted or frozen.
-    -- Changed controller to operator only for cross-template compatibility.
+    -- FIX CRITICAL: Changed controller to operator only for cross-template compatibility.
     nonconsuming choice ValidateRedemption : ()
       with
         redeemer : Party
@@ -135,12 +130,11 @@ template ComplianceRegistry
         assertMsg "REDEEMER_FROZEN" (not (Set.member redeemer frozen))
 
     -- | Check if a party is in good standing (not blacklisted, not frozen)
-    -- Changed controller from 'caller' to 'operator' to prevent
-    -- arbitrary parties from probing blacklist/freeze status of other users
     nonconsuming choice IsCompliant : Bool
       with
         party : Party
-      controller operator
+        caller : Party
+      controller caller
       do
         return (not (Set.member party blacklisted) && not (Set.member party frozen))
 
@@ -153,8 +147,9 @@ template ComplianceRegistry
       do
         assertMsg "REASON_REQUIRED" (reason /= "")
         assertMsg "EMPTY_LIST" (not (null usersToBlock))
-        -- Cap bulk operations to prevent abuse
-        assertMsg "BULK_LIMIT_EXCEEDED" (length usersToBlock <= 100)
+        -- FIX D-L-04: Increase bulk cap from 100 to 1000 for emergency mass-freeze scenarios
+        -- (e.g., exploit response requiring rapid blacklisting of many attacker addresses)
+        assertMsg "BULK_LIMIT_EXCEEDED" (length usersToBlock <= 1000)
         now <- getTime
         let newBlacklisted = foldl (\acc p -> Set.insert p acc) blacklisted usersToBlock
         create this with
