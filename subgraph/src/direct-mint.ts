@@ -1,11 +1,38 @@
-// DirectMint event handlers for The Graph subgraph
-// FIX H-06: Populated stub file (was 0-byte)
+import {
+  Minted as MintedEv,
+  Redeemed as RedeemedEv,
+} from "../generated/DirectMintV2/DirectMintV2";
+import { DirectMint, DirectRedeem } from "../generated/schema";
+import { generateEventId } from "./helpers";
 
-export { };
+export function handleMinted(event: MintedEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new DirectMint(id);
+  entity.user = event.params.user;
+  entity.usdcAmount = event.params.usdcIn;
+  entity.musdAmount = event.params.musdOut;
+  entity.fee = event.params.fee;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}
 
-// TODO: Implement handlers for DirectMint events:
-// - handleMinted(event: Minted): Track USDC → mUSD minting with fee breakdown
-// - handleRedeemed(event: Redeemed): Track mUSD → USDC redemption
-// - handleFeesUpdated(event: FeesUpdated): Track fee parameter changes
-// - handleLimitsUpdated(event: LimitsUpdated): Track mint/redeem limits
-// - handleSupplyCapUpdated(event: SupplyCapUpdated): Track supply cap changes
+export function handleRedeemed(event: RedeemedEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new DirectRedeem(id);
+  entity.user = event.params.user;
+  entity.musdAmount = event.params.musdIn;
+  entity.usdcAmount = event.params.usdcOut;
+  entity.fee = event.params.fee;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}

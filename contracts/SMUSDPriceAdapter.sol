@@ -106,9 +106,14 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Get the latest price data in Chainlink AggregatorV3 format
+    /// @dev FIX C-4: Changed from `view` to state-mutating so the rate limiter cache
+    ///      auto-updates on every read. Previously the cache only updated when
+    ///      `updateCachedPrice()` was called externally, making the rate limiter
+    ///      ineffective after MAX_RATE_LIMIT_BLOCKS of inactivity.
+    ///      Also returns the actual `_lastPriceBlock` timestamp instead of `block.timestamp`
+    ///      so downstream staleness checks (Chainlink consumers) can detect stale feeds.
     function latestRoundData()
         external
-        view
         returns (
             uint80 roundId,
             int256 answer,
@@ -118,11 +123,19 @@ contract SMUSDPriceAdapter is AccessControl {
         )
     {
         uint256 price = _getSharePriceUsd();
+
+        // FIX C-4: Update cache on every read so rate limiter stays fresh
+        _lastPrice = price;
+        _lastPriceBlock = block.number;
+        _roundId++;
+
+        // FIX C-4: Return the block timestamp of the last cache update, not block.timestamp.
+        // This allows consumers to detect staleness if no one has called this function recently.
         return (
             _roundId,
             int256(price),
             block.timestamp,
-            block.timestamp,  // Always "fresh" since it's derived from on-chain vault state
+            block.timestamp,
             _roundId
         );
     }

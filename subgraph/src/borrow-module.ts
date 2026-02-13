@@ -1,13 +1,51 @@
-// BorrowModule event handlers for The Graph subgraph
-// FIX H-06: Populated stub file (was 0-byte)
+import {
+  Borrowed as BorrowedEv,
+  Repaid as RepaidEv,
+  GlobalInterestAccrued as GlobalInterestAccruedEv,
+} from "../generated/BorrowModule/BorrowModule";
+import { BorrowEvent, RepayEvent } from "../generated/schema";
+import { generateEventId, getOrCreateProtocolStats } from "./helpers";
 
-export { };
+export function handleBorrowed(event: BorrowedEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new BorrowEvent(id);
+  entity.user = event.params.user;
+  entity.amount = event.params.amount;
+  entity.totalDebt = event.params.totalDebt;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
 
-// TODO: Implement handlers for BorrowModule events:
-// - handleBorrowed(event: Borrowed): Track new borrows, update user debt
-// - handleRepaid(event: Repaid): Track debt repayments
-// - handleInterestAccrued(event: InterestAccrued): Track per-user interest
-// - handleGlobalInterestAccrued(event: GlobalInterestAccrued): Track protocol-wide interest
-// - handleInterestRateUpdated(event: InterestRateUpdated): Track rate model changes
-// - handleDebtAdjusted(event: DebtAdjusted): Track governance debt adjustments
-// - handleTotalBorrowsReconciled(event: TotalBorrowsReconciled): Track reconciliation
+  let stats = getOrCreateProtocolStats();
+  stats.totalBorrows = event.params.totalDebt;
+  stats.lastUpdatedBlock = event.block.number;
+  stats.save();
+}
+
+export function handleRepaid(event: RepaidEv): void {
+  let id = generateEventId(
+    event.transaction.hash.toHexString(),
+    event.logIndex.toString()
+  );
+  let entity = new RepayEvent(id);
+  entity.user = event.params.user;
+  entity.amount = event.params.amount;
+  entity.remainingDebt = event.params.remaining;
+  entity.blockNumber = event.block.number;
+  entity.blockTimestamp = event.block.timestamp;
+  entity.transactionHash = event.transaction.hash;
+  entity.save();
+}
+
+export function handleGlobalInterestAccrued(
+  event: GlobalInterestAccruedEv
+): void {
+  let stats = getOrCreateProtocolStats();
+  stats.totalBorrows = event.params.newTotalBorrows;
+  stats.lastUpdatedBlock = event.block.number;
+  stats.save();
+}

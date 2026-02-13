@@ -1,5 +1,12 @@
--- BLE Protocol - Fixed Version
+-- BLE Protocol - Fixed Version (DEPRECATED — DO NOT USE IN PRODUCTION)
 -- Fixes: D-01 (TOCTOU), D-02 (Signature Uniqueness), D-03 (Timestamp Validation)
+--
+-- ╔══════════════════════════════════════════════════════════════════════════════╗
+-- ║  C-3 CRITICAL: ValidatorSignature has `signatory aggregator`, NOT validator  ║
+-- ║  A compromised aggregator can forge signatures and bypass BFT validation.   ║
+-- ║  USE BLEBridgeProtocol.daml INSTEAD — it makes validator the signatory      ║
+-- ║  and adds ValidatorSelfAttestation for independent commitment.              ║
+-- ╚══════════════════════════════════════════════════════════════════════════════╝
 
 module BLEProtocol where
 

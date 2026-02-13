@@ -1,11 +1,21 @@
 /**
  * Minted Protocol - Canton Validator Node (V1 — DEPRECATED)
  *
- * @deprecated Use validator-node-v2.ts instead. V1 message hashes use 7 parameters
- *             and do NOT include cantonStateHash. V2 uses 8 parameters matching
- *             BLEBridgeV9's updated signature verification. If any active validator
- *             runs V1 while others run V2, their signatures will produce different
- *             hashes, potentially dropping below the minSignatures threshold.
+ * @deprecated Use validator-node-v2.ts instead.
+ *
+ * ╔═══════════════════════════════════════════════════════════════════════════════╗
+ * ║  FIX H-07: DEPRECATED — Use validator-node-v2.ts for all new deployments.   ║
+ * ║                                                                             ║
+ * ║  V1 message hash has 7 parameters; V2 has 8 (adds cantonStateHash).         ║
+ * ║  V1 attestation ID uses ethers.id() (keccak256 of UTF-8 string);            ║
+ * ║  V2 uses computeAttestationId() matching BLEBridgeV9 on-chain derivation.   ║
+ * ║                                                                             ║
+ * ║  These differences make V1 and V2 signatures INCOMPATIBLE.                  ║
+ * ║  If BLEBridgeV9 verifies using the V2 format, V1 signatures will always     ║
+ * ║  fail, potentially dropping below minSignatures and blocking attestations.  ║
+ * ║                                                                             ║
+ * ║  ALL validators MUST upgrade to V2 before BLEBridgeV9 V2 deployment.        ║
+ * ╚═══════════════════════════════════════════════════════════════════════════════╝
  *
  * Watches for AttestationRequest contracts and signs them using AWS KMS.
  *
@@ -525,6 +535,21 @@ async function main(): Promise<void> {
   }
   if (!DEFAULT_CONFIG.cantonToken) {
     throw new Error("CANTON_TOKEN not set");
+  }
+
+  // FIX H-07: Runtime deprecation warning — V1 signatures are incompatible with V2 on-chain verification.
+  console.warn("╔══════════════════════════════════════════════════════════════════════════════╗");
+  console.warn("║  ⚠️  DEPRECATION WARNING: validator-node.ts (V1) is DEPRECATED.             ║");
+  console.warn("║  V1 message hash has 7 parameters; BLEBridgeV9 V2 expects 8.               ║");
+  console.warn("║  V1 attestation ID derivation differs from V2 on-chain contract.           ║");
+  console.warn("║  Signatures from this node WILL BE REJECTED by BLEBridgeV9 V2.             ║");
+  console.warn("║  MIGRATE TO: validator-node-v2.ts                                          ║");
+  console.warn("╚══════════════════════════════════════════════════════════════════════════════╝");
+
+  // Abort in production to prevent V1 from silently generating unusable signatures
+  if (process.env.NODE_ENV === "production") {
+    console.error("[FATAL] V1 validator node MUST NOT run in production. Use validator-node-v2.ts.");
+    process.exit(1);
   }
 
   // Create validator node

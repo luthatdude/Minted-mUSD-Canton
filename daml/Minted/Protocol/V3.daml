@@ -1159,8 +1159,14 @@ template CantonSMUSD
         let cooldownMicros = ticket.cooldownSeconds * 1000000
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
-        -- Calculate mUSD value at current share price
-        let sharePrice = if totalShares == 0.0 then 1.0 else totalAssets / totalShares
+        -- FIX D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
+        -- Previously used raw division: totalAssets / totalShares
+        -- Deposit used virtual offset: (totalAssets + 1000.0) / (totalShares + 1000.0)
+        -- This asymmetry meant depositors paid a higher price than withdrawers received,
+        -- creating systematically extractable value in early pool phases.
+        let virtualShares = totalShares + 1000.0
+        let virtualAssets = totalAssets + 1000.0
+        let sharePrice = virtualAssets / virtualShares
         let musdAmount = ticket.shares * sharePrice
         
         assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
