@@ -1,53 +1,70 @@
-// Certora Verification Spec: BLEBridgeV9
-// FIX: Previously no formal verification for bridge security
+/// @title BLEBridgeV9 Formal Verification Spec
+/// @notice Certora spec for the attestation-based bridge
+/// @dev Verifies nonce monotonicity, attestation ID permanence, and signature bounds
+
+// ═══════════════════════════════════════════════════════════════════
+// METHODS
+// ═══════════════════════════════════════════════════════════════════
 
 methods {
-    function mintCap() external returns (uint256) envfree;
-    function totalMinted() external returns (uint256) envfree;
-    function requiredSignatures() external returns (uint256) envfree;
-    function processedNonces(bytes32) external returns (bool) envfree;
+    function minSignatures() external returns (uint256) envfree;
+    function currentNonce() external returns (uint256) envfree;
+    function usedAttestationIds(bytes32) external returns (bool) envfree;
+    function attestedCantonAssets() external returns (uint256) envfree;
+    function paused() external returns (bool) envfree;
+
+    // Summarize external MUSD token calls
+    function _.setSupplyCap(uint256) external => NONDET;
+    function _.supplyCap() external => PER_CALLEE_CONSTANT;
+    function _.totalSupply() external => PER_CALLEE_CONSTANT;
 }
 
-// INV-1: Total minted never exceeds mint cap
-invariant mintCapEnforced()
-    totalMinted() <= mintCap();
+// ═══════════════════════════════════════════════════════════════════
+// RULES: NONCE SECURITY
+// ═══════════════════════════════════════════════════════════════════
 
-// INV-2: Required signatures must be positive
-invariant signaturesRequired()
-    requiredSignatures() > 0;
-
-// RULE: Nonces cannot be replayed
-rule nonceNotReplayable(bytes32 nonce) {
+/// @notice Nonce is monotonically non-decreasing across all operations
+rule nonce_monotonic(method f)
+    filtered { f -> f.selector != sig:forceUpdateNonce(uint256, string).selector }
+{
     env e;
+    calldataarg args;
+    uint256 nonceBefore = currentNonce();
 
-    require processedNonces(nonce) == true;
+    f(e, args);
 
-    // Any mint attempt with a used nonce must revert
-    bridgeMint@withrevert(e, nonce);
-
-    assert lastReverted, "Used nonce must cause revert";
+    assert currentNonce() >= nonceBefore,
+        "Nonce must never decrease";
 }
 
-// RULE: Minting increases totalMinted
-rule mintIncreasesTotal() {
+// ═══════════════════════════════════════════════════════════════════
+// RULES: ATTESTATION ID PERMANENCE
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Once an attestation ID is used, it can never be un-set
+rule attestation_id_permanence(bytes32 id, method f) {
     env e;
-    uint256 mintedBefore = totalMinted();
+    calldataarg args;
+    require usedAttestationIds(id) == true;
 
-    // Any successful mint
-    bridgeMint(e);
+    f(e, args);
 
-    uint256 mintedAfter = totalMinted();
-    assert mintedAfter > mintedBefore, "Successful mint must increase totalMinted";
+    assert usedAttestationIds(id) == true,
+        "Used attestation ID was reset to false";
 }
 
-// RULE: Mint cap cannot be reduced below current supply
-rule mintCapBoundedBySupply(uint256 newCap) {
+// ═══════════════════════════════════════════════════════════════════
+// RULES: SIGNATURE BOUNDS
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice minSignatures stays within valid range [2, 10] (inductive)
+rule min_signatures_preserved(method f) {
     env e;
+    calldataarg args;
+    require minSignatures() >= 2 && minSignatures() <= 10;
 
-    uint256 currentMinted = totalMinted();
+    f(e, args);
 
-    setMintCap@withrevert(e, newCap);
-
-    assert !lastReverted => newCap >= currentMinted,
-        "Mint cap cannot be set below current minted amount";
+    assert minSignatures() >= 2 && minSignatures() <= 10,
+        "minSignatures out of valid range [2, 10]";
 }
