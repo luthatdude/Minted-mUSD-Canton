@@ -24,23 +24,20 @@ baseTime : Time
 baseTime = datetime 2026 Feb 6 12 0 0
 
 -- | Create a governance proof for tests
--- Now requires a proposer (governor) party separate from operator
 createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
-createGovProof operator proposer actionType targetModule desc = do
+createGovProof operator governor actionType targetModule desc = do
   now <- getTime
-  submitMulti [operator, proposer] [] do
+  submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer
       proposalId = "test-" <> desc
       actionType
-      -- Module-scoped governance proof
       targetModule
       description = desc
       payload = ""
       payloadHash = ""
-      approvers = [proposer]
-      executedBy = proposer
+      approvers = [governor]
+      executedBy = governor
       executedAt = now
 
 -- | Create a compliance registry
