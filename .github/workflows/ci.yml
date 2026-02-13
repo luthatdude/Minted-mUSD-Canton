@@ -103,7 +103,7 @@ jobs:
         run: npm ci
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@8f1998e9878d786b7571f19a22fa0e656386e004 # v1.3.0
+        uses: foundry-rs/foundry-toolchain@8789b3e21e6c11b2697f5eb56eddae542f746c10 # v1.7.0
 
       - name: Run Foundry tests
         run: forge test -vvv
@@ -151,7 +151,7 @@ jobs:
 
       # Slither static analysis
       - name: Run Slither
-        uses: crytic/slither-action@6bf3d1e41fe5ee8f8b86ad4e63f6a7ffc81e3d45 # v0.4.0
+        uses: crytic/slither-action@b52cc1cbfee9ca3e8722dd5224299d16c9a6b80f # v0.4.2
         id: slither
         with:
           node-version: "20"
