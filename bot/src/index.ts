@@ -212,6 +212,14 @@ class LiquidationBot {
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    // FIX C-REL-01: Guard against raw private key usage in production
+    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
+      throw new Error(
+        "SECURITY: Raw private key usage is forbidden in production. " +
+        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
+        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
+      );
+    }
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);
     
     this.borrowModule = new ethers.Contract(config.borrowModule, BORROW_MODULE_ABI, this.wallet);

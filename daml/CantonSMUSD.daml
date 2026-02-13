@@ -264,12 +264,13 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Legacy SyncYield for backwards compatibility (deprecated)
+    -- FIX C-DAML-03: Require governance co-signature (matches SyncGlobalSharePrice)
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
         yieldAccrued : Money
         epochNumber : Int
-      controller operator
+      controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         -- Convert to global share price model

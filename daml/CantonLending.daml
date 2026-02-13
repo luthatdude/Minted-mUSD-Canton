@@ -32,6 +32,7 @@ import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(.
 import CantonSMUSD (CantonSMUSD(..))
 import CantonBoostPool (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
@@ -1261,8 +1262,12 @@ template CantonLendingService
     choice Lending_UpdateConfig : ContractId CantonLendingService
       with
         newConfig : CollateralConfig
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "COLLATERAL_FACTOR_RANGE" (newConfig.collateralFactorBps >= 0 && newConfig.collateralFactorBps <= 9900)
         assertMsg "LIQ_THRESHOLD_RANGE" (newConfig.liquidationThresholdBps >= 0 && newConfig.liquidationThresholdBps <= 9900)
         assertMsg "THRESHOLD_GT_FACTOR" (newConfig.liquidationThresholdBps >= newConfig.collateralFactorBps)
@@ -1275,8 +1280,12 @@ template CantonLendingService
     choice Lending_UpdateRate : ContractId CantonLendingService
       with
         newRateBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RATE_NON_NEGATIVE" (newRateBps >= 0)
         assertMsg "RATE_MAX_100_PERCENT" (newRateBps <= 10000)
         create this with interestRateBps = newRateBps
@@ -1291,24 +1300,36 @@ template CantonLendingService
     choice Lending_UpdateMinBorrow : ContractId CantonLendingService
       with
         newMinBorrow : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "MIN_BORROW_POSITIVE" (newMinBorrow > 0.0)
         create this with minBorrow = newMinBorrow
 
     choice Lending_UpdateReserveFactor : ContractId CantonLendingService
       with
         newReserveFactorBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "RESERVE_FACTOR_RANGE" (newReserveFactorBps >= 0 && newReserveFactorBps <= 5000)
         create this with reserveFactorBps = newReserveFactorBps
 
     choice Lending_UpdateCloseFactor : ContractId CantonLendingService
       with
         newCloseFactorBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
         create this with closeFactorBps = newCloseFactorBps
 
@@ -1316,8 +1337,12 @@ template CantonLendingService
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
         musdCid <- create CantonMUSD with
           issuer = operator
@@ -1325,7 +1350,7 @@ template CantonLendingService
           amount
           agreementHash = mpaHash
           agreementUri = mpaUri
-          privacyObservers = []  -- Protocol reserves, fully private
+          privacyObservers = []
         newService <- create this with
           protocolReserves = protocolReserves - amount
         return (newService, musdCid)
@@ -1334,8 +1359,13 @@ template CantonLendingService
     choice Lending_SetComplianceRegistry : ContractId CantonLendingService
       with
         newRegistryCid : ContractId ComplianceRegistry
+        governanceProofCid : ContractId GovernanceActionLog
       controller operator
-      do create this with complianceRegistryCid = newRegistryCid
+      do
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
+        create this with complianceRegistryCid = newRegistryCid
 
 -- ============================================================
 --                     SECTION 6: LIQUIDATION RECEIPT
