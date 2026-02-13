@@ -211,7 +211,7 @@ testDepositCTN = do
       privacyObservers = []
 
   -- Deposit as collateral
-  (newServiceCid, escrowCid) <- submit setup.user do
+  (newServiceCid, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -235,7 +235,7 @@ testDepositUSDC = do
       amount = 5000.0
       privacyObservers = []
 
-  (newServiceCid, escrowCid) <- submit setup.user do
+  (newServiceCid, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
@@ -268,7 +268,7 @@ testDepositSMUSD = do
       source = "smusd-share-price"
       observers = [setup.user]
 
-  (newServiceCid, escrowCid) <- submit setup.user do
+  (newServiceCid, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositSMUSD with
       user = setup.user
       smusdCid
@@ -294,7 +294,7 @@ testDepositFailsWhenPaused = do
       privacyObservers = []
 
   -- Deposit should fail
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd pausedServiceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -316,7 +316,7 @@ testBorrowAgainstCTN = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -350,7 +350,7 @@ testBorrowExceedsLTV = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -374,7 +374,7 @@ testBorrowBelowMinimum = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -403,7 +403,7 @@ testRepayDebt = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -443,13 +443,13 @@ testWithdrawCollateral = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- Withdraw 5000 CTN (no debt, so no health check needed)
-  (svc2, returnedCoinCid) <- submit setup.user do
+  (svc2, returnedCoinCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_WithdrawCTN with
       user = setup.user
       escrowCid
@@ -478,7 +478,7 @@ testLiquidation = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -542,7 +542,7 @@ testLiquidationHealthyPositionFails = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -599,12 +599,12 @@ testMultiCollateralBorrow = do
       amount = 1000.0
       privacyObservers = []
 
-  (svc1, ctnEscrowCid) <- submit setup.user do
+  (svc1, ctnEscrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
-  (svc2, usdcEscrowCid) <- submit setup.user do
+  (svc2, usdcEscrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_DepositUSDC with
       user = setup.user
       usdcCid
@@ -908,7 +908,7 @@ testBorrowAgainstUSDCHighLTV = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositUSDC with
       user = setup.user
       usdcCid
@@ -940,7 +940,7 @@ testFullLifecycle = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -961,7 +961,7 @@ testFullLifecycle = do
       debtCid
 
   -- 4. Withdraw all collateral (debt should be ~0)
-  (svc4, returnedCoinCid) <- submit setup.user do
+  (svc4, returnedCoinCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc3 Lending_WithdrawCTN with
       user = setup.user
       escrowCid
