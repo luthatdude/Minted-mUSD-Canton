@@ -195,11 +195,32 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Cache Hardhat artifacts
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cache/hardhat-nodejs
+            cache
+            artifacts
+          key: ${{ runner.os }}-hardhat-${{ hashFiles('contracts/**/*.sol') }}
+          restore-keys: |
+            ${{ runner.os }}-hardhat-
+
       - name: Install dependencies
         run: npm ci
 
+      - name: Compile contracts (with retry)
+        run: |
+          for i in 1 2 3; do
+            echo "Attempt $i of 3..."
+            npx hardhat compile && break || {
+              echo "Compile failed, waiting 10s before retry..."
+              sleep 10
+            }
+          done
+
       - name: Validate UUPS storage layouts
-        run: npx hardhat run scripts/validate-storage-layout.ts
+        run: npx hardhat run scripts/validate-storage-layout.ts --no-compile
 
   # ============================================================
   #  MYTHRIL: Symbolic Execution Analysis
@@ -376,6 +397,26 @@ jobs:
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             -summary {} +
+
+      - name: Reject placeholder image digests (CRIT-03)
+        run: |
+          echo "Checking for placeholder image digests in K8s manifests..."
+          VIOLATIONS=$(grep -rn \
+            -e 'MUST_REPLACE' \
+            -e 'sha256:placeholder' \
+            -e 'sha256:0123456789' \
+            -e 'sha256:abcdef' \
+            k8s/ --include='*.yaml' || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::CRIT-03: Placeholder image digests found in K8s manifests!"
+            echo "$VIOLATIONS"
+            echo ""
+            echo "All container images must use verified SHA256 digests."
+            echo "Run: docker pull <image>:<tag>"
+            echo "     docker inspect --format='{{index .RepoDigests 0}}' <image>:<tag>"
+            exit 1
+          fi
+          echo "✅ No placeholder digests found"
 
   # ============================================================
   #  DEPENDENCY AUDIT
