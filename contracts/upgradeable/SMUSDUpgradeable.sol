@@ -111,8 +111,8 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   address _timelockController
  ) external initializer {
   require(_timelockController != address(0), "INVALID_TIMELOCK");
-  __ERC4626_init(_asset);
   __ERC20_init("Staked mUSD", "smUSD");
+  __ERC4626_init(_asset);
   __AccessControl_init();
   __ReentrancyGuard_init();
   __Pausable_init();

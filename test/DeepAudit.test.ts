@@ -167,9 +167,9 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     // BorrowModule: LIQUIDATION_ROLE for LiquidationEngine
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
 
-    // BorrowModule: set InterestRateModel
-    const BM_BORROW_ADMIN = ethers.keccak256(ethers.toUtf8Bytes("BORROW_ADMIN_ROLE"));
-    await borrowModule.grantRole(BM_BORROW_ADMIN, admin.address);
+    // BorrowModule: set InterestRateModel (requires TIMELOCK_ROLE per SOL-H-01)
+    const BM_TIMELOCK = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+    await borrowModule.grantRole(BM_TIMELOCK, admin.address);
     await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
 
     // Treasury roles — grant VAULT_ROLE to DirectMint
