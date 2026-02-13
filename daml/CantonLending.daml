@@ -456,7 +456,7 @@ template CantonLendingService
             amount = coin.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -490,7 +490,7 @@ template CantonLendingService
             amount = usdc.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -524,7 +524,7 @@ template CantonLendingService
             amount = usdcx.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -559,7 +559,7 @@ template CantonLendingService
             amount = smusd.shares
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         newService <- create this with {}
         return (newService, escrowCid)
@@ -623,7 +623,7 @@ template CantonLendingService
             accruedInterest = 0.0
             lastAccrualTime = now
             interestRateBps
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- Update service
         newService <- create this with

@@ -6,17 +6,40 @@
  */
 
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
-import { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { 
-  getAssociatedTokenAddress, 
-  createTransferInstruction,
-  TOKEN_PROGRAM_ID,
-  getAccount,
-} from '@solana/spl-token';
+import { Connection, PublicKey, Transaction, TransactionInstruction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 // Solana USDC token address (mainnet)
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-const USDC_DECIMALS = 6;
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+function getAssociatedTokenAddress(mint: PublicKey, owner: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  )[0];
+}
+
+function createTransferInstruction(
+  source: PublicKey,
+  destination: PublicKey,
+  owner: PublicKey,
+  amount: bigint
+): TransactionInstruction {
+  const data = Buffer.alloc(9);
+  data.writeUInt8(3, 0); // SPL Token: Transfer
+  data.writeBigUInt64LE(amount, 1);
+
+  return new TransactionInstruction({
+    programId: TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: source, isSigner: false, isWritable: true },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+    ],
+    data,
+  });
+}
 
 // RPC endpoints
 const RPC_ENDPOINTS = {
@@ -153,9 +176,9 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
 
       // Get USDC balance
       try {
-        const usdcATA = await getAssociatedTokenAddress(USDC_MINT, publicKey);
-        const tokenAccount = await getAccount(connection, usdcATA);
-        setUsdcBalance(tokenAccount.amount);
+        const usdcATA = getAssociatedTokenAddress(USDC_MINT, publicKey);
+        const tokenBalance = await connection.getTokenAccountBalance(usdcATA);
+        setUsdcBalance(BigInt(tokenBalance.value.amount));
       } catch {
         // Token account doesn't exist
         setUsdcBalance(0n);
@@ -241,17 +264,15 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
       const recipientPubkey = new PublicKey(recipient);
       
       // Get token accounts
-      const senderATA = await getAssociatedTokenAddress(USDC_MINT, publicKey);
-      const recipientATA = await getAssociatedTokenAddress(USDC_MINT, recipientPubkey);
+      const senderATA = getAssociatedTokenAddress(USDC_MINT, publicKey);
+      const recipientATA = getAssociatedTokenAddress(USDC_MINT, recipientPubkey);
 
       // Create transfer instruction
       const transferIx = createTransferInstruction(
         senderATA,
         recipientATA,
         publicKey,
-        amount,
-        [],
-        TOKEN_PROGRAM_ID
+        amount
       );
 
       // Build transaction

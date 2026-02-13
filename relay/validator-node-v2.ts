@@ -361,9 +361,6 @@ class ValidatorNode {
       // 1. Fetch current asset snapshot from Canton
       const snapshot = await this.cantonClient.getAssetSnapshot();
 
-      // 2. Get the asset IDs referenced in the attestation
-      const requestedAssetIds = payload.cantonAssets.map(a => a.assetId);
-
       // 3. Verify each asset exists and value matches
       for (const attestedAsset of payload.cantonAssets) {
         const cantonAsset = snapshot.assets.find(a => a.assetId === attestedAsset.assetId);
@@ -408,6 +405,13 @@ class ValidatorNode {
       const totalDiff = attestedTotal > snapshot.totalValue
         ? attestedTotal - snapshot.totalValue
         : snapshot.totalValue - attestedTotal;
+      if (totalDiff > tolerance) {
+        return {
+          valid: false,
+          reason: `Total value mismatch: attested=${attestedTotal}, canton=${snapshot.totalValue}, diff=${totalDiff}`,
+          stateHash: snapshot.stateHash,
+        };
+      }
 
       // Only verify against assets included in attestation
       // FIX H-13: Use ethers.parseUnits
