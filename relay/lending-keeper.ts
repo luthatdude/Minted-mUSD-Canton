@@ -222,14 +222,24 @@ export class LendingKeeperBot {
       {}
     );
 
-    return contracts.map((c: any) => ({
-      contractId: c.contractId,
-      borrower: c.payload.borrower,
-      principalDebt: parseFloat(c.payload.principalDebt),
-      accruedInterest: parseFloat(c.payload.accruedInterest),
-      lastAccrualTime: c.payload.lastAccrualTime,
-      interestRateBps: parseInt(c.payload.interestRateBps, 10),
-    }));
+    return contracts.map((c: any) => {
+      const principalDebt = parseFloat(c.payload.principalDebt);
+      if (principalDebt > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.principalDebt}`);
+      }
+      const accruedInterest = parseFloat(c.payload.accruedInterest);
+      if (accruedInterest > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.accruedInterest}`);
+      }
+      return {
+        contractId: c.contractId,
+        borrower: c.payload.borrower,
+        principalDebt,
+        accruedInterest,
+        lastAccrualTime: c.payload.lastAccrualTime,
+        interestRateBps: parseInt(c.payload.interestRateBps, 10),
+      };
+    });
   }
 
   /**
@@ -243,12 +253,18 @@ export class LendingKeeperBot {
       { owner: borrower }
     );
 
-    return contracts.map((c: any) => ({
-      contractId: c.contractId,
-      owner: c.payload.owner,
-      collateralType: c.payload.collateralType,
-      amount: parseFloat(c.payload.amount),
-    }));
+    return contracts.map((c: any) => {
+      const collateralAmount = parseFloat(c.payload.amount);
+      if (collateralAmount > Number.MAX_SAFE_INTEGER) {
+        console.warn(`[LendingKeeper] Value exceeds safe integer range: ${c.payload.amount}`);
+      }
+      return {
+        contractId: c.contractId,
+        owner: c.payload.owner,
+        collateralType: c.payload.collateralType,
+        amount: collateralAmount,
+      };
+    });
   }
 
   /**

@@ -271,23 +271,26 @@ template MintedMUSD
         create this with amount = amount + other.amount
 
     -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
+    -- DAML-H-04: Fetch validators/aggregator from BridgeService instead of user input
     choice MUSD_BridgeToEthereum : ContractId AttestationRequest
       with
-        ethAddress : Text         -- Target Ethereum address
-        chainId : Int             -- Target chain (1 = mainnet)
-        validators : [Party]      -- Validator group for attestation
-        aggregator : Party        -- Attestation aggregator
+        ethAddress : Text                    -- Target Ethereum address
+        chainId : Int                        -- Target chain (1 = mainnet)
+        bridgeServiceCid : ContractId BridgeService  -- Bridge service for validators
         nonce : Int
         expiresAt : Time
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
-        
+
+        -- DAML-H-04: Fetch trusted validators and operator from BridgeService
+        bridgeSvc <- fetch bridgeServiceCid
+
         -- Token is consumed (burned) on Canton
         create AttestationRequest with
-          aggregator
-          validatorGroup = validators
+          aggregator = bridgeSvc.operator
+          validatorGroup = bridgeSvc.validators
           payload = AttestationPayload with
             attestationId = "bridge-" <> show nonce
             globalCantonAssets = amount
@@ -458,7 +461,10 @@ template LiquidityPool
         let musdAmount = musd.amount
         let collateralOut = musdAmount / exchangeRate
         assertMsg "INSUFFICIENT_LIQUIDITY" (quoteReserve >= collateralOut)
-        
+
+        -- DAML-C-03: Verify issuer matches pool operator before archive
+        assertMsg "ISSUER_MUST_BE_OPERATOR" (musd.issuer == operator)
+
         -- Archive (consume) the input token
         archive musdCid
         
@@ -587,6 +593,13 @@ template Vault
         newConfig : VaultConfig
       controller operator
       do
+        -- DAML-H-06: Validate new config bounds (mirrors ensure clause)
+        assertMsg "INVALID_LIQ_THRESHOLD" (newConfig.liquidationThreshold >= 1.0 && newConfig.liquidationThreshold <= 10.0)
+        assertMsg "INVALID_LIQ_PENALTY" (newConfig.liquidationPenaltyBps >= 0 && newConfig.liquidationPenaltyBps <= 2000)
+        assertMsg "INVALID_LIQ_BONUS" (newConfig.liquidationBonusBps >= 0 && newConfig.liquidationBonusBps <= newConfig.liquidationPenaltyBps)
+        assertMsg "INVALID_CLOSE_FACTOR" (newConfig.closeFactorBps >= 1000 && newConfig.closeFactorBps <= 10000)
+        assertMsg "INVALID_INTEREST_RATE" (newConfig.interestRateBps >= 0 && newConfig.interestRateBps <= 5000)
+        assertMsg "INVALID_DUST_THRESHOLD" (newConfig.dustThreshold >= 0.0 && newConfig.dustThreshold <= 1000.0)
         create this with config = newConfig
 
     -- | AdjustLeverage - Atomic leverage loop
@@ -929,6 +942,8 @@ template LiquidationOrder
         keeper : Party
       controller keeper
       do
+        -- DAML-H-01: Only authorized keepers can claim orders
+        assertMsg "NOT_AUTHORIZED_KEEPER" (keeper `elem` observers)
         assertMsg "ORDER_NOT_PENDING" (status == Pending)
         create this with 
           status = Claimed
@@ -1192,7 +1207,7 @@ template CantonSMUSD
         let cooldownMicros = ticket.cooldownSeconds * 1000000
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
-        -- FIX D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
+        -- FIX DAML-H-05 / D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
         -- Previously used raw division: totalAssets / totalShares
         -- Deposit used virtual offset: (totalAssets + 1000.0) / (totalShares + 1000.0)
         -- This asymmetry meant depositors paid a higher price than withdrawers received,
@@ -1376,21 +1391,29 @@ template BridgeService
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
-        
+
         attestation <- fetch attestationCid
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
-        
+
+        -- DAML-H-02: Nonce monotonicity check
+        assertMsg "NONCE_NOT_MONOTONIC" (attestation.payload.nonce > lastNonce)
+
+        -- DAML-H-03: Attestation expiration check
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
+
         let sigParties = Set.toList attestation.collectedSignatures
         assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
-        
-        -- Verify sufficient signatures
+
+        -- DAML-H-03: Use BFT formula instead of stored requiredSignatures
         let sigCount = Set.size attestation.collectedSignatures
-        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
-        
+        let bftRequired = (length attestation.validatorGroup * 2 + 2) / 3
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= bftRequired)
+
         -- Archive attestation (consumed)
         archive attestationCid
-        
+
         -- Mint mUSD on Canton
         musdCid <- create MintedMUSD with
           issuer = operator
@@ -1400,11 +1423,11 @@ template BridgeService
           agreementHash = mpaHash
           agreementUri = mpaUri
           observers = []
-        
+
         newService <- create this with
           totalBridgedIn = totalBridgedIn + amount
           lastNonce = attestation.payload.nonce
-        
+
         return (newService, musdCid)
 
     -- | Assign nonce to a bridge-out request
