@@ -7,17 +7,16 @@
 // ═══════════════════════════════════════════════════════════════════
 
 methods {
+    // envfree declarations (view/pure functions callable without env)
     function totalSupply() external returns (uint256) envfree;
     function supplyCap() external returns (uint256) envfree;
     function balanceOf(address) external returns (uint256) envfree;
     function isBlacklisted(address) external returns (bool) envfree;
-    function mint(address, uint256) external;
-    function burn(address, uint256) external;
-    function transfer(address, uint256) external returns (bool);
-    function transferFrom(address, address, uint256) external returns (bool);
-    function approve(address, uint256) external returns (bool);
     function allowance(address, address) external returns (uint256) envfree;
     function paused() external returns (bool) envfree;
+
+    // State-changing functions don't need declaration in Certora v8+
+    // (mint, burn, transfer, transferFrom, approve are auto-detected)
 }
 
 // ═══════════════════════════════════════════════════════════════════
