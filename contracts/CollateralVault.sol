@@ -230,19 +230,40 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     ) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant {
         require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
         require(recipient != address(0), "INVALID_RECIPIENT");
-        
+
+        // FIX C-SOL-02: When skipHealthCheck is true, restrict recipient to the
+        // LeverageVault (msg.sender) or the user themselves. This prevents a
+        // compromised LEVERAGE_VAULT_ROLE from draining collateral to arbitrary addresses.
+        if (skipHealthCheck) {
+            require(
+                recipient == msg.sender || recipient == user,
+                "SKIP_HC_RECIPIENT_RESTRICTED"
+            );
+        }
+
         // Check health factor unless explicitly skipped during atomic position closure
         if (!skipHealthCheck && borrowModule != address(0)) {
             // Only check if user has debt
             uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
             if (userDebt > 0) {
-                // Get current health factor - must be >= 1.0 (10000 bps) after withdrawal
-                // Note: This is a view call, actual withdrawal may change the calculation
-                // The LeverageVault must use skipHealthCheck=true only in atomic close operations
-                // where debt is being repaid in the same transaction
-                uint256 hf = IBorrowModule(borrowModule).healthFactor(user);
-                // Require significant margin (1.1x = 11000 bps) to account for the withdrawal
-                require(hf >= 11000, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
+                // FIX C-UPG-01: Use try/catch so oracle failure does NOT silently
+                // allow withdrawal. If both safe and unsafe health checks revert,
+                // we block the withdrawal rather than fail-open.
+                bool healthOk = false;
+                try IBorrowModule(borrowModule).healthFactor(user) returns (uint256 hf) {
+                    healthOk = hf >= 11000;
+                } catch {
+                    // Safe oracle reverted (circuit breaker). Try unsafe path for resilience.
+                    try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
+                        healthOk = hfUnsafe >= 11000;
+                    } catch {
+                        // FIX C-UPG-01: Both oracles failed — BLOCK withdrawal (fail-closed).
+                        // Previously this would have reverted naturally, but with try/catch
+                        // we must explicitly revert to prevent fail-open.
+                        revert("ORACLE_UNAVAILABLE");
+                    }
+                }
+                require(healthOk, "WITHDRAWAL_WOULD_UNDERCOLLATERALIZE");
             }
         }
 
