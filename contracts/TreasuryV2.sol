@@ -394,10 +394,10 @@ contract TreasuryV2 is
         } else {
             // Need to pull from strategies
             uint256 needed = amount - reserve;
-            // slither-disable-next-line reentrancy-vulnerabilities
-            uint256 withdrawn = _withdrawFromStrategies(needed);
+            _withdrawFromStrategies(needed);
 
-            actualAmount = reserve + withdrawn;
+            // Re-read balance after external calls to avoid stale-balance usage
+            actualAmount = reserveBalance();
             if (actualAmount > amount) actualAmount = amount;
 
             // Silent partial withdrawals can leave protocol in inconsistent state
