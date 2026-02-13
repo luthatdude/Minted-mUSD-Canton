@@ -245,21 +245,24 @@ contract CollateralVaultUpgradeable is
     // ══════════════════════════════════════════════════════════════════════
 
     /// from permanently blocking withdrawals during extreme price moves
+    /// @dev FIX P1-CODEX: Fail-CLOSED when both oracle paths revert.
+    ///      Previously allowed withdrawal when both healthFactor() and healthFactorUnsafe()
+    ///      reverted, enabling users with debt to extract all collateral — creating unbacked mUSD.
+    ///      Now reverts with ORACLE_UNAVAILABLE, blocking withdrawal until oracle recovers.
     function _checkHealthFactor(address user) internal view {
         if (borrowModule != address(0)) {
             uint256 debt = IBorrowModule(borrowModule).totalDebt(user);
             if (debt > 0) {
-                // Use try/catch: if oracle circuit breaker trips, allow withdrawal
-                // rather than trapping user funds indefinitely
                 try IBorrowModule(borrowModule).healthFactor(user) returns (uint256 hf) {
                     require(hf >= 10000, "HEALTH_FACTOR_TOO_LOW");
                 } catch {
                     // Oracle circuit breaker triggered — try unsafe health factor
-                    // (bypasses staleness check) to prevent bad debt from unchecked withdrawals
                     try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
                         require(hfUnsafe >= 10000, "HEALTH_FACTOR_TOO_LOW");
                     } catch {
-                        // Both safe and unsafe failed — allow withdrawal to prevent fund trapping
+                        // FIX P1-CODEX: FAIL CLOSED — block withdrawal when oracle unavailable.
+                        // Users without debt can still withdraw (checked above).
+                        revert("ORACLE_UNAVAILABLE");
                     }
                 }
             }
