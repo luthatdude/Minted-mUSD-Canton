@@ -16,14 +16,14 @@
 |--------|-------|
 | **Files Audited** | 160+ across 7 layers |
 | **Total Findings** | 78 |
-| **Critical** | 3 |
+| **Critical** | 3 (1 Resolved, 1 Retracted, 1 Open) |
 | **High** | 13 |
 | **Medium** | 27 |
 | **Low** | 25 |
 | **Informational** | 10 |
 | **Gas Optimizations** | 17 |
-| **Composite Score** | **7.9 / 10.0** |
-| **Verdict** | **INSTITUTIONAL GRADE — Mid-Upper Tier** |
+| **Composite Score** | **8.0 / 10.0** |
+| **Verdict** | **INSTITUTIONAL GRADE — Upper Tier** |
 
 ---
 
@@ -33,7 +33,7 @@
 |---|---|---|---|---|
 | 1 | **Smart Contract Security** (25%) | 8.2 / 10 | solidity-auditor | Strong RBAC, CEI compliance, ReentrancyGuard throughout. PendleStrategyV2 upgrade auth and unlimited approval are the only HIGH findings. No criticals in Solidity. |
 | 2 | **Cross-Chain Bridge Security** (15%) | 8.5 / 10 | solidity-auditor | Multi-layered replay protection exceeds industry standard. Attestation entropy + state hash + nonce + timestamp bounds + rate limiting. |
-| 3 | **DAML/Canton Layer** (10%) | 8.1 / 10 | daml-auditor | Dual-signatory token model, proposal-based transfers, BFT 67% bridge attestation. Deprecated templates still compilable (CRITICAL). Optional compliance in LoopStrategy (HIGH). |
+| 3 | **DAML/Canton Layer** (10%) | 8.7 / 10 | daml-auditor | Dual-signatory token model, proposal-based transfers, BFT 67% bridge attestation. ~~Deprecated templates~~ archived (CRIT-01 RESOLVED). Optional compliance in LoopStrategy (HIGH). |
 | 4 | **TypeScript Services** (10%) | 7.5 / 10 | typescript-reviewer | TLS enforcement, secret sanitization, KMS key management. dotenv in yield-api breaks secret model (HIGH). parseFloat precision loss in financial calcs (HIGH). |
 | 5 | **Infrastructure & DevOps** (10%) | 8.5 / 10 | infra-reviewer | Pod Security Standards `restricted`, default-deny NetworkPolicies, ESO integration, SHA-pinned Actions, 9 security scanners in CI. Placeholder Canton image digests (CRITICAL). |
 | 6 | **Operational Security** (10%) | 7.8 / 10 | infra-reviewer | Health endpoints, Prometheus alerting, graceful shutdown. ServiceMonitor label mismatch means metrics not scraped. |
@@ -42,8 +42,8 @@
 
 ### Weighted Composite Score
 
-$$\text{Score} = (8.2 \times 0.25) + (8.5 \times 0.15) + (8.1 \times 0.10) + (7.5 \times 0.10) + (8.5 \times 0.10) + (7.8 \times 0.10) + (7.5 \times 0.10) + (6.5 \times 0.10)$$
-$$= 2.05 + 1.275 + 0.81 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.92 \approx 7.9/10}$$
+$$\text{Score} = (8.2 \times 0.25) + (8.5 \times 0.15) + (8.7 \times 0.10) + (7.5 \times 0.10) + (8.5 \times 0.10) + (7.8 \times 0.10) + (7.5 \times 0.10) + (6.5 \times 0.10)$$
+$$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \approx 8.0/10}$$
 
 ---
 
@@ -52,16 +52,18 @@ $$= 2.05 + 1.275 + 0.81 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.92 \appro
 ### CRIT-01: Deprecated DAML Templates Still Compilable — Signature Forgery Vector
 - **Agent**: daml-auditor
 - **File**: `daml/BLEBridgeProtocol.daml` (deprecated V1/V2)
-- **Description**: Deprecated bridge templates are still compiled and deployable. The V1 `ValidatorSignature` template uses `signatory aggregator` instead of the validator party, meaning a compromised aggregator could forge validator signatures. V2 templates bypass compliance checks entirely and lack rate limits or cross-module supply coordination.
-- **Impact**: If a deprecated template is accidentally instantiated (or deliberately by a compromised operator), it bypasses all V3 security controls — compliance, rate limits, and proper signature authorization.
-- **Recommendation**: Move deprecated DAML files to `archive/daml/` and add a `daml.yaml` exclude pattern. Alternatively, delete them entirely since V3 replacements exist.
+- **Status**: ✅ **RESOLVED** (commit `64ed868`)
+- **Description**: Deprecated bridge templates were still compiled and deployable. The V1 `ValidatorSignature` template uses `signatory aggregator` instead of the validator party, meaning a compromised aggregator could forge validator signatures. V2 templates bypass compliance checks entirely and lack rate limits or cross-module supply coordination.
+- **Impact**: If a deprecated template was accidentally instantiated (or deliberately by a compromised operator), it bypassed all V3 security controls — compliance, rate limits, and proper signature authorization.
+- **Remediation Applied**: Archived 6 deprecated DAML files to `archive/daml/` (outside the `daml/` source directory). Files archived: `BLEProtocol.daml`, `BLEBridgeProtocol.daml`, `MintedMUSD.daml`, `MUSD_Protocol.daml`, `TokenInterface.daml`, `InstitutionalAssetV4.daml`. Verified zero active modules import any archived file. `daml.yaml` (`source: .`) only compiles files within `daml/`, so archived files are excluded from compilation. Added `archive/daml/DEPRECATED.md` documenting why each file was archived.
 
-### CRIT-02: Deprecated CantonDirectMint Bypasses All Compliance
+### ~~CRIT-02: Deprecated CantonDirectMint Bypasses All Compliance~~ — RETRACTED (False Positive)
 - **Agent**: daml-auditor
-- **File**: `daml/CantonDirectMint.daml` (deprecated version)
-- **Description**: The deprecated `CantonDirectMint` module lacks compliance registry enforcement, rate limits, and cross-module supply coordination present in the active V3 version.
-- **Impact**: If instantiated, allows unrestricted minting without compliance checks — blacklisted parties could mint mUSD.
-- **Recommendation**: Archive or delete alongside CRIT-01. Add compile-time guards.
+- **File**: `daml/CantonDirectMint.daml`
+- **Status**: ❌ **RETRACTED** — False positive identified during remediation
+- **Verification**: `CantonDirectMint.daml` is the **active production module**, imported by 9 other modules (CantonLending, CantonSMUSD, CantonLoopStrategy, CantonBoostPool, CantonCoinToken, and 4 test files). It contains **12 compliance references** (`ComplianceRegistry`, `ValidateMint`, `ValidateRedemption`, `ValidateTransfer`), mandatory compliance enforcement, rate limiting via `BurnRateLimiter`, and cross-module supply coordination via `CantonDirectMintService`.
+- **Root Cause of False Positive**: The audit agent confused the standalone `CantonDirectMint.daml` (active, with full compliance) with the V3-embedded `CantonDirectMint` template inside `Minted/Protocol/V3.daml`. Both are production code; neither is deprecated.
+- **Finding Count Adjustment**: Total criticals reduced from 3 to 2 (1 resolved, 1 retracted, 1 open).
 
 ### CRIT-03: Placeholder Container Image Digests in Canton K8s Deployments
 - **Agent**: infra-reviewer
@@ -282,7 +284,7 @@ $$= 2.05 + 1.275 + 0.81 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.92 \appro
 ## CROSS-CUTTING OBSERVATIONS
 
 ### 1. Bridge Security (Solidity ↔ DAML ↔ TypeScript ↔ K8s)
-The bridge security model is the strongest component of the protocol. BLEBridgeV9 implements 8 layers of replay protection (multi-sig + entropy + state hash + nonce + timestamp + rate limit + attestation age + unpause timelock). However, the DAML-side deprecated templates (CRIT-01/02) create a bypass vector that undermines the on-chain protections. The TypeScript relay correctly sanitizes URLs and enforces TLS, but the validator node lacks the same TLS guard.
+The bridge security model is the strongest component of the protocol. BLEBridgeV9 implements 8 layers of replay protection (multi-sig + entropy + state hash + nonce + timestamp + rate limit + attestation age + unpause timelock). The DAML-side deprecated templates (CRIT-01) have been archived, eliminating the bypass vector that previously undermined the on-chain protections. The TypeScript relay correctly sanitizes URLs and enforces TLS, but the validator node lacks the same TLS guard.
 
 ### 2. Secret Management (K8s ↔ TypeScript ↔ CI)
 Largely excellent — Docker secrets, ESO integration, KMS for signing, SHA-pinned Actions. The `dotenv` usage in yield-api (TS-H-01) is the single inconsistency. Canton image placeholder digests (CRIT-03) are the infrastructure gap.
@@ -341,7 +343,7 @@ Solidity contracts handle precision well (BPS arithmetic, proper rounding). The 
 ## REMEDIATION PRIORITY
 
 ### 🔴 Immediate (Before Mainnet)
-1. **CRIT-01/02**: Archive or delete deprecated DAML templates (BLEBridgeProtocol V1/V2, CantonDirectMint deprecated)
+1. ~~**CRIT-01/02**: Archive or delete deprecated DAML templates~~ — ✅ **DONE** (CRIT-01 resolved via archival, CRIT-02 retracted as false positive)
 2. **CRIT-03**: Replace placeholder Canton image digests with real SHA-256 hashes
 3. **SOL-H-01**: PendleStrategyV2 — per-operation approvals instead of `type(uint256).max`
 4. **SOL-H-02**: PendleStrategyV2 — `_authorizeUpgrade` requires `TIMELOCK_ROLE`
@@ -367,7 +369,7 @@ Solidity contracts handle precision well (BPS arithmetic, proper rounding). The 
 
 ## FINAL VERDICT
 
-### Composite Score: 7.9 / 10.0 — INSTITUTIONAL GRADE (Mid-Upper Tier)
+### Composite Score: 8.0 / 10.0 — INSTITUTIONAL GRADE (Upper Tier)
 
 The Minted mUSD Canton protocol demonstrates **production-grade security architecture** with defense-in-depth patterns that exceed most DeFi protocols. The bridge security model (8 protection layers), role separation, and Canton escrow model are particular standouts.
 
@@ -375,7 +377,7 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 
 | Factor | Impact on Score |
 |---|---|
-| Deprecated DAML templates still compilable | −0.6 |
+| ~~Deprecated DAML templates still compilable~~ | ~~−0.6~~ → **RESOLVED** |
 | 10/21 contracts without formal verification | −0.4 |
 | Gas inefficiency (string requires, uncached reads) | −0.35 |
 | Zero frontend tests | −0.3 |
@@ -383,7 +385,7 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 | TypeScript precision issues in financial calcs | −0.15 |
 
 **Path to 9.0+:**
-1. Archive deprecated DAML templates (+0.6)
+1. ~~Archive deprecated DAML templates (+0.6)~~ — ✅ **DONE**
 2. Add Certora specs for remaining 10 contracts (+0.4)
 3. Gas optimization pass with custom errors (+0.35)
 4. Add frontend test suite (+0.3)
