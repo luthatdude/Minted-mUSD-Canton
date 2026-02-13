@@ -25,17 +25,23 @@ export function enforceTLSSecurity(): void {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
     }
     // INFRA-H-06: Define a getter that prevents runtime tampering with this env var
+    // FIX P1-CODEX: Use configurable:true and guard against re-definition.
+    // Previous code used configurable:false which crashes on module re-import
+    // or process restart (Object.defineProperty throws on non-configurable redefinition).
     const originalValue = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    Object.defineProperty(process.env, "NODE_TLS_REJECT_UNAUTHORIZED", {
-      get: () => originalValue || "1",
-      set: (val: string) => {
-        if (val === "0") {
-          console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
-          return;
-        }
-      },
-      configurable: false,
-    });
+    const descriptor = Object.getOwnPropertyDescriptor(process.env, "NODE_TLS_REJECT_UNAUTHORIZED");
+    if (!descriptor || descriptor.configurable !== false) {
+      Object.defineProperty(process.env, "NODE_TLS_REJECT_UNAUTHORIZED", {
+        get: () => originalValue || "1",
+        set: (val: string) => {
+          if (val === "0") {
+            console.error("[SECURITY] Attempt to disable TLS cert validation blocked at runtime.");
+            return;
+          }
+        },
+        configurable: false,
+      });
+    }
   }
 }
 
