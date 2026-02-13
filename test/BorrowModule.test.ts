@@ -36,7 +36,7 @@ describe("BorrowModule", function () {
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy(owner.address);
+    const collateralVault = await CollateralVault.deploy();
 
     // Add collateral (token, collateralFactorBps, liquidationThresholdBps, liquidationPenaltyBps)
     await timelockAddCollateral(
@@ -65,6 +65,10 @@ describe("BorrowModule", function () {
     const BORROW_MODULE_ROLE = await collateralVault.BORROW_MODULE_ROLE();
     await musd.grantRole(BRIDGE_ROLE, await borrowModule.getAddress());
     await collateralVault.grantRole(BORROW_MODULE_ROLE, await borrowModule.getAddress());
+
+    // Grant TIMELOCK_ROLE for admin parameter changes
+    const TIMELOCK_ROLE = await borrowModule.TIMELOCK_ROLE();
+    await borrowModule.grantRole(TIMELOCK_ROLE, owner.address);
 
     // Mint WETH to user
     await weth.mint(user1.address, ethers.parseEther("100"));

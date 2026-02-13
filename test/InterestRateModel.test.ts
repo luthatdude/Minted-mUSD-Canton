@@ -12,7 +12,7 @@ describe("InterestRateModel", function () {
     const [admin, user] = await ethers.getSigners();
 
     const InterestRateModel = await ethers.getContractFactory("InterestRateModel");
-    const model = await InterestRateModel.deploy(admin.address, admin.address);
+    const model = await InterestRateModel.deploy(admin.address);
 
     return { model, admin, user };
   }
@@ -248,63 +248,64 @@ describe("InterestRateModel", function () {
   });
 
   // ================================================================
-  //  Per-Second Rate Tests (IRM-01 / IRM-02 regression)
+  //  Rate Tests (IRM-01 / IRM-02 regression)
   // ================================================================
-  describe("Per-Second Rates (WAD-scaled)", function () {
-    it("getBorrowRatePerSecond should NOT return 0 at typical utilization", async function () {
+  describe("Annual Rates and Interest Calculation", function () {
+    it("getBorrowRateAnnual should return correct BPS at typical utilization", async function () {
       const { model } = await loadFixture(deployFixture);
 
       const supply = ethers.parseEther("1000");
-      const borrows = ethers.parseEther("500"); // 50% util → 700 BPS annual
+      const borrows = ethers.parseEther("500"); // 50% util
 
-      const perSecond = await model.getBorrowRatePerSecond(borrows, supply);
-      // 700 * 1e18 / 31536000 ≈ 2.219e13 — must be > 0
-      expect(perSecond).to.be.gt(0n);
-
-      // Verify range: annual 700 BPS → per-second ≈ 2.219e13
-      expect(perSecond).to.be.gt(2n * 10n ** 13n);
-      expect(perSecond).to.be.lt(3n * 10n ** 13n);
+      const annualRate = await model.getBorrowRateAnnual(borrows, supply);
+      // 50% util < 80% kink → baseRate + (util * multiplier / BPS) = 200 + (5000*1000)/10000 = 700
+      expect(annualRate).to.equal(700n);
     });
 
-    it("getSupplyRatePerSecond should NOT return 0 at typical utilization", async function () {
+    it("getSupplyRateAnnual should return correct BPS at typical utilization", async function () {
       const { model } = await loadFixture(deployFixture);
 
       const supply = ethers.parseEther("1000");
-      const borrows = ethers.parseEther("500"); // 50% util → supply rate 315 BPS annual
+      const borrows = ethers.parseEther("500"); // 50% util
 
-      const perSecond = await model.getSupplyRatePerSecond(borrows, supply);
-      expect(perSecond).to.be.gt(0n);
-
-      // 315 * 1e18 / 31536000 ≈ 9.99e12
-      expect(perSecond).to.be.gt(9n * 10n ** 12n);
-      expect(perSecond).to.be.lt(11n * 10n ** 12n);
+      const supplyRate = await model.getSupplyRateAnnual(borrows, supply);
+      // supplyRate = borrowRate * util * (1 - reserveFactor) / (BPS^2)
+      // = 700 * 5000 * 9000 / (10000 * 10000) = 315 BPS
+      expect(supplyRate).to.equal(315n);
     });
 
-    it("Per-second borrow rate at 100% util should be highest", async function () {
+    it("Annual borrow rate at 100% util should be highest", async function () {
       const { model } = await loadFixture(deployFixture);
 
       const supply = ethers.parseEther("1000");
-      const rate50 = await model.getBorrowRatePerSecond(ethers.parseEther("500"), supply);
-      const rate90 = await model.getBorrowRatePerSecond(ethers.parseEther("900"), supply);
-      const rate100 = await model.getBorrowRatePerSecond(ethers.parseEther("1000"), supply);
+      const rate50 = await model.getBorrowRateAnnual(ethers.parseEther("500"), supply);
+      const rate90 = await model.getBorrowRateAnnual(ethers.parseEther("900"), supply);
+      const rate100 = await model.getBorrowRateAnnual(ethers.parseEther("1000"), supply);
 
       expect(rate100).to.be.gt(rate90);
       expect(rate90).to.be.gt(rate50);
     });
 
-    it("Per-second rates at 0% utilization: borrow > 0 (base rate), supply = 0", async function () {
+    it("calculateInterest avoids per-second truncation for small rates", async function () {
       const { model } = await loadFixture(deployFixture);
 
       const supply = ethers.parseEther("1000");
-      const borrows = 0n;
+      const borrows = 0n; // 0% util → base rate only (200 BPS)
 
-      const borrowPerSec = await model.getBorrowRatePerSecond(borrows, supply);
-      const supplyPerSec = await model.getSupplyRatePerSecond(borrows, supply);
+      // Annual borrow rate at 0% util = base rate = 200 BPS
+      const annualRate = await model.getBorrowRateAnnual(borrows, supply);
+      expect(annualRate).to.equal(200n);
 
-      // Base rate 200 BPS → per-second > 0
-      expect(borrowPerSec).to.be.gt(0n);
+      // calculateInterest uses reordered multiplication to avoid precision loss
+      const principal = ethers.parseEther("1000");
+      const oneYear = 365n * 24n * 3600n;
+      const interest = await model.calculateInterest(principal, borrows, supply, oneYear);
+      // interest = principal * 200 * oneYear / (10000 * oneYear) = principal * 200 / 10000 = 2%
+      expect(interest).to.equal(ethers.parseEther("20")); // 2% of 1000 = 20
+
       // Supply rate at 0% util = 0 (no borrowing activity)
-      expect(supplyPerSec).to.equal(0n);
+      const supplyRate = await model.getSupplyRateAnnual(borrows, supply);
+      expect(supplyRate).to.equal(0n);
     });
   });
 
@@ -312,36 +313,41 @@ describe("InterestRateModel", function () {
   //  Enhanced Parameter Validation Tests (IRM-03/04/06)
   // ================================================================
   describe("Enhanced Parameter Validation", function () {
-    it("Should reject baseRateBps > 2000 (20%)", async function () {
+    it("Should reject kinkBps > 10000 (KinkTooHigh)", async function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(2100, 1000, 8000, 5000, 1000)
-      ).to.be.revertedWithCustomError(model, "BaseRateTooHigh");
+        model.connect(admin).setParams(200, 1000, 10001, 5000, 1000)
+      ).to.be.revertedWithCustomError(model, "KinkTooHigh");
     });
 
-    it("Should reject kinkBps < 1000 (10%)", async function () {
+    it("Should reject reserveFactorBps > 5000 (ReserveFactorTooHigh)", async function () {
       const { model, admin } = await loadFixture(deployFixture);
 
       await expect(
-        model.connect(admin).setParams(200, 1000, 500, 5000, 1000)
-      ).to.be.revertedWithCustomError(model, "KinkTooLow");
+        model.connect(admin).setParams(200, 1000, 8000, 5000, 5001)
+      ).to.be.revertedWithCustomError(model, "ReserveFactorTooHigh");
     });
 
-    it("Should reject multiplierBps = 0", async function () {
+    it("Should reject params that produce maxRate > 10000 (InvalidParameter)", async function () {
       const { model, admin } = await loadFixture(deployFixture);
 
+      // baseRate=5000, multiplier=5000, kink=8000, jump=5000
+      // maxRate = 5000 + (8000*5000)/10000 + (2000*5000)/10000 = 5000 + 4000 + 1000 = 10000
+      // 10000 is NOT > 10000, so bump baseRate to 5001
       await expect(
-        model.connect(admin).setParams(200, 0, 8000, 5000, 1000)
-      ).to.be.revertedWithCustomError(model, "MultiplierZero");
+        model.connect(admin).setParams(5001, 5000, 8000, 5000, 1000)
+      ).to.be.revertedWithCustomError(model, "InvalidParameter");
     });
 
-    it("Should reject jumpMultiplierBps = 0", async function () {
+    it("Should reject another maxRate > 10000 combination (InvalidParameter)", async function () {
       const { model, admin } = await loadFixture(deployFixture);
 
+      // baseRate=200, multiplier=10000, kink=8000, jump=10000
+      // maxRate = 200 + (8000*10000)/10000 + (2000*10000)/10000 = 200 + 8000 + 2000 = 10200 > 10000
       await expect(
-        model.connect(admin).setParams(200, 1000, 8000, 0, 1000)
-      ).to.be.revertedWithCustomError(model, "MultiplierZero");
+        model.connect(admin).setParams(200, 10000, 8000, 10000, 1000)
+      ).to.be.revertedWithCustomError(model, "InvalidParameter");
     });
 
     it("Should accept valid params at boundary", async function () {
