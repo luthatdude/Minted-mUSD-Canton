@@ -96,24 +96,36 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  event BadDebtSocialized(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
 
  // ═══════════════════════════════════════════════════════════════════════
- // ADMIN TIMELOCK (48h propose → execute)
+ // FIX H-04: DEPRECATED — Legacy in-contract timelock variables.
+ // These are no longer used since the contract now uses MintedTimelockController.
+ // Kept to preserve storage layout for upgradeable contract compatibility.
+ // DO NOT use these variables; use MintedTimelockController for all governance.
  // ═══════════════════════════════════════════════════════════════════════
 
  uint256 public constant ADMIN_DELAY = 48 hours;
 
- // Pending contract-reference changes
+ /// @deprecated Use MintedTimelockController instead
  address public pendingInterestRateModel;
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingInterestRateModelTime;
+ /// @deprecated Use MintedTimelockController instead
  address public pendingSMUSD;
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingSMUSDTime;
+ /// @deprecated Use MintedTimelockController instead
  address public pendingTreasury;
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingTreasuryTime;
 
- // Pending parameter changes
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingInterestRate;
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingInterestRateTime;
+ /// @deprecated Use MintedTimelockController instead
  bool public pendingInterestRateSet; // distinguish 0-value from unset
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingMinDebt;
+ /// @deprecated Use MintedTimelockController instead
  uint256 public pendingMinDebtTime;
 
  event InterestRateModelChangeRequested(address indexed model, uint256 readyAt);
@@ -243,7 +255,7 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// This function reconciles by subtracting the unrouted amount from totalBorrows.
  event UnroutedInterestDrained(uint256 amount, uint256 totalBorrowsBefore, uint256 totalBorrowsAfter);
 
- function drainUnroutedInterest() external onlyRole(BORROW_ADMIN_ROLE) {
+ function drainUnroutedInterest() external onlyRole(TIMELOCK_ROLE) {
  uint256 amount = unroutedInterest;
  require(amount > 0, "NOTHING_TO_DRAIN");
  uint256 totalBorrowsBefore = totalBorrows;
@@ -816,7 +828,6 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// Admin sends mUSD to this contract, which is burned to reduce
  /// the unbacked supply. Reduces the badDebt accumulator accordingly.
  /// @param amount Amount of bad debt to cover (mUSD, 18 decimals)
- /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE (not just DEFAULT_ADMIN_ROLE) for high-impact debt operations
  function coverBadDebt(uint256 amount) external nonReentrant onlyRole(TIMELOCK_ROLE) {
  require(amount > 0, "ZERO_AMOUNT");
  require(badDebt > 0, "NO_BAD_DEBT");
@@ -846,7 +857,6 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// breaking interest accrual math (overallocation via proportional share).
  /// @param amount Amount of bad debt to socialize
  /// @param borrowers Array of active borrower addresses whose debt should be reduced
- /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE for irreversible debt socialization
  function socializeBadDebt(uint256 amount, address[] calldata borrowers) external nonReentrant onlyRole(TIMELOCK_ROLE) {
  require(amount > 0, "ZERO_AMOUNT");
  require(badDebt > 0, "NO_BAD_DEBT");
@@ -1037,7 +1047,6 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
  /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
  /// Admin should coordinate with supply cap management before withdrawing.
- /// @dev FIX P1-CODEX: Requires TIMELOCK_ROLE for reserve withdrawal (mints mUSD)
  function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
  require(amount <= protocolReserves, "EXCEEDS_RESERVES");
  require(to != address(0), "ZERO_ADDRESS");

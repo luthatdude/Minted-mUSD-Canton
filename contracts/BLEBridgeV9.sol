@@ -518,7 +518,13 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     //                      UPGRADEABILITY
     // ============================================================
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX H-01: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE.
+    /// Previously, an admin EOA could instantly upgrade the bridge implementation,
+    /// bypassing the 48h delay enforced on all other upgradeable contracts.
+    /// Now requires MintedTimelockController (48h delay) for upgrade authorization.
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
+
+    function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
     // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
     // (Added: lastCantonStateHash, verifiedStateHashes)

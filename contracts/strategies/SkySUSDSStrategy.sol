@@ -92,6 +92,9 @@ contract SkySUSDSStrategy is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+    /// @notice FIX C-02: Declare TIMELOCK_ROLE explicitly — was undefined, defaulting to
+    /// bytes32(0) (DEFAULT_ADMIN_ROLE), which allowed admin to bypass 48h timelock delay
+    /// on unpause() and recoverToken().
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════

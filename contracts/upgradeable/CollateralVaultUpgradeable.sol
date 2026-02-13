@@ -147,6 +147,33 @@ contract CollateralVaultUpgradeable is
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    // FIX H-05: ADMIN — disableCollateral / enableCollateral
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// @notice Disable an existing collateral token — must be called through MintedTimelockController
+    /// @dev Disabling prevents new deposits but allows withdrawals and liquidations to continue.
+    ///      Existing positions are not affected; users can still withdraw their deposits.
+    /// @param token The collateral token address to disable
+    function disableCollateral(address token) external onlyRole(TIMELOCK_ROLE) {
+        require(collateralConfigs[token].enabled, "TOKEN_NOT_ACTIVE");
+        collateralConfigs[token].enabled = false;
+        emit CollateralDisabled(token);
+    }
+
+    /// @notice Re-enable a previously disabled collateral token — must be called through MintedTimelockController
+    /// @param token The collateral token address to re-enable
+    function enableCollateral(address token) external onlyRole(TIMELOCK_ROLE) {
+        require(!collateralConfigs[token].enabled, "TOKEN_ALREADY_ENABLED");
+        // Ensure the token was previously added (has non-zero config)
+        require(
+            collateralConfigs[token].liquidationThresholdBps > 0,
+            "TOKEN_NEVER_ADDED"
+        );
+        collateralConfigs[token].enabled = true;
+        emit CollateralEnabled(token);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     // USER OPERATIONS
     // ══════════════════════════════════════════════════════════════════════
 
@@ -260,9 +287,11 @@ contract CollateralVaultUpgradeable is
                     try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
                         require(hfUnsafe >= 10000, "HEALTH_FACTOR_TOO_LOW");
                     } catch {
-                        // FIX P1-CODEX: FAIL CLOSED — block withdrawal when oracle unavailable.
-                        // Users without debt can still withdraw (checked above).
-                        revert("ORACLE_UNAVAILABLE");
+                        // FIX C-04: Both safe and unsafe oracles failed — REVERT.
+                        // Previously this was an empty catch{} that silently allowed
+                        // withdrawal, enabling borrowers to drain collateral while
+                        // keeping outstanding debt, creating unbacked mUSD.
+                        revert("HEALTH_CHECK_FAILED");
                     }
                 }
             }
