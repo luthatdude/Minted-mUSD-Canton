@@ -108,8 +108,13 @@ contract TreasuryV2 is
     /// @notice Minimum deposit to trigger auto-allocation
     uint256 public minAutoAllocateAmount;
 
-    /// @dev Storage gap for future upgrades
-    uint256[40] private __gap;
+    /// @notice FIX P1-CODEX: High-water mark for fee accrual. Fees only accrue when
+    ///         totalValue exceeds this peak, preventing fee charging on principal recovery
+    ///         after transient strategy failures.
+    uint256 public peakRecordedValue;
+
+    /// @dev Storage gap for future upgrades (reduced by 1 for peakRecordedValue)
+    uint256[39] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -625,18 +630,30 @@ contract TreasuryV2 is
      * @notice Accrue protocol fees on yield
      * Attacker cannot inflate totalValue() temporarily and immediately accrue fees.
      */
+    /// @dev FIX P1-CODEX: Track peak value to prevent charging fees on principal recovery.
+    ///      Previously, if a strategy temporarily returned 0 (transient failure caught by
+    ///      try/catch in totalValue()), lastRecordedValue would drop. When the strategy
+    ///      recovered, the increase was treated as "yield" and fees were charged on principal.
+    ///      Now uses peakRecordedValue: fees only accrue when totalValue exceeds the all-time
+    ///      high-water mark, ensuring only genuine yield is subject to performance fees.
     function _accrueFees() internal {
         if (block.timestamp < lastFeeAccrual + MIN_ACCRUAL_INTERVAL) {
             return;
         }
-        
+
         uint256 currentValue = totalValue();
 
-        if (currentValue > lastRecordedValue) {
-            uint256 yield_ = currentValue - lastRecordedValue;
+        // FIX P1-CODEX: Only charge fees on genuine yield above the high-water mark.
+        // peakRecordedValue tracks the highest legitimate totalValue observed.
+        // This prevents fee charging when a broken strategy recovers (principal recovery != yield).
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+
+        if (currentValue > peak) {
+            uint256 yield_ = currentValue - peak;
             uint256 protocolFee = (yield_ * fees.performanceFeeBps) / BPS;
 
             fees.accruedFees += protocolFee;
+            peakRecordedValue = currentValue;
 
             emit FeesAccrued(yield_, protocolFee);
         }
