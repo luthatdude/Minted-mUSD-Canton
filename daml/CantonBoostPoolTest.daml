@@ -290,10 +290,9 @@ test_RewardDistribution = script do
 
   -- Distribute 100 Canton in validator rewards (epoch 1)
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-1"
       actionType = ParameterUpdate
       description = "test"
@@ -310,10 +309,9 @@ test_RewardDistribution = script do
       governanceProofCid = distProof1
 
   -- Distribute another 200 Canton (epoch 2)
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-2"
       actionType = ParameterUpdate
       description = "test"
@@ -357,10 +355,9 @@ test_RewardEpochSequential = script do
 
   -- Epoch 1 works
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch1"
       actionType = ParameterUpdate
       description = "test"
@@ -377,10 +374,9 @@ test_RewardEpochSequential = script do
       governanceProofCid = distProof1
 
   -- Epoch 1 again fails (not sequential)
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch1-dup"
       actionType = ParameterUpdate
       description = "test"
@@ -397,10 +393,9 @@ test_RewardEpochSequential = script do
       governanceProofCid = distProof2
 
   -- Epoch 0 fails (going backwards)
-  distProof3 <- submitMulti [operator, governor] [] do
+  distProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-epoch0"
       actionType = ParameterUpdate
       description = "test"
@@ -433,10 +428,9 @@ test_CantonPriceSync = script do
 
   now <- getTime
   -- Valid: 10% increase (0.172 → 0.189)
-  syncProof1 <- submitMulti [operator, governor] [] do
+  syncProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-1"
       actionType = ParameterUpdate
       description = "test"
@@ -452,10 +446,9 @@ test_CantonPriceSync = script do
       governanceProofCid = syncProof1
 
   -- Invalid: >20% jump (0.189 → 0.300)
-  syncProof2 <- submitMulti [operator, governor] [] do
+  syncProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-2"
       actionType = ParameterUpdate
       description = "test"
@@ -471,10 +464,9 @@ test_CantonPriceSync = script do
       governanceProofCid = syncProof2
 
   -- Valid: 15% decrease (0.189 → 0.161)
-  syncProof3 <- submitMulti [operator, governor] [] do
+  syncProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-3"
       actionType = ParameterUpdate
       description = "test"
@@ -490,10 +482,9 @@ test_CantonPriceSync = script do
       governanceProofCid = syncProof3
 
   -- Invalid: zero price
-  syncProof4 <- submitMulti [operator, governor] [] do
+  syncProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sync-price-4"
       actionType = ParameterUpdate
       description = "test"
@@ -525,10 +516,9 @@ test_SharePriceSync = script do
 
   now <- getTime
   -- Valid: share price up (1.0 → 1.05)
-  spProof1 <- submitMulti [operator, governor] [] do
+  spProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-1"
       actionType = ParameterUpdate
       description = "test"
@@ -544,10 +534,9 @@ test_SharePriceSync = script do
       governanceProofCid = spProof1
 
   -- Valid: small decrease (1.05 → 0.95, just within 10%)
-  spProof2 <- submitMulti [operator, governor] [] do
+  spProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-2"
       actionType = ParameterUpdate
       description = "test"
@@ -563,10 +552,9 @@ test_SharePriceSync = script do
       governanceProofCid = spProof2
 
   -- Invalid: >10% decrease (0.95 → 0.80)
-  spProof3 <- submitMulti [operator, governor] [] do
+  spProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-3"
       actionType = ParameterUpdate
       description = "test"
@@ -582,10 +570,9 @@ test_SharePriceSync = script do
       governanceProofCid = spProof3
 
   -- Invalid: zero
-  spProof4 <- submitMulti [operator, governor] [] do
+  spProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-sp-4"
       actionType = ParameterUpdate
       description = "test"
@@ -628,10 +615,9 @@ test_ProtocolRewardWithdraw = script do
 
   -- Distribute 1000 Canton rewards → 400 to protocol (40%)
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-rewards"
       actionType = ParameterUpdate
       description = "test"
@@ -648,10 +634,9 @@ test_ProtocolRewardWithdraw = script do
       governanceProofCid = distProof
 
   -- Operator withdraws 200 of 400 accrued
-  wdProof1 <- submitMulti [operator, governor] [] do
+  wdProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-1"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -667,10 +652,9 @@ test_ProtocolRewardWithdraw = script do
       governanceProofCid = wdProof1
 
   -- Cannot withdraw more than remaining (200 left)
-  wdProof2 <- submitMulti [operator, governor] [] do
+  wdProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-2"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -686,10 +670,9 @@ test_ProtocolRewardWithdraw = script do
       governanceProofCid = wdProof2
 
   -- Can withdraw the rest
-  wdProof3 <- submitMulti [operator, governor] [] do
+  wdProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-wd-rewards-3"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -725,10 +708,9 @@ test_PauseUnpause = script do
 
   -- Pause pool
   now <- getTime
-  pauseProof1 <- submitMulti [operator, governor] [] do
+  pauseProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-pause-1"
       actionType = EmergencyPause
       description = "test"
@@ -752,10 +734,9 @@ test_PauseUnpause = script do
       smusdCid
 
   -- Unpause
-  unpauseProof <- submitMulti [operator, governor] [] do
+  unpauseProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-unpause"
       actionType = EmergencyPause
       description = "test"
@@ -778,10 +759,9 @@ test_PauseUnpause = script do
       smusdCid
 
   -- Pause again — withdrawals still allowed when paused (users can always exit)
-  pauseProof2 <- submitMulti [operator, governor] [] do
+  pauseProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-pause-2"
       actionType = EmergencyPause
       description = "test"
@@ -820,10 +800,9 @@ test_FeeUpdate = script do
 
   now <- getTime
   -- Valid: update to 100bps / 100bps
-  feeProof1 <- submitMulti [operator, governor] [] do
+  feeProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-1"
       actionType = ParameterUpdate
       description = "test"
@@ -840,10 +819,9 @@ test_FeeUpdate = script do
       governanceProofCid = feeProof1
 
   -- Invalid: entry fee > 500 bps (5%)
-  feeProof2 <- submitMulti [operator, governor] [] do
+  feeProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-2"
       actionType = ParameterUpdate
       description = "test"
@@ -860,10 +838,9 @@ test_FeeUpdate = script do
       governanceProofCid = feeProof2
 
   -- Invalid: exit fee > 500 bps
-  feeProof3 <- submitMulti [operator, governor] [] do
+  feeProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-3"
       actionType = ParameterUpdate
       description = "test"
@@ -880,10 +857,9 @@ test_FeeUpdate = script do
       governanceProofCid = feeProof3
 
   -- Valid: zero fees
-  feeProof4 <- submitMulti [operator, governor] [] do
+  feeProof4 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-fee-4"
       actionType = ParameterUpdate
       description = "test"
@@ -916,10 +892,9 @@ test_CapRatioUpdate = script do
 
   now <- getTime
   -- Valid: change ratio to 0.50 (50/50 pool)
-  capProof1 <- submitMulti [operator, governor] [] do
+  capProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-1"
       actionType = ParameterUpdate
       description = "test"
@@ -935,10 +910,9 @@ test_CapRatioUpdate = script do
       governanceProofCid = capProof1
 
   -- Invalid: zero ratio
-  capProof2 <- submitMulti [operator, governor] [] do
+  capProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-2"
       actionType = ParameterUpdate
       description = "test"
@@ -954,10 +928,9 @@ test_CapRatioUpdate = script do
       governanceProofCid = capProof2
 
   -- Invalid: > 1.0
-  capProof3 <- submitMulti [operator, governor] [] do
+  capProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-cap-3"
       actionType = ParameterUpdate
       description = "test"
@@ -1082,10 +1055,9 @@ test_MultipleDepositors = script do
   -- Distribute 300 Canton rewards → 180 to LPs (60%)
   -- Alice has ~2/3 of pool, Bob ~1/3 (by share proportion)
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-dist-multi"
       actionType = ParameterUpdate
       description = "test"
@@ -1289,10 +1261,9 @@ test_InvalidReward = script do
 
   -- Zero reward
   now <- getTime
-  distProof <- submitMulti [operator, governor] [] do
+  distProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-invalid-reward"
       actionType = ParameterUpdate
       description = "test"
@@ -1342,10 +1313,9 @@ test_FullLifecycle = script do
 
   -- 2. VALIDATOR REWARDS over 3 epochs (100 + 200 + 300 = 600 CTN total)
   now <- getTime
-  distProof1 <- submitMulti [operator, governor] [] do
+  distProof1 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-1"
       actionType = ParameterUpdate
       description = "test"
@@ -1361,10 +1331,9 @@ test_FullLifecycle = script do
       epochNumber = 1
       governanceProofCid = distProof1
 
-  distProof2 <- submitMulti [operator, governor] [] do
+  distProof2 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-2"
       actionType = ParameterUpdate
       description = "test"
@@ -1380,10 +1349,9 @@ test_FullLifecycle = script do
       epochNumber = 2
       governanceProofCid = distProof2
 
-  distProof3 <- submitMulti [operator, governor] [] do
+  distProof3 <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-dist-3"
       actionType = ParameterUpdate
       description = "test"
@@ -1400,10 +1368,9 @@ test_FullLifecycle = script do
       governanceProofCid = distProof3
 
   -- 3. CANTON PRICE INCREASES (demand from pool)
-  syncPriceProof <- submitMulti [operator, governor] [] do
+  syncPriceProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-sync-price"
       actionType = ParameterUpdate
       description = "test"
@@ -1419,10 +1386,9 @@ test_FullLifecycle = script do
       governanceProofCid = syncPriceProof
 
   -- 4. sMUSD SHARE PRICE INCREASES (Treasury yield)
-  syncShareProof <- submitMulti [operator, governor] [] do
+  syncShareProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-sync-share"
       actionType = ParameterUpdate
       description = "test"
@@ -1439,10 +1405,9 @@ test_FullLifecycle = script do
 
   -- 5. OPERATOR WITHDRAWS PROTOCOL REWARDS
   -- 600 total rewards → 40% = 240 protocol share
-  wdProof <- submitMulti [operator, governor] [] do
+  wdProof <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-lc-wd-rewards"
       actionType = TreasuryWithdrawal
       description = "test"
@@ -1507,10 +1472,9 @@ test_NonOperatorAdmin = script do
 
   -- Create a governance proof (as operator) — attacker still can't use admin choices
   now <- getTime
-  proofCid <- submitMulti [operator, governor] [] do
+  proofCid <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-attacker-proof"
       actionType = EmergencyPause
       description = "test"
@@ -1520,10 +1484,9 @@ test_NonOperatorAdmin = script do
       approvers = [governor]
       executedBy = governor
       executedAt = now
-  paramProofCid <- submitMulti [operator, governor] [] do
+  paramProofCid <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-attacker-param-proof"
       actionType = ParameterUpdate
       description = "test"
@@ -1533,10 +1496,9 @@ test_NonOperatorAdmin = script do
       approvers = [governor]
       executedBy = governor
       executedAt = now
-  treasuryProofCid <- submitMulti [operator, governor] [] do
+  treasuryProofCid <- submit operator do
     createCmd GovernanceActionLog with
       operator
-      proposer = governor
       proposalId = "test-attacker-treasury-proof"
       actionType = TreasuryWithdrawal
       description = "test"
