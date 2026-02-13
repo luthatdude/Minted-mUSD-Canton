@@ -339,7 +339,7 @@ jobs:
 
       # Trivy vulnerability scanner
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9a2d7e # v0.28.0
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284 # v0.34.0
         with:
           image-ref: musd-relay:ci
           format: table
