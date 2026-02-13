@@ -379,7 +379,8 @@ class RelayService {
       this.provider = new ethers.JsonRpcProvider(this.config.ethereumRpcUrl);
     } else {
       const fallbackUrl = this.config.fallbackRpcUrls[nextIndex - 1];
-      console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${fallbackUrl}`);
+      // FIX NEW-H-01: Sanitize fallback URL to prevent API key leakage in logs
+      console.log(`[Relay] Switching to fallback RPC provider #${nextIndex}: ${sanitizeUrl(fallbackUrl)}`);
       this.provider = this.fallbackProviders[nextIndex - 1];
     }
 
