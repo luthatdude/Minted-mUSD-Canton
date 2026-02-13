@@ -514,6 +514,17 @@ class ValidatorNode {
         ? attestedTotal - snapshot.totalValue
         : snapshot.totalValue - attestedTotal;
 
+      // FIX CX-H-02: Enforce total-value tolerance — previously computed but never checked.
+      // Without this, per-asset tolerances ($100K each) can accumulate across many assets
+      // to produce a multi-million-dollar overvaluation that passes validation.
+      if (totalDiff > tolerance) {
+        return {
+          valid: false,
+          reason: `Total value mismatch: attested=${attestedTotal}, canton=${snapshot.totalValue}, diff=${totalDiff}, tolerance=${tolerance}`,
+          stateHash: snapshot.stateHash,
+        };
+      }
+
       // Only verify against assets included in attestation
       const includedAssetsValue = payload.cantonAssets.reduce((sum, a) => {
         return sum + ethers.parseUnits(a.assetValue, 18);
