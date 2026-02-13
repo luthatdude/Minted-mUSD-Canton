@@ -124,6 +124,11 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Liquidate an undercollateralized position
+    /// @dev FIX H-04: CALLER MUST approve this contract to spend their mUSD before calling.
+    ///      Because `musd.burn(msg.sender, amount)` is called by this contract (not by msg.sender),
+    ///      MUSD.burn() sees `from != msg.sender` and invokes `_spendAllowance()`.
+    ///      Without approval, every liquidation call will revert with "ERC20: insufficient allowance".
+    ///      Recommended: `IERC20(musd).approve(address(liquidationEngine), type(uint256).max)`
     /// @param borrower The address of the undercollateralized borrower
     /// @param collateralToken The collateral token to seize
     /// @param debtToRepay Amount of mUSD debt to repay on behalf of borrower
