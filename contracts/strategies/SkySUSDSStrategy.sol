@@ -189,7 +189,7 @@ contract SkySUSDSStrategy is
         _grantRole(TREASURY_ROLE, _treasury);
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
-        // TimelockGoverned replaces TIMELOCK_ROLE — upgrades go through MintedTimelockController
+        _grantRole(TIMELOCK_ROLE, _timelock);
 
         // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
         _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
