@@ -37,6 +37,7 @@ interface YieldSyncConfig {
   treasuryAddress: string;
   smusdAddress: string;        // NEW: SMUSD contract for global share price
   bridgePrivateKey: string;    // NEW: Private key with BRIDGE_ROLE
+  kmsKeyId: string;            // AWS KMS key ID (when set, raw key is ignored)
 
   // Canton
   cantonHost: string;
@@ -66,6 +67,7 @@ const DEFAULT_CONFIG: YieldSyncConfig = {
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
   bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
+  kmsKeyId: process.env.KMS_KEY_ID || "",
 
   cantonHost: process.env.CANTON_HOST || "localhost",
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
@@ -240,22 +242,24 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
-    // Validate bridge private key before constructing wallet
-    const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
-    if (keyBytes.length !== 32) {
-      throw new Error(
-        `[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`
+    // FIX TS-C-01: Only validate raw private key when KMS is NOT configured
+    if (!config.kmsKeyId) {
+      const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
+      if (keyBytes.length !== 32) {
+        throw new Error(
+          `[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`
+        );
+      }
+      // Validate it's a valid secp256k1 scalar (0 < key < curve order)
+      const SECP256K1_ORDER = BigInt(
+        "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
       );
-    }
-    // Validate it's a valid secp256k1 scalar (0 < key < curve order)
-    const SECP256K1_ORDER = BigInt(
-      "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
-    );
-    const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
-    if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
-      throw new Error(
-        "[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar"
-      );
+      const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
+      if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
+        throw new Error(
+          "[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar"
+        );
+      }
     }
 
     // Ethereum connection with signing capability
@@ -286,6 +290,7 @@ class YieldSyncService {
     console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
     console.log(`[YieldSync] Treasury: ${config.treasuryAddress}`);
     console.log(`[YieldSync] SMUSD: ${config.smusdAddress}`);
+    console.log(`[YieldSync] Bridge wallet: (deferred until start)`);
     console.log(`[YieldSync] Canton: ${config.cantonHost}:${config.cantonPort}`);
     console.log(`[YieldSync] Operator: ${config.cantonParty}`);
     console.log(`[YieldSync] Sync interval: ${config.syncIntervalMs}ms`);

@@ -792,14 +792,16 @@ contract MorphoLoopStrategy is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX SOL-C-04: Unpause requires timelock to prevent bypassing governance delay
+    function unpause() external onlyTimelock {
         _unpause();
     }
 
     /**
      * @notice Recover stuck tokens (not USDC in active position)
      */
-    function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice FIX SOL-C-04: Token recovery requires timelock to prevent unauthorized extraction
+    function recoverToken(address token, uint256 amount) external onlyTimelock {
         require(token != address(usdc) || totalPrincipal == 0, "Cannot recover active USDC");
         IERC20(token).safeTransfer(msg.sender, amount);
     }

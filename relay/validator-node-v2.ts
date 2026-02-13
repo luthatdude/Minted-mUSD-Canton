@@ -294,8 +294,8 @@ class ValidatorNode {
 
     if (config.kmsKeyRotationEnabled && config.kmsRotationKeyId) {
       console.log(`[Validator] Key rotation ENABLED`);
-      console.log(`[Validator]   Primary key: ${config.kmsKeyId}`);
-      console.log(`[Validator]   Rotation key: ${config.kmsRotationKeyId}`);
+      console.log(`[Validator]   Primary key: ${config.kmsKeyId ? "***..." + config.kmsKeyId.slice(-8) : "none"}`);
+      console.log(`[Validator]   Rotation key: ${config.kmsRotationKeyId ? "***..." + config.kmsRotationKeyId.slice(-8) : "none"}`);
       console.log(`[Validator]   Primary ETH: ${config.ethereumAddress}`);
       console.log(`[Validator]   Rotation ETH: ${config.rotationEthereumAddress}`);
     }
@@ -340,8 +340,8 @@ class ValidatorNode {
     }
 
     console.log(`[Validator] ⚠️ ACTIVATING ROTATION KEY`);
-    console.log(`[Validator]   Old: ${this.activeKmsKeyId} → ${this.activeEthAddress}`);
-    console.log(`[Validator]   New: ${this.config.kmsRotationKeyId} → ${this.config.rotationEthereumAddress}`);
+    console.log(`[Validator]   Old: ${"***..." + this.activeKmsKeyId.slice(-8)} → ${this.activeEthAddress}`);
+    console.log(`[Validator]   New: ${"***..." + this.config.kmsRotationKeyId.slice(-8)} → ${this.config.rotationEthereumAddress}`);
 
     // Test signing with rotation key before switching
     try {
@@ -357,7 +357,7 @@ class ValidatorNode {
     this.activeEthAddress = this.config.rotationEthereumAddress;
     this.rotationInProgress = false;
 
-    console.log(`[Validator] ✅ Now signing with rotation key: ${this.activeKmsKeyId}`);
+    console.log(`[Validator] ✅ Now signing with rotation key: ${"***..." + this.activeKmsKeyId.slice(-8)}`);
   }
 
   /**
