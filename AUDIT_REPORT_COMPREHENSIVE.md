@@ -1,12 +1,12 @@
-# COMPREHENSIVE SECURITY AUDIT REPORT — ENHANCED DEEP RE-AUDIT
+# COMPREHENSIVE SECURITY AUDIT REPORT — THIRD PASS (CODEX CROSS-REVIEW)
 ## Minted mUSD Canton Protocol
 ### Full-Stack Audit: Solidity + DAML + TypeScript + Infrastructure
 
-**Auditor**: Claude Opus 4.6 (Automated Deep Audit — Second Pass)
+**Auditor**: Claude Opus 4.6 (Automated Deep Audit — Third Pass w/ Codex Cross-Review)
 **Date**: 2026-02-13
 **Scope**: Every source file across all layers (~160+ files)
 **Methodology**: Trail of Bits / Spearbit / Consensys Diligence hybrid framework
-**Audit Type**: Comprehensive re-audit with code-level analysis, line references, and applied fixes
+**Audit Type**: Comprehensive re-audit with Codex audit cross-validation, code-level analysis, line references, and applied fixes
 
 ---
 
@@ -16,21 +16,26 @@
 |--------|-------|
 | **Files Audited** | 160+ across 7 layers |
 | **Languages** | Solidity 0.8.26, DAML, TypeScript, YAML |
-| **Total Findings** | 103 |
-| **Critical** | 1 (FIXED in this audit) |
-| **High** | 12 |
-| **Medium** | 27 |
-| **Low** | 31 |
-| **Informational** | 32 |
+| **Total Findings** | 119 |
+| **Critical** | 1 (FIXED) + 1 NEW (Open) |
+| **High** | 16 (3 FIXED, 13 Open) |
+| **Medium** | 34 |
+| **Low** | 33 |
+| **Informational** | 34 |
 | **Code Fixes Applied** | 2 |
 
-### INSTITUTIONAL GRADE SCORE: 8.3 / 10.0 (Post-Fix)
+### INSTITUTIONAL GRADE SCORE: 7.2 / 10.0
 
-**Verdict: Upper-Tier Institutional Grade** — This protocol demonstrates security maturity
-significantly above most DeFi protocols. The architecture shows evidence of iterative security
-hardening (fix tags throughout), proper use of OpenZeppelin battle-tested contracts, formal
-verification via Certora, and defense-in-depth across all layers. The C-01 critical finding
-has been fixed in this audit pass.
+**Revised Verdict: Mid-Tier Institutional Grade** — Core on-chain security (BLEBridgeV9,
+BorrowModule, LiquidationEngine) is strong with defense-in-depth. However, cross-review with
+Codex audit revealed a critical ERC-4626 compliance break in SMUSD, dead code in validator
+total-value verification, TreasuryReceiver fund orphaning, and significant integration gaps
+(deploy scripts, frontend hooks, relay ABI). These reduce confidence in production readiness.
+
+**Codex Cross-Review Note**: A separate Codex audit scored this protocol 46/100. After
+verifying each Codex finding against the source code, 9 of 11 findings were confirmed valid.
+The 46/100 score is overly harsh (weights tooling gaps equally with smart contract security),
+but the findings are substantively correct and materially lower the score from our initial 8.3.
 
 ---
 
@@ -38,14 +43,14 @@ has been fixed in this audit pass.
 
 | Category (Weight) | Score | Notes |
 |---|---|---|
-| **Smart Contract Security** (30%) | 8.5/10 | Reentrancy guards, CEI pattern, role separation, rate limiting, circuit breakers, timelock governance. Storage gap accounting verified correct. |
-| **Cross-Chain Bridge Security** (10%) | 9.0/10 | Multi-sig attestations, entropy, Canton state hash binding, nonce + timestamp replay protection, KMS signing, pre-flight simulation |
+| **Smart Contract Security** (30%) | 7.5/10 | Strong guards, CEI, RBAC. But SMUSD ERC-4626 compliance broken (CX-C-01), TreasuryV2 residual allowance pattern unsafe. Storage gaps verified correct. |
+| **Cross-Chain Bridge Security** (10%) | 7.5/10 | Multi-sig + entropy + state hash. But validator totalDiff dead code (CX-H-02), TreasuryReceiver orphans user credit (CX-H-01). |
 | **Formal Verification** (10%) | 7.0/10 | Certora specs for 8 core contracts. Missing for 7+ supporting contracts |
-| **Test Coverage** (15%) | 8.0/10 | 30+ test files including deep audit and institutional tests |
-| **DAML/Canton Layer** (10%) | 8.0/10 | Proper signatory/observer model. C-01 supply tracking fixed. Minor compliance gaps remain |
-| **Infrastructure** (15%) | 7.5/10 | K8s with network policies, PDB, RBAC, TLS. Non-root Dockerfile. Needs External Secrets Operator |
-| **Operational Security** (10%) | 8.5/10 | TLS enforcement, health monitoring, fallback RPC with sanitized logging (NEW-H-01 fixed), Prometheus rules |
-| **Weighted Total** | **8.3/10** | Up from 8.1 after applying fixes |
+| **Test Coverage** (15%) | 7.0/10 | 30+ test files. But deploy script completely broken (6/9 constructor mismatches). No integration tests catch frontend/contract ABI drift. |
+| **DAML/Canton Layer** (10%) | 7.0/10 | Proper signatory model. C-01 fixed. But divulgence dependency in liquidation path (CX-H-03) is pruning-incompatible. |
+| **Infrastructure** (15%) | 7.0/10 | K8s with policies. But npm audit CVEs in frontend (high) and bot (critical). Bot not build-clean. |
+| **Operational Security** (10%) | 7.5/10 | TLS enforcement, health monitoring, fallback RPC. But relay ABI missing event (CX-M-02) causes startup failure. |
+| **Weighted Total** | **7.2/10** | Down from 8.3 after Codex cross-review |
 
 ---
 
