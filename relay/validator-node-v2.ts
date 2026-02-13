@@ -54,6 +54,9 @@ interface ValidatorConfig {
   // Operational
   pollIntervalMs: number;
   minCollateralRatioBps: number;
+
+  // FIX P2-CODEX: Template allowlist to prevent signing arbitrary contract types
+  allowedTemplates: string[];
 }
 
 const DEFAULT_CONFIG: ValidatorConfig = {
@@ -76,6 +79,12 @@ const DEFAULT_CONFIG: ValidatorConfig = {
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "3000", 10),
   minCollateralRatioBps: parseInt(process.env.MIN_COLLATERAL_RATIO_BPS || "11000", 10),
+
+  // FIX P2-CODEX: Only sign attestation requests from allowed DAML templates
+  allowedTemplates: (process.env.ALLOWED_TEMPLATES || "MintedProtocolV3:AttestationRequest")
+    .split(",")
+    .map(t => t.trim())
+    .filter(Boolean),
 };
 
 // ============================================================
@@ -383,9 +392,10 @@ class ValidatorNode {
   }
 
   private async pollForAttestations(): Promise<void> {
-    // Query AttestationRequest contracts
+    // FIX P2-CODEX: Only query allowed DAML templates (prevents signing arbitrary contracts)
+    const templateId = this.config.allowedTemplates[0] || "MintedProtocolV3:AttestationRequest";
     const attestations = await (this.ledger.query as any)(
-      "MintedProtocolV3:AttestationRequest",
+      templateId,
       {}
     ) as CreateEvent<AttestationRequest>[];
 
@@ -621,8 +631,9 @@ class ValidatorNode {
   }
 
   private buildMessageHash(payload: AttestationPayload, cantonStateHash?: string): string {
-    const idBytes32 = ethers.id(payload.attestationId);
-    const timestamp = Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600);
+    const cantonAssets = ethers.parseUnits(payload.totalCantonValue, 18);
+    const nonce = BigInt(payload.nonce);
+    const timestamp = BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600));
 
     // FIX C-05: Include entropy in hash (matches BLEBridgeV9 signature verification)
     const entropy = (payload as any).entropy
@@ -634,13 +645,23 @@ class ValidatorNode {
       ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
       : ethers.ZeroHash;
 
+    // FIX P2-CODEX: Derive attestation ID matching BLEBridgeV9.computeAttestationId()
+    // Previously used ethers.id(payload.attestationId) which is keccak256(utf8) — wrong.
+    // On-chain: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))
+    const idBytes32 = ethers.solidityPackedKeccak256(
+      ["uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+      [nonce, cantonAssets, timestamp, entropy, stateHash, BigInt(payload.targetChainId), payload.targetBridgeAddress]
+    );
+
+    // Message hash matches BLEBridgeV9.processAttestation() signature verification:
+    // keccak256(abi.encodePacked(id, cantonAssets, nonce, timestamp, entropy, cantonStateHash, chainid, address))
     return ethers.solidityPackedKeccak256(
       ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
       [
         idBytes32,
-        ethers.parseUnits(payload.totalCantonValue, 18),
-        BigInt(payload.nonce),
-        BigInt(timestamp),
+        cantonAssets,
+        nonce,
+        timestamp,
         entropy,
         stateHash,
         BigInt(payload.targetChainId),
@@ -729,6 +750,11 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.cantonAssetApiUrl.startsWith("https://") && process.env.NODE_ENV !== "development") {
     throw new Error("CANTON_ASSET_API_URL must use HTTPS in production");
   }
+  // FIX P2-CODEX: Validate template allowlist is not empty
+  if (DEFAULT_CONFIG.allowedTemplates.length === 0) {
+    throw new Error("ALLOWED_TEMPLATES must not be empty — validator needs at least one template to query");
+  }
+  console.log(`[Main] Allowed templates: ${DEFAULT_CONFIG.allowedTemplates.join(", ")}`);
   // INFRA-H-01 / INFRA-H-02: Validate HTTPS for all external endpoints
   requireHTTPS(DEFAULT_CONFIG.cantonAssetApiUrl, "CANTON_ASSET_API_URL");
 
