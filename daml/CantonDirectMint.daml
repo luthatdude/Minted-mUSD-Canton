@@ -124,11 +124,17 @@ template USDCx
       controller owner
       do create this with privacyObservers = newObservers
 
+    -- DAML-H-01 FIX: Mandatory compliance check on USDCx transfers
     choice USDCx_Transfer : ContractId USDCxTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
+        -- DAML-H-01 FIX: Validate sender not frozen/blacklisted, receiver not blacklisted
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create USDCxTransferProposal with
           usdcx = this
           newOwner
@@ -157,9 +163,17 @@ template USDCxTransferProposal
     signatory usdcx.issuer, usdcx.owner
     observer newOwner
 
+    -- DAML-H-01 FIX: Re-validate compliance at acceptance time
+    -- (status may have changed between proposal creation and acceptance)
     choice USDCxTransferProposal_Accept : ContractId USDCx
+      with
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller newOwner
-      do create usdcx with owner = newOwner
+      do
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = usdcx.owner
+          receiver = newOwner
+        create usdcx with owner = newOwner
 
     choice USDCxTransferProposal_Reject : ContractId USDCx
       controller newOwner
@@ -578,8 +592,8 @@ template CantonDirectMintService
 
         -- Transfer USDCx to operator (staging for bridge-out)
         -- The operator holds it temporarily until bridge confirms
-        usdcxProposal <- exercise usdcxCid USDCx_Transfer with newOwner = operator
-        exercise usdcxProposal USDCxTransferProposal_Accept
+        usdcxProposal <- exercise usdcxCid USDCx_Transfer with newOwner = operator; complianceRegistryCid
+        exercise usdcxProposal USDCxTransferProposal_Accept with complianceRegistryCid
 
         -- Mint Canton mUSD to user (1:1 minus fee)
         userObs <- lookupUserObservers operator user
