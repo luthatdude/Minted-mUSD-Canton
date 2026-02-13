@@ -6,6 +6,7 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./Errors.sol";
 
 /// @dev ERC-4626 interface for reading share price
 interface ISMUSD {
@@ -232,9 +233,9 @@ contract SMUSDPriceAdapter is AccessControl {
         uint256 _minPrice,
         uint256 _maxPrice
     ) external onlyRole(ADAPTER_ADMIN_ROLE) {
-        require(_minPrice > 0, "MIN_ZERO");
-        require(_maxPrice > _minPrice, "MAX_LTE_MIN");
-        require(_maxPrice <= 10e8, "MAX_TOO_HIGH"); // Cap at $10
+        if (_minPrice == 0) revert MinZero();
+        if (_maxPrice <= _minPrice) revert MaxLteMin();
+        if (_maxPrice > 10e8) revert MaxTooHigh();
 
         minSharePrice = _minPrice;
         maxSharePrice = _maxPrice;
@@ -249,9 +250,9 @@ contract SMUSDPriceAdapter is AccessControl {
         uint256 _minTotalSupply,
         uint256 _maxPriceChangePerBlock
     ) external onlyRole(ADAPTER_ADMIN_ROLE) {
-        require(_minTotalSupply > 0, "MIN_SUPPLY_ZERO");
-        require(_maxPriceChangePerBlock > 0, "MAX_CHANGE_ZERO");
-        require(_maxPriceChangePerBlock <= 0.50e8, "MAX_CHANGE_TOO_HIGH"); // Cap at 50%
+        if (_minTotalSupply == 0) revert MinSupplyZero();
+        if (_maxPriceChangePerBlock == 0) revert MaxChangeZero();
+        if (_maxPriceChangePerBlock > 0.50e8) revert MaxChangeTooHigh();
 
         minTotalSupply = _minTotalSupply;
         maxPriceChangePerBlock = _maxPriceChangePerBlock;

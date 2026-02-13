@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
 import "../TimelockGoverned.sol";
+import "../Errors.sol";
 
 /**
  * @title MorphoLoopStrategy
@@ -211,12 +212,10 @@ contract MorphoLoopStrategy is
     event ProfitabilityParamsUpdated(uint256 maxBorrowRate, uint256 minSupplyRate);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERRORS
+    // ERRORS (shared errors imported from Errors.sol)
     // ═══════════════════════════════════════════════════════════════════════
 
-    error ZeroAmount();
     error StrategyNotActive();
-    error InsufficientBalance();
     error HealthFactorTooLow();
     error ExcessiveLoops();
     error InvalidLTV();
@@ -239,7 +238,7 @@ contract MorphoLoopStrategy is
         address _admin,
         address _timelock
     ) external initializer {
-        require(_timelock != address(0), "ZERO_TIMELOCK");
+        if (_timelock == address(0)) revert ZeroAddress();
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
@@ -726,7 +725,7 @@ contract MorphoLoopStrategy is
      * @notice Set safety buffer
      */
     function setSafetyBuffer(uint256 _safetyBufferBps) external onlyRole(STRATEGIST_ROLE) {
-        require(_safetyBufferBps >= 200 && _safetyBufferBps <= 2000, "Invalid buffer");
+        if (_safetyBufferBps < 200 || _safetyBufferBps > 2000) revert InvalidBuffer();
         safetyBufferBps = _safetyBufferBps;
     }
 
@@ -740,8 +739,8 @@ contract MorphoLoopStrategy is
         uint256 _minSupplyRate
     ) external onlyRole(STRATEGIST_ROLE) {
         // Sanity checks: rates should be reasonable (0% - 50%)
-        require(_maxBorrowRate <= 0.50e18, "Max borrow rate too high");
-        require(_minSupplyRate <= 0.50e18, "Min supply rate too high");
+        if (_maxBorrowRate > 0.50e18) revert MaxBorrowRateTooHigh();
+        if (_minSupplyRate > 0.50e18) revert MinSupplyRateTooHigh();
         
         maxBorrowRateForProfit = _maxBorrowRate;
         minSupplyRateRequired = _minSupplyRate;
@@ -802,7 +801,7 @@ contract MorphoLoopStrategy is
      */
     /// @notice FIX SOL-C-04: Token recovery requires timelock to prevent unauthorized extraction
     function recoverToken(address token, uint256 amount) external onlyTimelock {
-        require(token != address(usdc) || totalPrincipal == 0, "Cannot recover active USDC");
+        if (token == address(usdc) && totalPrincipal > 0) revert CannotRecoverActiveUsdc();
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 

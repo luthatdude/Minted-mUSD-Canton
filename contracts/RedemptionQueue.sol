@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "./Errors.sol";
 
 /// @dev Interface for burning mUSD tokens after redemption fulfillment
 interface IMUSDBurnable {
@@ -71,7 +72,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         uint256 _maxDailyRedemption,
         uint256 _minRequestAge
     ) {
-        require(_musd != address(0) && _usdc != address(0), "ZERO_ADDRESS");
+        if (_musd == address(0) || _usdc == address(0)) revert ZeroAddress();
         musd = IERC20(_musd);
         musdBurnable = IMUSDBurnable(_musd);
         usdc = IERC20(_usdc);
@@ -87,12 +88,12 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     /// @param musdAmount Amount of mUSD to redeem (18 decimals)
     /// @param minUsdcOut Minimum USDC expected (6 decimals) - slippage protection
     function queueRedemption(uint256 musdAmount, uint256 minUsdcOut) external nonReentrant whenNotPaused {
-        require(musdAmount > 0, "ZERO_AMOUNT");
+        if (musdAmount == 0) revert ZeroAmount();
 
         // Convert mUSD (18 decimals) to USDC (6 decimals) at 1:1
         uint256 usdcAmount = musdAmount / 1e12;
-        require(usdcAmount >= minUsdcOut, "SLIPPAGE_EXCEEDED");
-        require(usdcAmount > 0, "DUST_AMOUNT");
+        if (usdcAmount < minUsdcOut) revert SlippageExceeded();
+        if (usdcAmount == 0) revert DustAmount();
 
         // Lock mUSD
         musd.safeTransferFrom(msg.sender, address(this), musdAmount);
@@ -169,11 +170,11 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Cancel a pending redemption and return mUSD
     /// @param requestId The request index to cancel
     function cancelRedemption(uint256 requestId) external nonReentrant {
-        require(requestId < queue.length, "INVALID_ID");
+        if (requestId >= queue.length) revert InvalidId();
         RedemptionRequest storage req = queue[requestId];
-        require(req.user == msg.sender, "NOT_OWNER");
-        require(!req.fulfilled, "ALREADY_FULFILLED");
-        require(!req.cancelled, "ALREADY_CANCELLED");
+        if (req.user != msg.sender) revert NotOwner();
+        if (req.fulfilled) revert AlreadyFulfilled();
+        if (req.cancelled) revert AlreadyCancelled();
 
         req.cancelled = true;
         totalPendingMusd -= req.musdAmount;

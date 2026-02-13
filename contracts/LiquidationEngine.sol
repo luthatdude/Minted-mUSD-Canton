@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "./Errors.sol";
 
 interface ICollateralVaultLiq {
     function deposits(address user, address token) external view returns (uint256);
@@ -108,11 +109,11 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         address _musd,
         uint256 _closeFactorBps
     ) {
-        require(_vault != address(0), "INVALID_VAULT");
-        require(_borrowModule != address(0), "INVALID_BORROW_MODULE");
-        require(_oracle != address(0), "INVALID_ORACLE");
-        require(_musd != address(0), "INVALID_MUSD");
-        require(_closeFactorBps > 0 && _closeFactorBps <= 10000, "INVALID_CLOSE_FACTOR");
+        if (_vault == address(0)) revert InvalidVault();
+        if (_borrowModule == address(0)) revert InvalidBorrowModule();
+        if (_oracle == address(0)) revert InvalidOracle();
+        if (_musd == address(0)) revert InvalidMusd();
+        if (_closeFactorBps == 0 || _closeFactorBps > 10000) revert InvalidCloseFactor();
 
         vault = ICollateralVaultLiq(_vault);
         borrowModule = IBorrowModule(_borrowModule);
@@ -138,18 +139,18 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         address collateralToken,
         uint256 debtToRepay
     ) external nonReentrant whenNotPaused {
-        require(borrower != msg.sender, "CANNOT_SELF_LIQUIDATE");
-        require(debtToRepay > 0, "INVALID_AMOUNT");
-        require(debtToRepay >= MIN_LIQUIDATION_AMOUNT, "DUST_LIQUIDATION");
+        if (borrower == msg.sender) revert CannotSelfLiquidate();
+        if (debtToRepay == 0) revert InvalidAmount();
+        if (debtToRepay < MIN_LIQUIDATION_AMOUNT) revert DustLiquidation();
 
         uint256 hf = borrowModule.healthFactorUnsafe(borrower);
-        require(hf < 10000, "POSITION_HEALTHY");
+        if (hf >= 10000) revert PositionHealthy();
 
         uint256 actualRepay;
         uint256 seizeAmount;
         (actualRepay, seizeAmount) = _calculateLiquidation(borrower, collateralToken, debtToRepay, hf);
 
-        require(seizeAmount > 0, "NOTHING_TO_SEIZE");
+        if (seizeAmount == 0) revert NothingToSeize();
 
         // Explicit transferFrom + burn-from-self pattern.
         // Standard ERC-20 pull + self-burn (no hidden allowance semantics).
@@ -174,7 +175,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
         (, , , uint256 penaltyBps) = vault.getConfig(collateralToken);
         uint256 collateralPrice = oracle.getPriceUnsafe(collateralToken);
-        require(collateralPrice > 0, "INVALID_PRICE");
+        if (collateralPrice == 0) revert InvalidPrice();
 
         seizeAmount = (actualRepay * (10000 + penaltyBps) * (10 ** IERC20Decimals(collateralToken).decimals())) / (10000 * collateralPrice);
 
@@ -252,7 +253,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
     /// @dev SOL-H-01 FIX: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setCloseFactor(uint256 _bps) external onlyRole(TIMELOCK_ROLE) {
-        require(_bps > 0 && _bps <= 10000, "INVALID_CLOSE_FACTOR");
+        if (_bps == 0 || _bps > 10000) revert InvalidCloseFactor();
         uint256 old = closeFactorBps;
         closeFactorBps = _bps;
         emit CloseFactorUpdated(old, _bps);
@@ -260,7 +261,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
     /// @dev SOL-H-01 FIX: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setFullLiquidationThreshold(uint256 _bps) external onlyRole(TIMELOCK_ROLE) {
-        require(_bps > 0 && _bps < 10000, "INVALID_THRESHOLD");
+        if (_bps == 0 || _bps >= 10000) revert InvalidThreshold();
         emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);
         fullLiquidationThreshold = _bps;
     }
@@ -270,7 +271,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
     function socializeBadDebt(address borrower) external onlyRole(ENGINE_ADMIN_ROLE) {
         uint256 amount = borrowerBadDebt[borrower];
-        require(amount > 0, "NO_BAD_DEBT");
+        if (amount == 0) revert NoBadDebt();
         borrowerBadDebt[borrower] = 0;
         totalBadDebt -= amount;
         // Reduce the borrower's debt record in BorrowModule

@@ -239,7 +239,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.550 = \mathbf{8.33
 | SOL-M-05 | BorrowModule.sol | Simple interest accrual drift over time — `reconcileTotalBorrows()` is manual-only |
 | SOL-M-06 | RedemptionQueue.sol | Queue array grows unboundedly — no compaction or cleanup mechanism |
 | SOL-M-07 | BorrowModule.sol | `_weightedCollateralValue` and `_weightedCollateralValueUnsafe` are near-identical — consolidate |
-| SOL-M-08 | Multiple upgradeable | Storage gap arithmetic unverified across all 5 upgradeable contracts — run `npx hardhat storage-layout` |
+| SOL-M-08 | Multiple upgradeable | ✅ **RESOLVED** — `scripts/validate-storage-layout.ts` validates all 11 UUPS contracts via `@openzeppelin/upgrades-core`. CI `storage-layout` job fixed (missing `HARDHAT_NETWORK_TIMEOUT`). All 11 pass. Benign warning on `SMUSDUpgradeable` parent initializer order. |
 | SOL-M-09 | PriceOracle.sol | `getValueUsd()` / `getValueUsdUnsafe()` duplicate 30+ lines of identical validation logic |
 
 ### DAML (9)

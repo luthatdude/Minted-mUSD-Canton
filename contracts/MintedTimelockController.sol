@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/governance/TimelockController.sol";
+import "./Errors.sol";
 
 /**
  * @title MintedTimelockController
@@ -54,7 +55,7 @@ contract MintedTimelockController is TimelockController {
         address[] memory executors,
         address admin
     ) TimelockController(minDelay, proposers, executors, admin) {
-        require(minDelay >= MIN_EMERGENCY_DELAY, "DELAY_TOO_SHORT");
+        if (minDelay < MIN_EMERGENCY_DELAY) revert DelayTooShort();
     }
 
     /// @notice Check if an operation is pending (scheduled but not yet executable)

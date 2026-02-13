@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "./Errors.sol";
 
 interface IPriceOracle {
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
@@ -146,9 +147,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 _interestRateBps,
         uint256 _minDebt
     ) {
-        require(_vault != address(0), "INVALID_VAULT");
-        require(_oracle != address(0), "INVALID_ORACLE");
-        require(_musd != address(0), "INVALID_MUSD");
+        if (_vault == address(0)) revert InvalidVault();
+        if (_oracle == address(0)) revert InvalidOracle();
+        if (_musd == address(0)) revert InvalidMusd();
 
         vault = ICollateralVault(_vault);
         oracle = IPriceOracle(_oracle);
@@ -168,7 +169,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Set the interest rate model (enables dynamic rates)
     /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setInterestRateModel(address _model) external onlyRole(TIMELOCK_ROLE) {
-        require(_model != address(0), "ZERO_ADDRESS");
+        if (_model == address(0)) revert ZeroAddress();
         address old = address(interestRateModel);
         interestRateModel = IInterestRateModel(_model);
         emit InterestRateModelUpdated(old, _model);
@@ -177,7 +178,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Set the SMUSD vault for interest routing
     /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setSMUSD(address _smusd) external onlyRole(TIMELOCK_ROLE) {
-        require(_smusd != address(0), "ZERO_ADDRESS");
+        if (_smusd == address(0)) revert ZeroAddress();
         address old = address(smusd);
         smusd = ISMUSD(_smusd);
         emit SMUSDUpdated(old, _smusd);
@@ -186,7 +187,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Set the Treasury for supply calculation
     /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setTreasury(address _treasury) external onlyRole(TIMELOCK_ROLE) {
-        require(_treasury != address(0), "ZERO_ADDRESS");
+        if (_treasury == address(0)) revert ZeroAddress();
         address old = address(treasury);
         treasury = ITreasury(_treasury);
         emit TreasuryUpdated(old, _treasury);
@@ -199,14 +200,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Borrow mUSD against deposited collateral
     /// @param amount Amount of mUSD to borrow (18 decimals)
     function borrow(uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         // Accrue interest first
         _accrueInterest(msg.sender);
 
         DebtPosition storage pos = positions[msg.sender];
         uint256 newDebt = pos.principal + pos.accruedInterest + amount;
-        require(newDebt >= minDebt, "BELOW_MIN_DEBT");
+        if (newDebt < minDebt) revert BelowMinDebt();
 
         pos.principal += amount;
         totalBorrows += amount; // Track global borrows
@@ -214,7 +215,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // _healthFactor uses liquidation threshold, which allows borrowing at the liquidation edge
         uint256 capacity = _borrowCapacity(msg.sender);
         uint256 newTotalDebt = totalDebt(msg.sender);
-        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
+        if (capacity < newTotalDebt) revert ExceedsBorrowCapacity();
 
         // Mint mUSD to borrower
         musd.mint(msg.sender, amount);
@@ -226,22 +227,22 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @param user The user to borrow for
     /// @param amount Amount of mUSD to borrow (18 decimals)
     function borrowFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
-        require(user != address(0), "INVALID_USER");
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert InvalidUser();
 
         // Accrue interest first
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];
         uint256 newDebt = pos.principal + pos.accruedInterest + amount;
-        require(newDebt >= minDebt, "BELOW_MIN_DEBT");
+        if (newDebt < minDebt) revert BelowMinDebt();
 
         pos.principal += amount;
         totalBorrows += amount; // Track global borrows
 
         uint256 capacity = _borrowCapacity(user);
         uint256 newTotalDebt = totalDebt(user);
-        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
+        if (capacity < newTotalDebt) revert ExceedsBorrowCapacity();
 
         // Mint mUSD to the LeverageVault (msg.sender) for swapping
         musd.mint(msg.sender, amount);
@@ -252,13 +253,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Repay mUSD debt
     /// @param amount Amount of mUSD to repay (18 decimals)
     function repay(uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         _accrueInterest(msg.sender);
 
         DebtPosition storage pos = positions[msg.sender];
         uint256 total = pos.principal + pos.accruedInterest;
-        require(total > 0, "NO_DEBT");
+        if (total == 0) revert NoDebt();
 
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
@@ -270,7 +271,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             repayAmount = total;
             remaining = 0;
         } else if (remaining > 0) {
-            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+            if (remaining < minDebt) revert RemainingBelowMinDebt();
         }
 
         // Pay interest first, then principal
@@ -301,14 +302,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @param user The user whose debt to repay
     /// @param amount Amount of mUSD to repay (18 decimals)
     function repayFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
-        require(user != address(0), "INVALID_USER");
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert InvalidUser();
 
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];
         uint256 total = pos.principal + pos.accruedInterest;
-        require(total > 0, "NO_DEBT");
+        if (total == 0) revert NoDebt();
 
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
@@ -319,7 +320,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             repayAmount = total;
             remaining = 0;
         } else if (remaining > 0) {
-            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+            if (remaining < minDebt) revert RemainingBelowMinDebt();
         }
 
         // Pay interest first, then principal
@@ -347,7 +348,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @param token The collateral token
     /// @param amount Amount to withdraw
     function withdrawCollateral(address token, uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         _accrueInterest(msg.sender);
 
@@ -355,14 +356,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         if (totalDebt(msg.sender) > 0) {
             // Verify the user has enough deposit
             uint256 currentDeposit = vault.deposits(msg.sender, token);
-            require(currentDeposit >= amount, "INSUFFICIENT_DEPOSIT");
+            if (currentDeposit < amount) revert InsufficientDeposit();
 
             // Compute post-withdrawal health by subtracting the withdrawn amount's value
             (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(token);
             // If admin disables a token, users with debt must still be able to withdraw
             // as long as the token was properly configured (liqThreshold > 0).
             // Blocking withdrawal traps collateral permanently for indebted users.
-            require(enabled || liqThreshold > 0, "TOKEN_NOT_SUPPORTED");
+            if (!enabled && liqThreshold == 0) revert TokenNotSupported();
             uint256 withdrawnValue = oracle.getValueUsd(token, amount);
             uint256 weightedReduction = (withdrawnValue * liqThreshold) / 10000;
 
@@ -373,7 +374,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
             uint256 debt = totalDebt(msg.sender);
             uint256 postHf = debt > 0 ? (postWeighted * 10000) / debt : type(uint256).max;
-            require(postHf >= 10000, "WITHDRAWAL_WOULD_LIQUIDATE");
+            if (postHf < 10000) revert WithdrawalWouldLiquidate();
         }
 
         // Now perform the transfer (Interaction)
@@ -771,8 +772,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
     /// Admin should coordinate with supply cap management before withdrawing.
     function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
-        require(amount <= protocolReserves, "EXCEEDS_RESERVES");
-        require(to != address(0), "ZERO_ADDRESS");
+        if (amount > protocolReserves) revert ExceedsReserves();
+        if (to == address(0)) revert ZeroAddress();
         
         protocolReserves -= amount;
         
@@ -783,7 +784,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Restore reserves and emit failure
             protocolReserves += amount;
             emit ReservesMintFailed(to, amount);
-            revert("SUPPLY_CAP_REACHED");
+            revert SupplyCapReached();
         }
     }
 
@@ -795,15 +796,15 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
     /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
     function setInterestRate(uint256 _rateBps) external onlyRole(TIMELOCK_ROLE) {
-        require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
+        if (_rateBps > 5000) revert RateTooHigh(); // Max 50% APR
         uint256 old = interestRateBps;
         interestRateBps = _rateBps;
         emit InterestRateUpdated(old, _rateBps);
     }
 
     function setMinDebt(uint256 _minDebt) external onlyRole(TIMELOCK_ROLE) {
-        require(_minDebt > 0, "MIN_DEBT_ZERO");
-        require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
+        if (_minDebt == 0) revert MinDebtZero();
+        if (_minDebt > 1e24) revert MinDebtTooHigh();
         emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
     }
@@ -846,7 +847,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///         Only callable by TIMELOCK_ROLE (48h MintedTimelockController delay).
     function drainPendingInterest() external onlyRole(TIMELOCK_ROLE) nonReentrant {
         uint256 amount = pendingInterest;
-        require(amount > 0, "NO_PENDING_INTEREST");
+        if (amount == 0) revert NoPendingInterest();
 
         pendingInterest = 0;
 
@@ -892,7 +893,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 absDrift = drift >= 0 ? uint256(drift) : uint256(-drift);
         if (oldTotal > 0) {
             uint256 driftBps = (absDrift * 10_000) / oldTotal;
-            require(driftBps <= MAX_DRIFT_BPS, "BorrowModule: drift exceeds safety threshold");
+            if (driftBps > MAX_DRIFT_BPS) revert DriftExceedsSafetyThreshold();
             if (driftBps > 100) { // > 1% — emit warning event
                 emit DriftThresholdExceeded(oldTotal, sumDebt, drift, driftBps);
             }

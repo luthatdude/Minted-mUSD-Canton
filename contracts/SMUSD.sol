@@ -11,6 +11,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./Errors.sol";
 
 /// @dev Typed interface for Treasury calls
 interface ITreasury {
@@ -97,13 +98,13 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
-        require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
+        if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) revert CooldownActive();
         return super.withdraw(assets, receiver, owner);
     }
 
     // Override redeem to enforce cooldown
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
-        require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
+        if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) revert CooldownActive();
         return super.redeem(shares, receiver, owner);
     }
 
@@ -127,13 +128,13 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     // Use SafeERC20 for token transfers with maximum yield cap to prevent excessive dilution
     function distributeYield(uint256 amount) external onlyRole(YIELD_MANAGER_ROLE) {
-        require(totalSupply() > 0, "NO_SHARES_EXIST");
-        require(amount > 0, "INVALID_AMOUNT");
+        if (totalSupply() == 0) revert NoSharesExist();
+        if (amount == 0) revert InvalidAmount();
         
         // Use globalTotalAssets() for cap (serves both ETH + Canton shareholders)
         uint256 currentAssets = globalTotalAssets();
         uint256 maxYield = (currentAssets * MAX_YIELD_BPS) / 10000;
-        require(amount <= maxYield, "YIELD_EXCEEDS_CAP");
+        if (amount > maxYield) revert YieldExceedsCap();
 
         // Use safeTransferFrom
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
@@ -145,15 +146,15 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @dev Called by BorrowModule to route borrower interest to suppliers
     /// @param amount The amount of mUSD interest to receive
     function receiveInterest(uint256 amount) external onlyRole(INTEREST_ROUTER_ROLE) {
-        require(amount > 0, "ZERO_AMOUNT");
-        require(globalTotalShares() > 0, "NO_SHARES_EXIST");
+        if (amount == 0) revert ZeroAmount();
+        if (globalTotalShares() == 0) revert NoSharesExist();
         
         // Use globalTotalAssets() for the cap, not local totalAssets().
         // The vault serves both Ethereum and Canton shareholders, so the cap
         // should reflect the total asset base.
         uint256 currentAssets = globalTotalAssets();
         uint256 maxInterest = (currentAssets * MAX_YIELD_BPS) / 10000;
-        require(amount <= maxInterest, "INTEREST_EXCEEDS_CAP");
+        if (amount > maxInterest) revert InterestExceedsCap();
 
         // Transfer mUSD from BorrowModule (which approved us)
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
@@ -191,7 +192,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Set the treasury address for global asset calculation
     function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_treasury != address(0), "ZERO_ADDRESS");
+        if (_treasury == address(0)) revert ZeroAddress();
         address oldTreasury = treasury;
         treasury = _treasury;
         emit TreasuryUpdated(oldTreasury, _treasury);
@@ -202,23 +203,23 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @param _cantonShares Total smUSD shares on Canton
     /// @param epoch Sync epoch (must be sequential)
     function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
-        require(epoch > lastCantonSyncEpoch, "EPOCH_NOT_SEQUENTIAL");
+        if (epoch <= lastCantonSyncEpoch) revert EpochNotSequential();
         
         // Rate limit — minimum 1 hour between syncs
-        require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
+        if (block.timestamp < lastCantonSyncTime + MIN_SYNC_INTERVAL) revert SyncTooFrequent();
         
         // First sync must use admin-only initialization to prevent manipulation
         // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
         if (cantonTotalShares == 0) {
             uint256 ethShares = totalSupply();
             uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : _cantonShares;
-            require(_cantonShares <= maxInitialShares, "INITIAL_SHARES_TOO_LARGE");
+            if (_cantonShares > maxInitialShares) revert InitialSharesTooLarge();
         } else {
             // Magnitude limit — max 5% change per sync to prevent manipulation
             uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
             uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
-            require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
-            require(_cantonShares >= maxDecrease, "SHARE_DECREASE_TOO_LARGE");
+            if (_cantonShares > maxIncrease) revert ShareIncreaseTooLarge();
+            if (_cantonShares < maxDecrease) revert ShareDecreaseTooLarge();
         }
         
         cantonTotalShares = _cantonShares;
