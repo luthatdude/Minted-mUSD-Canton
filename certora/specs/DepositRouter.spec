@@ -18,6 +18,13 @@ methods {
     function markDepositsComplete(uint64[]) external;
     function setFee(uint256) external;
     function paused() external returns (bool) envfree;
+
+    // External call summaries (ERC20, Wormhole bridge)
+    function _.transferFrom(address, address, uint256) external => NONDET;
+    function _.approve(address, uint256) external => NONDET;
+    function _.transfer(address, uint256) external => NONDET;
+    function _.transferTokensWithPayload(address, uint256, uint16, bytes32, uint32, bytes) external => NONDET;
+    function _.quoteEVMDeliveryPrice(uint16, uint256, uint256) external => PER_CALLEE_CONSTANT;
 }
 
 // ═══════════════════════════════════════════════════════════════════
