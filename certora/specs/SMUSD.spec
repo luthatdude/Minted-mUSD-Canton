@@ -12,10 +12,6 @@ methods {
     function balanceOf(address) external returns (uint256) envfree;
     function convertToShares(uint256) external returns (uint256) envfree;
     function convertToAssets(uint256) external returns (uint256) envfree;
-    function deposit(uint256, address) external returns (uint256);
-    function mint(uint256, address) external returns (uint256);
-    function withdraw(uint256, address, address) external returns (uint256);
-    function redeem(uint256, address, address) external returns (uint256);
     function maxDeposit(address) external returns (uint256) envfree;
     function maxMint(address) external returns (uint256) envfree;
     function maxWithdraw(address) external returns (uint256) envfree;

@@ -11,7 +11,6 @@ methods {
     function fullLiquidationThreshold() external returns (uint256) envfree;
     function isLiquidatable(address) external returns (bool) envfree;
     function estimateSeize(address, address, uint256) external returns (uint256) envfree;
-    function liquidate(address, address, uint256) external;
     function paused() external returns (bool) envfree;
 }
 
