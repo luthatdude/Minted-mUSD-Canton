@@ -7,6 +7,8 @@
 module CantonCoinToken where
 
 import CantonDirectMint (Money)
+-- DAML-H-01 FIX: Import Compliance module for transfer validation
+import Compliance (ComplianceRegistry(..), ValidateTransfer(..))
 
 -- | Represents Canton coin held on Canton Network.
 -- In production, this wraps the native Canton validator token.
@@ -57,8 +59,16 @@ template CantonCoinTransferProposal
     observer newOwner
 
     choice CantonCoinTransferProposal_Accept : ContractId CantonCoin
+      with
+        -- DAML-H-01 FIX: Require compliance registry for transfer validation
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller newOwner
-      do create coin with owner = newOwner
+      do
+        -- DAML-H-01 FIX: Validate both sender and receiver against blacklist/freeze
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = coin.owner
+          receiver = newOwner
+        create coin with owner = newOwner
 
     choice CantonCoinTransferProposal_Reject : ContractId CantonCoin
       controller newOwner

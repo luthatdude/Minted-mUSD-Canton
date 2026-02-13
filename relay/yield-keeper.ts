@@ -42,7 +42,12 @@ const DEFAULT_CONFIG: KeeperConfig = {
   keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
+  // TS-H-01 FIX: Use Number() + validation instead of parseFloat
+  minProfitUsd: (() => {
+    const v = Number(process.env.MIN_PROFIT_USD || "10");
+    if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+    return v;
+  })(),
 };
 
 // ============================================================
@@ -236,8 +241,14 @@ class YieldKeeper {
       const gasCostWei = gasEstimate * gasPrice;
       const gasCostEth = Number(gasCostWei) / 1e18;
 
-      // Rough ETH price assumption ($2000) - in production, fetch from oracle
-      const gasCostUsd = gasCostEth * 2000;
+      // TS-H-02 FIX: Use configurable ETH price from env/oracle instead of hardcoded $2000
+      // In production, this should be fetched from the price oracle service
+      const ethPriceUsd = Number(process.env.ETH_PRICE_USD || "0");
+      if (ethPriceUsd <= 0) {
+        console.warn("⚠️  ETH_PRICE_USD not set or invalid — skipping profitability check");
+        return;
+      }
+      const gasCostUsd = gasCostEth * ethPriceUsd;
 
       // Estimate daily yield on deployed amount (assume 10% APY)
       const deployableUsd = Number(deployable) / 1e6;

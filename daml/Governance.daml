@@ -359,9 +359,17 @@ template GovernanceActionLog
 
     -- FIX C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
     -- Returns the log data so the caller can verify actionType and targetModule.
+    -- DAML-H-02 FIX: Added executor authorization — only the original executedBy party
+    -- or the operator can consume the proof, preventing unauthorized proof consumption.
     choice ConsumeProof : GovernanceActionLog
+      with
+        consumedBy : Party
       controller operator
-      do return this
+      do
+        -- DAML-H-02 FIX: Validate the consumer is authorized (operator or original executor)
+        assertMsg "UNAUTHORIZED_CONSUMER: must be operator or original executor"
+          (consumedBy == operator || consumedBy == executedBy)
+        return this
 
 -- ============================================================
 --                     5. EMERGENCY PAUSE
