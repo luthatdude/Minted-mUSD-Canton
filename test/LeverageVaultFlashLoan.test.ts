@@ -174,7 +174,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           ethers.parseEther("5"),
           15, 0, futureDeadline()
         )
-      ).to.be.revertedWith("POSITION_EXISTS");
+      ).to.be.revertedWithCustomError(leverageVault, "PositionExists");
     });
   });
 
@@ -268,7 +268,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).emergencyClosePosition(user1.address)
-      ).to.be.revertedWith("NO_POSITION");
+      ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
   });
 
@@ -286,7 +286,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           0, // Zero collateral
           20, 0, futureDeadline()
         )
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidAmount");
     });
 
     it("attacker cannot exceed maximum allowed leverage", async function () {
@@ -300,7 +300,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           100, // 10x leverage (exceeds max)
           0, futureDeadline()
         )
-      ).to.be.revertedWith("LEVERAGE_EXCEEDS_MAX");
+      ).to.be.revertedWithCustomError(leverageVault, "LeverageExceedsMax");
     });
 
     it("attacker cannot set leverage below 1x", async function () {
@@ -313,7 +313,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           5, // 0.5x — below minimum
           0, futureDeadline()
         )
-      ).to.be.revertedWith("LEVERAGE_TOO_LOW");
+      ).to.be.revertedWithCustomError(leverageVault, "LeverageTooLow");
     });
 
     it("position cannot be opened on disabled token", async function () {
@@ -328,7 +328,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
           ethers.parseEther("10"),
           20, 0, futureDeadline()
         )
-      ).to.be.revertedWith("TOKEN_NOT_ENABLED");
+      ).to.be.revertedWithCustomError(leverageVault, "TokenNotEnabled");
     });
 
     it("large position opening and closing preserves invariant: user gets back <= deposited (no free money)", async function () {
@@ -410,7 +410,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(user1).closeLeveragedPositionWithMusd(insufficientAmount, 0)
-      ).to.be.revertedWith("INSUFFICIENT_MUSD_PROVIDED");
+      ).to.be.revertedWithCustomError(leverageVault, "InsufficientMusdProvided");
     });
   });
 
@@ -528,11 +528,11 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).setMaxLeverage(5) // 0.5x - too low
-      ).to.be.revertedWith("INVALID_MAX_LEVERAGE");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
 
       await expect(
         leverageVault.connect(owner).setMaxLeverage(50) // 5x - too high
-      ).to.be.revertedWith("INVALID_MAX_LEVERAGE");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
     });
 
     it("setMaxLeverage accepts valid values", async function () {
@@ -550,7 +550,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).setConfig(10, ethers.parseEther("100"), 3000, 600)
-      ).to.be.revertedWith("SLIPPAGE_TOO_HIGH");
+      ).to.be.revertedWithCustomError(leverageVault, "SlippageTooHigh");
     });
 
     it("setConfig rejects zero maxLoops", async function () {
@@ -558,7 +558,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).setConfig(0, ethers.parseEther("100"), 3000, 100)
-      ).to.be.revertedWith("INVALID_MAX_LOOPS");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLoops");
     });
 
     it("setConfig rejects maxLoops > 20", async function () {
@@ -566,7 +566,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).setConfig(21, ethers.parseEther("100"), 3000, 100)
-      ).to.be.revertedWith("INVALID_MAX_LOOPS");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLoops");
     });
 
     it("enableToken rejects invalid fee tiers", async function () {
@@ -574,7 +574,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       await expect(
         leverageVault.connect(owner).enableToken(await weth.getAddress(), 2000) // Invalid fee tier
-      ).to.be.revertedWith("INVALID_FEE_TIER");
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidFeeTier");
     });
 
     it("enableToken accepts valid Uniswap V3 fee tiers", async function () {

@@ -170,7 +170,7 @@ describe('LeverageVault', function () {
           10,
           futureDeadline()
         )
-      ).to.be.revertedWith('LEVERAGE_EXCEEDS_MAX');
+      ).to.be.revertedWithCustomError(leverageVault, "LeverageExceedsMax");
     });
 
     it('should reject if token not enabled', async function () {
@@ -185,7 +185,7 @@ describe('LeverageVault', function () {
           5,
           futureDeadline()
         )
-      ).to.be.revertedWith('TOKEN_NOT_ENABLED');
+      ).to.be.revertedWithCustomError(leverageVault, "TokenNotEnabled");
     });
 
     it('should reject second position if one already exists', async function () {
@@ -209,7 +209,7 @@ describe('LeverageVault', function () {
           3,
           futureDeadline()
         )
-      ).to.be.revertedWith('POSITION_EXISTS');
+      ).to.be.revertedWithCustomError(leverageVault, "PositionExists");
     });
   });
 
@@ -226,13 +226,13 @@ describe('LeverageVault', function () {
     it('should reject invalid max loops', async function () {
       await expect(
         leverageVault.setConfig(25, ethers.parseEther('100'), 3000, 100)
-      ).to.be.revertedWith('INVALID_MAX_LOOPS');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLoops");
     });
 
     it('should reject invalid slippage', async function () {
       await expect(
         leverageVault.setConfig(10, ethers.parseEther('100'), 3000, 600)
-      ).to.be.revertedWith('SLIPPAGE_TOO_HIGH');
+      ).to.be.revertedWithCustomError(leverageVault, "SlippageTooHigh");
     });
 
     it('should allow admin to enable/disable tokens', async function () {
@@ -279,19 +279,19 @@ describe('LeverageVault', function () {
           5,
           futureDeadline()
         )
-      ).to.be.revertedWith('LEVERAGE_EXCEEDS_MAX');
+      ).to.be.revertedWithCustomError(leverageVault, "LeverageExceedsMax");
     });
 
     it('should reject invalid max leverage values', async function () {
       // Too low (below 1x)
       await expect(
         leverageVault.setMaxLeverage(5)
-      ).to.be.revertedWith('INVALID_MAX_LEVERAGE');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
 
       // Too high (above 4x)
       await expect(
         leverageVault.setMaxLeverage(50)
-      ).to.be.revertedWith('INVALID_MAX_LEVERAGE');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidMaxLeverage");
     });
   });
 
@@ -348,7 +348,7 @@ describe('LeverageVault', function () {
     it('should reject emergency close for no position', async function () {
       await expect(
         leverageVault.emergencyClosePosition(user.address)
-      ).to.be.revertedWith('NO_POSITION');
+      ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
 
     it('should reject emergency close from non-admin', async function () {
@@ -443,7 +443,7 @@ describe('LeverageVault', function () {
           5,
           futureDeadline()
         )
-      ).to.be.revertedWith('INVALID_AMOUNT');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidAmount");
     });
 
     it('should reject leverage too low', async function () {
@@ -455,13 +455,13 @@ describe('LeverageVault', function () {
           5,
           futureDeadline()
         )
-      ).to.be.revertedWith('LEVERAGE_TOO_LOW');
+      ).to.be.revertedWithCustomError(leverageVault, "LeverageTooLow");
     });
 
     it('should reject invalid token address for enable', async function () {
       await expect(
         leverageVault.enableToken(ethers.ZeroAddress, 3000)
-      ).to.be.revertedWith('INVALID_TOKEN');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidToken");
     });
 
     it('should reject invalid fee tier', async function () {
@@ -470,7 +470,7 @@ describe('LeverageVault', function () {
 
       await expect(
         leverageVault.enableToken(await newToken.getAddress(), 999)
-      ).to.be.revertedWith('INVALID_FEE_TIER');
+      ).to.be.revertedWithCustomError(leverageVault, "InvalidFeeTier");
     });
   });
 
@@ -565,13 +565,13 @@ describe('LeverageVault', function () {
       const absurdMinOut = ethers.parseEther('999999');
       await expect(
         leverageVault.connect(user).closeLeveragedPosition(absurdMinOut)
-      ).to.be.revertedWith('SLIPPAGE_EXCEEDED');
+      ).to.be.revertedWithCustomError(leverageVault, "SlippageExceeded");
     });
 
     it('should fail close when no position exists', async function () {
       await expect(
         leverageVault.connect(user).closeLeveragedPosition(0)
-      ).to.be.revertedWith('NO_POSITION');
+      ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
   });
 
@@ -670,13 +670,13 @@ describe('LeverageVault', function () {
 
       await expect(
         leverageVault.connect(user).closeLeveragedPositionWithMusd(insufficientMusd, futureDeadline())
-      ).to.be.revertedWith('INSUFFICIENT_MUSD_PROVIDED');
+      ).to.be.revertedWithCustomError(leverageVault, "InsufficientMusdProvided");
     });
 
     it('should fail when no position exists', async function () {
       await expect(
         leverageVault.connect(user).closeLeveragedPositionWithMusd(ethers.parseEther('100'), futureDeadline())
-      ).to.be.revertedWith('NO_POSITION');
+      ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
   });
 

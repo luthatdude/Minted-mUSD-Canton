@@ -109,7 +109,7 @@ describe("SMUSD", function () {
     it("should reject withdrawal during cooldown", async function () {
       await expect(
         smusd.connect(user1).withdraw(ethers.parseEther("100"), user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
 
     it("should allow withdrawal after cooldown", async function () {
@@ -123,7 +123,7 @@ describe("SMUSD", function () {
       const shares = await smusd.balanceOf(user1.address);
       await expect(
         smusd.connect(user1).redeem(shares / 2n, user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
 
     it("should allow redeem after cooldown", async function () {
@@ -198,13 +198,13 @@ describe("SMUSD", function () {
 
       await expect(
         emptySmusd.connect(yieldManager).distributeYield(ethers.parseEther("100"))
-      ).to.be.revertedWith("NO_SHARES_EXIST");
+      ).to.be.revertedWithCustomError(smusd, "NoSharesExist");
     });
 
     it("should reject zero yield", async function () {
       await expect(
         smusd.connect(yieldManager).distributeYield(0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(smusd, "InvalidAmount");
     });
 
     it("should reject yield without YIELD_MANAGER_ROLE", async function () {
@@ -219,7 +219,7 @@ describe("SMUSD", function () {
       const excessiveYield = ethers.parseEther("200"); // 20% > 10%
       await expect(
         smusd.connect(yieldManager).distributeYield(excessiveYield)
-      ).to.be.revertedWith("YIELD_EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(smusd, "YieldExceedsCap");
     });
 
     it("should accept yield within MAX_YIELD_BPS cap", async function () {
@@ -292,7 +292,7 @@ describe("SMUSD", function () {
     it("should reject zero address for treasury", async function () {
       await expect(
         smusd.connect(deployer).setTreasury(ethers.ZeroAddress)
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(smusd, "ZeroAddress");
     });
 
     it("should emit TreasuryUpdated event", async function () {
@@ -331,7 +331,7 @@ describe("SMUSD", function () {
 
       await expect(
         smusd.connect(bridge).syncCantonShares(ethers.parseEther("2000"), 1)
-      ).to.be.revertedWith("EPOCH_NOT_SEQUENTIAL");
+      ).to.be.revertedWithCustomError(smusd, "EpochNotSequential");
     });
 
     it("should update global total shares", async function () {

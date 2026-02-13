@@ -146,7 +146,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
           kind: "uups",
           initializer: "initialize",
         })
-      ).to.be.revertedWith("ZERO_ADMIN");
+      ).to.be.revertedWithCustomError(PendleMarketSelector, "ZeroAddress");
     });
   });
 
@@ -561,7 +561,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
       const { selector, marketAdmin } = await loadFixture(deployFullFixture);
       await expect(
         selector.connect(marketAdmin).whitelistMarket(ethers.ZeroAddress, "USD")
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(selector, "ZeroAddress");
     });
 
     it("reverts when MAX_WHITELISTED_MARKETS is reached", async function () {
@@ -580,7 +580,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
       // The 101st should revert
       await expect(
         selector.connect(admin).whitelistMarket(ethers.Wallet.createRandom().address, "USD")
-      ).to.be.revertedWith("MAX_MARKETS_REACHED");
+      ).to.be.revertedWithCustomError(selector, "MaxMarketsReached");
     });
 
     it("does not duplicate when whitelisting already-whitelisted market", async function () {
@@ -620,7 +620,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
           [await marketA.getAddress(), await marketB.getAddress()],
           ["USD"]
         )
-      ).to.be.revertedWith("Length mismatch");
+      ).to.be.revertedWithCustomError(selector, "LengthMismatch");
     });
 
     it("successfully batch-whitelists multiple markets", async function () {
@@ -674,7 +674,7 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
           [ethers.Wallet.createRandom().address, ethers.Wallet.createRandom().address],
           ["USD", "USD"]
         )
-      ).to.be.revertedWith("MAX_MARKETS_REACHED");
+      ).to.be.revertedWithCustomError(selector, "MaxMarketsReached");
     });
   });
 

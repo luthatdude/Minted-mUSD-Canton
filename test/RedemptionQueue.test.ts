@@ -83,10 +83,10 @@ describe("RedemptionQueue", function () {
       const QueueFactory = await ethers.getContractFactory("RedemptionQueue");
       await expect(
         QueueFactory.deploy(ethers.ZeroAddress, await usdc.getAddress(), MAX_DAILY, MIN_AGE)
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(queue, "ZeroAddress");
       await expect(
         QueueFactory.deploy(await musd.getAddress(), ethers.ZeroAddress, MAX_DAILY, MIN_AGE)
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(queue, "ZeroAddress");
     });
   });
 
@@ -122,14 +122,14 @@ describe("RedemptionQueue", function () {
     it("Should revert on zero amount", async function () {
       await expect(
         queue.connect(user1).queueRedemption(0, 0)
-      ).to.be.revertedWith("ZERO_AMOUNT");
+      ).to.be.revertedWithCustomError(queue, "ZeroAmount");
     });
 
     it("Should revert on dust amount (< 1 USDC equivalent)", async function () {
       // 0.5 USDC worth in mUSD = 5e11 (too small to convert to 1 USDC)
       await expect(
         queue.connect(user1).queueRedemption(5n * 10n ** 11n, 0)
-      ).to.be.revertedWith("DUST_AMOUNT");
+      ).to.be.revertedWithCustomError(queue, "DustAmount");
     });
 
     it("Should revert if slippage exceeded", async function () {
@@ -138,7 +138,7 @@ describe("RedemptionQueue", function () {
 
       await expect(
         queue.connect(user1).queueRedemption(amount, tooHighMin)
-      ).to.be.revertedWith("SLIPPAGE_EXCEEDED");
+      ).to.be.revertedWithCustomError(queue, "SlippageExceeded");
     });
 
     it("Should queue multiple requests from same user", async function () {
@@ -287,7 +287,7 @@ describe("RedemptionQueue", function () {
     it("Should revert if not request owner", async function () {
       await expect(
         queue.connect(user2).cancelRedemption(0)
-      ).to.be.revertedWith("NOT_OWNER");
+      ).to.be.revertedWithCustomError(queue, "NotOwner");
     });
 
     it("Should revert if already fulfilled", async function () {
@@ -296,7 +296,7 @@ describe("RedemptionQueue", function () {
 
       await expect(
         queue.connect(user1).cancelRedemption(0)
-      ).to.be.revertedWith("ALREADY_FULFILLED");
+      ).to.be.revertedWithCustomError(queue, "AlreadyFulfilled");
     });
 
     it("Should revert if already cancelled", async function () {
@@ -304,13 +304,13 @@ describe("RedemptionQueue", function () {
 
       await expect(
         queue.connect(user1).cancelRedemption(0)
-      ).to.be.revertedWith("ALREADY_CANCELLED");
+      ).to.be.revertedWithCustomError(queue, "AlreadyCancelled");
     });
 
     it("Should revert for invalid request ID", async function () {
       await expect(
         queue.connect(user1).cancelRedemption(99)
-      ).to.be.revertedWith("INVALID_ID");
+      ).to.be.revertedWithCustomError(queue, "InvalidId");
     });
   });
 

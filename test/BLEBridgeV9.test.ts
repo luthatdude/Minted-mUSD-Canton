@@ -107,28 +107,28 @@ describe("BLEBridgeV9", function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // Now requires >= 2
+      ).to.be.revertedWithCustomError(BridgeFactory, "MinSigsTooLow");  // Now requires >= 2
     });
 
     it("Should reject initialization with one minSig", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("MIN_SIGS_TOO_LOW");  // At least 2 required
+      ).to.be.revertedWithCustomError(BridgeFactory, "MinSigsTooLow");  // At least 2 required
     });
 
     it("Should reject initialization with zero MUSD address", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, ethers.ZeroAddress, COLLATERAL_RATIO, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("INVALID_MUSD_ADDRESS");
+      ).to.be.revertedWithCustomError(BridgeFactory, "InvalidMusdAddress");
     });
 
     it("Should reject initialization with ratio below 100%", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, await musd.getAddress(), 9999, DAILY_CAP_LIMIT])
-      ).to.be.revertedWith("RATIO_BELOW_100_PERCENT");
+      ).to.be.revertedWithCustomError(BridgeFactory, "RatioBelow100Percent");
     });
   });
 
@@ -156,7 +156,7 @@ describe("BLEBridgeV9", function () {
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 2)); // Only 2 sigs
 
       await expect(bridge.processAttestation(attestation, sigs))
-        .to.be.revertedWith("INSUFFICIENT_SIGNATURES");
+        .to.be.revertedWithCustomError(bridge, "InsufficientSignatures");
     });
 
     it("Should reject attestation with wrong nonce", async function () {
@@ -165,7 +165,7 @@ describe("BLEBridgeV9", function () {
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
 
       await expect(bridge.processAttestation(attestation, sigs))
-        .to.be.revertedWith("INVALID_NONCE");
+        .to.be.revertedWithCustomError(bridge, "InvalidNonce");
     });
 
     it("Should reject reused attestation ID", async function () {
@@ -181,7 +181,7 @@ describe("BLEBridgeV9", function () {
 
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
       await expect(bridge.processAttestation(attestation2, sigs2))
-        .to.be.revertedWith("ATTESTATION_REUSED");
+        .to.be.revertedWithCustomError(bridge, "AttestationReused");
     });
 
     it("Should reject unsorted signatures", async function () {
@@ -192,7 +192,7 @@ describe("BLEBridgeV9", function () {
       const reversedSigs = [...sigs].reverse();
 
       await expect(bridge.processAttestation(attestation, reversedSigs))
-        .to.be.revertedWith("UNSORTED_SIGNATURES");
+        .to.be.revertedWithCustomError(bridge, "UnsortedSignatures");
     });
 
     it("Should reject future timestamp", async function () {
@@ -201,7 +201,7 @@ describe("BLEBridgeV9", function () {
 
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
       await expect(bridge.processAttestation(attestation, sigs))
-        .to.be.revertedWith("FUTURE_TIMESTAMP");
+        .to.be.revertedWithCustomError(bridge, "FutureTimestamp");
     });
 
     it("Should reject stale attestation", async function () {
@@ -216,7 +216,7 @@ describe("BLEBridgeV9", function () {
       const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
       // Error changed from STALE_ATTESTATION to ATTESTATION_TOO_CLOSE
       await expect(bridge.processAttestation(attestation2, sigs2))
-        .to.be.revertedWith("ATTESTATION_TOO_CLOSE");
+        .to.be.revertedWithCustomError(bridge, "AttestationTooClose");
     });
   });
 
@@ -283,7 +283,7 @@ describe("BLEBridgeV9", function () {
       
       // Cannot execute immediately - need to wait 24 hours
       await expect(bridge.connect(deployer).executeUnpause())
-        .to.be.revertedWith("TIMELOCK_NOT_ELAPSED");
+        .to.be.revertedWithCustomError(bridge, "TimelockNotElapsed");
       
       // Fast forward 24 hours
       await time.increase(24 * 60 * 60);
@@ -317,7 +317,7 @@ describe("BLEBridgeV9", function () {
       const higherCap = oldCap * 2n;
 
       await expect(bridge.connect(emergency).emergencyReduceCap(higherCap, "Bad intent"))
-        .to.be.revertedWith("NOT_A_REDUCTION");
+        .to.be.revertedWithCustomError(bridge, "NotAReduction");
     });
 
     it("Should invalidate attestation IDs", async function () {
@@ -332,7 +332,7 @@ describe("BLEBridgeV9", function () {
       // Now this ID cannot be used
       const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
       await expect(bridge.processAttestation(attestation, sigs))
-        .to.be.revertedWith("ATTESTATION_REUSED");
+        .to.be.revertedWithCustomError(bridge, "AttestationReused");
     });
   });
 
@@ -354,7 +354,7 @@ describe("BLEBridgeV9", function () {
 
       // Should fail immediately after
       await expect(bridge.setCollateralRatio(newRatio + 500n))
-        .to.be.revertedWith("RATIO_CHANGE_COOLDOWN");
+        .to.be.revertedWithCustomError(bridge, "RatioChangeCooldown");
 
       // After 1 day, should work
       await time.increase(86401);
@@ -367,7 +367,7 @@ describe("BLEBridgeV9", function () {
       const newRatio = oldRatio + 1500n; // 15% increase
 
       await expect(bridge.setCollateralRatio(newRatio))
-        .to.be.revertedWith("RATIO_CHANGE_TOO_LARGE");
+        .to.be.revertedWithCustomError(bridge, "RatioChangeTooLarge");
     });
 
     it("Should update daily cap increase limit", async function () {

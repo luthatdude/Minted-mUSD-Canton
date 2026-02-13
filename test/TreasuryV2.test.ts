@@ -484,7 +484,7 @@ describe("TreasuryV2", function () {
     it("Should reject fee too high", async function () {
       await expect(
         treasury.setFeeConfig(6000, feeRecipient.address) // 60% > 50% max
-      ).to.be.revertedWith("Fee too high");
+      ).to.be.revertedWithCustomError(treasury, "FeeTooHigh");
     });
 
     it("Should update reserve bps", async function () {
@@ -495,7 +495,7 @@ describe("TreasuryV2", function () {
     it("Should reject reserve too high", async function () {
       await expect(
         treasury.setReserveBps(4000) // 40% > 30% max
-      ).to.be.revertedWith("Reserve too high");
+      ).to.be.revertedWithCustomError(treasury, "ReserveTooHigh");
     });
 
     it("Should update vault address via timelock", async function () {

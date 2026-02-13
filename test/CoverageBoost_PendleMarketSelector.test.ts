@@ -175,7 +175,7 @@ describe("PendleMarketSelector — Coverage Boost", function () {
           [await market1.getAddress(), ethers.ZeroAddress],
           ["USD", "USD"]
         )
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(selector, "ZeroAddress");
     });
 
     it("Should reject batch > 50 markets", async function () {
@@ -184,7 +184,7 @@ describe("PendleMarketSelector — Coverage Boost", function () {
       const categories = Array(51).fill("USD");
       await expect(
         selector.connect(marketAdmin).whitelistMarkets(addresses, categories)
-      ).to.be.revertedWith("BATCH_TOO_LARGE");
+      ).to.be.revertedWithCustomError(selector, "BatchTooLarge");
     });
   });
 

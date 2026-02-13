@@ -99,7 +99,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       const F = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
         upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0])
-      ).to.be.revertedWith("INVALID_DAILY_LIMIT");
+      ).to.be.revertedWithCustomError(F, "InvalidDailyLimit");
     });
   });
 
@@ -114,13 +114,13 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       // emergency role (not admin) tries to reduce cap below totalSupply
       await expect(
         bridge.connect(emergency).emergencyReduceCap(ethers.parseEther("1000000"), "sub-supply test")
-      ).to.be.revertedWith("CAP_BELOW_SUPPLY");
+      ).to.be.revertedWithCustomError(bridge, "CapBelowSupply");
     });
 
     it("should revert REASON_REQUIRED when reason is empty", async function () {
       await expect(
         bridge.connect(emergency).emergencyReduceCap(ethers.parseEther("5000000"), "")
-      ).to.be.revertedWith("REASON_REQUIRED");
+      ).to.be.revertedWithCustomError(bridge, "ReasonRequired");
     });
   });
 
@@ -128,7 +128,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
 
   describe("setDailyCapIncreaseLimit", function () {
     it("should revert INVALID_LIMIT when _limit is 0", async function () {
-      await expect(bridge.setDailyCapIncreaseLimit(0)).to.be.revertedWith("INVALID_LIMIT");
+      await expect(bridge.setDailyCapIncreaseLimit(0)).to.be.revertedWithCustomError(bridge, "InvalidLimit");
     });
   });
 
@@ -138,7 +138,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should revert INVALID_PREVIOUS_BRIDGE when previousBridge is zero", async function () {
       const ids = [ethers.keccak256(ethers.toUtf8Bytes("migrate-zero"))];
       await expect(bridge.migrateUsedAttestations(ids, ethers.ZeroAddress))
-        .to.be.revertedWith("INVALID_PREVIOUS_BRIDGE");
+        .to.be.revertedWithCustomError(bridge, "InvalidPreviousBridge");
     });
   });
 
@@ -179,7 +179,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
 
   describe("requestUnpause — not paused", function () {
     it("should revert NOT_PAUSED when bridge is not paused", async function () {
-      await expect(bridge.requestUnpause()).to.be.revertedWith("NOT_PAUSED");
+      await expect(bridge.requestUnpause()).to.be.revertedWithCustomError(bridge, "NotPaused");
     });
   });
 
@@ -188,7 +188,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
   describe("executeUnpause — no pending request", function () {
     it("should revert NO_UNPAUSE_REQUEST when no unpause was requested", async function () {
       await bridge.connect(emergency).pause();
-      await expect(bridge.executeUnpause()).to.be.revertedWith("NO_UNPAUSE_REQUEST");
+      await expect(bridge.executeUnpause()).to.be.revertedWithCustomError(bridge, "NoUnpauseRequest");
     });
   });
 
@@ -199,7 +199,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       const now = BigInt(await time.latest());
       const att = await createAttestation(1n, 0n, now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("ZERO_ASSETS");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "ZeroAssets");
     });
   });
 
@@ -221,13 +221,13 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       const id = ethers.keccak256(ethers.toUtf8Bytes("inv-dup"));
       await bridge.connect(emergency).invalidateAttestationId(id, "first");
       await expect(bridge.connect(emergency).invalidateAttestationId(id, "second"))
-        .to.be.revertedWith("ALREADY_USED");
+        .to.be.revertedWithCustomError(bridge, "AlreadyUsed");
     });
 
     it("should revert REASON_REQUIRED when reason is empty", async function () {
       const id = ethers.keccak256(ethers.toUtf8Bytes("inv-empty"));
       await expect(bridge.connect(emergency).invalidateAttestationId(id, ""))
-        .to.be.revertedWith("REASON_REQUIRED");
+        .to.be.revertedWithCustomError(bridge, "ReasonRequired");
     });
   });
 
@@ -276,7 +276,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       const att2 = await createAttestation(2n, ethers.parseEther("13200000"), now2);
       const sigs2 = await createSortedSignatures(att2, validators.slice(0, 3));
       await expect(bridge.processAttestation(att2, sigs2))
-        .to.be.revertedWith("DAILY_CAP_LIMIT_EXHAUSTED");
+        .to.be.revertedWithCustomError(bridge, "DailyCapLimitExhausted");
     });
   });
 

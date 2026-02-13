@@ -404,7 +404,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       // Regular getPrice should revert due to circuit breaker (38.5% > 20%)
       await expect(
         priceOracle.getPrice(await weth.getAddress())
-      ).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+      ).to.be.revertedWithCustomError(priceOracle, "CircuitBreakerActive");
 
       // But getPriceUnsafe should work
       const unsafePrice = await priceOracle.getPriceUnsafe(await weth.getAddress());
@@ -414,7 +414,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       const wethAddr = await weth.getAddress();
       await expect(
         priceOracle.getValueUsd(wethAddr, collateral)
-      ).to.be.revertedWith("CIRCUIT_BREAKER_TRIGGERED");
+      ).to.be.revertedWithCustomError(priceOracle, "CircuitBreakerActive");
 
       // healthFactorUnsafe bypasses circuit breaker for liquidation path
       const hfUnsafe = await borrowModule.healthFactorUnsafe(user1.address);
@@ -534,7 +534,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
         // Attempt to withdraw reserves should fail gracefully
         await expect(
           borrowModule.withdrawReserves(admin.address, reserves)
-        ).to.be.revertedWith("SUPPLY_CAP_REACHED");
+        ).to.be.revertedWithCustomError(borrowModule, "SupplyCapReached");
 
         // Reserves should be restored (not lost)
         const reservesAfter = await borrowModule.protocolReserves();
@@ -580,7 +580,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       const extraToken = await MockERC20F.deploy("Extra", "EXTRA", 18);
       await expect(
         vault.addCollateral(await extraToken.getAddress(), 5000, 6000, 300)
-      ).to.be.revertedWith("TOO_MANY_TOKENS");
+      ).to.be.revertedWithCustomError(vault, "TooManyTokens");
     });
 
     it("should enforce 50-token cap on enableCollateral", async function () {
@@ -606,7 +606,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       const token50 = await MockERC20F.deploy("Token50", "TK50", 18);
       await expect(
         vault.addCollateral(await token50.getAddress(), 5000, 6000, 300)
-      ).to.be.revertedWith("TOO_MANY_TOKENS");
+      ).to.be.revertedWithCustomError(vault, "TooManyTokens");
       // Re-enabling token49 should succeed (no push needed, already in array)
       await vault.enableCollateral(await token49.getAddress());
     });
@@ -703,7 +703,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       const shares = await smusd.balanceOf(user2.address);
       await expect(
         smusd.connect(user2).redeem(shares, user2.address, user2.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
 
       // Even after transferring shares, cooldown propagates
       await smusd.connect(user2).transfer(user1.address, shares / 2n);
@@ -797,7 +797,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
           await weth.getAddress(),
           ethers.parseEther("200")
         )
-      ).to.be.revertedWith("CANNOT_SELF_LIQUIDATE");
+      ).to.be.revertedWithCustomError(liquidationEngine, "CannotSelfLiquidate");
     });
 
     it("should correctly handle multi-collateral liquidation", async function () {
@@ -870,7 +870,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
     it("should reject interest rate above 50% APR", async function () {
       await expect(
         borrowModule.setInterestRate(5001)
-      ).to.be.revertedWith("RATE_TOO_HIGH");
+      ).to.be.revertedWithCustomError(borrowModule, "RateTooHigh");
     });
 
     it("should allow interest rate up to 50% APR", async function () {
@@ -1005,7 +1005,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
           await weth.getAddress(),
           ethers.parseEther("10")
         )
-      ).to.be.revertedWith("WITHDRAWAL_WOULD_LIQUIDATE");
+      ).to.be.revertedWithCustomError(borrowModule, "WithdrawalWouldLiquidate");
 
       // Even partial withdrawal that breaks health factor should fail
       await expect(
@@ -1013,7 +1013,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
           await weth.getAddress(),
           ethers.parseEther("8") // leaves only $4000 collateral for $5000 debt
         )
-      ).to.be.revertedWith("WITHDRAWAL_WOULD_LIQUIDATE");
+      ).to.be.revertedWithCustomError(borrowModule, "WithdrawalWouldLiquidate");
     });
 
     it("should enforce blacklist across mint and transfer paths", async function () {
@@ -1028,7 +1028,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       // Transfer to blacklisted address should fail
       await expect(
         musd.connect(user1).transfer(user2.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
 
       // Transfer from blacklisted address should fail
       // First un-blacklist user2, give them tokens, then re-blacklist
@@ -1038,7 +1038,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
       await expect(
         musd.connect(user2).transfer(user1.address, ethers.parseEther("50"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should allow emergency pause to halt all operations", async function () {
@@ -1071,7 +1071,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
       await expect(
         priceOracle.getPrice(await weth.getAddress())
-      ).to.be.revertedWith("STALE_PRICE");
+      ).to.be.revertedWithCustomError(priceOracle, "StalePrice");
     });
 
     it("should revert stale prices in unsafe variant", async function () {
@@ -1080,7 +1080,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
       await expect(
         priceOracle.getPriceUnsafe(await weth.getAddress())
-      ).to.be.revertedWith("STALE_PRICE");
+      ).to.be.revertedWithCustomError(priceOracle, "StalePrice");
     });
 
     it("should check isFeedHealthy correctly", async function () {
@@ -1173,7 +1173,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       // minDebt is 100 mUSD
       await expect(
         borrowModule.connect(user1).borrow(ethers.parseEther("50"))
-      ).to.be.revertedWith("BELOW_MIN_DEBT");
+      ).to.be.revertedWithCustomError(borrowModule, "BelowMinDebt");
     });
 
     it("should auto-close dust positions below minDebt", async function () {

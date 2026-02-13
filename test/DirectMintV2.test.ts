@@ -91,11 +91,11 @@ describe("DirectMintV2", function () {
       
       await expect(
         DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address)
-      ).to.be.revertedWith("INVALID_USDC");
+      ).to.be.revertedWithCustomError(directMint, "InvalidUsdc");
 
       await expect(
         DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address)
-      ).to.be.revertedWith("INVALID_MUSD");
+      ).to.be.revertedWithCustomError(directMint, "InvalidMusd");
     });
   });
 
@@ -133,7 +133,7 @@ describe("DirectMintV2", function () {
       const tooSmall = ethers.parseUnits("0.5", USDC_DECIMALS); // 0.5 USDC
 
       await expect(directMint.connect(user).mint(tooSmall))
-        .to.be.revertedWith("BELOW_MIN");
+        .to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("Should reject mint above maximum", async function () {
@@ -142,7 +142,7 @@ describe("DirectMintV2", function () {
       const tooLarge = ethers.parseUnits("1500000", USDC_DECIMALS); // 1.5M USDC
 
       await expect(directMint.connect(user).mint(tooLarge))
-        .to.be.revertedWith("ABOVE_MAX");
+        .to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("Should reject mint that exceeds supply cap", async function () {
@@ -153,7 +153,7 @@ describe("DirectMintV2", function () {
       const usdcAmount = ethers.parseUnits("200", USDC_DECIMALS); // Would mint 200 mUSD
 
       await expect(directMint.connect(user).mint(usdcAmount))
-        .to.be.revertedWith("EXCEEDS_SUPPLY_CAP");
+        .to.be.revertedWithCustomError(directMint, "ExceedsSupplyCap");
     });
 
     it("Should reject mint when paused", async function () {
@@ -217,12 +217,12 @@ describe("DirectMintV2", function () {
       const tooSmall = ethers.parseEther("0.5"); // 0.5 mUSD
 
       await expect(directMint.connect(user).redeem(tooSmall))
-        .to.be.revertedWith("BELOW_MIN");
+        .to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("Should reject zero redeem amount", async function () {
       await expect(directMint.connect(user).redeem(0))
-        .to.be.revertedWith("INVALID_AMOUNT");
+        .to.be.revertedWithCustomError(directMint, "InvalidAmount");
     });
   });
 
@@ -238,7 +238,7 @@ describe("DirectMintV2", function () {
 
     it("Should reject fees above maximum", async function () {
       await expect(directMint.setFees(600, 0)) // 6% > 5% max
-        .to.be.revertedWith("MINT_FEE_TOO_HIGH");
+        .to.be.revertedWithCustomError(directMint, "MintFeeTooHigh");
     });
 
     it("Should allow fee withdrawal", async function () {
@@ -286,7 +286,7 @@ describe("DirectMintV2", function () {
     it("Should reject invalid limits (min > max)", async function () {
       await expect(
         directMint.setLimits(1000, 100, 1, 1000) // min > max
-      ).to.be.revertedWith("INVALID_MINT_LIMITS");
+      ).to.be.revertedWithCustomError(directMint, "InvalidMintLimits");
     });
   });
 

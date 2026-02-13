@@ -534,7 +534,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await f.selector.setReturnZeroMarket(true);
       await expect(
         f.strategy.connect(f.treasury).deposit(D6("1000"))
-      ).to.be.revertedWith("NO_VALID_MARKET");
+      ).to.be.revertedWithCustomError(f.strategy, "NoValidMarket");
     });
 
     it("INVALID_PT_TOKEN when pt is address(0)", async () => {
@@ -542,7 +542,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await f.selector.setReturnZeroPt(true);
       await expect(
         f.strategy.connect(f.treasury).deposit(D6("1000"))
-      ).to.be.revertedWith("INVALID_PT_TOKEN");
+      ).to.be.revertedWithCustomError(f.strategy, "InvalidPtToken");
     });
   });
 
@@ -719,14 +719,14 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const f = await loadFixture(fixture);
       await expect(
         f.strategy.connect(f.guardian).emergencyWithdraw(ethers.ZeroAddress)
-      ).to.be.revertedWith("ZERO_RECIPIENT");
+      ).to.be.revertedWithCustomError(f.strategy, "ZeroAddress");
     });
 
     it("reverts when recipient lacks TREASURY_ROLE", async () => {
       const f = await loadFixture(fixture);
       await expect(
         f.strategy.connect(f.guardian).emergencyWithdraw(f.user1.address)
-      ).to.be.revertedWith("RECIPIENT_MUST_BE_TREASURY");
+      ).to.be.revertedWithCustomError(f.strategy, "RecipientMustBeTreasury");
     });
   });
 
@@ -741,7 +741,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
         f.strategy
           .connect(f.admin)
           .recoverToken(await f.usdc.getAddress(), f.admin.address)
-      ).to.be.revertedWith("Cannot recover USDC");
+      ).to.be.revertedWithCustomError(f.strategy, "CannotRecoverUsdc");
     });
 
     it("cannot recover PT after market selected", async () => {
@@ -752,7 +752,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
         f.strategy
           .connect(f.admin)
           .recoverToken(await f.pt.getAddress(), f.admin.address)
-      ).to.be.revertedWith("Cannot recover PT");
+      ).to.be.revertedWithCustomError(f.strategy, "CannotRecoverPt");
     });
 
     it("can recover random tokens", async () => {
@@ -943,7 +943,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const f = await loadFixture(fixture);
       await expect(
         f.strategy.connect(f.strategist).setPtDiscountRate(5001)
-      ).to.be.revertedWith("DISCOUNT_TOO_HIGH");
+      ).to.be.revertedWithCustomError(f.strategy, "DiscountTooHigh");
     });
 
     it("setRolloverThreshold emits RolloverThresholdUpdated", async () => {
@@ -959,14 +959,14 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const f = await loadFixture(fixture);
       await expect(
         f.strategy.connect(f.strategist).setRolloverThreshold(3600)
-      ).to.be.revertedWith("INVALID_THRESHOLD");
+      ).to.be.revertedWithCustomError(f.strategy, "InvalidThreshold");
     });
 
     it("setRolloverThreshold > 30 days reverts", async () => {
       const f = await loadFixture(fixture);
       await expect(
         f.strategy.connect(f.strategist).setRolloverThreshold(31 * 86400)
-      ).to.be.revertedWith("INVALID_THRESHOLD");
+      ).to.be.revertedWithCustomError(f.strategy, "InvalidThreshold");
     });
 
     it("setActive toggles", async () => {

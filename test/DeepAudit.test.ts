@@ -273,20 +273,20 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const amount = ethers.parseUnits("200", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
-      await expect(directMint.connect(user1).mint(amount)).to.be.revertedWith("EXCEEDS_SUPPLY_CAP");
+      await expect(directMint.connect(user1).mint(amount)).to.be.revertedWithCustomError(directMint, "ExceedsSupplyCap");
     });
 
     it("should reject mint below minimum amount", async function () {
       const tooSmall = ethers.parseUnits("0.5", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), tooSmall);
-      await expect(directMint.connect(user1).mint(tooSmall)).to.be.revertedWith("BELOW_MIN");
+      await expect(directMint.connect(user1).mint(tooSmall)).to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("should reject mint above maximum amount", async function () {
       const tooLarge = ethers.parseUnits("2000000", USDC_DECIMALS);
       await usdc.mint(user1.address, tooLarge);
       await usdc.connect(user1).approve(await directMint.getAddress(), tooLarge);
-      await expect(directMint.connect(user1).mint(tooLarge)).to.be.revertedWith("ABOVE_MAX");
+      await expect(directMint.connect(user1).mint(tooLarge)).to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("should allow mintFor by MINTER_ROLE", async function () {
@@ -333,13 +333,13 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.connect(user1).approve(await vault.getAddress(), amount);
       await expect(
         vault.connect(user1).deposit(await usdc.getAddress(), amount)
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
     });
 
     it("should reject zero amount deposits", async function () {
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(vault, "InvalidAmount");
     });
 
     it("should disable/enable collateral correctly", async function () {
@@ -349,7 +349,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await weth.connect(user1).approve(await vault.getAddress(), amount);
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), amount)
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
 
       await vault.enableCollateral(await weth.getAddress());
       await vault.connect(user1).deposit(await weth.getAddress(), amount);
@@ -367,7 +367,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const extraToken = await MockERC20F.deploy("Extra", "EXT", 18);
       await expect(
         vault.addCollateral(await extraToken.getAddress(), 7000, 7500, 500)
-      ).to.be.revertedWith("TOO_MANY_TOKENS");
+      ).to.be.revertedWithCustomError(vault, "TooManyTokens");
     });
   });
 
@@ -397,14 +397,14 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const tooMuch = ethers.parseEther("16000");
       await expect(
         borrowModule.connect(user1).borrow(tooMuch)
-      ).to.be.revertedWith("EXCEEDS_BORROW_CAPACITY");
+      ).to.be.revertedWithCustomError(borrowModule, "ExceedsBorrowCapacity");
     });
 
     it("should reject borrow below minimum debt", async function () {
       const tiny = ethers.parseEther("1"); // Below 100 mUSD min
       await expect(
         borrowModule.connect(user1).borrow(tiny)
-      ).to.be.revertedWith("BELOW_MIN_DEBT");
+      ).to.be.revertedWithCustomError(borrowModule, "BelowMinDebt");
     });
 
     it("should accrue interest over time", async function () {
@@ -483,7 +483,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await expect(
         borrowModule.connect(user1).withdrawCollateral(await weth.getAddress(), ethers.parseEther("5"))
-      ).to.be.revertedWith("WITHDRAWAL_WOULD_LIQUIDATE");
+      ).to.be.revertedWithCustomError(borrowModule, "WithdrawalWouldLiquidate");
     });
   });
 
@@ -512,7 +512,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("1000")
         )
-      ).to.be.revertedWith("POSITION_HEALTHY");
+      ).to.be.revertedWithCustomError(liquidationEngine, "PositionHealthy");
     });
 
     it("should liquidate after price drop", async function () {
@@ -614,7 +614,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("1000")
         )
-      ).to.be.revertedWith("CANNOT_SELF_LIQUIDATE");
+      ).to.be.revertedWithCustomError(liquidationEngine, "CannotSelfLiquidate");
     });
 
     it("should prevent dust liquidations", async function () {
@@ -630,7 +630,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("50") // Below 100 mUSD min
         )
-      ).to.be.revertedWith("DUST_LIQUIDATION");
+      ).to.be.revertedWithCustomError(liquidationEngine, "DustLiquidation");
     });
 
     it("should correctly compute WBTC seizure with 8 decimals", async function () {
@@ -837,7 +837,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       // Immediate redeem should fail
       await expect(
         smusd.connect(user1).redeem(shares, user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
 
       // Advance 24h+1s
       await time.increase(24 * 60 * 60 + 1);
@@ -859,7 +859,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       // user2 should NOT be able to redeem (inherited cooldown)
       await expect(
         smusd.connect(user2).redeem(halfShares, user2.address, user2.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
   });
 
@@ -957,7 +957,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INSUFFICIENT_SIGNATURES");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InsufficientSignatures");
     });
 
     it("should reject replay attestation", async function () {
@@ -977,7 +977,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
       await bridge.processAttestation(att, sigs);
 
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INVALID_NONCE");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InvalidNonce");
     });
 
     it("should reject attestation with wrong nonce", async function () {
@@ -995,7 +995,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INVALID_NONCE");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InvalidNonce");
     });
 
     it("should reject expired attestation", async function () {
@@ -1014,7 +1014,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("ATTESTATION_TOO_OLD");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "AttestationTooOld");
     });
 
     it("should enforce unpause timelock", async function () {
@@ -1026,7 +1026,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await bridge.requestUnpause();
 
-      await expect(bridge.executeUnpause()).to.be.revertedWith("TIMELOCK_NOT_ELAPSED");
+      await expect(bridge.executeUnpause()).to.be.revertedWithCustomError(bridge, "TimelockNotElapsed");
 
       await time.increase(24 * 60 * 60 + 1);
 
@@ -1058,7 +1058,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await time.increase(3601);
       await expect(
         priceOracle.getPrice(await weth.getAddress())
-      ).to.be.revertedWith("STALE_PRICE");
+      ).to.be.revertedWithCustomError(priceOracle, "StalePrice");
     });
 
     it("should allow admin to update price after circuit breaker", async function () {
@@ -1138,7 +1138,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await expect(
         musd.connect(user1).transfer(user2.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should pause/unpause MUSD with role separation", async function () {
