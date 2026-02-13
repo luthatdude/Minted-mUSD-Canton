@@ -689,8 +689,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
-    /// @dev Reordered: withdraw to contract → swap → repay → THEN return remainder to user
-    ///      This prevents the user receiving collateral while still having outstanding debt
+    /// @dev FIX H-05: Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
+    ///      Remaining collateral is returned to the user as-is to minimize swap losses.
     /// @param user The user whose position to emergency-close
     function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         LeveragePosition storage pos = positions[user];
@@ -705,9 +705,15 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this), true);
         }
 
-        // Step 2: Attempt to repay debt FIRST before returning anything to user
+        // Step 2: Only swap the collateral needed to cover debt (+ buffer)
         if (debtToRepay > 0 && totalCollateralInVault > 0) {
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, totalCollateralInVault);
+            // Estimate collateral needed for debt using oracle, add 10% buffer for slippage
+            uint256 collateralNeeded = _getCollateralForMusd(collateralToken, debtToRepay);
+            collateralNeeded = (collateralNeeded * 11000) / 10000; // +10% buffer
+            // Cap at available collateral
+            uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
+
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount);
             if (musdReceived > 0) {
                 uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);

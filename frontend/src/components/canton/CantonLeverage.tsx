@@ -18,6 +18,7 @@ export function CantonLeverage() {
   
   const [depositAmount, setDepositAmount] = useState("");
   const [leverageX10, setLeverageX10] = useState(20); // Default 2x
+  const [slippageBps, setSlippageBps] = useState("50"); // H-09: Default 0.5% slippage tolerance
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +144,8 @@ export function CantonLeverage() {
           vaultCid: targetVaultCid,
           oracleCid: oracleCid,
           poolCid: poolCid,
-          loops: loops
+          loops: loops,
+          slippageToleranceBps: parseInt(slippageBps) || 50, // H-09: Pass slippage tolerance
         }
       );
 
@@ -289,6 +291,44 @@ export function CantonLeverage() {
               maxLeverage={30}
               disabled={loading}
             />
+          </div>
+
+          {/* H-09: Slippage Tolerance */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-400 mb-2">
+              Slippage Tolerance
+            </label>
+            <div className="flex items-center gap-3">
+              <div className="flex gap-1">
+                {[10, 50, 100, 200].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setSlippageBps(v.toString())}
+                    className={`px-3 py-2 text-sm rounded-lg transition-colors ${
+                      slippageBps === v.toString()
+                        ? "bg-emerald-600 text-white"
+                        : "bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700"
+                    }`}
+                  >
+                    {(v / 100).toFixed(1)}%
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  className="w-20 bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-emerald-500 outline-none"
+                  min="1"
+                  max="500"
+                  value={slippageBps}
+                  onChange={(e) => setSlippageBps(e.target.value)}
+                />
+                <span className="text-gray-500 text-sm">bps</span>
+              </div>
+              {parseInt(slippageBps) > 200 && (
+                <span className="text-yellow-400 text-xs">⚠ High slippage</span>
+              )}
+            </div>
           </div>
 
           {/* Preview */}

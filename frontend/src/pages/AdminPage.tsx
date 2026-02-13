@@ -7,6 +7,7 @@ import { formatUSD, formatBps, formatToken } from "@/lib/format";
 import { USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 
 type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
@@ -14,8 +15,43 @@ type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "
 export function AdminPage() {
   const { address, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
+  const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
   const [section, setSection] = useState<AdminSection>("musd");
   const tx = useTx();
+
+  // H-08: Role gate — only render admin controls if wallet has admin/timelock role
+  if (!isConnected) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <h2 className="text-xl font-semibold text-gray-300">Admin Panel</h2>
+        <p className="text-gray-400">Connect your wallet to access admin functions.</p>
+        <WalletConnector />
+      </div>
+    );
+  }
+
+  if (isAdminLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-gray-400">Verifying admin role…</p>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <h2 className="text-xl font-semibold text-red-400">Access Denied</h2>
+        <p className="text-gray-400">
+          Connected wallet <span className="font-mono text-sm">{address}</span> does not
+          hold an admin role on this protocol.
+        </p>
+        <p className="text-gray-500 text-sm">
+          Required: DEFAULT_ADMIN_ROLE or TIMELOCK_ROLE on the MUSD contract.
+        </p>
+      </div>
+    );
+  }
 
   // MUSD Admin
   const [newSupplyCap, setNewSupplyCap] = useState("");

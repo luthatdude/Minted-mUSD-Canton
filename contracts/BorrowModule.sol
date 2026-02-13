@@ -809,6 +809,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);
+    event DriftThresholdExceeded(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift, uint256 thresholdBps);
+
+    /// @notice Maximum allowed drift as basis points of totalBorrows.
+    ///         Reverts if drift exceeds this to prevent silent large mismatches.
+    uint256 public constant MAX_DRIFT_BPS = 500; // 5%
 
     /// @notice Reconcile totalBorrows with the actual sum of all user debts
     /// @dev    Fixes H-01 — accounting drift can accumulate from rounding in
@@ -816,6 +821,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///         computes the true aggregate debt by iterating tracked borrowers
     ///         and snaps totalBorrows to that value.
     ///         Callable by BORROW_ADMIN_ROLE; should be run periodically (e.g. weekly).
+    ///         The keeper bot (bot/src/reconciliation-keeper.ts) automates this.
     /// @param  borrowers Array of all addresses that have (or had) debt positions.
     ///         Off-chain indexer supplies this list from Borrowed / Repaid events.
     function reconcileTotalBorrows(address[] calldata borrowers) external onlyRole(BORROW_ADMIN_ROLE) nonReentrant {
@@ -829,6 +835,17 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
         uint256 oldTotal = totalBorrows;
         int256 drift = int256(oldTotal) - int256(sumDebt);
+
+        // H-01: Guard against excessively large drift (> MAX_DRIFT_BPS of old total)
+        uint256 absDrift = drift >= 0 ? uint256(drift) : uint256(-drift);
+        if (oldTotal > 0) {
+            uint256 driftBps = (absDrift * 10_000) / oldTotal;
+            require(driftBps <= MAX_DRIFT_BPS, "BorrowModule: drift exceeds safety threshold");
+            if (driftBps > 100) { // > 1% — emit warning event
+                emit DriftThresholdExceeded(oldTotal, sumDebt, drift, driftBps);
+            }
+        }
+
         totalBorrows = sumDebt;
 
         emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);

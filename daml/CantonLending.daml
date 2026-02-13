@@ -1248,9 +1248,12 @@ template CantonLendingService
           timestamp = now
 
         let repayFromBorrows = min actualRepay totalBorrows
+        -- FIX C-01: Decrement cantonCurrentSupply on liquidation (mirrors RepayLoan)
+        let repayFromSupply = min actualRepay cantonCurrentSupply
         newService <- create this with
           totalBorrows = totalBorrows - repayFromBorrows
           protocolReserves = protocolReserves + protocolFee
+          cantonCurrentSupply = cantonCurrentSupply - repayFromSupply
 
         return (newService, receiptCid)
 
