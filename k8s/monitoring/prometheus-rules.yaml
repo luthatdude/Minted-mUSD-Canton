@@ -5,7 +5,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: minted-security-alerts
-  namespace: canton
+  namespace: musd-canton
   labels:
     app: minted
     component: monitoring
@@ -241,22 +241,22 @@ spec:
       rules:
         - alert: PodRestartLoop
           expr: |
-            increase(kube_pod_container_status_restarts_total{namespace="canton"}[1h]) > 5
+            increase(kube_pod_container_status_restarts_total{namespace="musd-canton"}[1h]) > 5
           for: 5m
           labels:
             severity: warning
             team: platform
           annotations:
-            summary: "Pod in canton namespace is restart-looping"
+            summary: "Pod in musd-canton namespace is restart-looping"
             description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has restarted > 5 times in 1 hour."
 
         - alert: PodOOMKilled
           expr: |
-            kube_pod_container_status_last_terminated_reason{namespace="canton", reason="OOMKilled"} == 1
+            kube_pod_container_status_last_terminated_reason{namespace="musd-canton", reason="OOMKilled"} == 1
           for: 0m
           labels:
             severity: warning
             team: platform
           annotations:
-            summary: "Pod OOM-killed in canton namespace"
+            summary: "Pod OOM-killed in musd-canton namespace"
             description: "Container {{ $labels.container }} was OOM-killed. Increase resource limits."

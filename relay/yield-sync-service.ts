@@ -260,6 +260,14 @@ class YieldSyncService {
 
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
+    // FIX C-REL-01: Guard against raw private key usage in production
+    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
+      throw new Error(
+        "SECURITY: Raw private key usage is forbidden in production. " +
+        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
+        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
+      );
+    }
     this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
     
     this.treasury = new ethers.Contract(

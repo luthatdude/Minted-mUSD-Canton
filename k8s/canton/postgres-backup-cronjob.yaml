@@ -137,9 +137,9 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
-                # Cannot use readOnlyRootFilesystem: true because pg_dump
-                # needs /tmp for intermediate state; /backups is the PVC mount.
-                readOnlyRootFilesystem: false
+                # All writable paths (/tmp, /backups) are volume-mounted,
+                # so we can safely lock down the root filesystem.
+                readOnlyRootFilesystem: true
               volumeMounts:
                 - name: backups
                   mountPath: /backups
