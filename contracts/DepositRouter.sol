@@ -139,6 +139,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event FeeUpdated(uint256 oldFee, uint256 newFee);
     event FeesWithdrawn(address indexed to, uint256 amount);
+    event EmergencyWithdrawn(address indexed token, address indexed to, uint256 amount, address indexed executor);
     /// @dev Dedicated event for failed native token refunds.
     event RefundFailed(address indexed recipient, uint256 amount);
 
@@ -335,19 +336,20 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Emergency withdrawal
+     * @notice Emergency withdrawal to treasury (paused-only, timelock-gated)
      * @param token Token to withdraw (use address(0) for native)
-     * @param to Recipient address
      * @param amount Amount to withdraw
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (to == address(0)) revert InvalidAddress();
+    function emergencyWithdraw(address token, uint256 amount) external onlyRole(TIMELOCK_ROLE) whenPaused {
+        if (amount == 0) revert InvalidAmount();
+        address to = treasuryAddress;
         if (token == address(0)) {
             (bool success, ) = to.call{value: amount}("");
             if (!success) revert TransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
+        emit EmergencyWithdrawn(token, to, amount, msg.sender);
     }
 
     // ============ Internal Functions ============

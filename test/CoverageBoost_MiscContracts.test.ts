@@ -891,39 +891,44 @@ describe("CoverageBoost — Misc Contracts", function () {
       ).to.be.revertedWith("DEPOSIT_NOT_FOUND");
     });
 
-    // --- emergencyWithdraw: InvalidAddress ---
-    it("should revert emergencyWithdraw to zero address", async function () {
+    // --- emergencyWithdraw: InvalidAmount ---
+    it("should revert emergencyWithdraw on zero amount", async function () {
+      await router.connect(pauser).pause();
       await expect(
-        router.connect(admin).emergencyWithdraw(await usdc.getAddress(), ethers.ZeroAddress, 100)
-      ).to.be.revertedWithCustomError(router, "InvalidAddress");
+        router.connect(admin).emergencyWithdraw(await usdc.getAddress(), 0)
+      ).to.be.revertedWithCustomError(router, "InvalidAmount");
     });
 
-    // --- emergencyWithdraw: USDC allowed without pause requirement ---
-    it("should allow USDC emergencyWithdraw without pause requirement", async function () {
+    // --- emergencyWithdraw: must be paused ---
+    it("should revert USDC emergencyWithdraw when not paused", async function () {
       await usdc.mint(await router.getAddress(), 1_000n * 10n ** 6n);
-      await router.connect(admin).emergencyWithdraw(await usdc.getAddress(), admin.address, 100);
+      await expect(
+        router.connect(admin).emergencyWithdraw(await usdc.getAddress(), 100)
+      ).to.be.revertedWithCustomError(router, "ExpectedPause");
     });
 
     // --- emergencyWithdraw: USDC allowed when paused ---
     it("should allow USDC emergencyWithdraw when paused", async function () {
       await usdc.mint(await router.getAddress(), 1_000n * 10n ** 6n);
       await router.connect(pauser).pause();
-      await router.connect(admin).emergencyWithdraw(await usdc.getAddress(), admin.address, 100);
+      await router.connect(admin).emergencyWithdraw(await usdc.getAddress(), 100);
     });
 
     // --- emergencyWithdraw: native token (address(0)) ---
     it("should allow native token emergency withdrawal", async function () {
       // Send ETH to router
       await admin.sendTransaction({ to: await router.getAddress(), value: ethers.parseEther("0.1") });
-      await router.connect(admin).emergencyWithdraw(ethers.ZeroAddress, admin.address, ethers.parseEther("0.05"));
+      await router.connect(pauser).pause();
+      await router.connect(admin).emergencyWithdraw(ethers.ZeroAddress, ethers.parseEther("0.05"));
     });
 
     // --- emergencyWithdraw: non-USDC ERC20 ---
-    it("should allow non-USDC token emergency withdrawal without pause", async function () {
+    it("should allow non-USDC token emergency withdrawal when paused", async function () {
       const MockERC20 = await ethers.getContractFactory("MockERC20");
       const other = await MockERC20.deploy("Other", "OTH", 18);
       await other.mint(await router.getAddress(), 1000);
-      await router.connect(admin).emergencyWithdraw(await other.getAddress(), admin.address, 1000);
+      await router.connect(pauser).pause();
+      await router.connect(admin).emergencyWithdraw(await other.getAddress(), 1000);
     });
 
     // --- pause / unpause separation ---
