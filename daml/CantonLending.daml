@@ -577,7 +577,7 @@ template CantonLendingService
             amount = coin.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
@@ -629,7 +629,7 @@ template CantonLendingService
             amount = usdc.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
@@ -681,7 +681,7 @@ template CantonLendingService
             amount = usdcx.amount
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
@@ -734,7 +734,7 @@ template CantonLendingService
             amount = smusd.shares
             depositedAt = now
             lastUpdatedAt = now
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
@@ -831,7 +831,7 @@ template CantonLendingService
             accruedInterest = 0.0
             lastAccrualTime = now
             interestRateBps
-            privacyObservers = userObs
+            privacyObservers = observers <> userObs
 
         -- Update service (DAML-H-02: track Canton supply)
         newService <- create this with

@@ -886,6 +886,8 @@ contract TreasuryV2 is
                 // slither-disable-next-line calls-loop
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
+                    // Clear temporary allowance after use (defense in depth).
+                    asset.forceApprove(strat, 0);
                 } catch {
                     emit RebalanceDepositFailed(strat, toDeposit);
                     asset.forceApprove(strat, 0); // Clear approval on failure
