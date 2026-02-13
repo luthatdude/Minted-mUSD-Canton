@@ -12,7 +12,10 @@
  */
 
 import { ethers } from "ethers";
-import { readSecret } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity, createSigner } from "./utils";
+
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -28,7 +31,13 @@ interface KeeperConfig {
 }
 
 const DEFAULT_CONFIG: KeeperConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01: No insecure fallback — require explicit RPC URL
+  ethereumRpcUrl: (() => {
+    const url = process.env.ETHEREUM_RPC_URL;
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required (no insecure default)");
+    requireHTTPS(url, "ETHEREUM_RPC_URL");
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
@@ -110,7 +119,7 @@ const TREASURY_ABI = [
 
 class YieldKeeper {
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
   private config: KeeperConfig;
   private running: boolean = false;
@@ -118,11 +127,22 @@ class YieldKeeper {
   constructor(config: KeeperConfig) {
     this.config = config;
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.keeperPrivateKey, this.provider);
+    // FIX C-07: Signer is initialised asynchronously via init()
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
       TREASURY_ABI,
-      this.wallet
+      this.provider
+    );
+  }
+
+  /** Initialise the KMS-backed (or fallback) signer */
+  async init(): Promise<void> {
+    this.wallet = await createSigner(this.provider, "keeper_private_key", "KEEPER_PRIVATE_KEY");
+    // Re-bind treasury with signing capability
+    this.treasury = new ethers.Contract(
+      this.config.treasuryAddress,
+      TREASURY_ABI,
+      this.wallet,
     );
   }
 
@@ -130,9 +150,12 @@ class YieldKeeper {
    * Start the keeper loop
    */
   async start(): Promise<void> {
+    // FIX C-07: Initialise signer (KMS or fallback)
+    await this.init();
     console.log("🚀 Yield Keeper starting...");
     console.log(`   Treasury: ${this.config.treasuryAddress}`);
-    console.log(`   Keeper wallet: ${this.wallet.address}`);
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`   Keeper wallet: ${walletAddress}`);
     console.log(`   Poll interval: ${this.config.pollIntervalMs}ms`);
 
     // Verify connection and configuration

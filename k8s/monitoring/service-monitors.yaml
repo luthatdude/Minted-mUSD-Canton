@@ -1,0 +1,128 @@
+# Minted Protocol - ServiceMonitor Definitions
+# INFRA-H-03: Prometheus service discovery for all Canton namespace services.
+# Requires prometheus-operator CRDs (ServiceMonitor, PodMonitor).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: canton-participant-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: canton-participant
+spec:
+  selector:
+    matchLabels:
+      app: canton-participant
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+      scheme: http
+      tlsConfig:
+        insecureSkipVerify: false
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nginx-proxy-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: nginx-proxy
+spec:
+  selector:
+    matchLabels:
+      app: nginx-proxy
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /nginx_status
+      scheme: http
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: postgres
+spec:
+  selector:
+    matchLabels:
+      app: canton-postgres
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scheme: http
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+# PodMonitor for relay services (no Service object — metrics exposed on sidecar)
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: bridge-relay-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: bridge-relay
+spec:
+  selector:
+    matchLabels:
+      app: bridge-relay
+  podMetricsEndpoints:
+    - port: health
+      interval: 15s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: price-oracle-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: price-oracle
+spec:
+  selector:
+    matchLabels:
+      app: price-oracle
+  podMetricsEndpoints:
+    - port: health
+      interval: 15s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: yield-sync-metrics
+  namespace: canton
+  labels:
+    app: minted
+    component: yield-sync
+spec:
+  selector:
+    matchLabels:
+      app: yield-sync
+  podMetricsEndpoints:
+    - port: health
+      interval: 30s
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - canton

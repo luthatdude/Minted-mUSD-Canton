@@ -39,7 +39,8 @@ describe("TreasuryReceiver", function () {
       await wormhole.getAddress(),
       await tokenBridge.getAddress(),
       await directMint.getAddress(),
-      treasury.address
+      treasury.address,
+      admin.address // timelock = admin for testing
     );
 
     // Grant roles
@@ -78,7 +79,7 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should revert on zero address parameters", async function () {
-      const { usdc, wormhole, tokenBridge, directMint, treasury } = await loadFixture(deployFixture);
+      const { usdc, wormhole, tokenBridge, directMint, treasury, admin } = await loadFixture(deployFixture);
       const TreasuryReceiver = await ethers.getContractFactory("TreasuryReceiver");
 
       await expect(
@@ -87,7 +88,8 @@ describe("TreasuryReceiver", function () {
           await wormhole.getAddress(),
           await tokenBridge.getAddress(),
           await directMint.getAddress(),
-          treasury.address
+          treasury.address,
+          admin.address
         )
       ).to.be.revertedWithCustomError(TreasuryReceiver, "InvalidAddress");
 
@@ -97,7 +99,8 @@ describe("TreasuryReceiver", function () {
           ethers.ZeroAddress,
           await tokenBridge.getAddress(),
           await directMint.getAddress(),
-          treasury.address
+          treasury.address,
+          admin.address
         )
       ).to.be.revertedWithCustomError(TreasuryReceiver, "InvalidAddress");
     });
@@ -364,10 +367,13 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should allow emergency withdrawal", async function () {
-      const { receiver, usdc, admin, user1 } = await loadFixture(deployFixture);
+      const { receiver, usdc, admin, user1, pauser } = await loadFixture(deployFixture);
 
       // Send some USDC to receiver
       await usdc.mint(await receiver.getAddress(), ethers.parseUnits("1000", 6));
+
+      // USDC withdrawal only allowed when paused (true emergency)
+      await receiver.connect(pauser).pause();
 
       await receiver.connect(admin).emergencyWithdraw(
         await usdc.getAddress(),

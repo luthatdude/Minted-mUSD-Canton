@@ -62,14 +62,12 @@ jobs:
 
       - name: Check coverage threshold
         run: |
-          # FIX P1: Coverage threshold is now BLOCKING for institutional audit readiness
           COVERAGE=$(cat coverage/coverage-summary.json 2>/dev/null | jq -r '.total.statements.pct // 0' || echo "0")
           echo "Statement coverage: $COVERAGE%"
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "::error::Coverage below 80% threshold — institutional audit requires ≥80%"
+          if (( $(echo "$COVERAGE < 90" | bc -l) )); then
+            echo "::error::Coverage below 90% threshold — institutional audit requires ≥90%"
             exit 1
           fi
-        # FIX P1: Removed continue-on-error to make coverage gate blocking
 
       - name: Upload coverage
         if: always()
@@ -78,6 +76,32 @@ jobs:
           name: solidity-coverage
           path: coverage/
           retention-days: 14
+
+  # ============================================================
+  #  FOUNDRY: Fuzz & Invariant Tests
+  # ============================================================
+  foundry:
+    name: Foundry Fuzz & Invariant Tests
+    runs-on: ubuntu-latest
+    needs: solidity
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Run Foundry tests
+        run: forge test -vvv
 
   # ============================================================
   #  SOLIDITY: Static Analysis & Security Audit
@@ -150,6 +174,78 @@ jobs:
         with:
           sarif_file: results.sarif
         continue-on-error: true  # SARIF upload can fail on forks
+
+  # ============================================================
+  #  M-05: UUPS Storage Layout Validation
+  # ============================================================
+  storage-layout:
+    name: UUPS Storage Layout Check
+    runs-on: ubuntu-latest
+    needs: solidity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate UUPS storage layouts
+        run: npx hardhat run scripts/validate-storage-layout.ts
+
+  # ============================================================
+  #  MYTHRIL: Symbolic Execution Analysis
+  # ============================================================
+  mythril:
+    name: Mythril Symbolic Analysis
+    runs-on: ubuntu-latest
+    needs: solidity
+    continue-on-error: true  # Advisory — Mythril can timeout on complex contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Install Mythril
+        run: |
+          pip3 install mythril
+
+      - name: Run Mythril on core contracts
+        run: |
+          CORE_CONTRACTS=(
+            "contracts/BorrowModule.sol"
+            "contracts/CollateralVault.sol"
+            "contracts/DirectMintV2.sol"
+            "contracts/LiquidationEngine.sol"
+            "contracts/SMUSD.sol"
+            "contracts/PriceOracle.sol"
+            "contracts/MUSD.sol"
+          )
+          EXIT_CODE=0
+          for contract in "${CORE_CONTRACTS[@]}"; do
+            echo "═══════════════════════════════════════════════"
+            echo "  Analyzing: $contract"
+            echo "═══════════════════════════════════════════════"
+            myth analyze "$contract" \
+              --solv 0.8.26 \
+              --execution-timeout 300 \
+              --max-depth 12 \
+              --strategy bfs \
+              2>&1 || EXIT_CODE=$?
+          done
+          exit $EXIT_CODE
 
   # ============================================================
   #  DAML: Build & Test

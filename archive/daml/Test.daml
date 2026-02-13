@@ -469,7 +469,7 @@ musdAssetTest = script do
       observers = [alice]
 
   -- Direct mint (admin/bootstrap path)
-  -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
+  -- Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
     exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
@@ -572,7 +572,7 @@ musdAttestationMintTest = script do
       currentSupply = 0.0
       observers = [alice]
 
-  -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
+  -- Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
     exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
@@ -599,7 +599,7 @@ musdTransferTest = script do
       currentSupply = 0.0
       observers = [alice]
 
-  -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
+  -- Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
     exerciseCmd roleCid MintedMUSD.IssuerRole_Mint with
       mintOwner = alice
@@ -635,7 +635,7 @@ musdTransferTest = script do
 
 
 -- Test: User-initiated mint request (MintRequest)
--- FIX 5C-C01: Updated to pass IssuerRole CID for supply cap enforcement
+-- Updated to pass IssuerRole CID for supply cap enforcement
 musdMintRequestTest : Script ()
 musdMintRequestTest = script do
   issuer <- allocateParty "Issuer"
@@ -660,7 +660,7 @@ musdMintRequestTest = script do
       requestObservers = []
 
   -- Issuer approves (now requires IssuerRole for supply cap)
-  -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
+  -- Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [issuer, alice] [] do
     exerciseCmd requestCid MintedMUSD.MintRequest_Approve with
       issuerRoleCid = roleCid
@@ -703,7 +703,7 @@ musdMintRequestTest = script do
 
 
 -- Test: Issuer-initiated mint proposal (MintProposal)
--- FIX 5C-C02: Updated to pass IssuerRole CID for supply cap enforcement
+-- Updated to pass IssuerRole CID for supply cap enforcement
 musdMintProposalTest : Script ()
 musdMintProposalTest = script do
   issuer <- allocateParty "Issuer"
@@ -728,7 +728,7 @@ musdMintProposalTest = script do
       proposalObservers = []
 
   -- Alice accepts (now requires IssuerRole for supply cap)
-  -- FIX: Use submitMulti for dual-signatory MUSD creation (provider + owner)
+  -- Use submitMulti for dual-signatory MUSD creation (provider + owner)
   (roleCid2, musdCid) <- submitMulti [alice, issuer] [] do
     exerciseCmd proposalCid MintedMUSD.MintProposal_Accept with
       issuerRoleCid = roleCid

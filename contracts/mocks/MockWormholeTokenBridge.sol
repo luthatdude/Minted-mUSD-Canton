@@ -48,7 +48,7 @@ contract MockWormholeTokenBridge {
     }
 
     /// @notice Mock transferTokensWithPayload for DepositRouter testing (with recipient payload)
-    /// @dev FIX P0: Added to support transferTokensWithPayload in DepositRouter
+    /// @dev Added to support transferTokensWithPayload in DepositRouter
     function transferTokensWithPayload(
         address token,
         uint256 amount,

@@ -1,4 +1,4 @@
-// FIX FE-C01: Updated to TreasuryV2 ABI (was stale v1 with non-existent functions)
+// Updated to TreasuryV2 ABI (was stale v1 with non-existent functions)
 export const TREASURY_ABI = [
   // View functions
   "function totalValue() view returns (uint256)",

@@ -38,7 +38,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
 
     const WETH = "0x0000000000000000000000000000000000000001";
-    await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18);
+    await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18, 0);
 
     return { oracle, ethFeed, deployer, admin, user, WETH, ORACLE_ADMIN_ROLE };
   }
@@ -342,7 +342,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const btcFeed = await MockFeed.deploy(8, 5000000000000n); // $50000
 
       const WBTC = "0x0000000000000000000000000000000000000002";
-      await oracle.connect(admin).setFeed(WBTC, await btcFeed.getAddress(), 3600, 8);
+      await oracle.connect(admin).setFeed(WBTC, await btcFeed.getAddress(), 3600, 8, 0);
 
       const oneBTC = 100000000n; // 1 BTC in 8 decimals
       const value = await oracle.getValueUsdUnsafe(WBTC, oneBTC);
@@ -375,7 +375,7 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
       const MockFeed = await ethers.getContractFactory("MockAggregatorV3");
       const newFeed = await MockFeed.deploy(8, 300000000000n); // $3000
 
-      await oracle.connect(admin).setFeed(WETH, await newFeed.getAddress(), 3600, 18);
+      await oracle.connect(admin).setFeed(WETH, await newFeed.getAddress(), 3600, 18, 0);
       expect(await oracle.lastKnownPrice(WETH)).to.equal(ethers.parseEther("3000"));
     });
   });
@@ -400,7 +400,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();
@@ -1449,7 +1449,7 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
     const collateralVault = await CollateralVault.deploy();

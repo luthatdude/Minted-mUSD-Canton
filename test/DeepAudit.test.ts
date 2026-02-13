@@ -20,6 +20,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { timelockSetFeed, timelockAddCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockAddStrategy, timelockRemoveStrategy, refreshFeeds } from "./helpers/timelock";
 
 describe("DEEP AUDIT – Full Protocol Integration", function () {
   // ── actors ──
@@ -89,7 +90,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy InterestRateModel (constructor takes admin address)
     const IRMF = await ethers.getContractFactory("InterestRateModel");
-    interestRateModel = await IRMF.deploy(admin.address);
+    interestRateModel = await IRMF.deploy(admin.address, admin.address);
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
@@ -97,7 +98,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(admin.address);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -106,11 +107,12 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       admin.address, // placeholder vault — will update later
       admin.address,
       admin.address, // fee recipient
+      admin.address
     ]);
 
     // Deploy SMUSD (constructor takes IERC20 _musd)
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), admin.address);
 
     // Deploy BorrowModule (constructor: vault, oracle, musd, interestRateBps, minDebt)
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -119,7 +121,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% fixed fallback rate
-      ethers.parseEther("100") // 100 mUSD min debt
+      ethers.parseEther("100"), // 100 mUSD min debt
+      admin.address
     );
 
     // Deploy DirectMintV2 (constructor: usdc, musd, treasury, feeRecipient)
@@ -128,7 +131,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      admin.address // fee recipient
+      admin.address, // fee recipient
+      admin.address
     );
 
     // Deploy LiquidationEngine (constructor: vault, borrowModule, oracle, musd, closeFactorBps)
@@ -138,7 +142,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000 // 50% close factor
+      5000, // 50% close factor
+      admin.address
     );
 
     // Deploy MockStrategy (constructor: asset, treasury)
@@ -160,7 +165,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await vault.grantRole(BORROW_MODULE_ROLE, await borrowModule.getAddress());
     await vault.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await vault.grantRole(PAUSER_ROLE, pauser.address);
-    await vault.setBorrowModule(await borrowModule.getAddress());
+    await timelockSetBorrowModule(vault, admin, await borrowModule.getAddress());
 
     // BorrowModule: LIQUIDATION_ROLE for LiquidationEngine
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
@@ -168,7 +173,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     // BorrowModule: set InterestRateModel
     const BM_BORROW_ADMIN = ethers.keccak256(ethers.toUtf8Bytes("BORROW_ADMIN_ROLE"));
     await borrowModule.grantRole(BM_BORROW_ADMIN, admin.address);
-    await borrowModule.setInterestRateModel(await interestRateModel.getAddress());
+    await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
 
     // Treasury roles — grant VAULT_ROLE to DirectMint
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
@@ -177,13 +182,15 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await directMint.grantRole(MINTER_ROLE, minter.address);
 
     // ── Setup Price Feeds ──
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await weth.getAddress(),
       await ethFeed.getAddress(),
       3600,
       WETH_DECIMALS
     );
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await wbtc.getAddress(),
       await btcFeed.getAddress(),
       3600,
@@ -191,18 +198,23 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     );
 
     // ── Setup Collateral ──
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       500   // 5% penalty
     );
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await wbtc.getAddress(),
       7000, // 70% LTV
       7500, // 75% liquidation threshold
       500   // 5% penalty
     );
+
+    // Refresh mock Chainlink feeds after timelock calls advanced block time
+    await refreshFeeds(ethFeed, btcFeed);
 
     // ── Mint test tokens ──
     await usdc.mint(user1.address, ethers.parseUnits("1000000", USDC_DECIMALS));
@@ -351,7 +363,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       for (let i = 0; i < 48; i++) {
         const MockERC20F = await ethers.getContractFactory("MockERC20");
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 7000, 7500, 500);
+        await timelockAddCollateral(vault, admin, await token.getAddress(), 7000, 7500, 500);
       }
 
       const MockERC20F = await ethers.getContractFactory("MockERC20");
@@ -657,16 +669,19 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const hf = await borrowModule.healthFactor(user1.address);
 
-      if (hf < 10000n) {
-        await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+      // Assert health factor is actually below threshold instead of
+      // silently skipping all assertions when it's not
+      expect(hf).to.be.lt(10000n, "Health factor should be below 1.0 for liquidation test");
 
-        const btcBefore = await wbtc.balanceOf(liquidator.address);
-        await liquidationEngine.connect(liquidator).liquidate(
-          user1.address,
-          await wbtc.getAddress(),
-          ethers.parseEther("5000")
-        );
-        const btcAfter = await wbtc.balanceOf(liquidator.address);
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+
+      const btcBefore = await wbtc.balanceOf(liquidator.address);
+      await liquidationEngine.connect(liquidator).liquidate(
+        user1.address,
+        await wbtc.getAddress(),
+        ethers.parseEther("5000")
+      );
+      const btcAfter = await wbtc.balanceOf(liquidator.address);
 
         expect(btcAfter).to.be.gt(btcBefore);
 
@@ -675,7 +690,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         // Use 5% tolerance due to stepped circuit-breaker prices
         expect(seized).to.be.gt(0n);
         expect(seized).to.be.lt(ethers.parseUnits("1", WBTC_DECIMALS));
-      }
     });
   });
 
@@ -690,7 +704,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -706,7 +721,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should keep reserve buffer in treasury", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -727,7 +743,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -755,8 +772,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const MSF2 = await ethers.getContractFactory("MockStrategy");
       const strategy2 = await MSF2.deploy(await usdc.getAddress(), await treasury.getAddress());
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 4500, 2000, 8000, true);
-      await treasury.addStrategy(await strategy2.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await strategy2.getAddress(), 4500, 2000, 8000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -778,7 +795,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should handle strategy removal with full withdrawal", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 9000, 5000, 10000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -787,7 +804,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const stratValBefore = await mockStrategy.totalValue();
       expect(stratValBefore).to.be.gt(0n);
 
-      await treasury.removeStrategy(await mockStrategy.getAddress());
+      await timelockRemoveStrategy(treasury, admin, await mockStrategy.getAddress());
 
       const stratValAfter = await mockStrategy.totalValue();
       expect(stratValAfter).to.equal(0n);
@@ -870,12 +887,17 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         await musd.getAddress(),
         11000, // 110% collateral ratio
         ethers.parseEther("1000000"), // 1M daily limit
+        admin.address
       ]);
 
       const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));
       await bridge.grantRole(VALIDATOR_ROLE, validator1.address);
       await bridge.grantRole(VALIDATOR_ROLE, validator2.address);
       await bridge.grantRole(VALIDATOR_ROLE, validator3.address);
+
+      // Grant RELAYER_ROLE so default signer can call processAttestation()
+      const RELAYER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("RELAYER_ROLE"));
+      await bridge.grantRole(RELAYER_ROLE, admin.address);
 
       // Grant CAP_MANAGER_ROLE to bridge
       await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());

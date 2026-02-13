@@ -43,7 +43,6 @@ type Bps = Int
 -- ============================================================
 
 -- | CantonUSDC - Represents USDC deposited on Canton side.
--- FIX H-01: Added to V3 for deposit verification in CantonMint_Mint
 template CantonUSDC
   with
     issuer : Party
@@ -58,7 +57,6 @@ template CantonUSDC
 -- ============================================================
 
 -- | CollateralDepositProof - Verifies external collateral deposits for pool swaps.
--- FIX DC-03: Added to prevent Swap_Collateral_For_mUSD from creating mUSD without
 -- actual backing. The relay or validator must create this proof after verifying
 -- the on-chain deposit event (e.g., ERC20 transfer to bridge contract).
 template CollateralDepositProof
@@ -75,12 +73,15 @@ template CollateralDepositProof
     signatory verifier
     observer depositor
 
+    -- DAML-H-01: Allow both used and unused proofs on-ledger (used proofs serve as
+    -- immutable audit trail). Consumption is enforced by the choice assertion.
     ensure amount > 0.0
         && T.length ethTxHash == 66  -- "0x" + 64 hex chars
         && blockNumber > 0
-        && not used
 
     -- | Consume this proof in a pool swap (one-time use)
+    -- DAML-H-01: Assertion-based guard prevents logical replay.
+    -- The consumed proof remains on-ledger as an immutable audit record.
     choice CollateralProof_Consume : ContractId CollateralDepositProof
       with
         consumer : Party
@@ -95,30 +96,26 @@ template CollateralDepositProof
 -- ============================================================
 
 -- | MUSDSupplyService - Global supply cap tracking for vault borrows.
--- FIX DL-C03: Ensures Vault.AdjustLeverage respects global supply limits.
--- FIX DL-C01: Added governance co-signer for institutional-grade access control.
 --   - Large mints (above largeMintThreshold) require governance pre-approval
 --   - Supply cap updates require governance approval
 --   - Operator handles day-to-day operations within approved limits
 template MUSDSupplyService
   with
     operator : Party              -- Day-to-day operator (e.g., relay service)
-    governance : Party            -- FIX DL-C01: Governance multi-sig/DAO
+    governance : Party
     supplyCap : Money
     currentSupply : Money
-    largeMintThreshold : Money    -- FIX DL-C01: Mints above this require approval
-    pendingLargeMints : [(Party, Money)]  -- FIX DL-C01: Pre-approved large mints
+    largeMintThreshold : Money
+    pendingLargeMints : [(Party, Money)]
     observers : [Party]
   where
-    signatory operator, governance  -- FIX DL-C01: Both must sign
+    signatory operator, governance
     observer observers
 
     ensure supplyCap >= currentSupply
         && largeMintThreshold > 0.0
 
     -- | Vault borrow mint: Used by Vault.AdjustLeverage for supply-cap-tracked minting
-    -- FIX DL-C03: This enables vault leverage to respect global supply caps
-    -- FIX DL-C01: Large mints require pre-approval from governance
     choice SupplyService_VaultMint : (ContractId MUSDSupplyService, ContractId MintedMUSD)
       with
         borrower : Party
@@ -130,7 +127,6 @@ template MUSDSupplyService
         assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)
         
-        -- FIX DL-C01: Check if this is a large mint requiring pre-approval
         let isLargeMint = borrowAmount >= largeMintThreshold
         let hasApproval = Prelude.any (\(p, amt) -> p == borrower && amt >= borrowAmount) pendingLargeMints
         assertMsg "LARGE_MINT_REQUIRES_GOVERNANCE_APPROVAL" (not isLargeMint || hasApproval)
@@ -144,7 +140,6 @@ template MUSDSupplyService
           agreementUri = agreementUri
           observers = []
         
-        -- FIX H-02: Reduce approval by consumed amount (not remove entirely)
         -- This allows a $10M approval to be used across multiple mints
         let reduceApproval (p, amt) = 
               if p == borrower && amt >= borrowAmount
@@ -159,7 +154,6 @@ template MUSDSupplyService
           pendingLargeMints = newPendingMints
         return (newService, musdCid)
 
-    -- | FIX DL-C01: Governance pre-approves a large mint for a specific borrower
     -- This allows governance to authorize large mints in advance
     choice SupplyService_ApproveLargeMint : ContractId MUSDSupplyService
       with
@@ -172,7 +166,6 @@ template MUSDSupplyService
         create this with
           pendingLargeMints = (borrower, maxAmount) :: pendingLargeMints
 
-    -- | FIX DL-C01: Revoke a pending large mint approval
     choice SupplyService_RevokeLargeMint : ContractId MUSDSupplyService
       with
         borrower : Party
@@ -181,16 +174,15 @@ template MUSDSupplyService
         create this with
           pendingLargeMints = filter (\(p, _) -> p /= borrower) pendingLargeMints
 
-    -- | Update the supply cap (FIX DL-C01: requires governance, not just operator)
+    -- | Update the supply cap
     choice SupplyService_UpdateCap : ContractId MUSDSupplyService
       with
         newCap : Money
-      controller governance  -- FIX DL-C01: Only governance can update cap
+      controller governance
       do
         assertMsg "CAP_BELOW_CURRENT_SUPPLY" (newCap >= currentSupply)
         create this with supplyCap = newCap
 
-    -- | FIX DL-C01: Update the large mint threshold (governance only)
     choice SupplyService_UpdateThreshold : ContractId MUSDSupplyService
       with
         newThreshold : Money
@@ -228,7 +220,7 @@ template MintedMUSD
       <> "Agreement hash: " <> agreementHash
       <> " | URI: " <> agreementUri
 
-    -- | Transfer mUSD to another party (FIX C-2: Proposal pattern for proper authorization)
+    -- | Transfer mUSD to another party
     -- Creates a TransferProposal that the newOwner must accept
     choice MUSD_Transfer : ContractId MUSDTransferProposal
       with
@@ -251,9 +243,11 @@ template MintedMUSD
     choice MUSD_Split : (ContractId MintedMUSD, ContractId MintedMUSD)
       with
         splitAmount : Money
-      controller owner
+        operator : Party
+      controller issuer, owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        assertMsg "Only issuer can split" (issuer == operator)
         assertMsg "SPLIT_AMOUNT_POSITIVE" (splitAmount > 0.0)
         assertMsg "SPLIT_AMOUNT_LESS_THAN_TOTAL" (splitAmount < amount)
         c1 <- create this with amount = splitAmount
@@ -264,9 +258,11 @@ template MintedMUSD
     choice MUSD_Merge : ContractId MintedMUSD
       with
         otherCid : ContractId MintedMUSD
-      controller owner
+        operator : Party
+      controller issuer, owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
+        assertMsg "Only issuer can merge" (issuer == operator)
         other <- fetch otherCid
         assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
         assertMsg "OWNER_MISMATCH" (other.owner == owner)
@@ -312,7 +308,6 @@ template MintedMUSD
       do
         create this with blacklisted = newStatus
 
--- | FIX C-2: MUSDTransferProposal - Proposal pattern for proper authorization
 -- Receiver must explicitly accept the transfer, providing proper signatory structure
 template MUSDTransferProposal
   with
@@ -344,7 +339,6 @@ template MUSDTransferProposal
           observers
 
     -- | Sender cancels the proposal
-    -- FIX C-12: Return tokens to sender instead of destroying them
     choice TransferProposal_Cancel : ContractId MintedMUSD
       controller sender
       do
@@ -393,28 +387,41 @@ template PriceOracle
 
     ensure price > 0.0
 
-    -- FIX M-26: Explicit controller for nonconsuming choice
-    -- FIX H-01: Added maxAge parameter for staleness check
     -- Any observer can query the price (read-only operation)
     nonconsuming choice Oracle_GetPrice : Money
       with
         requester : Party
-        maxStaleness : RelTime  -- FIX H-01: Maximum acceptable age of price data
+        maxStaleness : RelTime
       controller requester
       do
         assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == provider)
-        -- FIX H-01: Check price staleness
         now <- getTime
         let age = subTime now lastUpdated
         assertMsg "PRICE_STALE" (age <= maxStaleness)
         return price
 
+    -- FIX D-M-04: Unsafe price query that skips staleness check.
+    -- Used exclusively by liquidation paths where blocking on stale data
+    -- would allow bad debt to accumulate during oracle outages.
+    nonconsuming choice Oracle_GetPriceUnsafe : Money
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester `elem` observers || requester == provider)
+        return price
+
+    -- DAML-M-07: Added price movement cap to prevent oracle manipulation
     choice Oracle_UpdatePrice : ContractId PriceOracle
       with
         newPrice : Money
       controller provider
       do
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPrice > 0.0)
+        -- DAML-M-07: Cap price movement to ±50% per update
+        let maxPrice = price * 1.5
+        let minPrice = price * 0.5
+        assertMsg "PRICE_MOVE_TOO_LARGE" (newPrice >= minPrice && newPrice <= maxPrice)
         now <- getTime
         create this with 
           price = newPrice
@@ -425,7 +432,6 @@ template PriceOracle
 -- ============================================================
 
 -- | LiquidityPool - On-chain DEX for atomic leverage operations.
--- FIX C-01: Swaps now require actual token contract IDs for verification
 template LiquidityPool
   with
     operator : Party
@@ -439,14 +445,13 @@ template LiquidityPool
 
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
 
-    -- | Swap mUSD for collateral (FIX C-01: requires actual token)
+    -- | Swap mUSD for collateral
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, Money)
       with
-        musdCid : ContractId MintedMUSD  -- FIX: Require actual token contract
+        musdCid : ContractId MintedMUSD  -- Require actual token contract
         receiver : Party
       controller receiver
       do
-        -- FIX C-01: Verify token ownership and consume it
         musd <- fetch musdCid
         assertMsg "NOT_OWNER" (musd.owner == receiver)
         assertMsg "TOKEN_BLACKLISTED" (not musd.blacklisted)
@@ -463,15 +468,13 @@ template LiquidityPool
         return (newPool, collateralOut)
 
     -- | Swap collateral for mUSD
-    -- FIX DC-03: Requires CollateralDepositProof to prevent unbacked mUSD creation.
     -- The proof must be created by a validator after verifying the on-chain deposit.
     choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money, ContractId CollateralDepositProof)
       with
-        depositProofCid : ContractId CollateralDepositProof  -- FIX DC-03: Proof of deposit
+        depositProofCid : ContractId CollateralDepositProof
         receiver : Party
       controller operator
       do
-        -- FIX DC-03: Fetch and validate the deposit proof
         proof <- fetch depositProofCid
         assertMsg "PROOF_ALREADY_USED" (not proof.used)
         assertMsg "WRONG_DEPOSITOR" (proof.depositor == receiver)
@@ -520,7 +523,6 @@ template Vault
     signatory operator, owner
     observer observers
 
-    -- FIX C-03: Validate VaultConfig bounds to prevent malicious configuration
     ensure collateralAmount >= 0.0 
       && principalDebt >= 0.0
       && config.liquidationThreshold >= 1.0        -- At least 100% collateralization
@@ -534,7 +536,6 @@ template Vault
       && config.dustThreshold >= 0.0
 
     -- | Calculate current total debt including accrued interest
-    -- FIX M-27: Explicit controller for nonconsuming choice
     nonconsuming choice Vault_GetTotalDebt : Money
       with
         requester : Party
@@ -579,7 +580,6 @@ template Vault
           accruedInterest = accruedInterest + newInterest
           lastInterestUpdate = now
 
-    -- | FIX H-03: Update vault config (operator-controlled, consuming choice)
     -- Must live on Vault so that Vault's signatories {operator, owner} are in
     -- the authorization context when the contract is archived and recreated.
     choice Vault_UpdateConfig : ContractId Vault
@@ -591,14 +591,13 @@ template Vault
 
     -- | AdjustLeverage - Atomic leverage loop
     -- deposit collateral + borrow mUSD + swap via DEX in one transaction
-    -- FIX DL-C03: Now requires MUSDSupplyService CID for supply-cap-tracked minting
     choice AdjustLeverage : (ContractId Vault, ContractId MUSDSupplyService)
       with
         depositAmount : Money
         borrowAmount : Money
         poolCid : ContractId LiquidityPool
         oracleCid : ContractId PriceOracle
-        supplyServiceCid : ContractId MUSDSupplyService  -- FIX DL-C03: Supply cap tracking
+        supplyServiceCid : ContractId MUSDSupplyService
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
@@ -609,12 +608,12 @@ template Vault
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
         
-        -- Get oracle price (FIX H-01: with staleness check - 1 hour max)
+        -- Get oracle price
         price <- exercise oracleCid Oracle_GetPrice with 
           requester = owner
           maxStaleness = hours 1
         
-        -- Recursive leverage loop (FIX C-01: mint via SupplyService for supply tracking)
+        -- Recursive leverage loop
         let loopFn (col, debt, pCid, svcCid) _ = do
               let colValue = col * price
               let maxDebt = colValue / config.liquidationThreshold
@@ -622,7 +621,6 @@ template Vault
               if borrowable < 1.0 
                 then return (col, debt, pCid, svcCid)
                 else do
-                  -- FIX DL-C03: Mint via MUSDSupplyService for supply cap enforcement
                   (newSvcCid, musdCid) <- exercise svcCid SupplyService_VaultMint with
                     borrower = owner
                     borrowAmount = borrowable
@@ -649,11 +647,32 @@ template Vault
         return (vaultCid, finalSvcCid)
 
     -- | Repay debt
+    -- DAML-H-05: Added token verification (blacklist check + issuer match)
     choice Vault_Repay : ContractId Vault
       with
         repayAmount : Money
+        musdCid : ContractId MintedMUSD
       controller owner
       do
+        musd <- fetch musdCid
+        assertMsg "REPAY_MUSD_OWNER_MISMATCH" (musd.owner == owner)
+        assertMsg "REPAY_MUSD_ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "REPAY_MUSD_INSUFFICIENT" (musd.amount >= repayAmount)
+        assertMsg "REPAY_TOKEN_BLACKLISTED" (not musd.blacklisted)
+        -- Archive (consume) the mUSD token as payment
+        archive musdCid
+        -- Return change if mUSD amount exceeds repayAmount
+        when (musd.amount > repayAmount) $ do
+          _ <- create MintedMUSD with
+            issuer = musd.issuer
+            owner = owner
+            amount = musd.amount - repayAmount
+            blacklisted = musd.blacklisted
+            agreementHash = musd.agreementHash
+            agreementUri = musd.agreementUri
+            observers = musd.observers
+          return ()
+
         now <- getTime
         let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
         let secondsElapsed = intToNumeric (elapsed / 1000000)
@@ -685,7 +704,7 @@ template Vault
         assertMsg "INSUFFICIENT_COLLATERAL" (collateralAmount >= withdrawAmount)
         let newCollateral = collateralAmount - withdrawAmount
         
-        -- Health check (FIX H-01: with staleness check)
+        -- Health check
         price <- exercise oracleCid Oracle_GetPrice with 
           requester = owner
           maxStaleness = hours 1
@@ -703,6 +722,8 @@ template Vault
         oracleCid : ContractId PriceOracle
       controller liquidator
       do
+        assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
+
         -- Calculate current debt with interest
         now <- getTime
         let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
@@ -711,10 +732,12 @@ template Vault
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         let totalDebt = principalDebt + accruedInterest + newInterest
         
-        -- Check if vault is liquidatable (FIX H-01: with staleness check)
-        price <- exercise oracleCid Oracle_GetPrice with 
+        -- FIX D-M-04: Use Oracle_GetPriceUnsafe for liquidation path.
+        -- During volatile markets, Oracle_GetPrice may reject stale data,
+        -- blocking liquidations and allowing bad debt to accumulate.
+        -- Liquidations MUST proceed with the latest available price.
+        price <- exercise oracleCid Oracle_GetPriceUnsafe with 
           requester = liquidator
-          maxStaleness = hours 1
         let colValue = collateralAmount * price
         let healthBefore = colValue / totalDebt
         assertMsg "VAULT_HEALTHY" (healthBefore < config.liquidationThreshold)
@@ -746,9 +769,9 @@ template Vault
           accruedInterest = 0.0
           lastInterestUpdate = now
         
-        -- Create immutable receipt (FIX H-02: operator signs the receipt)
+        -- Create immutable receipt
         receipt <- create LiquidationReceipt with
-          operator  -- FIX H-02: Use vault's operator as receipt signer
+          operator
           vaultOwner = owner
           liquidator
           debtRepaid = actualRepay
@@ -806,7 +829,6 @@ template VaultManager
       do create this with defaultConfig = newConfig
 
     -- | Update vault config for a specific vault
-    -- FIX H-03: Exercise Vault_UpdateConfig on the Vault contract directly.
     -- This brings Vault's signatories {operator, owner} into the authorization
     -- context, allowing the consuming choice to archive and recreate the Vault.
     -- Previously, manual archive from VaultManager failed because only {operator}
@@ -824,12 +846,11 @@ template VaultManager
 -- ============================================================
 
 -- | LiquidationReceipt - Immutable audit trail per liquidation.
--- FIX H-02: Changed to operator-signed pattern to make receipt creatable
 -- The operator (protocol) signs the receipt, with both vaultOwner and liquidator as observers
 -- This allows the receipt to be created within the Vault.Liquidate choice context
 template LiquidationReceipt
   with
-    operator : Party          -- FIX H-02: Protocol operator signs
+    operator : Party
     vaultOwner : Party
     liquidator : Party
     debtRepaid : Money
@@ -842,7 +863,7 @@ template LiquidationReceipt
     isFullLiquidation : Bool
     timestamp : Time
   where
-    signatory operator  -- FIX H-02: Only operator signs (can create in Vault context)
+    signatory operator
     observer vaultOwner, liquidator  -- Both parties can see the receipt
 
 -- ============================================================
@@ -932,16 +953,14 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
-    -- FIX H-01: Now requires actual CantonUSDC token to verify deposit
     choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
-        depositCid : ContractId CantonUSDC  -- FIX H-01: Require actual token
+        depositCid : ContractId CantonUSDC
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
         
-        -- FIX H-01: Fetch and verify the deposit token
         deposit <- fetch depositCid
         assertMsg "DEPOSIT_OWNER_MISMATCH" (deposit.owner == user)
         let depositAmount = deposit.amount
@@ -949,7 +968,6 @@ template CantonDirectMint
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
         
-        -- FIX H-01: Archive (consume) the deposit token
         archive depositCid
         
         let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
@@ -1053,6 +1071,9 @@ template CantonDirectMint
 data SmUSDConfig = SmUSDConfig with
     cooldownSeconds : Int
     maxTotalDeposits : Money
+    -- DAML-H-06: Yield bound parameters to prevent unbounded yield injection
+    maxYieldBps : Int          -- Max yield per epoch as bps of totalAssets (default 500 = 5%)
+    maxEpochGap : Int          -- Max epochs between syncs (default 100)
   deriving (Eq, Show)
 
 -- | CantonSMUSD - Yield vault synced from Ethereum attestations.
@@ -1060,6 +1081,7 @@ data SmUSDConfig = SmUSDConfig with
 template CantonSMUSD
   with
     operator : Party
+    governance : Party
     totalShares : Money
     totalAssets : Money
     lastYieldEpoch : Int
@@ -1068,21 +1090,18 @@ template CantonSMUSD
     mpaUri : Text
     observers : [Party]
   where
-    signatory operator
+    signatory operator, governance
     observer observers
 
     ensure totalShares >= 0.0 && totalAssets >= 0.0
 
     -- | Get current share price
-    -- FIX M-27: Explicit controller for nonconsuming choice
-    -- FIX H-02: Uses virtual shares to prevent dilution attack
     nonconsuming choice SMUSD_GetSharePrice : Money
       with
         requester : Party
       controller requester
       do
         assertMsg "NOT_AUTHORIZED" (requester == operator || requester `elem` observers)
-        -- FIX H-02: Virtual offset prevents dilution attack (similar to ERC-4626 fix)
         let virtualShares = totalShares + 1000.0
         let virtualAssets = totalAssets + 1000.0
         return (virtualAssets / virtualShares)
@@ -1099,7 +1118,6 @@ template CantonSMUSD
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
         assertMsg "MAX_DEPOSITS_EXCEEDED" (totalAssets + musd.amount <= config.maxTotalDeposits)
         
-        -- FIX H-02: Calculate shares using virtual offset to prevent dilution attack
         let virtualShares = totalShares + 1000.0
         let virtualAssets = totalAssets + 1000.0
         let sharePrice = virtualAssets / virtualShares
@@ -1168,14 +1186,19 @@ template CantonSMUSD
         return (newService, musdCid)
 
     -- | Sync yield from Ethereum via attestation
+    -- DAML-H-06: Added yield bounds and epoch gap limit
     choice SMUSD_SyncYield : ContractId CantonSMUSD
       with
         yieldAccrued : Money
         epochNumber : Int
-      controller operator
+      controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
         assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
+        -- DAML-H-06: Prevent unbounded yield injection
+        let maxYield = totalAssets * intToNumeric config.maxYieldBps / 10000.0
+        assertMsg "YIELD_EXCEEDS_MAX_PER_EPOCH" (yieldAccrued <= maxYield)
+        assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastYieldEpoch + config.maxEpochGap)
         create this with
           totalAssets = totalAssets + yieldAccrued
           lastYieldEpoch = epochNumber
@@ -1184,7 +1207,7 @@ template CantonSMUSD
     choice SMUSD_UpdateConfig : ContractId CantonSMUSD
       with
         newConfig : SmUSDConfig
-      controller operator
+      controller operator, governance
       do create this with config = newConfig
 
 -- ============================================================
@@ -1205,7 +1228,7 @@ template CooldownTicket
 
     ensure shares > 0.0
 
-    -- | Transfer ticket to another party (FIX C-3: Proposal pattern)
+    -- | Transfer ticket to another party
     -- Creates a TicketTransferProposal that the newOwner must accept
     choice Ticket_Transfer : ContractId TicketTransferProposal
       with
@@ -1234,7 +1257,6 @@ template CooldownTicket
         c2 <- create this with shares = shares - splitShares
         return (c1, c2)
 
--- | FIX C-3: TicketTransferProposal - Proposal pattern for proper authorization
 -- Receiver must explicitly accept the ticket transfer
 template TicketTransferProposal
   with
@@ -1281,10 +1303,11 @@ template TicketTransferProposal
 -- ============================================================
 
 -- | BridgeService - Coordinates all bridge operations.
--- FIX H-04: Added ensure clause for proper bounds validation
+-- DAML-CRIT-03: Added governance co-signatory for admin choices
 template BridgeService
   with
     operator : Party
+    governance : Party
     validators : [Party]
     requiredSignatures : Int
     totalBridgedIn : Money
@@ -1293,10 +1316,9 @@ template BridgeService
     paused : Bool
     observers : [Party]
   where
-    signatory operator
+    signatory operator, governance
     observer validators, observers
 
-    -- FIX H-04: Ensure clause validates requiredSignatures bounds
     ensure requiredSignatures > 0
       && requiredSignatures <= length validators
       && length validators > 0
@@ -1305,7 +1327,6 @@ template BridgeService
       && lastNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
-    -- FIX DL-C02: Added validator membership verification
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
       with
         attestationCid : ContractId AttestationRequest
@@ -1321,7 +1342,6 @@ template BridgeService
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
         
-        -- FIX DL-C02: Verify signers are authorized validators
         let sigParties = Set.toList attestation.collectedSignatures
         assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
         
@@ -1364,22 +1384,22 @@ template BridgeService
       do
         create this with totalBridgedOut = totalBridgedOut + amount
 
-    -- | Pause bridge
+    -- | Pause bridge (requires governance approval)
     choice Bridge_Pause : ContractId BridgeService
-      controller operator
+      controller operator, governance
       do create this with paused = True
 
-    -- | Unpause bridge
+    -- | Unpause bridge (requires governance approval)
     choice Bridge_Unpause : ContractId BridgeService
-      controller operator
+      controller operator, governance
       do create this with paused = False
 
-    -- | Update validators
+    -- | Update validators (requires governance approval)
     choice Bridge_UpdateValidators : ContractId BridgeService
       with
         newValidators : [Party]
         newRequiredSigs : Int
-      controller operator
+      controller operator, governance
       do
         assertMsg "INVALID_REQUIRED_SIGS" (newRequiredSigs > 0 && newRequiredSigs <= length newValidators)
         create this with 
@@ -1437,12 +1457,10 @@ template AttestationRequest
         create this with collectedSignatures = Set.insert validator collectedSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- FIX DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
     -- Previously used 50%+1, which is insufficient for BFT guarantees
     choice Attestation_Complete : ()
       controller aggregator
       do
-        -- FIX DC-06: Supermajority threshold = ceil(2/3 * n)
         -- For 5 validators: ceil(3.33) = 4 required (80%)
         -- For 7 validators: ceil(4.67) = 5 required (71%)
         let n = length validatorGroup

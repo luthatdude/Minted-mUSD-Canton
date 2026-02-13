@@ -15,7 +15,7 @@
 module MintedProtocol where
 
 import DA.Action (foldlA)
--- FIX D-L01/L02: Removed unused DA.List (head) import; use DA.Optional.fromOptional
+-- Removed unused DA.List (head) import; use DA.Optional.fromOptional
 import DA.Optional (fromOptional)
 
 -- | TYPE DEFINITIONS
@@ -34,7 +34,7 @@ template Asset
     signatory issuer, owner
     observer observers
 
-    -- FIX D-C11: Require strictly positive amounts
+    -- Require strictly positive amounts
     ensure amount > 0.0
 
     choice Asset_Transfer : AssetId
@@ -50,7 +50,7 @@ template Asset
       controller owner
       do
         assertMsg "Split amount must be positive" $ splitAmount > 0.0
-        -- FIX D-M04: Strict inequality to prevent zero-remainder splits
+        -- Strict inequality to prevent zero-remainder splits
         assertMsg "Insufficient balance" $ amount > splitAmount
         remaining <- create this with amount = amount - splitAmount
         split <- create this with amount = splitAmount
@@ -78,7 +78,7 @@ template PriceOracle
     signatory operator
     observer observers
 
-    -- FIX M-13: Return Optional instead of abort, let caller validate
+    -- Return Optional instead of abort, let caller validate
     nonconsuming choice GetPrice : Optional Decimal
       with
         symbol : Text
@@ -100,28 +100,28 @@ template PriceOracle
 
 -- | Represents a liquidity provider (DEX) to facilitate the leverage swap
 -- (Selling mUSD to buy Collateral)
--- FIX C-02: Added authorizedSwappers list to prevent anyone with visibility from draining pool
+-- Added authorizedSwappers list to prevent anyone with visibility from draining pool
 template LiquidityPool
   with
     operator : Party
     poolAsset : AssetId       -- The Collateral asset held by pool
     musdSymbol : Text
     exchangeRate : Decimal    -- Simple constant AMM (mUSD per Collateral)
-    authorizedSwappers : [Party]  -- FIX C-02: Only these parties can initiate swaps
+    authorizedSwappers : [Party]  -- Only these parties can initiate swaps
   where
     signatory operator
     observer authorizedSwappers
 
-    -- FIX C-07: Made CONSUMING to update poolAsset CID after split
+    -- Made CONSUMING to update poolAsset CID after split
     -- Previously nonconsuming, which left poolAsset pointing to an archived contract
-    -- FIX C-02: Changed controller to operator, receiver must be in authorizedSwappers
+    -- Changed controller to operator, receiver must be in authorizedSwappers
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, AssetId)
       with
         musdCid : AssetId
         receiver : Party
       controller operator
       do
-        -- FIX C-02: Verify receiver is authorized to swap
+        -- Verify receiver is authorized to swap
         assertMsg "UNAUTHORIZED_SWAPPER" (receiver `elem` authorizedSwappers)
         musd <- fetch musdCid
         assertMsg "Must be mUSD" $ musd.symbol == musdSymbol
@@ -167,7 +167,7 @@ template Vault
       do
         -- Check Collateral Value
         colData <- fetch collateral
-        -- FIX D-C12: Use exercise GetPrice instead of direct fetch + manual lookup
+        -- Use exercise GetPrice instead of direct fetch + manual lookup
         -- This ensures oracle staleness checks are enforced
         priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
         let price = fromOptional 0.0 priceOpt
@@ -214,14 +214,14 @@ template LeverageManager
       do
         assertMsg "Max loops exceeded" $ loops <= 10
         assertMsg "Loops must be positive" $ loops > 0
-        -- FIX D-C06: Thread poolCid through fold state to prevent stale CID after swap
-        -- FIX D-C13: Use exercise GetPrice instead of direct fetch + manual lookup
+        -- Thread poolCid through fold state to prevent stale CID after swap
+        -- Use exercise GetPrice instead of direct fetch + manual lookup
         let loopFn (currentVaultCid, currentPoolCid, currentLoop) _ = do
               if currentLoop == 0 then return (currentVaultCid, currentPoolCid, 0)
               else do
                 vault <- fetch currentVaultCid
                 colData <- fetch vault.collateral
-                -- FIX D-C13: Use GetPrice choice for staleness enforcement
+                -- Use GetPrice choice for staleness enforcement
                 priceOpt <- exercise oracleCid GetPrice with symbol = colData.symbol
                 let price = fromOptional 0.0 priceOpt
                 assertMsg "PRICE_NOT_AVAILABLE" $ price > 0.0
@@ -247,4 +247,4 @@ template LeverageManager
         (finalVault, _, _) <- foldlA loopFn (vaultCid, poolCid, loops) [1..loops]
         return finalVault
 
--- FIX D-L01: Removed duplicate fromOptional — now imported from DA.Optional
+-- Removed duplicate fromOptional — now imported from DA.Optional

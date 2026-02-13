@@ -33,11 +33,14 @@ data:
         # Stricter limit for write operations — 2 requests/sec per IP
         limit_req_zone $binary_remote_addr zone=api_write:10m rate=2r/s;
 
-        # Global rate limit across all IPs — circuit breaker at 500 req/s total
-        limit_req_zone $server_name zone=api_global:1m rate=500r/s;
+        # INFRA-H-04: Reduced global rate limit from 500r/s to 200r/s to limit DoS amplification
+        limit_req_zone $server_name zone=api_global:1m rate=200r/s;
 
         # Connection limit per IP
         limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+
+        # INFRA-H-04: Per-IP burst penalty zone — track IPs that exceed burst limits
+        limit_req_zone $binary_remote_addr zone=api_penalty:5m rate=1r/s;
 
         # Rate limit responses
         limit_req_status 429;
@@ -133,8 +136,8 @@ data:
             ssl_stapling on;
             ssl_stapling_verify on;
 
-            # Connection limit per IP
-            limit_conn conn_limit 20;
+            # INFRA-H-04: Reduced connection limit from 20 to 10 per IP
+            limit_conn conn_limit 10;
 
             # --------------------------------------------------------
             #  READ ENDPOINTS — 10 req/s per IP, burst 20
@@ -165,8 +168,8 @@ data:
 
             # Fetch contract by ID (read-only)
             location /v1/fetch {
-                limit_req zone=api_read burst=20 nodelay;
-                limit_req zone=api_global burst=50 nodelay;
+                limit_req zone=api_read burst=15 delay=10;
+                limit_req zone=api_global burst=30 nodelay;
 
                 proxy_pass http://json_api;
                 proxy_http_version 1.1;
@@ -191,8 +194,9 @@ data:
 
             # Create contract (write)
             location /v1/create {
-                limit_req zone=api_write burst=5;
-                limit_req zone=api_global burst=50 nodelay;
+                # INFRA-H-04: Tighter write limits — burst=3, delay=1 to smooth spikes
+                limit_req zone=api_write burst=3 delay=1;
+                limit_req zone=api_global burst=30 nodelay;
 
                 proxy_pass http://json_api;
                 proxy_http_version 1.1;
@@ -213,8 +217,9 @@ data:
 
             # Exercise choice (write)
             location /v1/exercise {
-                limit_req zone=api_write burst=5;
-                limit_req zone=api_global burst=50 nodelay;
+                # INFRA-H-04: Tighter write limits — burst=3, delay=1 to smooth spikes
+                limit_req zone=api_write burst=3 delay=1;
+                limit_req zone=api_global burst=30 nodelay;
 
                 proxy_pass http://json_api;
                 proxy_http_version 1.1;
@@ -238,6 +243,8 @@ data:
             # --------------------------------------------------------
 
             location /livez {
+                # INFRA-H-04: Rate limit health endpoints to prevent monitoring-based DoS
+                limit_req zone=api_read burst=5 nodelay;
                 proxy_pass http://json_api;
                 proxy_http_version 1.1;
                 proxy_set_header Connection "";
@@ -245,6 +252,8 @@ data:
             }
 
             location /readyz {
+                # INFRA-H-04: Rate limit health endpoints to prevent monitoring-based DoS
+                limit_req zone=api_read burst=5 nodelay;
                 proxy_pass http://json_api;
                 proxy_http_version 1.1;
                 proxy_set_header Connection "";

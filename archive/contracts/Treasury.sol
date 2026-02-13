@@ -15,7 +15,6 @@ import "./interfaces/IStrategy.sol";
 /// @notice Custodies USDC backing for mUSD. Auto-deploys to yield strategies on deposit.
 /// @dev Only DirectMint and authorized strategies can deposit/withdraw.
 ///      When USDC arrives (from mint or bridge-in), it's auto-deployed to the default strategy.
-/// @dev FIX H-01: Added Pausable for emergency controls
 contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
@@ -24,7 +23,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant TREASURY_ADMIN_ROLE = keccak256("TREASURY_ADMIN_ROLE");
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");      // Keeper/bot for auto-deploy
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");      // Bridge contract
-    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");      // FIX H-01: Pause authority
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
 
     IERC20 public immutable usdc;
 
@@ -109,7 +108,6 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Deposit USDC into treasury (called by DirectMint on user deposit)
     /// @param from The address to pull USDC from (must have approved Treasury)
     /// @param amount Amount of USDC to deposit
-    /// @dev FIX H-01: Added whenNotPaused for emergency controls
     function deposit(address from, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
         usdc.safeTransferFrom(from, address(this), amount);
@@ -122,7 +120,6 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Deposit USDC from bridge (Canton → Ethereum backing)
     /// @param from The address to pull USDC from
     /// @param amount Amount of USDC bridged in
-    /// @dev FIX H-01: Added whenNotPaused for emergency controls
     function depositFromBridge(address from, uint256 amount) external onlyRole(BRIDGE_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
         usdc.safeTransferFrom(from, address(this), amount);
@@ -134,7 +131,6 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Withdraw USDC from treasury (called by DirectMint on user redemption)
     /// @param to The address to send USDC to
     /// @param amount Amount of USDC to withdraw
-    /// @dev FIX H-01: Added whenNotPaused for emergency controls
     function withdraw(address to, uint256 amount) external onlyRole(MINTER_ROLE) nonReentrant whenNotPaused {
         require(amount > 0, "INVALID_AMOUNT");
 
@@ -157,18 +153,14 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Deploy USDC to a yield strategy
     /// @param strategy The strategy contract address (must have STRATEGY_ROLE)
     /// @param amount Amount to deploy
-    // FIX H-03: Require strategy to have STRATEGY_ROLE before sending funds
-    // FIX M-12: Guard against division by zero when totalAssets is 0
     function deployToStrategy(
         address strategy,
         uint256 amount
     ) external onlyRole(TREASURY_ADMIN_ROLE) nonReentrant {
         require(amount > 0, "INVALID_AMOUNT");
         require(amount <= availableReserves(), "INSUFFICIENT_RESERVES");
-        // FIX H-03: Only deploy to authorized strategy contracts
         require(hasRole(STRATEGY_ROLE, strategy), "STRATEGY_NOT_AUTHORIZED");
 
-        // FIX M-12: Guard against division by zero
         uint256 totalAssets = availableReserves() + deployedToStrategies;
         require(totalAssets > 0, "NO_ASSETS_AVAILABLE");
         uint256 newDeployed = deployedToStrategies + amount;
@@ -337,7 +329,7 @@ contract Treasury is AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ============================================================
-    //                  EMERGENCY CONTROLS (FIX H-01)
+    //                  EMERGENCY CONTROLS
     // ============================================================
 
     /// @notice Pause all deposits and withdrawals

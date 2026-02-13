@@ -156,10 +156,10 @@ template Collateral
   where
     signatory issuer, owner
 
-    -- FIX D-H01: Require strictly positive amounts
+    -- Require strictly positive amounts
     ensure amount > 0.0
 
-    -- FIX D-H01: Transfer via proposal pattern to prevent unsolicited assignments
+    -- Transfer via proposal pattern to prevent unsolicited assignments
     choice Collateral_Transfer : ContractId CollateralTransferProposal
       with
         newOwner : Party
@@ -175,7 +175,7 @@ template Collateral
       controller owner
       do
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
-        -- FIX D-M06: Strict inequality to prevent zero-remainder splits
+        -- Strict inequality to prevent zero-remainder splits
         assertMsg "Insufficient balance" (amount > splitAmount)
         remaining <- create this with amount = amount - splitAmount
         split <- create this with amount = splitAmount
@@ -193,7 +193,7 @@ template Collateral
         archive otherCid
         create this with amount = amount + other.amount
 
--- FIX D-H01: Collateral transfer proposal (dual-signatory safe)
+-- Collateral transfer proposal (dual-signatory safe)
 template CollateralTransferProposal
   with
     collateral : Collateral
@@ -222,10 +222,10 @@ template USDC
   where
     signatory issuer, owner
 
-    -- FIX D-H01: Require strictly positive amounts
+    -- Require strictly positive amounts
     ensure amount > 0.0
 
-    -- FIX D-H02: Transfer via proposal pattern to prevent unsolicited assignments
+    -- Transfer via proposal pattern to prevent unsolicited assignments
     choice USDC_Transfer : ContractId USDCTransferProposal
       with
         newOwner : Party
@@ -241,13 +241,13 @@ template USDC
       controller owner
       do
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
-        -- FIX D-M05: Strict inequality to prevent zero-remainder splits
+        -- Strict inequality to prevent zero-remainder splits
         assertMsg "Insufficient funds" (amount > splitAmount)
         c1 <- create this with amount = splitAmount
         c2 <- create this with amount = amount - splitAmount
         return (c1, c2)
 
--- FIX D-H02: USDC transfer proposal (dual-signatory safe)
+-- USDC transfer proposal (dual-signatory safe)
 template USDCTransferProposal
   with
     usdc : USDC
@@ -283,7 +283,7 @@ template PriceOracle
     signatory operator
     observer observers
 
-    -- SECURITY FIX: Removed `currentTime` arg. Uses `getTime`.
+    -- Removed `currentTime` arg. Uses `getTime`.
     nonconsuming choice GetPrice : Optional Money
       with
         symbol : Text
@@ -298,7 +298,7 @@ template PriceOracle
 
         return $ listToOptional [ p | (s, p) <- prices, s == symbol ]
 
-    -- FIX H-18: Validate timestamp against ledger time to prevent manipulation
+    -- Validate timestamp against ledger time to prevent manipulation
     choice UpdatePrices : ContractId PriceOracle
       with
         newPrices : [(Text, Money)]
@@ -373,7 +373,7 @@ template DirectMintService
         let netMintedToday = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
         assertMsg "DAILY_MINT_LIMIT" (netMintedToday + netAmount <= dailyMintLimit)
 
-        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
+        -- USDC_Transfer now returns proposal; accept it
         usdcProposal <- exercise usdcCid USDC_Transfer with newOwner = operator
         exercise usdcProposal USDCTransferProposal_Accept
 
@@ -417,7 +417,7 @@ template DirectMintService
 
         exercise musdCid MUSD_Burn
 
-        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
+        -- USDC_Transfer now returns proposal; accept it
         usdcToUser <- if reserve.amount == netAmount
           then do
             usdcProp <- exercise usdcReserveCid USDC_Transfer with newOwner = user
@@ -468,7 +468,7 @@ template DirectMintService
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         create this with dailyMintLimit = newLimit
 
-    -- FIX H-08: Create USDC payment for fees instead of destroying them
+    -- Create USDC payment for fees instead of destroying them
     choice DirectMint_WithdrawFees : (ContractId DirectMintService, ContractId USDC)
       with
         recipient : Party
@@ -480,7 +480,7 @@ template DirectMintService
         assertMsg "RESERVE_OWNER_MISMATCH" (reserve.owner == operator)
         assertMsg "INSUFFICIENT_RESERVE_FOR_FEES" (reserve.amount >= accumulatedFees)
 
-        -- FIX D-H02: USDC_Transfer now returns proposal; accept it
+        -- USDC_Transfer now returns proposal; accept it
         feePayout <- if reserve.amount == accumulatedFees
           then do
             usdcProp <- exercise usdcReserveCid USDC_Transfer with newOwner = recipient
@@ -536,7 +536,7 @@ template StakingService
           entryTime = currentTime
           interestRateBps = baseRateBps
 
-    -- FIX 5C-H02: Unstake now tracks yield minting against supply cap
+    -- Unstake now tracks yield minting against supply cap
     nonconsuming choice Unstake : (MUSDId, ContractId IssuerRole)
       with
         user : Party
@@ -558,7 +558,7 @@ template StakingService
         let interest = staked.principal * intToNumeric staked.interestRateBps / 10000.0 * durationYears
         let totalReturn = staked.principal + interest
 
-        -- FIX 5C-H02: Only the interest (yield) portion is new supply; principal was already minted
+        -- Only the interest (yield) portion is new supply; principal was already minted
         issuerRole <- fetch issuerRoleCid
         assertMsg "ISSUER_ROLE_MISMATCH" (issuerRole.issuer == operator)
         assertMsg "YIELD_EXCEEDS_SUPPLY_CAP" (issuerRole.currentSupply + interest <= issuerRole.supplyCap)
@@ -592,7 +592,7 @@ template Vault
     minCollateralRatioBps : Bps
     liquidationThresholdBps : Bps
     liquidationPenaltyBps : Bps
-    -- FIX D-H10: Allow external liquidators to observe vault for health checks
+    -- Allow external liquidators to observe vault for health checks
     liquidators : [Party]
     -- Master Participation Agreement (passed through to borrowed MUSD)
     mpaHash : Text
@@ -611,8 +611,8 @@ template Vault
         newCollateral <- exercise collateral Collateral_Merge with otherCid = depositCid
         create this with collateral = newCollateral
 
-    -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
-    -- FIX 5C-H01: Returns IssuerRole to track supply cap
+    -- Removed user-supplied `currentTime`. Uses `getTime`.
+    -- Returns IssuerRole to track supply cap
     choice Vault_Borrow : (VaultId, MUSDId, ContractId IssuerRole)
       with
         borrowAmount : Money
@@ -645,7 +645,7 @@ template Vault
           accruedInterest = newInterest
           lastAccrualTime = currentTime
 
-        -- FIX 5C-H01: Vault borrows must track supply. Require and update IssuerRole.
+        -- Vault borrows must track supply. Require and update IssuerRole.
         issuerRole <- fetch issuerRoleCid
         assertMsg "ISSUER_ROLE_MISMATCH" (issuerRole.issuer == operator)
         assertMsg "BORROW_EXCEEDS_SUPPLY_CAP" (issuerRole.currentSupply + borrowAmount <= issuerRole.supplyCap)
@@ -661,7 +661,7 @@ template Vault
 
         return (newVault, musd, newIssuerRole)
 
-    -- SECURITY FIX: Removed user-supplied `currentTime`
+    -- Removed user-supplied `currentTime`
     choice Vault_Repay : VaultId
       with
         musdCid : MUSDId
@@ -677,7 +677,7 @@ template Vault
         let totalDebt = newPrincipal + newInterest
         let repayAmount = min musd.amount totalDebt
 
-        -- FIX H-09: Return overpayment change to user instead of losing it
+        -- Return overpayment change to user instead of losing it
         if musd.amount <= totalDebt
         then exercise musdCid MUSD_Burn
         else do
@@ -696,7 +696,7 @@ template Vault
           accruedInterest = finalInterest
           lastAccrualTime = currentTime
 
-    -- SECURITY FIX: Removed user-supplied `currentTime`
+    -- Removed user-supplied `currentTime`
     choice Vault_WithdrawCollateral : (VaultId, CollateralId)
       with
         withdrawAmount : Money
@@ -720,7 +720,7 @@ template Vault
           assertMsg "WITHDRAWAL_WOULD_LIQUIDATE" (remainingColValue >= requiredCollateral)
 
         (remaining, withdrawn) <- exercise collateral Collateral_Split with splitAmount = withdrawAmount
-        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        -- Collateral_Transfer now returns proposal; accept it
         colProposal <- exercise withdrawn Collateral_Transfer with newOwner = owner
         withdrawnToOwner <- exercise colProposal CollateralTransferProposal_Accept
 
@@ -732,7 +732,7 @@ template Vault
 
         return (newVault, withdrawnToOwner)
 
-    -- FIX H-07: Allow any observer (including liquidators) to check health factor
+    -- Allow any observer (including liquidators) to check health factor
     nonconsuming choice Vault_GetHealthFactor : Money
       with
         oracleCid : ContractId PriceOracle
@@ -778,7 +778,7 @@ template LiquidationEngine
   where
     signatory operator
 
-    -- SECURITY FIX: Removed user-supplied `currentTime`. Uses `getTime`.
+    -- Removed user-supplied `currentTime`. Uses `getTime`.
     choice Liquidate : (VaultId, CollateralId)
       with
         vaultCid : VaultId
@@ -826,7 +826,7 @@ template LiquidationEngine
           exercise toBurn MUSD_Burn
 
         (remainingCol, seizedCol) <- exercise vault.collateral Collateral_Split with splitAmount = actualSeize
-        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        -- Collateral_Transfer now returns proposal; accept it
         colProposal <- exercise seizedCol Collateral_Transfer with newOwner = liquidator
         seizedToLiquidator <- exercise colProposal CollateralTransferProposal_Accept
 
@@ -856,7 +856,7 @@ template LiquidityPool
   where
     signatory operator
 
-    -- CRITICAL FIX: Choice must be CONSUMING (or creating new instance) to update
+    -- Choice must be CONSUMING (or creating new instance) to update
     -- the poolCollateral ContractId. Otherwise, the pool holds a reference to
     -- archived collateral and fails on the second trade.
     choice Pool_SwapMUSDForCollateral : (ContractId LiquidityPool, CollateralId)
@@ -871,7 +871,7 @@ template LiquidityPool
         poolHoldings <- fetch poolCollateral
         assertMsg "INSUFFICIENT_LIQUIDITY" (poolHoldings.amount >= collateralOut)
 
-        -- FIX D-C10: Supply required newOwner and expiry args to MUSD_Transfer
+        -- Supply required newOwner and expiry args to MUSD_Transfer
         currentTime <- getTime
         let transferExpiry = addRelTime currentTime (hours 1)
         proposalCid <- exercise musdCid MUSD_Transfer with
@@ -880,7 +880,7 @@ template LiquidityPool
         exercise proposalCid TransferProposal_Accept
 
         (remaining, payout) <- exercise poolCollateral Collateral_Split with splitAmount = collateralOut
-        -- FIX D-H01: Collateral_Transfer now returns proposal; accept it
+        -- Collateral_Transfer now returns proposal; accept it
         collateralProposal <- exercise payout Collateral_Transfer with newOwner = receiver
         receiverCollateral <- exercise collateralProposal CollateralTransferProposal_Accept
 
@@ -901,7 +901,7 @@ template LeverageManager
     signatory operator, user
 
     -- Fix: Loop logic updated to handle new pool contract ID return type
-    -- FIX: Use foldlA instead of local recursion (Daml-LF doesn't support local recursive definitions)
+    -- Use foldlA instead of local recursion (Daml-LF doesn't support local recursive definitions)
     choice Loop_Leverage : VaultId
       with
         vaultCid : VaultId
@@ -966,7 +966,7 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    -- FIX D-M03: Require strictly positive totalValue
+    -- Require strictly positive totalValue
     ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
@@ -998,26 +998,26 @@ template AttestationRequest
     validatorGroup : [Party]
     payload : AttestationPayload
     positionCids : [ContractId InstitutionalEquityPosition]
-    -- FIX D-H04: Track which validators have already signed to prevent duplicates
+    -- Track which validators have already signed to prevent duplicates
     collectedSignatures : Set.Set Party
   where
     signatory aggregator
     observer validatorGroup
 
-    -- FIX D-M02: Enforce validator group size bounds
+    -- Enforce validator group size bounds
     ensure length validatorGroup > 0 && length validatorGroup <= 100
 
-    -- FIX D-H04: Changed to consuming choice with signature tracking (like BLEProtocol)
+    -- Changed to consuming choice with signature tracking (like BLEProtocol)
     choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
       with
         validator : Party
         ecdsaSignature : Text
       controller validator
       do
-        -- FIX D-H04: Prevent duplicate signatures
+        -- Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX D-M03: Validate signature format (hex-encoded ECDSA = 130+ chars)
+        -- Validate signature format (hex-encoded ECDSA = 130+ chars)
         assertMsg "EMPTY_SIGNATURE" (T.length ecdsaSignature > 0)
         assertMsg "SIGNATURE_TOO_SHORT" (T.length ecdsaSignature >= 130)
 
@@ -1027,13 +1027,13 @@ template AttestationRequest
         positions <- mapA fetch positionCids
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
-        -- FIX D-M01: Use tolerance-based comparison instead of exact equality (Numeric 18 rounding)
+        -- Use tolerance-based comparison instead of exact equality (Numeric 18 rounding)
         let valueDiff = if totalGlobalValue >= payload.globalCantonAssets
               then totalGlobalValue - payload.globalCantonAssets
               else payload.globalCantonAssets - totalGlobalValue
         assertMsg "PAYLOAD_VALUE_MISMATCH" (valueDiff < 1.0)
 
-        -- FIX D-H04: Update tracking and recreate request
+        -- Update tracking and recreate request
         let newSignatures = Set.insert validator collectedSignatures
         newRequest <- create this with collectedSignatures = newSignatures
 
@@ -1046,13 +1046,13 @@ template AttestationRequest
 
         return (newRequest, sig)
 
-    -- FIX D-C05: Derive requiredSignatures from validatorGroup (not caller-supplied)
+    -- Derive requiredSignatures from validatorGroup (not caller-supplied)
     choice FinalizeAttestation : [ContractId ValidatorSignature]
       with
         signatureCids : [ContractId ValidatorSignature]
       controller aggregator
       do
-        -- FIX D-C05: Derive quorum from validator group size (supermajority)
+        -- Derive quorum from validator group size (supermajority)
         let requiredSignatures = (length validatorGroup + 1) / 2 + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -1073,7 +1073,7 @@ template AttestationRequest
         let totalGlobalValue = sum [p.totalValue | p <- positions]
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
-        -- FIX D-H04: Archive signatures after finalization to prevent reuse
+        -- Archive signatures after finalization to prevent reuse
         mapA_ archive signatureCids
 
         return signatureCids
@@ -1092,7 +1092,7 @@ template ValidatorSignature
 -- ============================================================
 --                     SECTION 10: ISSUER ROLE
 -- ============================================================
--- FIX D-C03/D-C04/D-M09: Removed insecure IssuerRole that accepted caller-supplied
+-- Removed insecure IssuerRole that accepted caller-supplied
 -- supplyCap, currentSupply, and requiredSignatures. All minting should go through
 -- DirectMintService (Section 3) which stores supply state on-ledger.
 -- MintFromAttestation is now a standalone choice that derives quorum from validatorGroup.
@@ -1107,7 +1107,7 @@ template IssuerRole
   where
     signatory issuer
 
-    -- FIX D-C01/D-C03: Consuming choice — supply tracked in contract state.
+    -- Consuming choice — supply tracked in contract state.
     -- Archives attestation to prevent replay. Returns updated IssuerRole.
     choice MintFromAttestation : (ContractId IssuerRole, MUSDId)
       with
@@ -1117,14 +1117,14 @@ template IssuerRole
         signatureCids : [ContractId ValidatorSignature]
       controller issuer
       do
-        -- FIX D-C01: Enforce supply cap from contract state
+        -- Enforce supply cap from contract state
         assertMsg "AMOUNT_MUST_BE_POSITIVE" (mintAmount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + mintAmount <= supplyCap)
 
         -- Fetch BEFORE archive
         attestation <- fetch attestationCid
 
-        -- FIX D-C03: Derive requiredSignatures from validatorGroup (supermajority)
+        -- Derive requiredSignatures from validatorGroup (supermajority)
         let requiredSignatures = (length attestation.validatorGroup + 1) / 2 + 1
 
         -- Validation
@@ -1153,7 +1153,7 @@ template IssuerRole
         newRole <- create this with currentSupply = currentSupply + mintAmount
         return (newRole, musdCid)
 
-    -- FIX D-C04: Consuming choice — supply tracked in contract state (not caller-supplied).
+    -- Consuming choice — supply tracked in contract state (not caller-supplied).
     choice DirectMint : (ContractId IssuerRole, MUSDId)
       with
         owner : Party
@@ -1183,7 +1183,7 @@ template IssuerRole
 --                     HELPER FUNCTIONS
 -- ============================================================
 
--- FIX C-3: Convert RelTime to microseconds
+-- Convert RelTime to microseconds
 -- Uses convertRelTimeToMicroseconds which is available in SDK 2.8.0
 relToInt : RelTime -> Int
 relToInt rt =
