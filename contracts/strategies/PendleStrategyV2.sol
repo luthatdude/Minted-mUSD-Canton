@@ -420,6 +420,8 @@ contract PendleStrategyV2 is
 
         IPendleRouter.LimitOrderData memory limit = _emptyLimitOrder();
 
+        // FIX SOL-C-02: Per-operation approval before router call
+        usdc.forceApprove(PENDLE_ROUTER, amount);
         (uint256 netPtOut,,) = IPendleRouter(PENDLE_ROUTER).swapExactTokenForPt(
             address(this),
             currentMarket,
@@ -428,6 +430,7 @@ contract PendleStrategyV2 is
             input,
             limit
         );
+        usdc.forceApprove(PENDLE_ROUTER, 0);
 
         if (netPtOut < minPtOut) revert SlippageExceeded();
 
@@ -643,6 +646,8 @@ contract PendleStrategyV2 is
             })
         });
 
+        // FIX SOL-C-02: Per-operation approval before router call
+        usdc.forceApprove(PENDLE_ROUTER, usdcAmount);
         (uint256 netPtOut,,) = IPendleRouter(PENDLE_ROUTER).swapExactTokenForPt(
             address(this),
             currentMarket,
@@ -651,6 +656,7 @@ contract PendleStrategyV2 is
             input,
             _emptyLimitOrder()
         );
+        usdc.forceApprove(PENDLE_ROUTER, 0);
 
         ptBalance += netPtOut;
     }
@@ -677,6 +683,8 @@ contract PendleStrategyV2 is
             })
         });
 
+        // FIX SOL-C-02: Per-operation approval for PT before router call
+        IERC20(currentPT).forceApprove(PENDLE_ROUTER, ptAmount);
         if (expired) {
             // Redeem PT directly (1:1) after maturity
             (usdcOut,) = IPendleRouter(PENDLE_ROUTER).redeemPyToToken(
@@ -695,6 +703,7 @@ contract PendleStrategyV2 is
                 _emptyLimitOrder()
             );
         }
+        IERC20(currentPT).forceApprove(PENDLE_ROUTER, 0);
 
         ptBalance -= ptAmount;
     }
@@ -825,7 +834,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Update market selector
      */
-    function setMarketSelector(address _selector) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setMarketSelector(address _selector) external onlyTimelock {
         if (_selector == address(0)) revert ZeroAddress();
         marketSelector = IPendleMarketSelector(_selector);
     }
@@ -870,14 +879,14 @@ contract PendleStrategyV2 is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function unpause() external onlyTimelock {
         _unpause();
     }
 
     /**
      * @notice Recover stuck tokens (not USDC or PT)
      */
-    function recoverToken(address token, address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function recoverToken(address token, address to) external onlyTimelock {
         require(token != address(usdc), "Cannot recover USDC");
         require(token != currentPT, "Cannot recover PT");
         uint256 balance = IERC20(token).balanceOf(address(this));
