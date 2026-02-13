@@ -19,7 +19,7 @@ import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // FIX T-M01: Use shared readSecret utility
 // FIX B-H07: Use readAndValidatePrivateKey for secp256k1 range validation
 // INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
-import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity } from "./utils";
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
 // FIX H-07: KMS-based Ethereum transaction signer (key never enters Node.js memory)
@@ -145,6 +145,7 @@ interface ValidatorSignature {
   aggregator: string;
   ecdsaSignature: string;
   nonce: string;
+  cantonStateHash: string;  // FIX P1-CODEX: Canton state hash from validator verification
 }
 
 // ============================================================
@@ -261,7 +262,8 @@ class RelayService {
 
     console.log(`[Relay] Initialized`);
     console.log(`[Relay] Canton: ${config.cantonHost}:${config.cantonPort}`);
-    console.log(`[Relay] Ethereum: ${config.ethereumRpcUrl}`);
+    // FIX P2-CODEX: Sanitize RPC URL in logs to prevent API key leakage
+    console.log(`[Relay] Ethereum: ${sanitizeUrl(config.ethereumRpcUrl)}`);
     console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
   }
 
@@ -529,9 +531,23 @@ class RelayService {
         throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
       }
       const chainId = expectedChainId;
+
+      // FIX P1-CODEX: Extract cantonStateHash from validator signatures
+      // All validators sign over the same Canton state hash; use the first one.
+      const cantonStateHash = validatorSigs.length > 0 && validatorSigs[0].cantonStateHash
+        ? (validatorSigs[0].cantonStateHash.startsWith("0x")
+            ? validatorSigs[0].cantonStateHash
+            : "0x" + validatorSigs[0].cantonStateHash)
+        : ethers.ZeroHash;
+      if (cantonStateHash === ethers.ZeroHash) {
+        console.warn(`[Relay] WARNING: No cantonStateHash from validators — bridge will reject`);
+      }
+
+      // FIX P1-CODEX: ID derivation matches BLEBridgeV9.computeAttestationId()
+      // On-chain: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))
       const idBytes32 = ethers.solidityPackedKeccak256(
-        ["uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
-        [nonce, cantonAssets, BigInt(timestampSec), entropy, chainId, this.config.bridgeContractAddress]
+        ["uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+        [nonce, cantonAssets, BigInt(timestampSec), entropy, cantonStateHash, chainId, this.config.bridgeContractAddress]
       );
 
       // Check if already used on-chain
@@ -543,7 +559,7 @@ class RelayService {
       }
 
       // Format signatures for Ethereum
-      const messageHash = this.buildMessageHash(payload, idBytes32);
+      const messageHash = this.buildMessageHash(payload, idBytes32, cantonStateHash);
       const formattedSigs = await this.formatSignatures(validatorSigs, messageHash);
 
       // Sort signatures by signer address (required by BLEBridgeV9)
@@ -556,6 +572,7 @@ class RelayService {
         nonce: nonce,
         timestamp: BigInt(timestampSec),
         entropy: entropy,
+        cantonStateHash: cantonStateHash,  // FIX P1-CODEX: Required by BLEBridgeV9
       };
 
       // FIX B-C01: Simulate transaction before submission to prevent race condition gas drain
@@ -634,8 +651,9 @@ class RelayService {
   /**
    * Build the message hash that validators signed
    * FIX C-05: Includes entropy in hash to match BLEBridgeV9 verification
+   * FIX P1-CODEX: Includes cantonStateHash to match on-chain signature verification
    */
-  private buildMessageHash(payload: AttestationPayload, idBytes32: string): string {
+  private buildMessageHash(payload: AttestationPayload, idBytes32: string, cantonStateHash?: string): string {
     // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
 
@@ -644,8 +662,14 @@ class RelayService {
       ? (payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy)
       : ethers.ZeroHash;
 
+    // FIX P1-CODEX: Include cantonStateHash in message hash (matches BLEBridgeV9.processAttestation)
+    const stateHash = cantonStateHash
+      ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
+      : ethers.ZeroHash;
+
+    // Matches on-chain: keccak256(abi.encodePacked(id, cantonAssets, nonce, timestamp, entropy, cantonStateHash, chainid, address))
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
@@ -653,6 +677,7 @@ class RelayService {
         // FIX B-M01: Use validated timestamp calculation consistent with bridgeAttestation
         BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
         entropy,
+        stateHash,
         chainId,
         this.config.bridgeContractAddress,
       ]

@@ -56,6 +56,21 @@ export function requireHTTPS(url: string, label: string): void {
   throw new Error(`SECURITY: ${label} must use HTTPS in production. Got: ${url.substring(0, 40)}...`);
 }
 
+/**
+ * Sanitize a URL for safe logging by masking API keys in the path/query.
+ * Strips everything after the host portion to prevent leaking credentials
+ * embedded in RPC endpoint URLs (e.g., https://eth-mainnet.g.alchemy.com/v2/SECRET).
+ */
+export function sanitizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}/***`;
+  } catch {
+    // If URL parsing fails, truncate to first 40 chars
+    return url.substring(0, 40) + "...";
+  }
+}
+
 // Initialize TLS enforcement on module load
 enforceTLSSecurity();
 
