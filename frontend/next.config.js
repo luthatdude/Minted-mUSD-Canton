@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   
-  // FIX FE-H1: Add security headers including Content Security Policy
+  // Add security headers including Content Security Policy
   async headers() {
     return [
       {

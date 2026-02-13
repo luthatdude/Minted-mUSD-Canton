@@ -63,8 +63,11 @@ contract SMUSDPriceAdapter is AccessControl {
     /// @notice Cached price from the last query (for rate limiting)
     uint256 private _lastPrice;
 
-    /// @notice Block number of the last query
+    /// @notice Block number of the last query (used for rate limiting)
     uint256 private _lastPriceBlock;
+
+    /// @notice Timestamp of the last cache update (used for Chainlink output)
+    uint256 private _lastPriceTimestamp;
 
     /// @notice Internal round tracking
     uint80 private _roundId;
@@ -106,6 +109,9 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Get the latest price data in Chainlink AggregatorV3 format
+    /// @dev Returns price as `view` for AggregatorV3 interface compliance.
+    ///      The rate limiter cache is updated via the separate `updateCachedPrice()` function
+    ///      which should be called by a keeper or before any price-sensitive operation.
     function latestRoundData()
         external
         view
@@ -118,11 +124,16 @@ contract SMUSDPriceAdapter is AccessControl {
         )
     {
         uint256 price = _getSharePriceUsd();
+
+        // Return cached timestamp so downstream staleness checks work correctly.
+        // If never cached, return current block.timestamp as fallback.
+        uint256 cachedTimestamp = _lastPriceTimestamp > 0 ? _lastPriceTimestamp : block.timestamp;
+        
         return (
             _roundId,
             int256(price),
-            block.timestamp,
-            block.timestamp,  // Always "fresh" since it's derived from on-chain vault state
+            cachedTimestamp,
+            cachedTimestamp,
             _roundId
         );
     }
@@ -200,14 +211,13 @@ contract SMUSDPriceAdapter is AccessControl {
     }
 
     /// @notice Public function to update the cached price (callable by anyone)
-    /// @dev FIX HIGH-04: Removed admin-only restriction so the rate limiter auto-updates.
-    /// Previously only ADAPTER_ADMIN could call this, making the rate limiter manual-only.
-    /// Now any price consumer can trigger a cache update before reading.
+    /// @dev Any price consumer can trigger a cache update before reading.
     /// @dev Also increments roundId so consumers can detect updates
     function updateCachedPrice() external {
         uint256 price = _getSharePriceUsd();
         _lastPrice = price;
         _lastPriceBlock = block.number;
+        _lastPriceTimestamp = block.timestamp;
         _roundId++;
     }
 

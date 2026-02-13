@@ -232,7 +232,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
         require(deposits[user][token] >= amount, "INSUFFICIENT_DEPOSIT");
         require(recipient != address(0), "INVALID_RECIPIENT");
 
-        // FIX C-SOL-02: When skipHealthCheck is true, restrict recipient to the
+        // When skipHealthCheck is true, restrict recipient to the
         // LeverageVault (msg.sender) or the user themselves. This prevents a
         // compromised LEVERAGE_VAULT_ROLE from draining collateral to arbitrary addresses.
         if (skipHealthCheck) {
@@ -242,7 +242,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
             );
         }
 
-        // FIX S-M-05: Decrement deposit BEFORE health check so healthFactor()
+        // Decrement deposit BEFORE health check so healthFactor()
         // sees the post-withdrawal state. Solidity's atomic revert ensures the
         // decrement is rolled back if the health check fails.
         deposits[user][token] -= amount;
@@ -252,7 +252,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
             // Only check if user has debt
             uint256 userDebt = IBorrowModule(borrowModule).totalDebt(user);
             if (userDebt > 0) {
-                // FIX C-UPG-01: Use try/catch so oracle failure does NOT silently
+                // Use try/catch so oracle failure does NOT silently
                 // allow withdrawal. If both safe and unsafe health checks revert,
                 // we block the withdrawal rather than fail-open.
                 bool healthOk = false;
@@ -263,7 +263,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
                     try IBorrowModule(borrowModule).healthFactorUnsafe(user) returns (uint256 hfUnsafe) {
                         healthOk = hfUnsafe >= 11000;
                     } catch {
-                        // FIX C-UPG-01: Both oracles failed — BLOCK withdrawal (fail-closed).
+                        // Both oracles failed — BLOCK withdrawal (fail-closed).
                         // Previously this would have reverted naturally, but with try/catch
                         // we must explicitly revert to prevent fail-open.
                         revert("ORACLE_UNAVAILABLE");

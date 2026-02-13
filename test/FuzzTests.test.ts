@@ -41,7 +41,7 @@ describe("FUZZ: InterestRateModel", function () {
   async function deployFixture() {
     const [admin] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("InterestRateModel");
-    const model = await Factory.deploy(admin.address, admin.address);
+    const model = await Factory.deploy(admin.address);
     return { model };
   }
 
@@ -148,7 +148,7 @@ describe("FUZZ: PriceOracle", function () {
     const [admin] = await ethers.getSigners();
 
     const OracleFactory = await ethers.getContractFactory("PriceOracle");
-    const oracle = await OracleFactory.deploy(admin.address);
+    const oracle = await OracleFactory.deploy();
 
     const MockFeedFactory = await ethers.getContractFactory("MockAggregatorV3");
 
@@ -364,7 +364,7 @@ describe("FUZZ: LiquidationEngine", function () {
     await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy(owner.address);
+    const collateralVault = await CollateralVault.deploy();
 
     await timelockAddCollateral(
       collateralVault, owner,
@@ -391,8 +391,7 @@ describe("FUZZ: LiquidationEngine", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000,
-      owner.address
+      5000
     );
 
     // Grant roles
@@ -519,7 +518,7 @@ describe("FUZZ: Arithmetic Edge Cases", function () {
   it("FUZZ: very large deposit amounts don't overflow in InterestRateModel", async function () {
     const [admin] = await ethers.getSigners();
     const Factory = await ethers.getContractFactory("InterestRateModel");
-    const model = await Factory.deploy(admin.address, admin.address);
+    const model = await Factory.deploy(admin.address);
 
     for (let i = 0; i < FUZZ_RUNS; i++) {
       // Large values near uint128 range

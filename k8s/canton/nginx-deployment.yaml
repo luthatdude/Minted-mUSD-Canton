@@ -21,7 +21,7 @@ metadata:
     # service.beta.kubernetes.io/aws-load-balancer-waf-acl-arn: "arn:aws:wafv2:REGION:ACCOUNT:regional/webacl/minted-waf/ID"
 spec:
   type: LoadBalancer
-  ## FIX HIGH-08: Restrict LoadBalancer source IPs to prevent proxy bypass.
+  ## Restrict LoadBalancer source IPs to prevent proxy bypass.
   ## Replace with your actual Cloud Armor / WAF IP ranges and office CIDRs.
   ## Without this, attackers can hit the LoadBalancer directly, bypassing WAF rules.
   loadBalancerSourceRanges:

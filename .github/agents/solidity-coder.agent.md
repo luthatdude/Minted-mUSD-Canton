@@ -2,12 +2,7 @@
 name: solidity-coder
 description: Solidity smart contract developer for the Minted mUSD protocol
 tools:
-  - read
-  - write
-  - edit
-  - grep
-  - glob
-  - bash
+  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'figma/*', 'agent', 'pylance-mcp-server/*', 'ms-azuretools.vscode-containers/containerToolsConfig', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-python.python/installPythonPackage', 'ms-python.python/configurePythonEnvironment', 'todo']
 ---
 
 # Solidity Coder Agent

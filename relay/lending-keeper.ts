@@ -59,7 +59,7 @@ interface KeeperBotConfig {
     bonusBps: number;
   }>;
 
-  // FIX LK-03: Configurable sMUSD price (should come from yield-sync service in production)
+  // Configurable sMUSD price (should come from yield-sync service in production)
   smusdPrice: number;
 }
 
@@ -87,7 +87,7 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
     "CTN_SMUSD": { ltvBps: 9000, liqThresholdBps: 9300, penaltyBps: 400, bonusBps: 200 },
   },
 
-  // FIX LK-03: Read sMUSD price from env (production: synced from yield-sync-service)
+  // Read sMUSD price from env (production: synced from yield-sync-service)
   smusdPrice: parseFloat(process.env.SMUSD_PRICE || "1.05"),
 };
 
@@ -98,7 +98,7 @@ requireHTTPS(DEFAULT_CONFIG.tradecraftBaseUrl, "TRADECRAFT_URL");
 //                     TYPES
 // ============================================================
 
-// FIX R-06: Fixed-point precision constants for BigInt-based financial math
+// Fixed-point precision constants for BigInt-based financial math
 // All USD/token values scaled to 18 decimals to avoid floating-point precision loss
 const PRECISION = BigInt(10) ** BigInt(18);
 const BPS_BASE = BigInt(10000);
@@ -199,7 +199,7 @@ export class LendingKeeperBot {
   private async connectLedger(): Promise<void> {
     if (this.ledger) return;
 
-    // FIX M-7: Default to TLS for Canton ledger connections (consistent with relay-service.ts)
+    // Default to TLS for Canton ledger connections (consistent with relay-service.ts)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({
@@ -279,7 +279,7 @@ export class LendingKeeperBot {
       case "CTN_USDCx":
         return 1.0;  // Stablecoins hardcoded
       case "CTN_SMUSD":
-        return this.config.smusdPrice; // FIX LK-03: Configurable via SMUSD_PRICE env var
+        return this.config.smusdPrice; // Configurable via SMUSD_PRICE env var
       default:
         throw new Error(`Unknown collateral type: ${collateralType}`);
     }
@@ -290,7 +290,7 @@ export class LendingKeeperBot {
    * healthFactor = Σ(collateral × price × liqThreshold) / totalDebt
    * If < 1.0, position is liquidatable
    *
-   * FIX R-06: Uses BigInt fixed-point (18 decimals) to avoid float precision loss
+   * Uses BigInt fixed-point (18 decimals) to avoid float precision loss
    * on positions > $10M where 64-bit float loses sub-cent accuracy.
    */
   private calculateHealthFactor(
@@ -323,7 +323,7 @@ export class LendingKeeperBot {
   /**
    * Calculate total debt including projected interest since last accrual
    *
-   * FIX R-06: Uses BigInt fixed-point to prevent precision loss on large debts
+   * Uses BigInt fixed-point to prevent precision loss on large debts
    */
   private calculateTotalDebt(position: DebtPosition): number {
     const now = Date.now() / 1000;
@@ -346,7 +346,7 @@ export class LendingKeeperBot {
    * Find the most profitable collateral to seize for a given position.
    * Prefers CTN (highest penalty = highest keeper bonus).
    *
-   * FIX R-06: Uses BigInt fixed-point for seize/bonus calculations
+   * Uses BigInt fixed-point for seize/bonus calculations
    */
   private selectBestTarget(
     escrows: EscrowPosition[],
@@ -567,8 +567,8 @@ export class LendingKeeperBot {
         };
       }
 
-      // FIX LK-01: Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
-      // FIX LK-02: Force fresh price fetch before execution
+      // Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
+      // Force fresh price fetch before execution
       try {
         await this.oracle.fetchCTNPrice();
       } catch (err) {
@@ -639,10 +639,10 @@ export class LendingKeeperBot {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
           repayAmount: candidate.maxRepay.toFixed(18),
-          targetEscrowCid: freshTarget.contractId,         // FIX LK-01: Fresh CID
-          debtCid: freshDebtCid,                           // FIX LK-01: Fresh CID
+          targetEscrowCid: freshTarget.contractId,         // Fresh CID
+          debtCid: freshDebtCid,                           // Fresh CID
           musdCid: (musdContract as any).contractId,
-          escrowCids: freshEscrows.map((e) => e.contractId), // FIX LK-01: Fresh CIDs
+          escrowCids: freshEscrows.map((e) => e.contractId), // Fresh CIDs
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
         } as any
       );

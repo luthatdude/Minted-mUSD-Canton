@@ -235,11 +235,11 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       // (We can't easily test deposit due to router mock, but pause state is verifiable)
     });
 
-    it("Should unpause from admin only", async function () {
+    it("Should unpause from admin (DEFAULT_ADMIN_ROLE)", async function () {
       const { strategy, admin, guardian } = await loadFixture(deployFixture);
       await strategy.connect(guardian).pause();
 
-      // Guardian cannot unpause
+      // Guardian CANNOT unpause — only DEFAULT_ADMIN_ROLE can
       await expect(strategy.connect(guardian).unpause()).to.be.reverted;
 
       // Admin can unpause
@@ -256,6 +256,7 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       await strategy.connect(guardian).emergencyWithdraw(treasury.address);
       const balAfter = await usdc.balanceOf(treasury.address);
 
+      // emergencyWithdraw sends USDC to treasury (recipient must have TREASURY_ROLE)
       expect(balAfter - balBefore).to.equal(ethers.parseUnits("1000", 6));
     });
 

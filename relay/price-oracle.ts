@@ -52,7 +52,7 @@ interface PriceOracleConfig {
   maxConsecutiveFailures: number; // Circuit breaker threshold
   stablecoinPrice: number;      // Hardcoded USDC/USDCx price
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: number;          // Absolute floor (reject below)
   maxPriceUsd: number;          // Absolute ceiling (reject above)
   maxChangePerUpdatePct: number; // Max % change from last known price
@@ -74,7 +74,7 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   maxConsecutiveFailures: parseInt(process.env.MAX_FAILURES || "10", 10),
   stablecoinPrice: 1.0,
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: parseFloat(process.env.MIN_PRICE_USD || "0.001"),
   maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
   maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
@@ -385,7 +385,7 @@ export class PriceOracleService {
     }
 
     // Cross-validation: block update if both sources available but diverge
-    // FIX PO-01: Divergence now blocks updates instead of just logging
+    // Divergence now blocks updates instead of just logging
     if (tradecraftResult && templeResult) {
       const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
       const divergencePct = Math.abs(tradecraftResult.price - templeResult.price) / avgPrice * 100;
@@ -403,7 +403,7 @@ export class PriceOracleService {
       }
     }
 
-    // FIX OR-01: Multi-provider averaging for robustness
+    // Multi-provider averaging for robustness
     // When both sources are available and within divergence threshold, use their
     // average instead of preferring a single source. This prevents manipulation
     // of any single DEX from fully controlling the oracle price.
@@ -532,15 +532,15 @@ export class PriceOracleService {
     this.running = true;
 
     let boundsViolationCount = 0;
-    const MAX_BOUNDS_VIOLATIONS = 5; // FIX NEW-PO-02: After N consecutive rejections, reset lastCtnPrice to allow recovery
+    const MAX_BOUNDS_VIOLATIONS = 5; // After N consecutive rejections, reset lastCtnPrice to allow recovery
 
     while (this.running) {
       if (!this.health.paused) {
         try {
           const result = await this.fetchCTNPrice();
 
-          // FIX PO-04: Off-chain price sanity check (absolute range + rate-of-change)
-          // FIX NEW-PO-01: Compare against lastCtnPrice BEFORE updating it
+          // Off-chain price sanity check (absolute range + rate-of-change)
+          // Compare against lastCtnPrice BEFORE updating it
           if (result.price < this.config.minPriceUsd || result.price > this.config.maxPriceUsd) {
             boundsViolationCount++;
             console.error(
@@ -558,11 +558,11 @@ export class PriceOracleService {
             );
           } else {
             await this.pushPriceUpdate("CTN", result.price, result.source);
-            this.lastCtnPrice = result.price; // FIX NEW-PO-01: Only update AFTER successful push
+            this.lastCtnPrice = result.price; // Only update AFTER successful push
             boundsViolationCount = 0; // Reset on success
           }
 
-          // FIX NEW-PO-02: If too many consecutive bounds violations, reset baseline to allow recovery
+          // If too many consecutive bounds violations, reset baseline to allow recovery
           if (boundsViolationCount >= MAX_BOUNDS_VIOLATIONS) {
             console.warn(
               `[PriceOracle] ⚠️ ${MAX_BOUNDS_VIOLATIONS} consecutive bounds violations. ` +

@@ -71,7 +71,7 @@ export function BorrowPage() {
             deposited,
             price,
             valueUsd,
-            // FIX M-05: getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
+            // getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
             // Previously mapped [0]→factor, [1]→threshold, [2]→penalty (off-by-one, skipping enabled)
             factorBps: config[1],
             liqThreshold: config[2],

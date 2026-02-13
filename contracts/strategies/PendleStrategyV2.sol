@@ -274,7 +274,7 @@ contract PendleStrategyV2 is
     /// @notice Slippage tolerance in basis points
     uint256 public slippageBps;
 
-    /// @notice FIX M-02: Configurable PT discount rate in BPS (default 1000 = 10%)
+    /// @notice Configurable PT discount rate in BPS (default 1000 = 10%)
     /// @dev Used for PT-to-USDC and USDC-to-PT valuation approximations
     uint256 public ptDiscountRateBps;
 
@@ -332,7 +332,7 @@ contract PendleStrategyV2 is
         string calldata _category,
         address _timelock
     ) external initializer {
-        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0)) {
+        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
         require(_timelock != address(0), "ZERO_TIMELOCK");
@@ -350,7 +350,7 @@ contract PendleStrategyV2 is
         // Default settings
         rolloverThreshold = DEFAULT_ROLLOVER_THRESHOLD;
         slippageBps = 50; // 0.5% default slippage
-        ptDiscountRateBps = 1000; // FIX M-02: 10% default, now configurable
+        ptDiscountRateBps = 1000; // 10% default, configurable
         active = true;
 
         // Setup roles
@@ -558,8 +558,7 @@ contract PendleStrategyV2 is
 
     /**
      * @notice Keeper function to trigger rollover
-     * @dev FIX HIGH: Added access control - only STRATEGIST or GUARDIAN can trigger
-     * @dev Previously permissionless, allowing front-running attacks
+     * @dev Only STRATEGIST or GUARDIAN can trigger rollover
      */
     function triggerRollover() external nonReentrant onlyRole(STRATEGIST_ROLE) {
         if (!_shouldRollover()) revert RolloverNotNeeded();
@@ -602,6 +601,9 @@ contract PendleStrategyV2 is
     function _selectNewMarket() internal {
         (address bestMarket, IPendleMarketSelector.MarketInfo memory info) =
             marketSelector.selectBestMarket(marketCategory);
+
+        require(bestMarket != address(0), "NO_VALID_MARKET");
+        require(info.pt != address(0), "INVALID_PT_TOKEN");
 
         currentMarket = bestMarket;
         currentPT = info.pt;
@@ -717,7 +719,7 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // FIX M-02: Use configurable discount rate instead of hardcoded 10%
+        // Use configurable discount rate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
@@ -736,7 +738,7 @@ contract PendleStrategyV2 is
             timeRemaining = secondsPerYear;
         }
 
-        // FIX M-02: Use configurable discount rate
+        // Use configurable discount rate
         uint256 discountBps = (ptDiscountRateBps * timeRemaining) / secondsPerYear;
         uint256 valueBps = BPS - discountBps;
 
@@ -802,7 +804,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Set PT discount rate for NAV valuation
      * @param _discountBps New discount rate in BPS (e.g., 1000 = 10%, 500 = 5%)
-     * @dev FIX M-02: Allows adjusting PT discount rate to match current market implied APY
+     * @dev Allows adjusting PT discount rate to match current market implied APY
      */
     function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
         require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
@@ -815,6 +817,7 @@ contract PendleStrategyV2 is
      * @param _threshold Time before expiry to trigger rollover
      */
     function setRolloverThreshold(uint256 _threshold) external onlyRole(STRATEGIST_ROLE) {
+        require(_threshold >= 1 days && _threshold <= 30 days, "INVALID_THRESHOLD");
         emit RolloverThresholdUpdated(rolloverThreshold, _threshold);
         rolloverThreshold = _threshold;
     }
@@ -835,20 +838,26 @@ contract PendleStrategyV2 is
     }
 
     /**
-     * @notice Emergency withdraw all to USDC
+     * @notice Emergency withdraw all to USDC and send to recipient
+     * @param recipient Address to receive the USDC (must hold TREASURY_ROLE)
      */
-    function emergencyWithdraw() external onlyRole(GUARDIAN_ROLE) {
+    function emergencyWithdraw(address recipient) external onlyRole(GUARDIAN_ROLE) {
+        require(recipient != address(0), "ZERO_RECIPIENT");
+        require(hasRole(TREASURY_ROLE, recipient), "RECIPIENT_MUST_BE_TREASURY");
+
         _pause();
 
-        uint256 usdcOut = 0;
+        uint256 ptRedeemed = ptBalance;
         if (ptBalance > 0) {
-            usdcOut = _redeemPt(ptBalance);
+            _redeemPt(ptBalance);
         }
 
         uint256 balance = usdc.balanceOf(address(this));
-        emit EmergencyWithdraw(ptBalance, balance);
+        if (balance > 0) {
+            usdc.safeTransfer(recipient, balance);
+        }
 
-        // Keep USDC in contract for treasury to withdraw
+        emit EmergencyWithdraw(ptRedeemed, balance);
     }
 
     /**
@@ -861,7 +870,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(GUARDIAN_ROLE) {
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 

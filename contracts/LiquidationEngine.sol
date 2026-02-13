@@ -80,7 +80,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     // Set to 100 mUSD (18 decimals) to ensure liquidations are economically meaningful
     uint256 public constant MIN_LIQUIDATION_AMOUNT = 100e18;
 
-    /// @notice FIX S-M-02: Total bad debt accumulated when seizure is capped at available collateral
+    /// @notice Total bad debt accumulated when seizure is capped at available collateral
     /// Bad debt = debt that cannot be recovered because the borrower has insufficient collateral
     uint256 public totalBadDebt;
 
@@ -124,6 +124,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Liquidate an undercollateralized position
+    /// @dev LIQUIDATOR PREREQUISITES:
+    ///      1. Hold sufficient mUSD to cover `debtToRepay`
+    ///      2. Approve this contract (LiquidationEngine) to spend mUSD via
+    ///         `IERC20(musd).approve(address(liquidationEngine), amount)`
     /// @param borrower The address of the undercollateralized borrower
     /// @param collateralToken The collateral token to seize
     /// @param debtToRepay Amount of mUSD debt to repay on behalf of borrower
@@ -145,8 +149,10 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
         require(seizeAmount > 0, "NOTHING_TO_SEIZE");
 
-        // Execute: burn → seize → reduceDebt (CEI pattern)
-        musd.burn(msg.sender, actualRepay);
+        // Explicit transferFrom + burn-from-self pattern.
+        // Standard ERC-20 pull + self-burn (no hidden allowance semantics).
+        IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), actualRepay);
+        musd.burn(address(this), actualRepay);
         vault.seize(borrower, collateralToken, seizeAmount, msg.sender);
         borrowModule.reduceDebt(borrower, actualRepay);
 
@@ -176,7 +182,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         );
     }
 
-    /// @dev FIX S-M-02: Cap seizure at available collateral and record any bad debt
+    /// @dev Cap seizure at available collateral and record any bad debt
     function _capSeizureAndTrackBadDebt(
         address borrower,
         address collateralToken,
@@ -255,7 +261,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         fullLiquidationThreshold = _bps;
     }
 
-    /// @notice FIX S-M-02: Write off bad debt for a specific borrower
+    /// @notice Write off bad debt for a specific borrower
     /// @dev Called after all collateral has been seized and position is fully underwater.
     ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
     function socializeBadDebt(address borrower) external onlyRole(ENGINE_ADMIN_ROLE) {
