@@ -71,22 +71,19 @@ rule dust_liquidation_reverts(address borrower, address token) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// RULES: CLOSE FACTOR BOUNDS
+// INVARIANTS: CLOSE FACTOR BOUNDS
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice Close factor must be in valid range (0, 10000]
-rule close_factor_bounded() {
-    uint256 cf = closeFactorBps();
-    assert cf > 0 && cf <= 10000,
-        "Close factor out of bounds";
-}
+/// @dev Enforced by constructor and setCloseFactor — invariant uses induction:
+///      base case checks constructor, inductive step checks all state transitions.
+invariant close_factor_bounded()
+    closeFactorBps() > 0 && closeFactorBps() <= 10000;
 
 /// @notice Full liquidation threshold must be in valid range (0, 10000)
-rule full_liquidation_threshold_bounded() {
-    uint256 flt = fullLiquidationThreshold();
-    assert flt > 0 && flt < 10000,
-        "Full liquidation threshold out of bounds";
-}
+/// @dev Enforced by constructor (5000) and setFullLiquidationThreshold.
+invariant full_liquidation_threshold_bounded()
+    fullLiquidationThreshold() > 0 && fullLiquidationThreshold() < 10000;
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: PAUSED STATE
