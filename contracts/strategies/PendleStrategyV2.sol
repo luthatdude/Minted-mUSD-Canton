@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
 import "../TimelockGoverned.sol";
+import "../Errors.sol";
 
 /**
  * @title PendleStrategyV2
@@ -295,15 +296,11 @@ contract PendleStrategyV2 is
     event EmergencyWithdraw(uint256 ptRedeemed, uint256 usdcOut);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERRORS
+    // ERRORS (shared errors imported from Errors.sol)
     // ═══════════════════════════════════════════════════════════════════════
 
-    error ZeroAddress();
-    error ZeroAmount();
-    error NotActive();
     error MarketNotExpired();
     error NoMarketSet();
-    error SlippageExceeded();
     error RolloverNotNeeded();
     error InvalidSlippage();
 
@@ -335,7 +332,7 @@ contract PendleStrategyV2 is
         if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
-        require(_timelock != address(0), "ZERO_TIMELOCK");
+        if (_timelock == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __ReentrancyGuard_init();
@@ -605,8 +602,8 @@ contract PendleStrategyV2 is
         (address bestMarket, IPendleMarketSelector.MarketInfo memory info) =
             marketSelector.selectBestMarket(marketCategory);
 
-        require(bestMarket != address(0), "NO_VALID_MARKET");
-        require(info.pt != address(0), "INVALID_PT_TOKEN");
+        if (bestMarket == address(0)) revert NoValidMarket();
+        if (info.pt == address(0)) revert InvalidPtToken();
 
         currentMarket = bestMarket;
         currentPT = info.pt;
@@ -782,7 +779,7 @@ contract PendleStrategyV2 is
     }
 
     function _pow10(uint8 exponent) internal pure returns (uint256) {
-        require(exponent <= 77, "DECIMALS_TOO_LARGE");
+        if (exponent > 77) revert DecimalsTooLarge();
         return 10 ** uint256(exponent);
     }
 
@@ -816,7 +813,7 @@ contract PendleStrategyV2 is
      * @dev Allows adjusting PT discount rate to match current market implied APY
      */
     function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
-        require(_discountBps <= 5000, "DISCOUNT_TOO_HIGH"); // Max 50%
+        if (_discountBps > 5000) revert DiscountTooHigh();
         emit PtDiscountRateUpdated(ptDiscountRateBps, _discountBps);
         ptDiscountRateBps = _discountBps;
     }
@@ -826,7 +823,7 @@ contract PendleStrategyV2 is
      * @param _threshold Time before expiry to trigger rollover
      */
     function setRolloverThreshold(uint256 _threshold) external onlyRole(STRATEGIST_ROLE) {
-        require(_threshold >= 1 days && _threshold <= 30 days, "INVALID_THRESHOLD");
+        if (_threshold < 1 days || _threshold > 30 days) revert InvalidThreshold();
         emit RolloverThresholdUpdated(rolloverThreshold, _threshold);
         rolloverThreshold = _threshold;
     }
@@ -851,8 +848,8 @@ contract PendleStrategyV2 is
      * @param recipient Address to receive the USDC (must hold TREASURY_ROLE)
      */
     function emergencyWithdraw(address recipient) external onlyRole(GUARDIAN_ROLE) {
-        require(recipient != address(0), "ZERO_RECIPIENT");
-        require(hasRole(TREASURY_ROLE, recipient), "RECIPIENT_MUST_BE_TREASURY");
+        if (recipient == address(0)) revert ZeroAddress();
+        if (!hasRole(TREASURY_ROLE, recipient)) revert RecipientMustBeTreasury();
 
         _pause();
 
@@ -887,8 +884,8 @@ contract PendleStrategyV2 is
      * @notice Recover stuck tokens (not USDC or PT)
      */
     function recoverToken(address token, address to) external onlyTimelock {
-        require(token != address(usdc), "Cannot recover USDC");
-        require(token != currentPT, "Cannot recover PT");
+        if (token == address(usdc)) revert CannotRecoverUsdc();
+        if (token == currentPT) revert CannotRecoverPt();
         uint256 balance = IERC20(token).balanceOf(address(this));
         IERC20(token).safeTransfer(to, balance);
     }

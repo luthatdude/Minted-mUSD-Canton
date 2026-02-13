@@ -5,6 +5,7 @@
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import "./Errors.sol";
 
 /// @title InterestRateModel
 /// @notice Calculates dynamic interest rates based on utilization
@@ -83,7 +84,7 @@ contract InterestRateModel is AccessControl {
     /// @param _admin The admin address for rate updates
     constructor(address _admin) {
         // Validate admin address to prevent permanently bricked governance
-        require(_admin != address(0), "INVALID_ADMIN");
+        if (_admin == address(0)) revert InvalidAddress();
         // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
         // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
         baseRateBps = 200;           // 2% base rate

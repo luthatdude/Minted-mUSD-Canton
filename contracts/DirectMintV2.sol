@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./Errors.sol";
 
 interface IMUSD_V2 {
     function mint(address to, uint256 amount) external;
@@ -70,10 +71,10 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         address _treasury,
         address _feeRecipient
     ) {
-        require(_usdc != address(0), "INVALID_USDC");
-        require(_musd != address(0), "INVALID_MUSD");
-        require(_treasury != address(0), "INVALID_TREASURY");
-        require(_feeRecipient != address(0), "INVALID_FEE_RECIPIENT");
+        if (_usdc == address(0)) revert InvalidUsdc();
+        if (_musd == address(0)) revert InvalidMusd();
+        if (_treasury == address(0)) revert InvalidTreasury();
+        if (_feeRecipient == address(0)) revert InvalidFeeRecipient();
 
         usdc = IERC20(_usdc);
         musd = IMUSD_V2(_musd);
@@ -103,8 +104,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @param usdcAmount Amount of USDC to deposit (6 decimals)
     /// @return musdOut Amount of mUSD minted (18 decimals)
     function mint(uint256 usdcAmount) external nonReentrant whenNotPaused returns (uint256 musdOut) {
-        require(usdcAmount >= minMintAmount, "BELOW_MIN");
-        require(usdcAmount <= maxMintAmount, "ABOVE_MAX");
+        if (usdcAmount < minMintAmount) revert BelowMin();
+        if (usdcAmount > maxMintAmount) revert AboveMax();
 
         // Calculate fee in USDC terms
         uint256 feeUsdc = (usdcAmount * mintFeeBps) / 10000;
@@ -114,7 +115,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         musdOut = usdcAfterFee * 1e12;
 
         // Check supply cap
-        require(musd.totalSupply() + musdOut <= musd.supplyCap(), "EXCEEDS_SUPPLY_CAP");
+        if (musd.totalSupply() + musdOut > musd.supplyCap()) revert ExceedsSupplyCap();
 
         // Transfer USDC from user to this contract
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
@@ -139,12 +140,12 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @param musdAmount Amount of mUSD to redeem (18 decimals)
     /// @return usdcOut Amount of USDC returned (6 decimals)
     function redeem(uint256 musdAmount) external nonReentrant whenNotPaused returns (uint256 usdcOut) {
-        require(musdAmount > 0, "INVALID_AMOUNT");
+        if (musdAmount == 0) revert InvalidAmount();
 
         // Convert mUSD to USDC equivalent
         uint256 usdcEquivalent = musdAmount / 1e12;
-        require(usdcEquivalent >= minRedeemAmount, "BELOW_MIN");
-        require(usdcEquivalent <= maxRedeemAmount, "ABOVE_MAX");
+        if (usdcEquivalent < minRedeemAmount) revert BelowMin();
+        if (usdcEquivalent > maxRedeemAmount) revert AboveMax();
 
         // Calculate fee - using combined calculation to avoid precision loss
         uint256 feeUsdc = (musdAmount * redeemFeeBps) / (1e12 * 10000);
@@ -154,7 +155,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         }
         usdcOut = usdcEquivalent - feeUsdc;
 
-        require(usdcOut > 0, "ZERO_OUTPUT");
+        if (usdcOut == 0) revert ZeroOutput();
 
         // Burn user's mUSD
         musd.burn(msg.sender, musdAmount);
@@ -180,9 +181,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @param usdcAmount Amount of USDC being deposited (6 decimals)
     /// @return musdOut Amount of mUSD minted (18 decimals)
     function mintFor(address recipient, uint256 usdcAmount) external nonReentrant whenNotPaused onlyRole(MINTER_ROLE) returns (uint256 musdOut) {
-        require(recipient != address(0), "INVALID_RECIPIENT");
-        require(usdcAmount >= minMintAmount, "BELOW_MIN");
-        require(usdcAmount <= maxMintAmount, "ABOVE_MAX");
+        if (recipient == address(0)) revert InvalidRecipient();
+        if (usdcAmount < minMintAmount) revert BelowMin();
+        if (usdcAmount > maxMintAmount) revert AboveMax();
 
         // Calculate fee in USDC terms
         uint256 feeUsdc = (usdcAmount * mintFeeBps) / 10000;
@@ -192,7 +193,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         musdOut = usdcAfterFee * 1e12;
 
         // Check supply cap
-        require(musd.totalSupply() + musdOut <= musd.supplyCap(), "EXCEEDS_SUPPLY_CAP");
+        if (musd.totalSupply() + musdOut > musd.supplyCap()) revert ExceedsSupplyCap();
 
         // Transfer USDC from caller (TreasuryReceiver) to this contract
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
@@ -260,8 +261,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     function setFees(uint256 _mintFeeBps, uint256 _redeemFeeBps) external onlyRole(TIMELOCK_ROLE) {
-        require(_mintFeeBps <= MAX_FEE_BPS, "MINT_FEE_TOO_HIGH");
-        require(_redeemFeeBps <= MAX_FEE_BPS, "REDEEM_FEE_TOO_HIGH");
+        if (_mintFeeBps > MAX_FEE_BPS) revert MintFeeTooHigh();
+        if (_redeemFeeBps > MAX_FEE_BPS) revert RedeemFeeTooHigh();
         mintFeeBps = _mintFeeBps;
         redeemFeeBps = _redeemFeeBps;
         emit FeesUpdated(_mintFeeBps, _redeemFeeBps);
@@ -273,8 +274,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         uint256 _minRedeem,
         uint256 _maxRedeem
     ) external onlyRole(TIMELOCK_ROLE) {
-        require(_minMint <= _maxMint, "INVALID_MINT_LIMITS");
-        require(_minRedeem <= _maxRedeem, "INVALID_REDEEM_LIMITS");
+        if (_minMint > _maxMint) revert InvalidMintLimits();
+        if (_minRedeem > _maxRedeem) revert InvalidRedeemLimits();
         minMintAmount = _minMint;
         maxMintAmount = _maxMint;
         minRedeemAmount = _minRedeem;
@@ -283,7 +284,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     }
 
     function setFeeRecipient(address _recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_recipient != address(0), "INVALID_RECIPIENT");
+        if (_recipient == address(0)) revert InvalidRecipient();
         address old = feeRecipient;
         feeRecipient = _recipient;
         emit FeeRecipientUpdated(old, _recipient);
@@ -292,7 +293,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Withdraw accumulated mint fees (held in this contract)
     function withdrawFees() external onlyRole(FEE_MANAGER_ROLE) {
         uint256 fees = mintFees;
-        require(fees > 0, "NO_FEES");
+        if (fees == 0) revert NoFees();
         mintFees = 0;
         usdc.safeTransfer(feeRecipient, fees);
         emit FeesWithdrawn(feeRecipient, fees);
@@ -302,7 +303,7 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
     /// Redeem fees stay in Treasury during redeem(); this function extracts them.
     function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
         uint256 fees = redeemFees;
-        require(fees > 0, "NO_REDEEM_FEES");
+        if (fees == 0) revert NoRedeemFees();
         redeemFees = 0;
         treasury.withdraw(feeRecipient, fees);
         emit FeesWithdrawn(feeRecipient, fees);
@@ -324,9 +325,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Emergency token recovery (not USDC)
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(token != address(usdc), "CANNOT_RECOVER_USDC");
+        if (token == address(usdc)) revert CannotRecoverUsdc();
         // Block mUSD recovery to prevent extraction of protocol tokens
-        require(token != address(musd), "CANNOT_RECOVER_MUSD");
+        if (token == address(musd)) revert CannotRecoverMusd();
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 }

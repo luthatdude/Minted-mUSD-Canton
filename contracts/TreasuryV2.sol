@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IStrategy.sol";
 import "./TimelockGoverned.sol";
+import "./Errors.sol";
 
 /**
  * @title TreasuryV2
@@ -136,16 +137,13 @@ contract TreasuryV2 is
     event RebalanceDepositFailed(address indexed strategy, uint256 amount);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERRORS
+    // ERRORS (shared errors imported from Errors.sol)
     // ═══════════════════════════════════════════════════════════════════════
 
-    error ZeroAddress();
-    error ZeroAmount();
     error StrategyExists();
     error StrategyNotFound();
     error AllocationExceedsLimit();
     error TotalAllocationInvalid();
-    error InsufficientBalance();
     error OnlyVault();
     error MaxStrategiesReached();
 
@@ -175,7 +173,7 @@ contract TreasuryV2 is
         if (_asset == address(0) || _vault == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
-        require(_timelock != address(0), "ZERO_TIMELOCK");
+        if (_timelock == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __ReentrancyGuard_init();
@@ -444,7 +442,7 @@ contract TreasuryV2 is
      */
     function deposit(address from, uint256 amount) external nonReentrant whenNotPaused onlyRole(VAULT_ROLE) {
         if (amount == 0) revert ZeroAmount();
-        require(from == msg.sender, "MUST_DEPOSIT_OWN_FUNDS");
+        if (from != msg.sender) revert MustDepositOwnFunds();
 
         _accrueFees();
 
@@ -479,7 +477,7 @@ contract TreasuryV2 is
         }
 
         uint256 available = reserveBalance();
-        require(available >= amount, "INSUFFICIENT_RESERVES");
+        if (available < amount) revert InsufficientReserves();
 
         asset.safeTransfer(to, amount);
 
@@ -943,8 +941,8 @@ contract TreasuryV2 is
         uint256 _performanceFeeBps,
         address _feeRecipient
     ) external onlyTimelock {
-        require(_performanceFeeBps <= 5000, "Fee too high"); // Max 50%
-        require(_feeRecipient != address(0), "Invalid recipient");
+        if (_performanceFeeBps > 5000) revert FeeTooHigh();
+        if (_feeRecipient == address(0)) revert InvalidRecipient();
 
         _accrueFees(); // Accrue with old rate first
 
@@ -960,7 +958,7 @@ contract TreasuryV2 is
      * @notice Update reserve percentage
      */
     function setReserveBps(uint256 _reserveBps) external onlyTimelock {
-        require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+        if (_reserveBps > 3000) revert ReserveTooHigh();
         uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
         emit ReserveBpsUpdated(oldBps, _reserveBps);
@@ -972,7 +970,7 @@ contract TreasuryV2 is
      * @notice Update minimum auto-allocate amount
      */
     function setMinAutoAllocate(uint256 _minAmount) external onlyTimelock {
-        require(_minAmount > 0, "ZERO_MIN_AMOUNT");
+        if (_minAmount == 0) revert ZeroAmount();
         uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
         emit MinAutoAllocateUpdated(oldAmount, _minAmount);
@@ -995,7 +993,7 @@ contract TreasuryV2 is
      */
     /// @notice Token recovery requires timelock delay via TimelockGoverned
     function recoverToken(address token, uint256 amount) external onlyTimelock {
-        require(token != address(asset), "CANNOT_RECOVER_ASSET");
+        if (token == address(asset)) revert CannotRecoverAsset();
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 

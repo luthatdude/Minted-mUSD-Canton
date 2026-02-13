@@ -28,6 +28,7 @@ import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import "./Errors.sol";
 
 interface IMUSD {
     function setSupplyCap(uint256 _cap) external;
@@ -126,10 +127,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         __Pausable_init();
 
         // Enforce minimum signature threshold of 2 at initialization
-        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
-        require(_musdToken != address(0), "INVALID_MUSD_ADDRESS");
-        require(_collateralRatioBps >= 10000, "RATIO_BELOW_100_PERCENT");
-        require(_dailyCapIncreaseLimit > 0, "INVALID_DAILY_LIMIT");
+        if (_minSigs < 2) revert MinSigsTooLow();
+        if (_musdToken == address(0)) revert InvalidMusdAddress();
+        if (_collateralRatioBps < 10000) revert RatioBelow100Percent();
+        if (_dailyCapIncreaseLimit == 0) revert InvalidDailyLimit();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(EMERGENCY_ROLE, msg.sender);
@@ -148,7 +149,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @dev Requires 48h timelock delay via MintedTimelockController.
     /// A compromised admin could swap to a malicious mUSD contract and mint unlimited tokens.
     function setMUSDToken(address _musdToken) external onlyRole(TIMELOCK_ROLE) {
-        require(_musdToken != address(0), "INVALID_ADDRESS");
+        if (_musdToken == address(0)) revert InvalidAddress();
         emit MUSDTokenUpdated(address(musdToken), _musdToken);
         musdToken = IMUSD(_musdToken);
     }
@@ -157,15 +158,15 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @dev Enforces min=2 and max=10 to prevent single-point compromise or lockup
     /// @dev Lowering min signatures reduces the compromise threshold for supply cap manipulation.
     function setMinSignatures(uint256 _minSigs) external onlyRole(TIMELOCK_ROLE) {
-        require(_minSigs >= 2, "MIN_SIGS_TOO_LOW");
-        require(_minSigs <= 10, "MIN_SIGS_TOO_HIGH");
+        if (_minSigs < 2) revert MinSigsTooLow();
+        if (_minSigs > 10) revert MinSigsTooHigh();
         emit MinSignaturesUpdated(minSignatures, _minSigs);
         minSignatures = _minSigs;
     }
 
     /// @dev Removing rate limits allows a fraudulent attestation to inflate supply cap instantly.
     function setDailyCapIncreaseLimit(uint256 _limit) external onlyRole(TIMELOCK_ROLE) {
-        require(_limit > 0, "INVALID_LIMIT");
+        if (_limit == 0) revert InvalidLimit();
         emit DailyCapIncreaseLimitUpdated(dailyCapIncreaseLimit, _limit);
         dailyCapIncreaseLimit = _limit;
     }
@@ -178,7 +179,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         bytes32[] calldata attestationIds, 
         address previousBridge
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(previousBridge != address(0), "INVALID_PREVIOUS_BRIDGE");
+        if (previousBridge == address(0)) revert InvalidPreviousBridge();
         for (uint256 i = 0; i < attestationIds.length; i++) {
             usedAttestationIds[attestationIds[i]] = true;
         }
@@ -188,12 +189,12 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @dev Ratio reductions increase the supply cap, which must be timelocked.
     function setCollateralRatio(uint256 _ratioBps) external onlyRole(TIMELOCK_ROLE) {
         // Rate-limit ratio changes to once per day
-        require(block.timestamp >= lastRatioChangeTime + 1 days, "RATIO_CHANGE_COOLDOWN");
-        require(_ratioBps >= 10000, "RATIO_BELOW_100_PERCENT");
+        if (block.timestamp < lastRatioChangeTime + 1 days) revert RatioChangeCooldown();
+        if (_ratioBps < 10000) revert RatioBelow100Percent();
         // Prevent drastic ratio changes (max 10% change at a time)
         uint256 oldRatio = collateralRatioBps;
         uint256 diff = _ratioBps > oldRatio ? _ratioBps - oldRatio : oldRatio - _ratioBps;
-        require(diff <= 1000, "RATIO_CHANGE_TOO_LARGE"); // Max 10% change per call
+        if (diff > 1000) revert RatioChangeTooLarge(); // Max 10% change per call
 
         collateralRatioBps = _ratioBps;
         emit CollateralRatioUpdated(oldRatio, _ratioBps);
@@ -229,31 +230,31 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     /// @notice Request unpause (starts timelock)
     function requestUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(paused(), "NOT_PAUSED");
+        if (!paused()) revert NotPaused();
         unpauseRequestTime = block.timestamp;
         emit UnpauseRequested(block.timestamp, block.timestamp + UNPAUSE_DELAY);
     }
 
     /// @notice Execute unpause after timelock delay
     function executeUnpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(paused(), "NOT_PAUSED");
-        require(unpauseRequestTime > 0, "NO_UNPAUSE_REQUEST");
-        require(block.timestamp >= unpauseRequestTime + UNPAUSE_DELAY, "TIMELOCK_NOT_ELAPSED");
+        if (!paused()) revert NotPaused();
+        if (unpauseRequestTime == 0) revert NoUnpauseRequest();
+        if (block.timestamp < unpauseRequestTime + UNPAUSE_DELAY) revert TimelockNotElapsed();
         unpauseRequestTime = 0;
         _unpause();
     }
 
     /// @dev Legacy unpause function — now requires timelock
     function unpause() external view onlyRole(DEFAULT_ADMIN_ROLE) {
-        revert("USE_requestUnpause_AND_executeUnpause");
+        revert UseRequestUnpauseAndExecuteUnpause();
     }
 
     /// @notice Emergency reduction of supply cap
     function emergencyReduceCap(uint256 _newCap, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
-        require(bytes(_reason).length > 0, "REASON_REQUIRED");
+        if (bytes(_reason).length == 0) revert ReasonRequired();
         uint256 oldCap = musdToken.supplyCap();
-        require(_newCap < oldCap, "NOT_A_REDUCTION");
-        require(_newCap >= musdToken.totalSupply(), "CAP_BELOW_SUPPLY");
+        if (_newCap >= oldCap) revert NotAReduction();
+        if (_newCap < musdToken.totalSupply()) revert CapBelowSupply();
 
         musdToken.setSupplyCap(_newCap);
         emit EmergencyCapReduction(oldCap, _newCap, _reason);
@@ -261,16 +262,16 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     /// @notice Force update nonce for stuck attestations
     function forceUpdateNonce(uint256 _newNonce, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
-        require(bytes(_reason).length > 0, "REASON_REQUIRED");
-        require(_newNonce > currentNonce, "NONCE_MUST_INCREASE");
+        if (bytes(_reason).length == 0) revert ReasonRequired();
+        if (_newNonce <= currentNonce) revert NonceMustIncrease();
         emit NonceForceUpdated(currentNonce, _newNonce, _reason);
         currentNonce = _newNonce;
     }
 
     /// @notice Invalidate an attestation ID for security
     function invalidateAttestationId(bytes32 _attestationId, string calldata _reason) external onlyRole(EMERGENCY_ROLE) {
-        require(!usedAttestationIds[_attestationId], "ALREADY_USED");
-        require(bytes(_reason).length > 0, "REASON_REQUIRED");
+        if (usedAttestationIds[_attestationId]) revert AlreadyUsed();
+        if (bytes(_reason).length == 0) revert ReasonRequired();
         usedAttestationIds[_attestationId] = true;
         emit AttestationInvalidated(_attestationId, _reason);
     }
@@ -306,26 +307,26 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         Attestation calldata att,
         bytes[] calldata signatures
     ) external nonReentrant whenNotPaused {
-        require(signatures.length >= minSignatures, "INSUFFICIENT_SIGNATURES");
-        require(att.nonce == currentNonce + 1, "INVALID_NONCE");
-        require(!usedAttestationIds[att.id], "ATTESTATION_REUSED");
-        require(att.cantonAssets > 0, "ZERO_ASSETS");
-        require(att.timestamp <= block.timestamp, "FUTURE_TIMESTAMP");
+        if (signatures.length < minSignatures) revert InsufficientSignatures();
+        if (att.nonce != currentNonce + 1) revert InvalidNonce();
+        if (usedAttestationIds[att.id]) revert AttestationReused();
+        if (att.cantonAssets == 0) revert ZeroAssets();
+        if (att.timestamp > block.timestamp) revert FutureTimestamp();
         /// @dev Require minimum gap between attestation timestamps
-        require(att.timestamp >= lastAttestationTime + MIN_ATTESTATION_GAP, "ATTESTATION_TOO_CLOSE");
+        if (att.timestamp < lastAttestationTime + MIN_ATTESTATION_GAP) revert AttestationTooClose();
         /// @dev Reject attestations older than MAX_ATTESTATION_AGE
-        require(block.timestamp - att.timestamp <= MAX_ATTESTATION_AGE, "ATTESTATION_TOO_OLD");
+        if (block.timestamp - att.timestamp > MAX_ATTESTATION_AGE) revert AttestationTooOld();
 
         // Require non-zero entropy and validate attestation ID derivation.
         // This prevents pre-computation attacks where all hash inputs are predictable.
         // Entropy must be generated by the aggregator at attestation creation time
         // (e.g., crypto.randomBytes) and included in what validators sign.
-        require(att.entropy != bytes32(0), "MISSING_ENTROPY");
+        if (att.entropy == bytes32(0)) revert MissingEntropy();
 
         // Require Canton state hash for on-ledger verification.
         // This binds the attestation to a specific Canton ledger state, preventing
         // attestations that don't correspond to verified Canton state
-        require(att.cantonStateHash != bytes32(0), "MISSING_STATE_HASH");
+        if (att.cantonStateHash == bytes32(0)) revert MissingStateHash();
 
         bytes32 expectedId = keccak256(abi.encodePacked(
             att.nonce,
@@ -336,7 +337,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             block.chainid,
             address(this)
         ));
-        require(att.id == expectedId, "INVALID_ATTESTATION_ID");
+        if (att.id != expectedId) revert InvalidAttestationId();
 
         // Verify signatures — validators sign over the full attestation including state hash
         bytes32 messageHash = keccak256(abi.encodePacked(
@@ -355,8 +356,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         address lastSigner = address(0);
         for (uint256 i = 0; i < signatures.length; i++) {
             address signer = ethHash.recover(signatures[i]);
-            require(hasRole(VALIDATOR_ROLE, signer), "INVALID_VALIDATOR");
-            require(signer > lastSigner, "UNSORTED_SIGNATURES");
+            if (!hasRole(VALIDATOR_ROLE, signer)) revert InvalidValidator();
+            if (signer <= lastSigner) revert UnsortedSignatures();
             lastSigner = signer;
         }
 
@@ -439,7 +440,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         
         // If daily limit is exhausted, revert to preserve attestation.
         // The attestation can be resubmitted after the 24h window resets.
-        require(remaining > 0, "DAILY_CAP_LIMIT_EXHAUSTED");
+        if (remaining == 0) revert DailyCapLimitExhausted();
         
         allowed = increase > remaining ? remaining : increase;
 

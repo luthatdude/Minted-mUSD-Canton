@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "./Errors.sol";
 
 /**
  * @title PendleMarketSelector
@@ -153,8 +154,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     // ═══════════════════════════════════════════════════════════════════════
 
     function initialize(address _admin, address _timelockController) external initializer {
-        require(_admin != address(0), "ZERO_ADMIN");
-        require(_timelockController != address(0), "ZERO_TIMELOCK");
+        if (_admin == address(0)) revert ZeroAddress();
+        if (_timelockController == address(0)) revert ZeroAddress();
         __AccessControl_init();
         __UUPSUpgradeable_init();
 
@@ -428,9 +429,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      * @param category Asset category (e.g., "USD", "ETH")
      */
     function whitelistMarket(address market, string calldata category) external onlyRole(MARKET_ADMIN_ROLE) {
-        require(market != address(0), "ZERO_ADDRESS");
+        if (market == address(0)) revert ZeroAddress();
         if (!isWhitelisted[market]) {
-            require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
+            if (whitelistedMarkets.length >= MAX_WHITELISTED_MARKETS) revert MaxMarketsReached();
             whitelistedMarkets.push(market);
             isWhitelisted[market] = true;
         }
@@ -448,13 +449,13 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         address[] calldata markets,
         string[] calldata categories
     ) external onlyRole(MARKET_ADMIN_ROLE) {
-        require(markets.length == categories.length, "Length mismatch");
-        require(markets.length <= 50, "BATCH_TOO_LARGE");
+        if (markets.length != categories.length) revert LengthMismatch();
+        if (markets.length > 50) revert BatchTooLarge();
 
         for (uint256 i = 0; i < markets.length; i++) {
-            require(markets[i] != address(0), "ZERO_ADDRESS");
+            if (markets[i] == address(0)) revert ZeroAddress();
             if (!isWhitelisted[markets[i]]) {
-                require(whitelistedMarkets.length < MAX_WHITELISTED_MARKETS, "MAX_MARKETS_REACHED");
+                if (whitelistedMarkets.length >= MAX_WHITELISTED_MARKETS) revert MaxMarketsReached();
                 whitelistedMarkets.push(markets[i]);
                 isWhitelisted[markets[i]] = true;
             }

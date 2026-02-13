@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
 import "../TimelockGoverned.sol";
+import "../Errors.sol";
 
 /**
  * @title SkySUSDSStrategy
@@ -130,13 +131,10 @@ contract SkySUSDSStrategy is
     event ActiveUpdated(bool active);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERRORS
+    // ERRORS (shared errors imported from Errors.sol)
     // ═══════════════════════════════════════════════════════════════════════
 
-    error ZeroAmount();
     error StrategyNotActive();
-    error InsufficientBalance();
-    error ZeroAddress();
 
     // ═══════════════════════════════════════════════════════════════════════
     // CONSTRUCTOR & INITIALIZER
@@ -170,7 +168,7 @@ contract SkySUSDSStrategy is
         {
             revert ZeroAddress();
         }
-        require(_timelock != address(0), "ZERO_TIMELOCK");
+        if (_timelock == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __ReentrancyGuard_init();
@@ -440,9 +438,9 @@ contract SkySUSDSStrategy is
      */
     /// @notice Recovery requires timelock delay to prevent instant drain
     function recoverToken(address token, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
-        require(token != address(usdc), "Cannot recover USDC");
-        require(token != address(usds), "Cannot recover USDS");
-        require(token != address(sUsds), "Cannot recover sUSDS");
+        if (token == address(usdc)) revert CannotRecoverUsdc();
+        if (token == address(usds)) revert CannotRecoverUsds();
+        if (token == address(sUsds)) revert CannotRecoverSusds();
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 

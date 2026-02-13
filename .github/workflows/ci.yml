@@ -218,6 +218,9 @@ jobs:
               sleep 10
             }
           done
+        env:
+          # Increase timeout for compiler download (matches solidity/slither jobs)
+          HARDHAT_NETWORK_TIMEOUT: 120000
 
       - name: Validate UUPS storage layouts
         run: npx hardhat run scripts/validate-storage-layout.ts --no-compile
@@ -312,7 +315,8 @@ jobs:
           fi
           echo "✅ DAML installer checksum verified: $ACTUAL_HASH"
           
-          bash "$INSTALLER_PATH" -s "$DAML_SDK_VERSION"
+          # Run installer from file — no -s flag needed (that's only for piped stdin)
+          bash "$INSTALLER_PATH" "$DAML_SDK_VERSION"
           rm -f "$INSTALLER_PATH"
         env:
           TERM: xterm
