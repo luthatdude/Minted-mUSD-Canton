@@ -799,6 +799,7 @@ contract PendleStrategyV2 is
      * @param _threshold Time before expiry to trigger rollover
      */
     function setRolloverThreshold(uint256 _threshold) external onlyRole(STRATEGIST_ROLE) {
+        require(_threshold >= 1 days && _threshold <= 30 days, "INVALID_THRESHOLD");
         emit RolloverThresholdUpdated(rolloverThreshold, _threshold);
         rolloverThreshold = _threshold;
     }
