@@ -378,7 +378,13 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
+        try {
+          fs.writeFileSync("/tmp/heartbeat", new Date().toISOString());
+        } catch (heartbeatError) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[Validator] heartbeat write failed", heartbeatError);
+          }
+        }
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }

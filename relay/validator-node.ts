@@ -179,7 +179,13 @@ class ValidatorNode {
       try {
         await this.pollForAttestations();
         // Write heartbeat file for Docker healthcheck
-        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
+        try {
+          fs.writeFileSync("/tmp/heartbeat", new Date().toISOString());
+        } catch (heartbeatError) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[Validator] heartbeat write failed", heartbeatError);
+          }
+        }
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }
