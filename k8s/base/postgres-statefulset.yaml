@@ -55,16 +55,12 @@ spec:
           env:
             - name: POSTGRES_DB
               value: canton
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: username
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: password
+            # INFRA-H-03: Use _FILE variants to read credentials from mounted secrets
+            # instead of injecting via environment variables (prevents /proc exposure)
+            - name: POSTGRES_USER_FILE
+              value: /run/secrets/db-username
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/db-password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           resources:
@@ -86,14 +82,22 @@ spec:
               mountPath: /tmp
             - name: run
               mountPath: /var/run/postgresql
+            # INFRA-H-03: Mount DB credentials as files instead of env vars
+            - name: db-credentials
+              mountPath: /run/secrets/db-username
+              subPath: username
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-password
+              subPath: password
+              readOnly: true
           livenessProbe:
             exec:
               command:
-                # $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
-                # Use shell wrapper to resolve env vars at runtime
+                # INFRA-H-03: Read username from mounted secret file
                 - /bin/sh
                 - -c
-                - pg_isready -U "$POSTGRES_USER" -d canton
+                - pg_isready -U "$(cat /run/secrets/db-username)" -d canton
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -101,15 +105,19 @@ spec:
           readinessProbe:
             exec:
               command:
-                # $(POSTGRES_USER) from secretKeyRef won't expand in exec probes
+                # INFRA-H-03: Read username from mounted secret file
                 - /bin/sh
                 - -c
-                - pg_isready -U "$POSTGRES_USER" -d canton
+                - pg_isready -U "$(cat /run/secrets/db-username)" -d canton
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
       volumes:
+        # INFRA-H-03: DB credentials mounted as files (read from /run/secrets/)
+        - name: db-credentials
+          secret:
+            secretName: postgres-credentials
         - name: tmp
           emptyDir:
             sizeLimit: 100Mi
