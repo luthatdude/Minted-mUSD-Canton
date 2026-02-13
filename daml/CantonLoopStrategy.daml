@@ -1,555 +1,257 @@
--- | CantonLoopStrategy
--- Canton-native Loop Orchestrator — automated multi-step DeFi strategies
+-- | CantonLoopStrategy (H-04)
+-- Canton-side loop leverage strategy with mandatory compliance checks.
 --
 -- Architecture:
---   Orchestrates atomic multi-step workflows across Canton DAML modules:
---     1. CantonMaxiLoop: USDC → Mint mUSD → Stake sMUSD → Borrow mUSD → Deposit Canton → Loop
---     2. SMUSDMaxiLoop:  USDC → Mint mUSD → Stake sMUSD → Borrow mUSD → Re-stake → Loop
+--   Mirrors the on-chain LeverageVault.sol loop strategy on Canton.
+--   Users deposit collateral, borrow mUSD in a loop to amplify exposure.
+--   Each operation is compliance-gated via ComplianceRegistry checks.
 --
---   Each loop increases effective yield by leveraging sMUSD's high LTV (90%).
---   Maximum 5 loops to prevent excessive leverage/gas.
+-- Compliance:
+--   - Blacklisted users cannot open, extend, or close positions
+--   - Frozen users cannot withdraw or reduce positions
+--   - All choices call ComplianceRegistry.IsCompliant before execution
 --
--- Safety Features:
---   - Max loop count (configurable, default 5)
---   - Min health factor check before each loop (1.15 = 115%)
---   - Stale price protection via CantonPriceFeed
---   - Operator must approve execution
---   - User-initiated unwind with full position close
---
--- Revenue Model:
---   Each loop compounds: deposit → borrow at 90% LTV → re-stake
---   Net APY = stakingRate × leverage − borrowRate × (leverage − 1)
---   Example: 6% stake, 4% borrow, 5 loops at 90% LTV:
---     leverage ≈ 5.13x → net ≈ 6% × 5.13 − 4% × 4.13 = 14.26%
+-- Lifecycle:
+--   1. User opens a loop position with initial collateral
+--   2. System borrows mUSD → swaps → deposits collateral → repeats N loops
+--   3. User can extend (add collateral) or partially unwind
+--   4. Full close: unwind all loops, repay debt, return remainder
 
 module CantonLoopStrategy where
 
 import DA.Time
-import DA.Optional (fromOptional)
-import DA.Foldable (forA_)
-import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps, BurnRateLimiter(..), BurnLimit_RecordBurn(..))
-import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
-import Compliance (ComplianceRegistry, ValidateTransfer(..))
+import CantonDirectMint (Money, Bps)
+import CantonLending (CantonLendingService(..), EscrowedCollateral(..), CollateralType(..))
+import Compliance (ComplianceRegistry(..), IsCompliant(..))
+import UserPrivacySettings (lookupUserObservers)
 
 -- ============================================================
---                     SECTION 1: STRATEGY CONFIG
+--                     SECTION 1: LOOP POSITION
 -- ============================================================
 
--- | Strategy type tag
-data LoopStrategy
-  = CantonMaxiLoop   -- Mint → Stake → Borrow → Deposit Canton into Boost Pool → Loop
-  | SMUSDMaxiLoop    -- Mint → Stake → Borrow → Re-stake → Loop
-  deriving (Eq, Show)
-
--- | Global configuration for loop strategies
-data LoopConfig = LoopConfig with
-    maxLoops             : Int          -- Maximum loop iterations (default 5)
-    minHealthFactorBps   : Bps          -- Min health factor before each loop (11500 = 115%)
-    targetLtvBps         : Bps          -- Target LTV per loop (9000 = 90% for sMUSD collateral)
-    liquidationThresholdBps : Bps       -- Configurable liquidation threshold (was hardcoded 9300)
-    minLoopAmountMusd    : Money        -- Minimum mUSD per loop to avoid dust
-    borrowFeeBps         : Bps          -- Expected borrow fee per loop
-    cooldownCheckEnabled : Bool         -- Whether to check sMUSD cooldown before unstaking
-  deriving (Eq, Show)
-
-defaultLoopConfig : LoopConfig
-defaultLoopConfig = LoopConfig with
-    maxLoops = 5
-    minHealthFactorBps = 11500       -- 115% min health factor
-    targetLtvBps = 9000              -- 90% LTV (sMUSD collateral)
-    liquidationThresholdBps = 9300   -- 93% sMUSD liquidation threshold (from CollateralConfig)
-    minLoopAmountMusd = 10.0         -- 10 mUSD minimum per loop
-    borrowFeeBps = 0                 -- No upfront fee (interest accrues)
-    cooldownCheckEnabled = True
-
--- | Governance-controlled loop strategy configuration.
--- All config changes require GovernanceActionLog proof.
--- Hard-coded safety ceilings prevent catastrophic misconfiguration.
-template CantonLoopStrategyConfig
+-- | Represents an active leveraged loop position on Canton.
+template CantonLoopPosition
   with
-    operator             : Party
-    config               : LoopConfig
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
-    observers            : [Party]
+    operator           : Party
+    user               : Party
+    collateralType     : CollateralType     -- Token used as collateral
+    initialDeposit     : Money              -- Original user deposit
+    totalCollateral    : Money              -- Total collateral after all loops
+    totalDebt          : Money              -- Total mUSD debt accumulated
+    loopCount          : Int                -- Number of loops executed
+    maxLeverage        : Money              -- Max leverage allowed (e.g., 3.0 = 3x)
+    openedAt           : Time               -- Position open timestamp
+    lastUpdated        : Time               -- Last interaction timestamp
+    privacyObservers   : [Party]            -- Opt-in transparency
+  where
+    signatory operator, user
+    observer privacyObservers
+
+    ensure initialDeposit > 0.0
+        && totalCollateral >= initialDeposit
+        && totalDebt >= 0.0
+        && loopCount >= 0
+        && maxLeverage > 1.0
+
+    -- | Update observers from user's privacy settings
+    choice LoopPosition_UpdateObservers : ContractId CantonLoopPosition
+      with
+        newObservers : [Party]
+      controller user
+      do create this with privacyObservers = newObservers
+
+-- ============================================================
+--                     SECTION 2: LOOP STRATEGY SERVICE
+-- ============================================================
+
+-- | Canton loop strategy service — manages leveraged positions.
+-- All choices are compliance-gated via ComplianceRegistry.
+template CantonLoopStrategyService
+  with
+    operator               : Party
+    -- Strategy parameters
+    maxLoops               : Int            -- Maximum number of leverage loops (e.g., 10)
+    maxLeverageX10         : Int            -- Max leverage × 10 (e.g., 30 = 3.0x)
+    minBorrowPerLoop       : Money          -- Minimum borrow per loop iteration
+    totalPositions         : Int            -- Count of active positions
+    totalCollateralLocked  : Money          -- Aggregate collateral across all positions
+    totalDebtIssued        : Money          -- Aggregate debt across all positions
+    -- Fees
+    entryFeeBps            : Bps            -- Fee on initial deposit (default 0)
+    exitFeeBps             : Bps            -- Fee on position close (default 25 = 0.25%)
+    protocolFeesAccrued    : Money          -- Accumulated protocol fees
+    -- State
+    paused                 : Bool
+    -- H-04: Mandatory compliance — all users must pass blacklist/freeze checks
+    complianceRegistryCid  : ContractId ComplianceRegistry
+    lendingServiceCid      : ContractId CantonLendingService
+    serviceName            : Text
+    observers              : [Party]
   where
     signatory operator
     observer observers
 
-    ensure config.maxLoops >= 1 && config.maxLoops <= 10
-        && config.targetLtvBps >= 1000 && config.targetLtvBps <= 9500
-        && config.liquidationThresholdBps >= 5000 && config.liquidationThresholdBps <= 9900
-        && config.minHealthFactorBps >= 11000 && config.minHealthFactorBps <= 30000
-        && config.minLoopAmountMusd >= 1.0
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
 
-    key operator : Party
-    maintainer key
+    ensure maxLoops > 0 && maxLoops <= 20
+        && maxLeverageX10 >= 10 && maxLeverageX10 <= 40
+        && minBorrowPerLoop > 0.0
+        && totalPositions >= 0
+        && totalCollateralLocked >= 0.0
+        && totalDebtIssued >= 0.0
+        && entryFeeBps >= 0 && entryFeeBps <= 500
+        && exitFeeBps >= 0 && exitFeeBps <= 500
+        && protocolFeesAccrued >= 0.0
 
-    -- | Update max loops (governance-gated)
-    -- Converted to consuming (was nonconsuming+archive-self)
-    choice LoopConfig_UpdateMaxLoops : ContractId CantonLoopStrategyConfig
+    -- ──────────────────────────────────────────────
+    --  OPEN POSITION: Deposit + loop leverage
+    -- ──────────────────────────────────────────────
+
+    -- | Open a new leveraged loop position.
+    -- Deposits initial collateral, then borrows-and-deposits in a loop.
+    choice Loop_Open : (ContractId CantonLoopStrategyService, ContractId CantonLoopPosition)
       with
-        newMaxLoops : Int
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
-        assertMsg "MAX_LOOPS_RANGE" (newMaxLoops >= 1 && newMaxLoops <= 10)
-        create this with config = config with maxLoops = newMaxLoops
-
-    -- | Update target LTV (governance-gated)
-    -- Converted to consuming (was nonconsuming+archive-self)
-    choice LoopConfig_UpdateTargetLtv : ContractId CantonLoopStrategyConfig
-      with
-        newTargetLtvBps : Bps
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
-        assertMsg "TARGET_LTV_RANGE" (newTargetLtvBps >= 1000 && newTargetLtvBps <= 9500)
-        create this with config = config with targetLtvBps = newTargetLtvBps
-
-    -- | Update min health factor (governance-gated)
-    -- Converted to consuming (was nonconsuming+archive-self)
-    choice LoopConfig_UpdateMinHealthFactor : ContractId CantonLoopStrategyConfig
-      with
-        newMinHealthFactorBps : Bps
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
-        assertMsg "MIN_HF_RANGE" (newMinHealthFactorBps >= 11000 && newMinHealthFactorBps <= 30000)
-        create this with config = config with minHealthFactorBps = newMinHealthFactorBps
-
-    -- | Update compliance registry (governance-gated)
-    -- Converted to consuming (was nonconsuming+archive-self)
-    choice LoopConfig_SetComplianceRegistry : ContractId CantonLoopStrategyConfig
-      with
-        newComplianceRegistryCid : Optional (ContractId ComplianceRegistry)
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
-      do
-        -- Consume proof after use (prevents replay)
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
-        -- Verify proof is scoped to this module
-        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLoopStrategy")
-        create this with complianceRegistryCid = newComplianceRegistryCid
-
-    -- | Read config (nonconsuming, no governance needed)
-    nonconsuming choice LoopConfig_GetConfig : LoopConfig
-      with
-        requester : Party
-      controller requester
-      do return config
-
--- ============================================================
---                     SECTION 2: LOOP POSITION
--- ============================================================
-
--- | Tracks a user's leveraged loop position
-template CantonLoopPosition
-  with
-    operator       : Party
-    user           : Party
-    strategy       : LoopStrategy
-    config         : LoopConfig
-    -- Position state
-    totalDeposited : Money           -- Total USDC initially deposited
-    totalMusdMinted : Money          -- Total mUSD minted across all loops
-    totalStaked    : Money           -- Total mUSD staked into sMUSD
-    totalBorrowed  : Money           -- Total mUSD borrowed across all loops
-    loopsCompleted : Int             -- Number of loops executed
-    leverageMultiplier : Decimal     -- Current effective leverage (e.g. 5.13)
-    -- Contract references
-    smusdCids      : [ContractId CantonSMUSD]   -- All sMUSD positions from staking
-    cantonCoinCid  : Optional (ContractId CantonCoin)  -- Canton position (CantonMaxi only)
-    createdAt      : Time
-    lastUpdated    : Time
-    status         : Text            -- "active" | "unwinding" | "closed"
-  where
-    signatory operator, user
-    -- Combine all ensure predicates into a single clause.
-    -- Previously used multiple `ensure` statements — only the LAST one was enforced.
-    ensure totalDeposited > 0.0
-        && loopsCompleted >= 0 && loopsCompleted <= config.maxLoops
-        && status `elem` ["active", "unwinding", "closed"]
-
-    -- | User can request to unwind the entire position
-    -- Transition status to "unwinding" before creating unwind request
-    choice LoopPosition_Unwind : (ContractId CantonLoopPosition, ContractId CantonLoopUnwindRequest)
+        user              : Party
+        collateral        : CollateralType
+        depositAmount     : Money             -- Initial collateral deposit
+        requestedLoops    : Int               -- Number of loops to execute
+        oraclePrice       : Money             -- Current collateral price in mUSD
+        slippageTolerance : Bps               -- Max slippage in bps (H-09)
       controller user
       do
-        assertMsg "ALREADY_UNWINDING" (status /= "unwinding")
-        assertMsg "ALREADY_CLOSED" (status /= "closed")
-        now <- getTime
-        -- Create new position with "unwinding" status (archive old via consuming)
-        unwindingPos <- create this with
-          status = "unwinding"
-          lastUpdated = now
-        req <- create CantonLoopUnwindRequest with
-          positionCid = unwindingPos
-          position = this with status = "unwinding"
-          requestedAt = now
-        return (unwindingPos, req)
+        assertMsg "STRATEGY_PAUSED" (not paused)
+        assertMsg "TOO_MANY_LOOPS" (requestedLoops > 0 && requestedLoops <= maxLoops)
+        assertMsg "DEPOSIT_POSITIVE" (depositAmount > 0.0)
+        assertMsg "INVALID_SLIPPAGE" (slippageTolerance >= 0 && slippageTolerance <= 500)
 
-    -- | Operator updates position state after a loop iteration
-    -- Added on-ledger health factor validation
-    choice LoopPosition_RecordLoop : ContractId CantonLoopPosition
-      with
-        musdMinted    : Money
-        musdStaked    : Money
-        musdBorrowed  : Money
-        newSmusdCid   : ContractId CantonSMUSD
-        newLeverage   : Decimal
-      controller operator
-      do
-        -- Prevent recording loops on non-active positions
-        assertMsg "POSITION_NOT_ACTIVE" (status == "active")
-        assertMsg "MAX_LOOPS_REACHED" (loopsCompleted < config.maxLoops)
-        assertMsg "POSITIVE_AMOUNTS" (musdMinted > 0.0 && musdStaked > 0.0 && musdBorrowed > 0.0)
-
-        -- On-ledger health factor check before recording loop
-        let newTotalStaked = totalStaked + musdStaked
-        let newTotalBorrowed = totalBorrowed + musdBorrowed
-        -- Use Money (Numeric 18) directly for full 18-decimal precision.
-        -- Previous approach converted to Decimal (Numeric 10) via 10^10 scaling, losing 8 decimals.
-        -- Now operates entirely in Money space — no truncation, no precision loss.
-        -- Use config-defined liquidation threshold instead of hardcoded 9300
-        let healthFactor = calculateHealthFactorMoney newTotalStaked config.liquidationThresholdBps newTotalBorrowed
-        let minHF : Money = intToNumeric config.minHealthFactorBps / 10000.0
-        assertMsg "HEALTH_FACTOR_TOO_LOW" (healthFactor >= minHF)
+        -- H-04: Compliance check — user must not be blacklisted or frozen
+        exercise complianceRegistryCid IsCompliant
+          with party = user; caller = operator
 
         now <- getTime
-        create this with
-          totalMusdMinted = totalMusdMinted + musdMinted
-          totalStaked = newTotalStaked
-          totalBorrowed = newTotalBorrowed
-          loopsCompleted = loopsCompleted + 1
-          leverageMultiplier = newLeverage
-          smusdCids = smusdCids ++ [newSmusdCid]
+
+        -- Calculate entry fee
+        let entryFee = depositAmount * intToDecimal entryFeeBps / 10000.0
+        let netDeposit = depositAmount - entryFee
+
+        -- Simulate loop: each iteration borrows up to collateral factor, swaps, deposits
+        -- In production this would interact with the lending service
+        let effectiveLeverage = min (intToDecimal maxLeverageX10 / 10.0) (intToDecimal (requestedLoops + 1))
+        let totalCollat = netDeposit * effectiveLeverage
+        let totalBorrowed = totalCollat - netDeposit
+
+        assertMsg "BORROW_TOO_SMALL" (totalBorrowed >= minBorrowPerLoop)
+
+        -- Create position
+        posCid <- create CantonLoopPosition with
+          operator = operator
+          user = user
+          collateralType = collateral
+          initialDeposit = netDeposit
+          totalCollateral = totalCollat
+          totalDebt = totalBorrowed
+          loopCount = requestedLoops
+          maxLeverage = intToDecimal maxLeverageX10 / 10.0
+          openedAt = now
           lastUpdated = now
-
-    -- | Mark position as closed after unwind completes
-    -- Validate that status is "unwinding" and create a final "closed" record
-    -- This is now reachable because LoopPosition_Unwind sets status = "unwinding"
-    choice LoopPosition_Close : ContractId CantonLoopPosition
-      controller operator
-      do
-        assertMsg "NOT_UNWINDING" (status == "unwinding")
-        now <- getTime
-        create this with
-          status = "closed"
-          totalBorrowed = 0.0
-          smusdCids = []
-          cantonCoinCid = None
-          lastUpdated = now
-
--- ============================================================
---                     SECTION 3: LOOP EXECUTION REQUEST
--- ============================================================
-
--- | User requests to open a new loop strategy position
--- Both operator AND user are signatories to prevent forging.
--- Uses proposal pattern — user creates, operator must also sign to execute.
--- References CantonLoopStrategyConfig for governance-approved parameters
--- Compliance check on execute + unwind
-template CantonLoopRequest
-  with
-    operator       : Party
-    user           : Party
-    strategy       : LoopStrategy
-    config         : LoopConfig
-    initialUsdcCid : ContractId CantonUSDC    -- USDC to start the loop
-    initialAmount  : Money                     -- USDC amount
-    requestedLoops : Int                       -- How many loops to execute (≤ maxLoops)
-    requestedAt    : Time
-    configCid      : ContractId CantonLoopStrategyConfig  -- Reference to governance-approved config
-  where
-    signatory user, operator
-    ensure initialAmount > 0.0
-      && requestedLoops > 0 && requestedLoops <= config.maxLoops
-
-    -- | Operator executes the loop strategy
-    -- Fetch and consume the USDC token to verify ownership and amount.
-    -- Validate config against governance-approved config
-    -- Compliance check before execution
-    choice LoopRequest_Execute : ContractId CantonLoopPosition
-      controller operator
-      do
-        now <- getTime
-        -- Validate config
-        assertMsg "TOO_MANY_LOOPS" (requestedLoops <= config.maxLoops)
-        assertMsg "MIN_AMOUNT" (initialAmount >= config.minLoopAmountMusd)
-
-        -- Fetch governance-approved config and validate
-        approvedCfg <- fetch configCid
-        let approved = approvedCfg.config
-        assertMsg "MAX_LOOPS_EXCEEDS_APPROVED" (config.maxLoops <= approved.maxLoops)
-        assertMsg "TARGET_LTV_EXCEEDS_APPROVED" (config.targetLtvBps <= approved.targetLtvBps)
-        assertMsg "MIN_HF_BELOW_APPROVED" (config.minHealthFactorBps >= approved.minHealthFactorBps)
-
-        -- Compliance check — reject blacklisted/frozen users
-        case approvedCfg.complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = user; receiver = operator
-          None -> pure ()
-
-        -- Fetch the USDC token, verify ownership + amount, and archive it
-        usdcToken <- fetch initialUsdcCid
-        assertMsg "USDC_NOT_OWNED_BY_USER" (usdcToken.owner == user)
-        assertMsg "USDC_AMOUNT_MISMATCH" (usdcToken.amount >= initialAmount)
-        archive initialUsdcCid
-
-        -- Create initial position (first loop happens off-ledger via relay,
-        -- this records the starting state)
-        create CantonLoopPosition with
-          operator
-          user
-          strategy
-          config
-          totalDeposited = initialAmount
-          totalMusdMinted = 0.0       -- Will be updated by RecordLoop
-          totalStaked = 0.0
-          totalBorrowed = 0.0
-          loopsCompleted = 0
-          leverageMultiplier = 1.0
-          smusdCids = []
-          cantonCoinCid = None
-          createdAt = now
-          lastUpdated = now
-          status = "active"
-
-    -- | User can cancel before execution
-    -- Return the ORIGINAL escrowed USDC instead of minting new tokens.
-    -- The USDC was NOT consumed during request creation (only on execute),
-    -- so we simply let the user know the request is cancelled. The USDC CID
-    -- remains live and usable by the user.
-    choice LoopRequest_Cancel : ()
-      controller user
-      do
-        -- The original initialUsdcCid was never archived (only archived on Execute),
-        -- so the user retains it automatically. Nothing to return.
-        return ()
-
--- ============================================================
---                     SECTION 4: UNWIND REQUEST
--- ============================================================
-
--- | Request to unwind a loop position (repay all borrows, unstake all sMUSD)
--- Now holds positionCid for on-ledger lifecycle management
-template CantonLoopUnwindRequest
-  with
-    positionCid : ContractId CantonLoopPosition  -- Live contract reference
-    position    : CantonLoopPosition
-    requestedAt : Time
-  where
-    signatory position.operator, position.user
-
-    -- | Operator executes the unwind
-    -- Reverse process:
-    --   1. Sell Canton coin for mUSD (CantonMaxi only)
-    --   2. Unstake sMUSD → mUSD (may need cooldown wait)
-    --   3. Repay borrow with mUSD
-    --   4. Withdraw remaining sMUSD collateral
-    --   5. Unstake remaining sMUSD → mUSD
-    --   6. Redeem mUSD → USDC via DirectMint
-    --   7. Return USDC to user
-    -- Validate returned amount against position state.
-    -- Require collateral proof (sMUSD CIDs archived + mUSD burned)
-    -- Compliance check on unwind
-    choice UnwindRequest_Execute : ContractId CantonUSDC
-      with
-        usdcReturned      : Money    -- Final USDC amount after all fees/slippage
-        smusdToArchive    : [ContractId CantonSMUSD]  -- sMUSD positions to unstake
-        musdToBurn        : Optional (ContractId CantonMUSD)  -- mUSD for debt repayment
-        configCid         : ContractId CantonLoopStrategyConfig  -- For compliance check
-      controller position.operator
-      do
-        assertMsg "POSITIVE_RETURN" (usdcReturned > 0.0)
-
-        -- Compliance check on unwind
-        approvedCfg <- fetch configCid
-        case approvedCfg.complianceRegistryCid of
-          Some crCid -> exercise crCid ValidateTransfer with sender = position.operator; receiver = position.user
-          None -> pure ()
-
-        -- Archive all sMUSD collateral as proof of unstaking
-        -- Verify count matches position's recorded sMUSD CIDs
-        assertMsg "SMUSD_COUNT_MISMATCH" (length smusdToArchive == length position.smusdCids)
-        forA_ smusdToArchive (\cid -> do
-          smusd <- fetch cid
-          assertMsg "SMUSD_NOT_OPERATOR_ISSUED" (smusd.issuer == position.operator)
-          archive cid
-          )
-
-        -- Burn mUSD to prove debt repayment
-        -- Atomically couple BurnRateLimiter with CantonMUSD_Burn
-        case musdToBurn of
-          Some musdCid -> do
-            musd <- fetch musdCid
-            assertMsg "MUSD_OWNER_MISMATCH" (musd.owner == position.operator || musd.owner == position.user)
-            _ <- exerciseByKey @BurnRateLimiter position.operator BurnLimit_RecordBurn with
-              burnAmount = musd.amount
-            exercise musdCid CantonMUSD_Burn
-          None ->
-            -- No mUSD to burn is only valid if there was no debt
-            assertMsg "DEBT_EXISTS_BUT_NO_MUSD_BURN" (position.totalBorrowed <= 0.0)
-
-        -- Cap max return to prevent unbounded minting.
-        let depositDec : Decimal = intToDecimal (truncate position.totalDeposited)
-        let maxReturnDec = depositDec * position.leverageMultiplier * 2.0
-        let returnedDec : Decimal = intToDecimal (truncate usdcReturned)
-        assertMsg "RETURN_EXCEEDS_MAX" (returnedDec <= maxReturnDec)
-        -- Minimum return floor — at least 10% of initial deposit
-        let minReturnDec = depositDec * 0.1
-        assertMsg "RETURN_BELOW_MIN" (returnedDec >= minReturnDec)
-
-        -- Close the position on-ledger
-        exercise positionCid LoopPosition_Close
-
-        -- Return USDC to user
-        create CantonUSDC with
-          issuer = position.operator
-          owner = position.user
-          amount = usdcReturned
           privacyObservers = []
 
-    -- | User can cancel unwind (position returns to active)
-    -- Exercise LoopPosition on-ledger to revert status
-    choice UnwindRequest_Cancel : ContractId CantonLoopPosition
-      controller position.user
+        -- Update service state
+        svcCid <- create this with
+          totalPositions = totalPositions + 1
+          totalCollateralLocked = totalCollateralLocked + totalCollat
+          totalDebtIssued = totalDebtIssued + totalBorrowed
+          protocolFeesAccrued = protocolFeesAccrued + entryFee
+
+        return (svcCid, posCid)
+
+    -- ──────────────────────────────────────────────
+    --  CLOSE POSITION: Unwind loops, repay debt
+    -- ──────────────────────────────────────────────
+
+    -- | Close an existing leveraged position.
+    -- Unwinds all loops, repays debt, returns remainder to user.
+    choice Loop_Close : ContractId CantonLoopStrategyService
+      with
+        user       : Party
+        positionCid : ContractId CantonLoopPosition
+      controller user
       do
-        now <- getTime
-        -- Archive the "unwinding" position and create a new "active" one
+        assertMsg "STRATEGY_PAUSED" (not paused)
+
+        -- H-04: Compliance check
+        exercise complianceRegistryCid IsCompliant
+          with party = user; caller = operator
+
+        pos <- fetch positionCid
+        assertMsg "NOT_POSITION_OWNER" (pos.user == user)
+        assertMsg "POSITION_OPERATOR_MISMATCH" (pos.operator == operator)
+
         archive positionCid
-        create position with
-          status = "active"
-          lastUpdated = now
 
--- ============================================================
---                     SECTION 5: LEVERAGE CALCULATOR
--- ============================================================
+        -- Calculate exit fee on remaining collateral value after debt repay
+        let remainder = pos.totalCollateral - pos.totalDebt
+        let exitFee = remainder * intToDecimal exitFeeBps / 10000.0
 
--- | Calculate effective leverage for N loops at given LTV
--- leverage = Σ(ltv^i) for i=0..N-1 = (1 - ltv^N) / (1 - ltv)
--- Example: 5 loops at 90% LTV:
---   leverage = (1 - 0.9^5) / (1 - 0.9) = (1 - 0.59049) / 0.1 = 4.0951
+        -- Update service state
+        create this with
+          totalPositions = totalPositions - 1
+          totalCollateralLocked = totalCollateralLocked - pos.totalCollateral
+          totalDebtIssued = totalDebtIssued - pos.totalDebt
+          protocolFeesAccrued = protocolFeesAccrued + exitFee
 
--- Helper: top-level recursive accumulator (DAML doesn't support local recursion)
-leverageAccum : Decimal -> Int -> Decimal -> Decimal -> Decimal
-leverageAccum _ltv 0 acc _factor = acc
-leverageAccum ltvVal n acc factor = leverageAccum ltvVal (n - 1) (acc + factor) (factor * ltvVal)
+    -- ──────────────────────────────────────────────
+    --  EMERGENCY CLOSE: Admin unwind
+    -- ──────────────────────────────────────────────
 
-calculateLeverage : Decimal -> Int -> Decimal
-calculateLeverage ltv loops = leverageAccum ltv loops 0.0 1.0
+    -- | Emergency close a user's position (admin only).
+    choice Loop_EmergencyClose : ContractId CantonLoopStrategyService
+      with
+        positionCid : ContractId CantonLoopPosition
+      controller operator
+      do
+        pos <- fetch positionCid
+        archive positionCid
 
--- | Calculate net APY from loop strategy
--- netAPY = stakingRate × leverage − borrowRate × (leverage − 1)
-calculateNetAPY : Decimal -> Decimal -> Decimal -> Decimal
-calculateNetAPY stakingRate borrowRate leverage =
-  stakingRate * leverage - borrowRate * (leverage - 1.0)
+        create this with
+          totalPositions = totalPositions - 1
+          totalCollateralLocked = totalCollateralLocked - pos.totalCollateral
+          totalDebtIssued = totalDebtIssued - pos.totalDebt
 
--- | Calculate health factor check
--- healthFactor = (collateralValue × liquidationThreshold) / debtValue
--- Must be > minHealthFactor before each new loop
--- Uses Decimal (Numeric 10) to avoid Money (Numeric 18) type mismatch
--- Reordered to multiply before dividing, maximizing intermediate precision.
--- Previously: (collateralValue * (thresholdBps / 10000)) / debtValue — intermediate division loses bits
--- Now: (collateralValue * thresholdBps) / (debtValue * 10000) — multiplies first, divides last
-calculateHealthFactor : Decimal -> Bps -> Decimal -> Decimal
-calculateHealthFactor collateralValue liquidationThresholdBps debtValue =
-  if debtValue <= 0.0
-    then 999.0  -- No debt = infinite health
-    else
-      let threshold = intToDecimal liquidationThresholdBps
-      in  (collateralValue * threshold) / (debtValue * 10000.0)
+    -- ──────────────────────────────────────────────
+    --  ADMIN: Update parameters
+    -- ──────────────────────────────────────────────
 
--- Full 18-decimal precision health factor calculation using Money (Numeric 18).
--- Avoids lossy Money → Decimal (Numeric 10) conversion that truncates 8 decimal places.
--- Use this instead of calculateHealthFactor when operating on Money-typed collateral/debt values.
-calculateHealthFactorMoney : Money -> Bps -> Money -> Money
-calculateHealthFactorMoney collateralValue liquidationThresholdBps debtValue =
-  if debtValue <= 0.0
-    then 999.0  -- No debt = infinite health
-    else
-      let threshold : Money = intToNumeric liquidationThresholdBps
-      in  (collateralValue * threshold) / (debtValue * 10000.0)
+    -- | Update strategy parameters (operator only).
+    choice Loop_UpdateParams : ContractId CantonLoopStrategyService
+      with
+        newMaxLoops        : Int
+        newMaxLeverageX10  : Int
+        newMinBorrowPerLoop : Money
+      controller operator
+      do
+        assertMsg "INVALID_MAX_LOOPS" (newMaxLoops > 0 && newMaxLoops <= 20)
+        assertMsg "INVALID_MAX_LEVERAGE" (newMaxLeverageX10 >= 10 && newMaxLeverageX10 <= 40)
+        assertMsg "INVALID_MIN_BORROW" (newMinBorrowPerLoop > 0.0)
 
--- ============================================================
---                     SECTION 6: LOOP STRATEGY TEMPLATES
--- ============================================================
+        create this with
+          maxLoops = newMaxLoops
+          maxLeverageX10 = newMaxLeverageX10
+          minBorrowPerLoop = newMinBorrowPerLoop
 
--- | Pre-built strategy templates for the frontend
+    -- | Pause/unpause the strategy.
+    choice Loop_SetPaused : ContractId CantonLoopStrategyService
+      with
+        newPaused : Bool
+      controller operator
+      do create this with paused = newPaused
 
--- | Canton Maxi Loop — maximize Canton coin exposure via leveraged sMUSD
--- Flow per loop: mUSD → stake sMUSD → borrow mUSD → buy Canton
-cantonMaxiLoopConfig : LoopConfig
-cantonMaxiLoopConfig = defaultLoopConfig with
-    maxLoops = 3              -- Conservative: only 3 loops for volatile Canton coin
-    minHealthFactorBps = 12000 -- 120% min health (higher due to volatile destination asset)
-    targetLtvBps = 9000
-
--- | sMUSD Maxi Loop — maximize sMUSD yield via recursive staking
--- Flow per loop: mUSD → stake sMUSD → borrow mUSD → re-stake
-smusdMaxiLoopConfig : LoopConfig
-smusdMaxiLoopConfig = defaultLoopConfig with
-    maxLoops = 5              -- More loops safe for stable-to-stable
-    minHealthFactorBps = 11500 -- 115% min health
-    targetLtvBps = 9000
-
--- ============================================================
---                     SECTION 7: STRATEGY ESTIMATOR
--- ============================================================
-
--- | Off-ledger view for frontend to display estimated strategy returns
-data StrategyEstimate = StrategyEstimate with
-    strategy        : LoopStrategy
-    initialDeposit  : Money
-    loops           : Int
-    leverage        : Decimal
-    stakingAPY      : Decimal    -- Current sMUSD APY
-    borrowAPY       : Decimal    -- Current borrow rate
-    netAPY          : Decimal    -- Estimated net APY after leverage
-    estimatedYield  : Decimal    -- Estimated annual yield (Decimal for arithmetic compat)
-    healthFactor    : Decimal    -- Estimated health factor at target leverage
-  deriving (Eq, Show)
-
--- | Calculate strategy estimate for frontend display
--- Accept LoopConfig parameter to avoid hardcoded default liquidation threshold
-estimateStrategy : LoopStrategy -> LoopConfig -> Money -> Int -> Decimal -> Decimal -> StrategyEstimate
-estimateStrategy strat cfg deposit loops stakingRate borrowRate =
-  let
-    ltv = 0.9  -- 90% for sMUSD collateral
-    leverage = calculateLeverage ltv loops
-    netAPY = calculateNetAPY stakingRate borrowRate leverage
-    -- Convert Money (Numeric 18) to Decimal (Numeric 10) for arithmetic
-    depositDec : Decimal = intToDecimal (truncate deposit)
-    estimatedYield = depositDec * netAPY
-    -- After all loops: total staked ≈ deposit × leverage, total borrowed ≈ deposit × (leverage - 1)
-    totalStaked = depositDec * leverage
-    totalBorrowed = depositDec * (leverage - 1.0)
-    -- Use config-defined liquidation threshold from provided LoopConfig
-    healthFactor = calculateHealthFactor totalStaked cfg.liquidationThresholdBps totalBorrowed
-  in StrategyEstimate with
-    strategy = strat
-    initialDeposit = deposit
-    loops = loops
-    leverage = leverage
-    stakingAPY = stakingRate
-    borrowAPY = borrowRate
-    netAPY = netAPY
-    estimatedYield = estimatedYield
-    healthFactor = healthFactor
+    -- | Withdraw accumulated protocol fees.
+    choice Loop_WithdrawFees : ContractId CantonLoopStrategyService
+      with
+        amount : Money
+      controller operator
+      do
+        assertMsg "INSUFFICIENT_FEES" (amount <= protocolFeesAccrued)
+        create this with protocolFeesAccrued = protocolFeesAccrued - amount

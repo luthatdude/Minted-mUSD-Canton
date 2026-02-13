@@ -69,6 +69,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Role for administrative functions (config changes)
     bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
+    
+    /// @notice FIX H-07: TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ============ Constants ============
     
@@ -274,7 +277,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the treasury address
      * @param newTreasury New treasury address on Ethereum
      */
-    function setTreasury(address newTreasury) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setTreasury(address newTreasury) external onlyRole(TIMELOCK_ROLE) {
         if (newTreasury == address(0)) revert InvalidAddress();
         address old = treasuryAddress;
         treasuryAddress = newTreasury;
@@ -285,7 +288,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the DirectMint address
      * @param newDirectMint New DirectMint address on Ethereum
      */
-    function setDirectMint(address newDirectMint) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setDirectMint(address newDirectMint) external onlyRole(TIMELOCK_ROLE) {
         if (newDirectMint == address(0)) revert InvalidAddress();
         address old = directMintAddress;
         directMintAddress = newDirectMint;
@@ -296,7 +299,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the protocol fee
      * @param newFeeBps New fee in basis points
      */
-    function setFee(uint256 newFeeBps) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setFee(uint256 newFeeBps) external onlyRole(TIMELOCK_ROLE) {
         if (newFeeBps > 500) revert FeeTooHigh();
         uint256 old = feeBps;
         feeBps = newFeeBps;

@@ -13,6 +13,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 /// @dev Interface for checking health factor before withdrawal
 interface IBorrowModule {
     function healthFactor(address user) external view returns (uint256);
+    function healthFactorUnsafe(address user) external view returns (uint256);
     function totalDebt(address user) external view returns (uint256);
 }
 
@@ -241,6 +242,11 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
             );
         }
 
+        // FIX S-M-05: Decrement deposit BEFORE health check so healthFactor()
+        // sees the post-withdrawal state. Solidity's atomic revert ensures the
+        // decrement is rolled back if the health check fails.
+        deposits[user][token] -= amount;
+
         // Check health factor unless explicitly skipped during atomic position closure
         if (!skipHealthCheck && borrowModule != address(0)) {
             // Only check if user has debt
@@ -267,7 +273,6 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
             }
         }
 
-        deposits[user][token] -= amount;
         IERC20(token).safeTransfer(recipient, amount);
 
         emit Withdrawn(user, token, amount);

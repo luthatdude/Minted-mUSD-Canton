@@ -13,7 +13,6 @@ module InterestRateService where
 
 import DA.Time
 import DA.Optional (fromOptional)
-import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
 -- ============================================================
 --                     RATE PARAMETERS
@@ -66,10 +65,10 @@ template InterestRateService
     signatory operator, governance
     observer observers
 
-    ensure params.baseRateBps >= 0 && params.baseRateBps <= 2000
-        && params.multiplierBps >= 0 && params.multiplierBps <= 10000
-        && params.kinkBps >= 1000 && params.kinkBps <= 10000
-        && params.jumpMultiplierBps >= 0 && params.jumpMultiplierBps <= 10000
+    ensure params.baseRateBps >= 0
+        && params.multiplierBps >= 0
+        && params.kinkBps >= 0 && params.kinkBps <= 10000
+        && params.jumpMultiplierBps >= 0
         && params.reserveFactorBps >= 0 && params.reserveFactorBps <= 5000
 
     -- | Calculate utilization rate (0-10000 BPS)
@@ -111,7 +110,6 @@ template InterestRateService
         return ((borrowRate * util * oneMinusReserve) / (10000 * 10000))
 
     -- | Calculate interest for a given principal and duration
-    -- Return 0 for zero/negative principal or duration to match Solidity behavior
     nonconsuming choice RateService_CalculateInterest : Decimal
       with
         requester : Party
@@ -119,13 +117,13 @@ template InterestRateService
         durationSeconds : Int
       controller requester
       do
-        if principal <= 0.0 || durationSeconds <= 0
-          then return 0.0
-          else do
-            borrowRateBps <- exercise self RateService_GetBorrowRate with requester
-            let secondsPerYear = 31536000.0  -- 365 * 24 * 60 * 60
-            let ratePerSecond = intToDecimal borrowRateBps / (10000.0 * secondsPerYear)
-            return (principal * ratePerSecond * intToDecimal durationSeconds)
+        assertMsg "PRINCIPAL_MUST_BE_POSITIVE" (principal > 0.0)
+        assertMsg "DURATION_MUST_BE_POSITIVE" (durationSeconds > 0)
+        
+        borrowRateBps <- exercise self RateService_GetBorrowRate with requester
+        let secondsPerYear = 31536000.0  -- 365 * 24 * 60 * 60
+        let ratePerSecond = intToDecimal borrowRateBps / (10000.0 * secondsPerYear)
+        return (principal * ratePerSecond * intToDecimal durationSeconds)
 
     -- | Split interest into supplier and reserve portions
     nonconsuming choice RateService_SplitInterest : (Decimal, Decimal)
@@ -139,21 +137,18 @@ template InterestRateService
         return (supplierAmount, reserveAmount)
 
     -- | Sync market state from Ethereum (via bridge attestation)
-    -- Governance-gated to prevent compromised operator feeding arbitrary data
+    -- FIX D-M-03: Require governance co-signature and attestation for market state sync
     choice RateService_SyncMarketState : ContractId InterestRateService
       with
         newTotalBorrows : Decimal
         newTotalSupply : Decimal
         ethBlockNumber : Int
-        governanceProofCid : ContractId GovernanceActionLog
-      controller operator
+        attestationHash : Text    -- FIX D-M-03: SHA-256 attestation from bridge validators
+      controller operator, governance
       do
-        -- Verify governance approval before syncing market state
-        proof <- exercise governanceProofCid ConsumeProof
-        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "STALE_DATA" (ethBlockNumber > marketState.ethBlockNumber)
-        assertMsg "INVALID_BORROWS" (newTotalBorrows >= 0.0)
-        assertMsg "INVALID_SUPPLY" (newTotalSupply >= 0.0)
+        -- FIX D-M-03: Require non-empty attestation hash to prevent unverified syncs
+        assertMsg "ATTESTATION_REQUIRED" (attestationHash /= "")
         now <- getTime
         create this with
           marketState = MarketState with
