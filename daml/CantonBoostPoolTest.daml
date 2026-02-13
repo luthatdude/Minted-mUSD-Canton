@@ -19,6 +19,8 @@ import CantonBoostPool
 import CantonCoinToken (CantonCoin(..), CantonCoin_Split(..), CantonCoin_Transfer(..), CantonCoinTransferProposal(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonDirectMint (Money)
+import Compliance (ComplianceRegistry(..))
+import DA.Set qualified as Set
 import DA.Time
 import DA.Date
 import Daml.Script
@@ -55,7 +57,16 @@ createCanton operator user amount =
 
 -- | Create a default CantonBoostPoolService
 createPoolService : Party -> [Party] -> Script (ContractId CantonBoostPoolService)
-createPoolService operator observers =
+createPoolService operator observers = do
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submit operator do
     createCmd CantonBoostPoolService with
       operator
@@ -74,7 +85,8 @@ createPoolService operator observers =
       cantonCapRatio = 0.25            -- 20/80 ratio
       cooldownSeconds = 172800         -- 48 hours
       paused = False
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
+      serviceName = "CantonBoostPool"
       observers
 
 -- ============================================================
@@ -162,6 +174,15 @@ test_CapScalesWithSharePrice = script do
   smusdCid <- createSmusd operator alice 10000.0 1.0 baseTime
 
   -- Deploy pool with higher share price (simulating yield accrual)
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   poolCid <- submit operator do
     createCmd CantonBoostPoolService with
       operator
@@ -180,7 +201,8 @@ test_CapScalesWithSharePrice = script do
       cantonCapRatio = 0.25
       cooldownSeconds = 172800
       paused = False
-      complianceRegistryCid = None
+      complianceRegistryCid = complianceCid
+      serviceName = "CantonBoostPool"
       observers = [alice]
 
   -- With sharePrice=1.10, cap = 10,000 × 1.10 × 0.25 = 2,750 mUSD
