@@ -13,6 +13,7 @@ import {InterestRateModel} from "../../contracts/InterestRateModel.sol";
 import {DirectMintV2} from "../../contracts/DirectMintV2.sol";
 import {MockERC20} from "../../contracts/mocks/MockERC20.sol";
 import {MockAggregatorV3} from "../../contracts/mocks/MockAggregatorV3.sol";
+import "../../contracts/Errors.sol";
 
 /// @title FuzzTest
 /// @notice Foundry fuzz tests that throw random inputs at every external function
@@ -42,14 +43,14 @@ contract FuzzTest is Test {
         musd = new MUSD(100_000_000e18);
         smusd = new SMUSD(IERC20(address(musd)));
         oracle = new PriceOracle();
-        irm = new InterestRateModel(address(this), address(this));
-        vault = new CollateralVault(address(this));
+        irm = new InterestRateModel(address(this));
+        vault = new CollateralVault();
         borrowModule = new BorrowModule(
             address(vault), address(oracle), address(musd), 500, 100e18
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),
-            address(musd), 5000, address(this)
+            address(musd), 5000
         );
 
         // Oracle setup — direct call gated by onlyTimelock (test contract is timelock)
@@ -66,6 +67,7 @@ contract FuzzTest is Test {
         vault.grantRole(vault.LIQUIDATION_ROLE(), address(liquidation));
         borrowModule.grantRole(borrowModule.LIQUIDATION_ROLE(), address(liquidation));
 
+        borrowModule.grantRole(borrowModule.TIMELOCK_ROLE(), admin);
         borrowModule.setInterestRateModel(address(irm));
 
         // Refresh mock feed timestamp so oracle doesn't see stale prices
@@ -301,10 +303,11 @@ contract FuzzTest is Test {
 
     /// @notice Minting should never exceed supply cap
     function testFuzz_mintNeverExceedsCap(uint256 amount) public {
-        amount = bound(amount, 1, musd.supplyCap());
+        uint256 effectiveCap = (musd.supplyCap() * musd.localCapBps()) / 10000;
+        amount = bound(amount, 1, effectiveCap);
 
-        if (musd.totalSupply() + amount > musd.supplyCap()) {
-            vm.expectRevert("EXCEEDS_CAP");
+        if (musd.totalSupply() + amount > effectiveCap) {
+            vm.expectRevert(ExceedsLocalCap.selector);
         }
         musd.mint(alice, amount);
 

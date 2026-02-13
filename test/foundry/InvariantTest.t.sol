@@ -44,14 +44,14 @@ contract InvariantTest is Test {
         musd = new MUSD(100_000_000e18);
         smusd = new SMUSD(IERC20(address(musd)));
         oracle = new PriceOracle();
-        irm = new InterestRateModel(address(this), address(this));
-        vault = new CollateralVault(address(this));
+        irm = new InterestRateModel(address(this));
+        vault = new CollateralVault();
         borrowModule = new BorrowModule(
             address(vault), address(oracle), address(musd), 500, 100e18
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),
-            address(musd), 5000, address(this)
+            address(musd), 5000
         );
 
         // Oracle setup
@@ -68,6 +68,7 @@ contract InvariantTest is Test {
         vault.grantRole(vault.LIQUIDATION_ROLE(), address(liquidation));
         borrowModule.grantRole(borrowModule.LIQUIDATION_ROLE(), address(liquidation));
 
+        borrowModule.grantRole(borrowModule.TIMELOCK_ROLE(), admin);
         borrowModule.setInterestRateModel(address(irm));
 
         // Refresh mock feed

@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 import "forge-std/Test.sol";
-import "../contracts/MUSD.sol";
+import {MUSD} from "../../contracts/MUSD.sol";
 
 /**
  * @title HalmosSpec
@@ -21,8 +21,8 @@ contract HalmosSpec is Test {
 
     function setUp() public {
         vm.startPrank(admin);
-        musd = new MUSD(admin);
-        musd.grantRole(musd.MINTER_ROLE(), minter);
+        musd = new MUSD(100_000_000e18);
+        musd.grantRole(musd.BRIDGE_ROLE(), minter);
         vm.stopPrank();
     }
 
@@ -93,7 +93,7 @@ contract HalmosSpec is Test {
     function check_only_minter_can_mint(address caller, uint256 amount) public {
         vm.assume(caller != minter && caller != admin);
         vm.assume(amount > 0);
-        vm.assume(!musd.hasRole(musd.MINTER_ROLE(), caller));
+        vm.assume(!musd.hasRole(musd.BRIDGE_ROLE(), caller));
         
         vm.prank(caller);
         try musd.mint(user1, amount) {
