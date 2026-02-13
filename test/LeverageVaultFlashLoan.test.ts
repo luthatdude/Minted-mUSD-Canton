@@ -150,7 +150,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       );
 
       // Close should work normally
-      await leverageVault.connect(user1).closeLeveragedPosition(0);
+      await leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline());
 
       // Position should be cleared
       const pos = await leverageVault.getPosition(user1.address);
@@ -207,7 +207,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       const user1WethBefore = await weth.balanceOf(user1.address);
 
       // Emergency close user1's position
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       const user1WethAfter = await weth.balanceOf(user1.address);
 
@@ -236,7 +236,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       );
 
       // Emergency close user1
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       // User1 position should be deleted
       const pos1 = await leverageVault.getPosition(user1.address);
@@ -259,7 +259,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       // Non-admin should be rejected
       await expect(
-        leverageVault.connect(attacker).emergencyClosePosition(user1.address)
+        leverageVault.connect(attacker).emergencyClosePosition(user1.address, 0)
       ).to.be.reverted;
     });
 
@@ -267,7 +267,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       const { leverageVault, user1, owner } = await loadFixture(deployFullFixture);
 
       await expect(
-        leverageVault.connect(owner).emergencyClosePosition(user1.address)
+        leverageVault.connect(owner).emergencyClosePosition(user1.address, 0)
       ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
   });
@@ -347,7 +347,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       // Close immediately — in a perfect mock environment with no fees,
       // user should get back approximately what they put in
-      await leverageVault.connect(user1).closeLeveragedPosition(0);
+      await leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline());
 
       const wethAfter = await weth.balanceOf(user1.address);
 
@@ -458,7 +458,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
       // Try to close — should be blocked
       await expect(
-        leverageVault.connect(user1).closeLeveragedPosition(0)
+        leverageVault.connect(user1).closeLeveragedPosition(0, 0, futureDeadline())
       ).to.be.reverted; // EnforcedPause
     });
 
@@ -493,7 +493,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       await leverageVault.connect(owner).pause();
 
       // Emergency close should still work (it has no whenNotPaused modifier)
-      await leverageVault.connect(owner).emergencyClosePosition(user1.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user1.address, 0);
 
       const pos = await leverageVault.getPosition(user1.address);
       expect(pos.totalCollateral).to.equal(0);

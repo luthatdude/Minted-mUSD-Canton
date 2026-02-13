@@ -549,12 +549,24 @@ export class PriceOracleService {
             );
           } else if (
             this.lastCtnPrice > 0 &&
-            Math.abs(result.price - this.lastCtnPrice) / this.lastCtnPrice * 100 > this.config.maxChangePerUpdatePct
+            (() => {
+              // When only a single price source is available, apply a tighter
+              // rate-of-change cap (max 5%) to limit manipulation risk.
+              const isSingleSource = !result.source.includes("multi-provider");
+              const effectiveMaxChange = isSingleSource
+                ? Math.min(this.config.maxChangePerUpdatePct, 5)
+                : this.config.maxChangePerUpdatePct;
+              return Math.abs(result.price - this.lastCtnPrice) / this.lastCtnPrice * 100 > effectiveMaxChange;
+            })()
           ) {
             boundsViolationCount++;
+            const isSingleSource = !result.source.includes("multi-provider");
+            const effectiveCap = isSingleSource
+              ? Math.min(this.config.maxChangePerUpdatePct, 5)
+              : this.config.maxChangePerUpdatePct;
             console.error(
               `[PriceOracle] 🚨 Price change ${((result.price - this.lastCtnPrice) / this.lastCtnPrice * 100).toFixed(2)}% ` +
-              `exceeds per-update cap of ${this.config.maxChangePerUpdatePct}%. Update blocked (${boundsViolationCount}/${MAX_BOUNDS_VIOLATIONS}).`
+              `exceeds per-update cap of ${effectiveCap}%${isSingleSource ? " (single-source tightened)" : ""}. Update blocked (${boundsViolationCount}/${MAX_BOUNDS_VIOLATIONS}).`
             );
           } else {
             await this.pushPriceUpdate("CTN", result.price, result.source);

@@ -347,7 +347,7 @@ describe('LeverageVault', function () {
   describe('Emergency Functions', function () {
     it('should reject emergency close for no position', async function () {
       await expect(
-        leverageVault.emergencyClosePosition(user.address)
+        leverageVault.emergencyClosePosition(user.address, 0)
       ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
 
@@ -361,7 +361,7 @@ describe('LeverageVault', function () {
       );
 
       await expect(
-        leverageVault.connect(user).emergencyClosePosition(user.address)
+        leverageVault.connect(user).emergencyClosePosition(user.address, 0)
       ).to.be.reverted;
     });
 
@@ -495,7 +495,7 @@ describe('LeverageVault', function () {
 
       // Close with user slippage = 50 bps (0.5%) — stricter than global 100 bps
       const balanceBefore = await weth.balanceOf(user.address);
-      await leverageVault.connect(user).closeLeveragedPosition(0);
+      await leverageVault.connect(user).closeLeveragedPosition(0, 0, futureDeadline());
       const balanceAfter = await weth.balanceOf(user.address);
 
       expect(balanceAfter).to.be.gt(balanceBefore);
@@ -535,7 +535,7 @@ describe('LeverageVault', function () {
 
       // Close the position — minCollateralOut = 0 for this test
       const balanceBefore = await weth.balanceOf(user.address);
-      await leverageVault.connect(user).closeLeveragedPosition(0);
+      await leverageVault.connect(user).closeLeveragedPosition(0, 0, futureDeadline());
       const balanceAfter = await weth.balanceOf(user.address);
 
       // User should have received collateral back
@@ -564,13 +564,13 @@ describe('LeverageVault', function () {
       // Set unrealistically high minCollateralOut — should revert
       const absurdMinOut = ethers.parseEther('999999');
       await expect(
-        leverageVault.connect(user).closeLeveragedPosition(absurdMinOut)
+        leverageVault.connect(user).closeLeveragedPosition(absurdMinOut, 0, futureDeadline())
       ).to.be.revertedWithCustomError(leverageVault, "SlippageExceeded");
     });
 
     it('should fail close when no position exists', async function () {
       await expect(
-        leverageVault.connect(user).closeLeveragedPosition(0)
+        leverageVault.connect(user).closeLeveragedPosition(0, 0, futureDeadline())
       ).to.be.revertedWithCustomError(leverageVault, "NoPosition");
     });
   });
@@ -732,7 +732,7 @@ describe('LeverageVault', function () {
       await weth.mint(await mockSwapRouter.getAddress(), ethers.parseEther('50000'));
 
       // Admin emergency closes the position
-      await leverageVault.connect(owner).emergencyClosePosition(user.address);
+      await leverageVault.connect(owner).emergencyClosePosition(user.address, 0);
 
       // Position should be cleared
       const positionAfter = await leverageVault.getPosition(user.address);

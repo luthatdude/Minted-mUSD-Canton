@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
@@ -55,6 +56,15 @@ export function CantonBridge() {
 
   async function handleLock() {
     if (!bridgeServices.length || !musdCid) return;
+    // Validate target address is a valid Ethereum address before bridging
+    if (!ethers.isAddress(targetAddress)) {
+      setError("Invalid Ethereum address");
+      return;
+    }
+    if (targetAddress === ethers.ZeroAddress) {
+      setError("Cannot bridge to zero address");
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);

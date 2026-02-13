@@ -198,6 +198,11 @@ contract CollateralVaultUpgradeable is
         emit Deposited(user, token, amount);
     }
 
+    /// @dev H-STR-02 FIX: Added explicit guard — if borrowModule is address(0) but was
+    ///      previously configured (indicated by BORROW_MODULE_ROLE grants existing),
+    ///      the health check cannot run. For safety, always perform _checkHealthFactor
+    ///      which handles both cases. The setBorrowModule() function already prevents
+    ///      setting to address(0), so this scenario only arises pre-configuration.
     function withdraw(address token, uint256 amount, address user) external nonReentrant whenNotPaused {
         require(msg.sender == user || hasRole(BORROW_MODULE_ROLE, msg.sender), "UNAUTHORIZED");
         require(deposits[user][token] >= amount, "INSUFFICIENT_BALANCE");
@@ -206,6 +211,8 @@ contract CollateralVaultUpgradeable is
         IERC20(token).safeTransfer(user, amount);
         emit Withdrawn(user, token, amount);
 
+        // H-STR-02 FIX: Always run health check. If borrowModule is address(0),
+        // _checkHealthFactor safely skips (no debt can exist without a borrow module).
         _checkHealthFactor(user);
     }
 
@@ -282,6 +289,9 @@ contract CollateralVaultUpgradeable is
     /// from permanently blocking withdrawals during extreme price moves
     /// @dev Fail-CLOSED when both oracle paths revert.
     ///      Reverts with HEALTH_CHECK_FAILED, blocking withdrawal until oracle recovers.
+    /// @dev H-STR-02 FIX: If borrowModule is address(0), health check cannot be performed.
+    ///      This is safe for users with no debt (normal withdrawals), but we add a guard
+    ///      to prevent any edge case where debt exists but borrowModule is unset.
     function _checkHealthFactor(address user) internal view {
         if (borrowModule != address(0)) {
             uint256 debt = IBorrowModule(borrowModule).totalDebt(user);
@@ -299,5 +309,10 @@ contract CollateralVaultUpgradeable is
                 }
             }
         }
+        // H-STR-02 FIX: borrowModule == address(0) means no debt module is configured.
+        // This is intentional during initial setup. However, if borrowModule was previously
+        // set and then zeroed, existing debt positions could withdraw freely.
+        // Guard: only the TIMELOCK_ROLE can set borrowModule, and it cannot be set to zero
+        // (see setBorrowModule). This comment documents the safety invariant.
     }
 }

@@ -58,14 +58,12 @@ jobs:
 
       - name: Coverage report
         run: npx hardhat coverage
-        # Coverage can fail on CI due to memory limits but should not block
-        continue-on-error: true
 
       - name: Check coverage threshold
         run: |
           if [ ! -f coverage/coverage-summary.json ]; then
-            echo "::warning::Coverage report not generated — skipping threshold check"
-            exit 0
+            echo "::error::Coverage report not generated"
+            exit 1
           fi
           COVERAGE=$(jq -r '.total.statements.pct // 0' coverage/coverage-summary.json)
           echo "Statement coverage: $COVERAGE%"
@@ -159,19 +157,21 @@ jobs:
           sarif: results.sarif
           fail-on: high
           slither-config: slither.config.json
-          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,arbitrary-send-erc20,arbitrary-send-eth,pragma,solc-version,missing-inheritance,shadowing-local,events-maths,missing-zero-check,calls-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth,timestamp,low-level-calls,unused-return,divide-before-multiply,incorrect-equality,locked-ether,unindexed-event-address,unused-state,cache-array-length,immutable-states,dead-code,cyclomatic-complexity,costly-loop,assembly,uninitialized-local
+          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,pragma,solc-version,shadowing-local,assembly,cyclomatic-complexity,dead-code,cache-array-length,immutable-states,costly-loop,unindexed-event-address
           # Only fail on HIGH severity - medium often has false positives
-          # Excluded detectors explanation:
-          # - arbitrary-send-*: Admin-only emergency functions with proper access control
-          # - reentrancy-*: Functions protected by nonReentrant or CEI pattern used intentionally
-          # - calls-loop: Bounded loops over admin-controlled strategy arrays
-          # - incorrect-equality: Valid zero checks for early returns (elapsed==0, debt==0)
-          # - divide-before-multiply: Intentional order for APY calculations with sufficient precision
-          # - locked-ether: Mock contracts for testing only
-          # - timestamp: Legitimate usage for cooldowns and rate limiting
-          # - unused-return: Intentional ignoring of certain return values
-          # - pragma/solc-version: OpenZeppelin uses different pragma versions
-          # - Other informational detectors excluded for audit noise reduction
+          # Excluded detectors (non-critical / known false positives only):
+          # - naming-convention: style only
+          # - pragma, solc-version: OpenZeppelin uses different pragma versions
+          # - shadowing-local: known shadow in BorrowModule
+          # - assembly: used for ERC-7201 storage layout
+          # - cyclomatic-complexity, dead-code: informational
+          # - cache-array-length, immutable-states, costly-loop, unindexed-event-address: gas optimizations
+          #
+          # Critical detectors intentionally RE-ENABLED (H-INFRA-02):
+          # - arbitrary-send-erc20, arbitrary-send-eth: detect unauthorized transfers
+          # - missing-zero-check: detect missing zero-address validation
+          # - unused-return: detect unchecked return values
+          # - reentrancy-no-eth: detect reentrancy without ETH
 
       - name: Upload Slither SARIF
         if: always()

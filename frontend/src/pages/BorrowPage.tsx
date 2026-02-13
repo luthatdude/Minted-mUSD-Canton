@@ -537,7 +537,9 @@ export function BorrowPage() {
                 {action === "deposit" ? "Deposit Amount" : action === "borrow" ? "Borrow Amount (mUSD)" : action === "repay" ? "Repay Amount (mUSD)" : "Withdraw Amount"}
               </label>
               {action === "borrow" && (
-                <span className="text-xs text-gray-500">Max: {formatUSD(maxBorrowable)}</span>
+                <span className="text-xs text-gray-500" title="Safe max is 95% to maintain safety margin">
+                  Max: {formatUSD(maxBorrowable)} (safe: {formatUSD(maxBorrowable * 95n / 100n)})
+                </span>
               )}
               {action === "repay" && (
                 <span className="text-xs text-gray-500">Debt: {formatUSD(debt)}</span>
@@ -556,9 +558,14 @@ export function BorrowPage() {
                   {action === "borrow" && maxBorrowable > 0n && (
                     <button
                       className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                      onClick={() => setAmount(ethers.formatUnits(maxBorrowable, MUSD_DECIMALS))}
+                      onClick={() => {
+                        // Apply 95% safety buffer to prevent instant liquidation risk
+                        const safeBorrow = maxBorrowable * 95n / 100n;
+                        setAmount(ethers.formatUnits(safeBorrow, MUSD_DECIMALS));
+                      }}
+                      title="95% of max to maintain safety margin"
                     >
-                      MAX
+                      SAFE MAX
                     </button>
                   )}
                   {action === "repay" && debt > 0n && (

@@ -161,7 +161,7 @@ interface EscrowPosition {
 interface LiquidationCandidate {
   borrower: string;
   totalDebt: number;
-  healthFactor: number;
+  healthFactor: bigint;             // Fixed-point BigInt (18 decimals) to avoid precision loss near 1.0
   escrows: EscrowPosition[];
   debtPosition: DebtPosition;
   bestTarget: EscrowPosition;       // Most profitable collateral to seize
@@ -318,8 +318,8 @@ export class LendingKeeperBot {
   private calculateHealthFactor(
     escrows: EscrowPosition[],
     totalDebt: number
-  ): number {
-    if (totalDebt <= 0) return 999.0;
+  ): bigint {
+    if (totalDebt <= 0) return BigInt(999) * PRECISION;
 
     const debtBig = toFixed(totalDebt);
     let totalLiqValue = BigInt(0);
@@ -339,7 +339,8 @@ export class LendingKeeperBot {
     }
 
     // healthFactor = totalLiqValue / totalDebt (both in fixed-point)
-    return fromFixed((totalLiqValue * PRECISION) / debtBig);
+    // Returns BigInt with PRECISION scaling to avoid float precision loss near 1.0
+    return (totalLiqValue * PRECISION) / debtBig;
   }
 
   /**
@@ -480,7 +481,7 @@ export class LendingKeeperBot {
 
       const healthFactor = this.calculateHealthFactor(escrows, totalDebt);
 
-      if (healthFactor < 1.0) {
+      if (healthFactor < PRECISION) {
         // Position is liquidatable
         const maxRepay = totalDebt * 0.5;  // 50% close factor
 
@@ -649,7 +650,7 @@ export class LendingKeeperBot {
       console.log(
         `[Keeper] 🔥 Liquidating ${candidate.borrower}: ` +
         `debt=$${candidate.totalDebt.toFixed(2)}, ` +
-        `HF=${candidate.healthFactor.toFixed(4)}, ` +
+        `HF=${fromFixed(candidate.healthFactor).toFixed(4)}, ` +
         `target=${candidate.bestTarget.collateralType}, ` +
         `repay=$${candidate.maxRepay.toFixed(2)}`
       );

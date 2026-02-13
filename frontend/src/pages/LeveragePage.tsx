@@ -127,12 +127,15 @@ export default function LeveragePage() {
         await approveTx.wait();
         setWethAllowance(amount);
       }
+      // Calculate minimum amount out with 3% slippage tolerance to prevent sandwich attacks
+      const expectedOut = amount * BigInt(leverageX10) / 10n;
+      const minAmountOut = expectedOut * 97n / 100n; // 3% slippage
       const tx = await leverageVault.openLeveragedPosition(
         WETH_ADDRESS,
         amount,
         leverageX10,
         maxLoops,
-        0
+        minAmountOut
       );
       await tx.wait();
       // Refresh position
@@ -149,14 +152,16 @@ export default function LeveragePage() {
 
   // Close position
   const handleClosePosition = async () => {
-    if (!leverageVault || !position) return;
+    if (!leverageVault || !position || !address) return;
     setLoading(true);
     setTxError(null);
     try {
-      // Calculate reasonable minCollateralOut instead of 0
-      // Use 95% of initial deposit as minimum to protect against sandwich/MEV attacks
-      const minOut = (position.initialDeposit * 95n) / 100n;
-      const tx = await leverageVault.closeLeveragedPosition(minOut);
+      // Re-fetch position before close to avoid stale data from page load
+      const freshPosition = await leverageVault.getPosition(address);
+      const netValue = freshPosition.totalCollateral - freshPosition.totalDebt;
+      // Use 5% slippage tolerance on current net value to protect against sandwich/MEV attacks
+      const minCollateralOut = netValue * 95n / 100n;
+      const tx = await leverageVault.closeLeveragedPosition(minCollateralOut);
       await tx.wait();
       setPosition(null);
       setHasPosition(false);

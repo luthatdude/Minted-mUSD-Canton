@@ -180,14 +180,14 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
     });
 
     it("Should update PT discount rate", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
-      await strategy.connect(strategist).setPtDiscountRate(50);
+      const { strategy, admin } = await loadFixture(deployFixture);
+      await strategy.connect(admin).setPtDiscountRate(50);
       expect(await strategy.ptDiscountRateBps()).to.equal(50);
     });
 
-    it("Should reject PT discount rate > 5000", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
-      await expect(strategy.connect(strategist).setPtDiscountRate(5001))
+    it("Should reject PT discount rate > 2000", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
+      await expect(strategy.connect(admin).setPtDiscountRate(2001))
         .to.be.revertedWithCustomError(strategy, "DiscountTooHigh");
     });
 

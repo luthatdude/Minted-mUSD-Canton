@@ -639,6 +639,15 @@ contract TreasuryV2 is
 
         uint256 currentValue = totalValue();
 
+        // H-SOL-03 FIX: Cap growth at 10% per accrual to prevent compromised strategy
+        // from inflating totalValue() for fee extraction
+        if (lastRecordedValue > 0) {
+            uint256 maxGrowth = lastRecordedValue + (lastRecordedValue * 1000) / 10000; // 10%
+            if (currentValue > maxGrowth) {
+                currentValue = maxGrowth;
+            }
+        }
+
         // Only charge fees on genuine yield above the high-water mark.
         // peakRecordedValue tracks the highest legitimate totalValue observed.
         uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;

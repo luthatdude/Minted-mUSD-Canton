@@ -500,6 +500,20 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         lastGlobalAccrualTime = block.timestamp;
+
+        // C-SOL-01 FIX: Auto-reconcile when drift exceeds AUTO_RECONCILE_DRIFT_BPS.
+        // This tightens the reconciliation loop to prevent global vs per-user divergence.
+        if (totalBorrows > 0 && lastReconcileBorrowers.length > 0) {
+            uint256 sumDebt = _sumAllPositions(lastReconcileBorrowers);
+            uint256 absDrift = totalBorrows > sumDebt ? totalBorrows - sumDebt : sumDebt - totalBorrows;
+            uint256 driftBps = (absDrift * 10_000) / totalBorrows;
+            if (driftBps > AUTO_RECONCILE_DRIFT_BPS) {
+                uint256 oldTotal = totalBorrows;
+                totalBorrows = sumDebt;
+                int256 drift = int256(oldTotal) - int256(sumDebt);
+                emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);
+            }
+        }
     }
 
     /// @notice Accrue interest on a user's debt
@@ -861,12 +875,18 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     //          RECONCILE totalBorrows WITH USER DEBT
     // ============================================================
 
+    /// @notice Cached borrower list from last reconciliation for auto-reconcile
+    address[] public lastReconcileBorrowers;
+
     event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);
     event DriftThresholdExceeded(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift, uint256 thresholdBps);
 
     /// @notice Maximum allowed drift as basis points of totalBorrows.
     ///         Reverts if drift exceeds this to prevent silent large mismatches.
-    uint256 public constant MAX_DRIFT_BPS = 500; // 5%
+    uint256 public constant MAX_DRIFT_BPS = 100; // 1%
+
+    /// @notice Drift threshold (in bps) that triggers automatic reconciliation
+    uint256 public constant AUTO_RECONCILE_DRIFT_BPS = 50; // 0.5%
 
     /// @notice Reconcile totalBorrows with the actual sum of all user debts
     /// @dev    Accounting drift can accumulate from rounding in
@@ -880,11 +900,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     function reconcileTotalBorrows(address[] calldata borrowers) external onlyRole(BORROW_ADMIN_ROLE) nonReentrant {
         _accrueGlobalInterest();
 
-        uint256 sumDebt = 0;
-        for (uint256 i = 0; i < borrowers.length; i++) {
-            DebtPosition storage pos = positions[borrowers[i]];
-            sumDebt += pos.principal + pos.accruedInterest;
-        }
+        uint256 sumDebt = _sumAllPositions(borrowers);
 
         uint256 oldTotal = totalBorrows;
         int256 drift = int256(oldTotal) - int256(sumDebt);
@@ -894,13 +910,38 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         if (oldTotal > 0) {
             uint256 driftBps = (absDrift * 10_000) / oldTotal;
             if (driftBps > MAX_DRIFT_BPS) revert DriftExceedsSafetyThreshold();
-            if (driftBps > 100) { // > 1% — emit warning event
+            if (driftBps > 50) { // > 0.5% — emit warning event
                 emit DriftThresholdExceeded(oldTotal, sumDebt, drift, driftBps);
             }
         }
 
         totalBorrows = sumDebt;
 
+        // C-SOL-01 FIX: Cache borrower list for auto-reconciliation in _accrueGlobalInterest
+        delete lastReconcileBorrowers;
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            lastReconcileBorrowers.push(borrowers[i]);
+        }
+
         emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);
+    }
+
+    /// @notice Sum all individual positions for a given borrower list
+    /// @dev Used by reconcileTotalBorrows and auto-reconciliation
+    function _sumAllPositions(address[] memory borrowers) internal view returns (uint256 sumDebt) {
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            DebtPosition storage pos = positions[borrowers[i]];
+            sumDebt += pos.principal + pos.accruedInterest;
+        }
+    }
+
+    /// @notice C-SOL-01 FIX: View function that sums all individual positions for transparency
+    /// @dev Allows anyone to compare this value against totalBorrows to detect drift
+    /// @param borrowers Array of all addresses that have (or had) debt positions
+    /// @return sumDebt The sum of all individual position debts
+    function computedTotalBorrows(address[] calldata borrowers) external view returns (uint256 sumDebt) {
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            sumDebt += totalDebt(borrowers[i]);
+        }
     }
 }

@@ -64,9 +64,22 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Total interest received from borrowers
     uint256 public totalInterestReceived;
-    
+
     /// @notice Last interest receipt timestamp
     uint256 public lastInterestReceiptTime;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // H-SOL-04 FIX: Cached treasury value for resilient fallback
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Last known treasury value (scaled to 18 decimals) for fallback
+    uint256 public lastKnownTreasuryValue;
+
+    /// @notice Timestamp of last successful treasury value fetch
+    uint256 public lastTreasuryUpdateTime;
+
+    /// @notice Maximum staleness for cached treasury value (1 hour)
+    uint256 public constant MAX_TREASURY_CACHE_AGE = 1 hours;
 
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
@@ -239,6 +252,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @dev Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
     ///      Uses typed interface call for better error propagation and compile-time safety.
+    /// @dev H-SOL-04 FIX: When treasury call succeeds, cache the value. When it fails
+    ///      and cache is fresh (<1 hour), use cached value. Only fall back to local
+    ///      totalAssets() if cache is stale, preventing silent share price collapse.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
             return totalAssets();
@@ -247,14 +263,28 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // slither-disable-next-line calls-loop
         try ITreasury(treasury).totalValue() returns (uint256 usdcValue) {
             // Convert USDC (6 decimals) to mUSD (18 decimals)
+            // Note: cannot update state in view function; caching happens in non-view callers
             return usdcValue * 1e12;
         } catch {
-            // SOL-C-05: Fallback to local assets if Treasury call fails.
-            // Cannot emit events in a view function — monitoring should detect
-            // divergence between globalTotalAssets() and Treasury.totalValue()
-            // off-chain by comparing both values periodically.
+            // H-SOL-04 FIX: Use cached treasury value if fresh (<1 hour)
+            if (lastKnownTreasuryValue > 0 && block.timestamp <= lastTreasuryUpdateTime + MAX_TREASURY_CACHE_AGE) {
+                return lastKnownTreasuryValue;
+            }
+            // Cache is stale — fall back to local assets as last resort
             return totalAssets();
         }
+    }
+
+    /// @notice H-SOL-04 FIX: Refresh the cached treasury value
+    /// @dev Called by keepers or before critical operations to maintain a fresh cache
+    function refreshTreasuryCache() external {
+        if (treasury == address(0)) revert NoTreasury();
+        // Rate-limit to prevent spam
+        if (block.timestamp < lastTreasuryUpdateTime + 5 minutes) revert RefreshTooFrequent();
+
+        uint256 usdcValue = ITreasury(treasury).totalValue();
+        lastKnownTreasuryValue = usdcValue * 1e12;
+        lastTreasuryUpdateTime = block.timestamp;
     }
 
     /// @notice Global share price used for both chains

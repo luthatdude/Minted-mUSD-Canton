@@ -36,8 +36,8 @@ export function startHealthServer(
     }
   });
 
-  server.listen(config.port, () => {
-    console.log(`[HealthServer] Listening on port ${config.port}`);
+  server.listen(config.port, '127.0.0.1', () => {
+    console.log(`[HealthServer] Listening on 127.0.0.1:${config.port}`);
   });
 
   return {

@@ -424,47 +424,52 @@ describe("PendleStrategyV2", function () {
   // ================================================================
 
   describe("PT Discount Rate", function () {
-    it("Should set PT discount rate as strategist", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+    it("Should set PT discount rate as timelock", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
 
-      await strategy.connect(strategist).setPtDiscountRate(500); // 5%
+      await strategy.connect(admin).setPtDiscountRate(500); // 5%
       expect(await strategy.ptDiscountRateBps()).to.equal(500);
     });
 
     it("Should emit PtDiscountRateUpdated event", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, admin } = await loadFixture(deployFixture);
 
-      await expect(strategy.connect(strategist).setPtDiscountRate(750))
+      await expect(strategy.connect(admin).setPtDiscountRate(750))
         .to.emit(strategy, "PtDiscountRateUpdated")
         .withArgs(1000, 750); // old=1000 (default 10%), new=750
     });
 
-    it("Should reject discount rate above 50%", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+    it("Should reject discount rate above 20%", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
 
       await expect(
-        strategy.connect(strategist).setPtDiscountRate(5001)
+        strategy.connect(admin).setPtDiscountRate(2001)
       ).to.be.revertedWithCustomError(strategy, "DiscountTooHigh");
     });
 
     it("Should allow zero discount rate", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, admin } = await loadFixture(deployFixture);
 
-      await strategy.connect(strategist).setPtDiscountRate(0);
+      await strategy.connect(admin).setPtDiscountRate(0);
       expect(await strategy.ptDiscountRateBps()).to.equal(0);
     });
 
-    it("Should allow max 50% discount rate", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+    it("Should allow max 20% discount rate", async function () {
+      const { strategy, admin } = await loadFixture(deployFixture);
 
-      await strategy.connect(strategist).setPtDiscountRate(5000);
-      expect(await strategy.ptDiscountRateBps()).to.equal(5000);
+      await strategy.connect(admin).setPtDiscountRate(2000);
+      expect(await strategy.ptDiscountRateBps()).to.equal(2000);
     });
 
-    it("Should reject non-strategist setting discount rate", async function () {
-      const { strategy, user1 } = await loadFixture(deployFixture);
+    it("Should reject non-timelock setting discount rate", async function () {
+      const { strategy, user1, strategist } = await loadFixture(deployFixture);
 
+      // user1 has no roles
       await expect(strategy.connect(user1).setPtDiscountRate(500))
+        .to.be.reverted;
+
+      // strategist has STRATEGIST_ROLE but not TIMELOCK_ROLE
+      await expect(strategy.connect(strategist).setPtDiscountRate(500))
         .to.be.reverted;
     });
   });

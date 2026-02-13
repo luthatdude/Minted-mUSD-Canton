@@ -96,6 +96,9 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     /// @notice Aggregate pending USDC amount per recipient.
     mapping(address => uint256) public pendingCredits;
 
+    /// @notice H-STR-05 FIX: Total USDC reserved for pending mints
+    uint256 public totalPendingMintAmount;
+
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
     
@@ -133,6 +136,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     error NoPendingMint();
     error PendingMintAlreadyClaimed();
     error UnauthorizedClaim();
+    error InsufficientAvailableBalance();
 
     // ============ Constructor ============
     
@@ -222,6 +226,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
                 claimed: false
             });
             pendingCredits[recipient] += received;
+            // H-STR-05 FIX: Track total pending amount to protect from emergencyWithdraw
+            totalPendingMintAmount += received;
             emit MintQueued(recipient, received, vm.hash);
         }
         
@@ -261,6 +267,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
         try IDirectMint(directMint).mintFor(pending.recipient, amount) returns (uint256 minted) {
             pending.claimed = true;
             pendingCredits[pending.recipient] -= amount;
+            // H-STR-05 FIX: Release reserved amount on successful claim
+            totalPendingMintAmount -= amount;
             emit PendingMintClaimed(pending.recipient, amount, minted, vaaHash);
             emit MUSDMinted(pending.recipient, amount, minted, vaaHash);
             return minted;
@@ -324,8 +332,15 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      * @param amount Amount to withdraw
      * @dev Requires DEFAULT_ADMIN_ROLE
      */
+    /// @dev H-STR-05 FIX: Protect USDC backing pending mints from being withdrawn
     function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert InvalidAddress();
+        // H-STR-05 FIX: If withdrawing USDC, ensure pending mint reserves are protected
+        if (token == address(usdc)) {
+            uint256 balance = usdc.balanceOf(address(this));
+            uint256 available = balance > totalPendingMintAmount ? balance - totalPendingMintAmount : 0;
+            if (amount > available) revert InsufficientAvailableBalance();
+        }
         IERC20(token).safeTransfer(to, amount);
     }
 

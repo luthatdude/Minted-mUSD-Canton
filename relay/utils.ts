@@ -198,13 +198,13 @@ export async function createSigner(
 
       console.log(`[KMS] Signer initialised — address ${address}`);
 
-      // Do NOT load raw private key when KMS is configured.
-      // Previously the code loaded the raw key into a Wallet even with KMS present,
-      // completely defeating the purpose of KMS (key stays in heap memory).
-      // Return a VoidSigner for now — full KMS AbstractSigner integration is required
-      // before production write operations will work without a raw key.
-      console.warn("[KMS] Using VoidSigner — full KMS AbstractSigner required for write ops");
-      return new ethers.VoidSigner(address, provider);
+      // C-TS-01 FIX: Use KMSEthereumSigner (AbstractSigner) for full signing capability.
+      // The private key never enters Node.js memory — all signing is
+      // performed inside the KMS HSM boundary.
+      // Dynamic import to avoid requiring @aws-sdk/client-kms at module load time.
+      const { KMSEthereumSigner } = await import("./kms-ethereum-signer");
+      const region = process.env.AWS_REGION || "us-east-1";
+      return await KMSEthereumSigner.create(kmsKeyId, region, provider);
     } catch (err) {
       console.error(`[KMS] Failed to initialise KMS signer: ${(err as Error).message}`);
       console.error("[KMS] Falling back to raw private key");

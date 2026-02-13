@@ -236,7 +236,10 @@ export class MEVProtectedExecutor {
   ) {
     this.provider = provider;
     this.wallet = wallet;
-    this.flashbots = new FlashbotsProvider(provider, wallet, chainId);
+    // Use a separate ephemeral wallet for Flashbots relay authentication
+    // to avoid linking the liquidation wallet identity to Flashbots reputation.
+    const authSigner = ethers.Wallet.createRandom();
+    this.flashbots = new FlashbotsProvider(provider, authSigner, chainId);
     this.maxBlocksToTry = maxBlocksToTry;
   }
 

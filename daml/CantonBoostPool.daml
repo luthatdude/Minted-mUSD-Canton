@@ -36,12 +36,14 @@ import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(
 
 -- | Boost Pool LP token — represents a share of the Canton reward pool.
 -- Redeemable for Canton coin proportional to pool balance.
+-- H-DAML-03: References the backing sMUSD contract instead of consuming it
 template BoostPoolLP
   with
     issuer         : Party
     owner          : Party
     shares         : Money        -- LP share amount
     depositedAt    : Time         -- For cooldown enforcement
+    smusdCid       : ContractId CantonSMUSD  -- H-DAML-03: Reference to backing sMUSD (not consumed)
     privacyObservers : [Party]    -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -204,6 +206,9 @@ template CantonBoostPoolService
         assertMsg "CANTON_ISSUER_MISMATCH" (canton.issuer == operator)
         assertMsg "CANTON_OWNER_MISMATCH" (canton.owner == user)
 
+        -- H-DAML-03: Use nonconsuming fetch to verify sMUSD ownership
+        -- The sMUSD stays active under staking service control, preventing
+        -- double-counting of shares in both staking service and boost pool
         smusd <- fetch smusdCid
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
@@ -212,8 +217,6 @@ template CantonBoostPoolService
         -- BoostPool with sMUSD that is already escrowed as lending collateral
         smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
         assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
-
-        archive smusdCid
 
         -- Calculate deposit cap from sMUSD value
         let smusdValueMusd = smusd.shares * globalSharePrice
@@ -241,15 +244,7 @@ template CantonBoostPoolService
               cumulativeCantonValue = cantonValueMusd
             pure ()
 
-        -- Recreate sMUSD (gives it back to user but with a new contract ID)
         now <- getTime
-        _newSmusdCid <- create CantonSMUSD with
-          issuer = operator
-          owner = user
-          shares = smusd.shares
-          entrySharePrice = smusd.entrySharePrice
-          stakedAt = smusd.stakedAt
-          privacyObservers = smusd.privacyObservers
 
         -- Apply entry fee
         let feeAmount = canton.amount * intToNumeric entryFeeBps / 10000.0
@@ -264,12 +259,14 @@ template CantonBoostPoolService
         exercise cantonCid CantonCoin_Burn
 
         -- Issue LP token
+        -- H-DAML-03: Store reference to backing sMUSD contract
         userObs <- lookupUserObservers operator user
         lpCid <- create BoostPoolLP with
           issuer = operator
           owner = user
           shares = newShares
           depositedAt = now
+          smusdCid
           privacyObservers = userObs
 
         newService <- create this with

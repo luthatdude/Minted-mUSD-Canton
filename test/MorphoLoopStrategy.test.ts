@@ -218,33 +218,33 @@ describe("MorphoLoopStrategy", function () {
 
   describe("Admin Functions", function () {
     it("Should update parameters", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
-      await strategy.connect(strategist).setParameters(6500, 3); // 65% LTV, 3 loops
+      await strategy.connect(timelockSigner).setParameters(6500, 3); // 65% LTV, 3 loops
       expect(await strategy.targetLtvBps()).to.equal(6500);
       expect(await strategy.targetLoops()).to.equal(3);
     });
 
     it("Should revert on excessive loops", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
-      await expect(strategy.connect(strategist).setParameters(7000, 10))
+      await expect(strategy.connect(timelockSigner).setParameters(7000, 10))
         .to.be.revertedWithCustomError(strategy, "ExcessiveLoops");
     });
 
     it("Should revert on invalid LTV (too high)", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
       // Too high LTV (over 85%)
-      await expect(strategy.connect(strategist).setParameters(9000, 4))
+      await expect(strategy.connect(timelockSigner).setParameters(9000, 4))
         .to.be.revertedWithCustomError(strategy, "InvalidLTV");
     });
 
     it("Should revert on invalid LTV (too low)", async function () {
-      const { strategy, strategist } = await loadFixture(deployFixture);
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
       // Too low LTV (under 50%)
-      await expect(strategy.connect(strategist).setParameters(4000, 4))
+      await expect(strategy.connect(timelockSigner).setParameters(4000, 4))
         .to.be.revertedWithCustomError(strategy, "InvalidLTV");
     });
 
@@ -258,11 +258,11 @@ describe("MorphoLoopStrategy", function () {
       expect(await strategy.active()).to.be.true;
     });
 
-    it("Should revert admin functions for non-strategist", async function () {
+    it("Should revert setParameters for non-timelock caller", async function () {
       const { strategy, user1 } = await loadFixture(deployFixture);
 
       await expect(strategy.connect(user1).setParameters(6500, 3))
-        .to.be.reverted;
+        .to.be.revertedWithCustomError(strategy, "OnlyTimelock");
     });
   });
 
@@ -319,10 +319,10 @@ describe("MorphoLoopStrategy", function () {
     });
 
     it("Should preserve state after upgrade", async function () {
-      const { strategy, strategist, timelockSigner } = await loadFixture(deployFixture);
+      const { strategy, timelockSigner } = await loadFixture(deployFixture);
 
       // Set some state
-      await strategy.connect(strategist).setParameters(6500, 5);
+      await strategy.connect(timelockSigner).setParameters(6500, 5);
       expect(await strategy.targetLtvBps()).to.equal(6500);
 
       // Upgrade

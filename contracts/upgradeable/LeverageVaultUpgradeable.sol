@@ -781,7 +781,14 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  bool repaySucceeded = false;
 
  if (debtToRepay > 0 && totalCollateralInVault > 0) {
- uint256 musdReceived = _swapCollateralToMusd(collateralToken, totalCollateralInVault, emergencySlippageBps, block.timestamp + 1 hours);
+ // H-STR-03 FIX: Only swap the collateral needed to cover debt (105% for slippage),
+ // not ALL collateral. Return remainder directly to user.
+ uint256 collateralNeeded = _getCollateralForMusd(collateralToken, debtToRepay);
+ collateralNeeded = (collateralNeeded * 10500) / 10000; // 105% for slippage buffer
+ // Cap at available collateral
+ uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
+
+ uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, emergencySlippageBps, block.timestamp + 1 hours);
  if (musdReceived > 0) {
  uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
  IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);

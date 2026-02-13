@@ -145,6 +145,21 @@ export function AdminPage() {
       <h1 className="text-3xl font-bold text-white">Admin Panel</h1>
       <p className="text-gray-400">Protocol administration (requires appropriate roles)</p>
 
+      {/* H-FE-02: Per-contract role warning — admin check above is a UI convenience gate only.
+          Each contract section requires its own on-chain role (e.g., bridge admin, treasury admin).
+          Transactions will revert if the connected wallet lacks the required role for that contract. */}
+      <div className="rounded-lg border border-yellow-700 bg-yellow-900/20 p-4 text-sm text-yellow-300 flex items-start gap-3">
+        <svg className="h-5 w-5 flex-shrink-0 mt-0.5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+        <div>
+          <span className="font-semibold">On-chain role enforcement:</span> Admin controls are protected by on-chain roles on each contract.
+          Transactions will revert if your wallet lacks the required role for the target contract
+          (e.g., Bridge Admin, Treasury Admin, Oracle Admin).
+          The check above only verifies your mUSD admin role as a convenience gate.
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-2 border-b border-gray-700 pb-4">
         {sections.map((s) => (
           <button
@@ -192,7 +207,10 @@ export function AdminPage() {
             <div className="mt-2 flex gap-2">
               <TxButton
                 className="flex-1"
-                onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, true))}
+                onClick={() => {
+                  if (!ethers.isAddress(blacklistAddr)) { tx.setError("Invalid address"); return; }
+                  tx.send(() => musd!.setBlacklist(blacklistAddr, true));
+                }}
                 loading={tx.loading}
                 disabled={!blacklistAddr}
                 variant="danger"
@@ -201,7 +219,10 @@ export function AdminPage() {
               </TxButton>
               <TxButton
                 className="flex-1"
-                onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, false))}
+                onClick={() => {
+                  if (!ethers.isAddress(blacklistAddr)) { tx.setError("Invalid address"); return; }
+                  tx.send(() => musd!.setBlacklist(blacklistAddr, false));
+                }}
                 loading={tx.loading}
                 disabled={!blacklistAddr}
                 variant="secondary"
@@ -285,7 +306,10 @@ export function AdminPage() {
             <input className="input" type="text" placeholder="0x..." value={newFeeRecipient} onChange={(e) => setNewFeeRecipient(e.target.value)} />
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => directMint!.setFeeRecipient(newFeeRecipient))}
+              onClick={() => {
+                if (!ethers.isAddress(newFeeRecipient)) { tx.setError("Invalid address"); return; }
+                tx.send(() => directMint!.setFeeRecipient(newFeeRecipient));
+              }}
               loading={tx.loading}
               disabled={!newFeeRecipient}
             >
@@ -335,7 +359,10 @@ export function AdminPage() {
             </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), true))}
+              onClick={() => {
+                if (!ethers.isAddress(strategyAddr)) { tx.setError("Invalid strategy address"); return; }
+                tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), true));
+              }}
               loading={tx.loading}
               disabled={!strategyAddr || !targetBps || !minBps || !maxBps}
             >
@@ -483,11 +510,13 @@ export function AdminPage() {
             </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() =>
+              onClick={() => {
+                if (!ethers.isAddress(oracleToken)) { tx.setError("Invalid token address"); return; }
+                if (!ethers.isAddress(oracleFeed)) { tx.setError("Invalid feed address"); return; }
                 tx.send(() =>
                   oracle!.setFeed(oracleToken, oracleFeed, BigInt(oracleStale), parseInt(oracleDecimals), 0)
-                )
-              }
+                );
+              }}
               loading={tx.loading}
               disabled={!oracleToken || !oracleFeed}
             >

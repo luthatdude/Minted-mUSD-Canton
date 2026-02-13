@@ -279,6 +279,10 @@ class YieldSyncService {
     );
 
     // Canton connection (TLS by default)
+    // SECURITY: Enforce TLS in production — plaintext Canton connections are forbidden
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error("SECURITY: Canton TLS is required in production");
+    }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
     const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
     this.ledger = new Ledger({

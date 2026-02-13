@@ -74,5 +74,9 @@ export function useTx() {
     [simulate]
   );
 
-  return { ...state, send, reset, simulate };
+  const setError = useCallback((error: string | null) => {
+    setState((s) => ({ ...s, error, success: false }));
+  }, []);
+
+  return { ...state, send, reset, simulate, setError };
 }

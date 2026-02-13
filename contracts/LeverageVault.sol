@@ -294,14 +294,16 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
     /// @notice Close leveraged position - repay debt and withdraw collateral
     /// @param minCollateralOut Minimum collateral to receive (slippage protection)
+    /// @param userMinOut H-SOL-01 FIX: User-supplied minimum mUSD output for sandwich protection
+    /// @param userDeadline H-SOL-01 FIX: User-supplied deadline for swap execution
     /// @return collateralReturned Amount of collateral returned to user
-    function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
+    function closeLeveragedPosition(uint256 minCollateralOut, uint256 userMinOut, uint256 userDeadline) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
         LeveragePosition storage pos = positions[msg.sender];
         if (pos.totalCollateral == 0) revert NoPosition();
 
         address collateralToken = pos.collateralToken;
         uint256 debtToRepay = borrowModule.totalDebt(msg.sender);
-        
+
         // Get total collateral in vault
         uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);
 
@@ -311,7 +313,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
             // Add slippage buffer
             collateralToSell = (collateralToSell * (10000 + maxSlippageBps)) / 10000;
-            
+
             // Cap at available collateral
             if (collateralToSell > totalCollateralInVault) {
                 collateralToSell = totalCollateralInVault;
@@ -319,8 +321,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
             collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
 
-            // Swap collateral → mUSD
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
+            // H-SOL-01 FIX: Pass user-supplied slippage and deadline instead of 0,0
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, userMinOut, userDeadline);
             if (musdReceived < debtToRepay) revert InsufficientMusdFromSwap();
 
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
@@ -331,7 +333,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             if (excessMusd > 0) {
                 // If swap fails (returns 0), transfer the mUSD directly to user
                 // instead of leaving it trapped in the contract.
-                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, 0);
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, userDeadline);
                 if (swappedCollateral == 0) {
                     // Swap failed — return mUSD directly to user
                     IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
@@ -712,7 +714,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @dev Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
     ///      Remaining collateral is returned to the user as-is to minimize swap losses.
     /// @param user The user whose position to emergency-close
-    function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+    /// @param minOut H-SOL-02 FIX: Minimum mUSD output from swap for slippage protection
+    function emergencyClosePosition(address user, uint256 minOut) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         LeveragePosition storage pos = positions[user];
         if (pos.totalCollateral == 0) revert NoPosition();
 
@@ -733,7 +736,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             // Cap at available collateral
             uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
 
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, 0, 0);
+            // H-SOL-02 FIX: Pass minOut instead of 0 for slippage protection; keep deadline=0 for admin flexibility
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, minOut, 0);
             if (musdReceived > 0) {
                 uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
                 IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);

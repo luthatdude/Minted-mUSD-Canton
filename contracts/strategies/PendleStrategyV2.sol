@@ -356,9 +356,10 @@ contract PendleStrategyV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // FIX C-01: Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
-        // Without this, DEFAULT_ADMIN can grant itself TIMELOCK_ROLE and bypass the 48h
-        // upgrade delay, enabling instant implementation swap to drain all funds
+        // FIX C-01: Grant TIMELOCK_ROLE to the timelock address, then make it self-admin
+        // so DEFAULT_ADMIN cannot grant itself TIMELOCK_ROLE and bypass the 48h
+        // upgrade delay, enabling instant implementation swap to drain all funds.
+        _grantRole(TIMELOCK_ROLE, _timelock);
         _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
         // FIX C-02: Removed infinite approval (type(uint256).max) to Pendle Router.
@@ -810,10 +811,11 @@ contract PendleStrategyV2 is
     /**
      * @notice Set PT discount rate for NAV valuation
      * @param _discountBps New discount rate in BPS (e.g., 1000 = 10%, 500 = 5%)
-     * @dev Allows adjusting PT discount rate to match current market implied APY
+     * @dev C-STR-01 FIX: Changed from STRATEGIST_ROLE to TIMELOCK_ROLE to prevent
+     *      share price manipulation. Also capped at 2000 bps (20%) max discount.
      */
-    function setPtDiscountRate(uint256 _discountBps) external onlyRole(STRATEGIST_ROLE) {
-        if (_discountBps > 5000) revert DiscountTooHigh();
+    function setPtDiscountRate(uint256 _discountBps) external onlyRole(TIMELOCK_ROLE) {
+        if (_discountBps > 2000) revert DiscountTooHigh();
         emit PtDiscountRateUpdated(ptDiscountRateBps, _discountBps);
         ptDiscountRateBps = _discountBps;
     }

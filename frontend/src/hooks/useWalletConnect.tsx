@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, createContext, useContext, ReactNode 
 import { ethers, BrowserProvider, Signer, Contract, formatUnits } from 'ethers';
 import { UniversalConnector } from '@reown/appkit-universal-connector';
 import { getUniversalConnector, projectId, getNetworkById } from '@/lib/walletconnect';
+import { CHAIN_ID } from '@/lib/config';
 
 // Types
 interface ConnectedChain {
@@ -337,10 +338,15 @@ export function WalletConnectProvider({
     method: string,
     args: unknown[] = []
   ): Promise<ethers.TransactionResponse> => {
-    if (!signer) throw new Error('Not connected');
+    if (!signer || !provider) throw new Error('Not connected');
+    // Validate chain ID before sending transaction
+    const currentChainId = await provider.getNetwork().then(n => n.chainId);
+    if (currentChainId !== BigInt(CHAIN_ID)) {
+      throw new Error(`Wrong network. Expected chain ${CHAIN_ID}, got ${currentChainId}`);
+    }
     const contract = new Contract(contractAddress, abi, signer);
     return contract[method](...args);
-  }, [signer]);
+  }, [signer, provider]);
 
   // Listen for browser wallet changes (when using fallback)
   useEffect(() => {

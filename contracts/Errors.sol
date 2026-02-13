@@ -234,3 +234,5 @@ error InsufficientLiquidity();
 error InvalidBuffer();
 error MaxBorrowRateTooHigh();
 error MinSupplyRateTooHigh();
+error DeleverageIncomplete();
+error InsufficientAvailableBalance();

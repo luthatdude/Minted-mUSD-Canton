@@ -568,13 +568,15 @@ contract MorphoLoopStrategy is
      * @notice Full deleverage - repay all debt and withdraw all collateral
      * @dev Returns actual freed amount based on ending balance
      */
+    /// @dev C-STR-02 FIX: Increased loop limit to MAX_LOOPS * 4 and added revert
+    ///      if borrowShares > 0 after loop completes, ensuring full unwind.
     function _fullDeleverage() internal returns (uint256 totalFreed) {
         // Track starting balance to calculate actual net freed
         uint256 startingBalance = usdc.balanceOf(address(this));
-        
-        for (uint256 i = 0; i < MAX_LOOPS * 2; i++) {
+
+        for (uint256 i = 0; i < MAX_LOOPS * 4; i++) {
             IMorphoBlue.Position memory pos = morpho.position(marketId, address(this));
-            
+
             // Get current borrow
             (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
             uint256 currentBorrow = 0;
@@ -605,7 +607,11 @@ contract MorphoLoopStrategy is
                 morpho.repay(marketParams, repayAmount, 0, address(this), "");
             }
         }
-        
+
+        // C-STR-02 FIX: Verify debt is fully unwound after loop
+        IMorphoBlue.Position memory finalPos = morpho.position(marketId, address(this));
+        if (finalPos.borrowShares > 0) revert DeleverageIncomplete();
+
         // Return actual net increase in balance
         uint256 endingBalance = usdc.balanceOf(address(this));
         totalFreed = endingBalance > startingBalance ? endingBalance - startingBalance : 0;
@@ -706,11 +712,13 @@ contract MorphoLoopStrategy is
      * @notice Update looping parameters
      * @param _targetLtvBps New target LTV in basis points
      * @param _targetLoops New number of loops
+     * @dev H-STR-07 FIX: Changed from STRATEGIST_ROLE to onlyTimelock — critical risk parameters
+     *      must go through timelock delay to prevent instant manipulation.
      */
     function setParameters(
         uint256 _targetLtvBps,
         uint256 _targetLoops
-    ) external onlyRole(STRATEGIST_ROLE) {
+    ) external onlyTimelock {
         // Validate LTV is reasonable (max 85% to stay below typical 86% LLTV)
         if (_targetLtvBps > 8500 || _targetLtvBps < 5000) revert InvalidLTV();
         if (_targetLoops > MAX_LOOPS) revert ExcessiveLoops();

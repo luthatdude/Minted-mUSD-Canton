@@ -107,6 +107,11 @@ function loadConfig() {
     maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
     useFlashbots: process.env.USE_FLASHBOTS === "true",
     flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
+    ethPriceUsd: (() => {
+      const v = Number(process.env.ETH_PRICE_USD || "2500");
+      if (Number.isNaN(v) || v <= 0) throw new Error("ETH_PRICE_USD must be a positive number");
+      return v;
+    })(),
   };
 }
 
@@ -444,7 +449,7 @@ class LiquidationBot {
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * 2500; // Assume ETH = $2500
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * config.ethPriceUsd;
           
           const netProfitUsd = profitUsd - gasCostUsd;
           

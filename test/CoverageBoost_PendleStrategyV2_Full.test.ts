@@ -126,7 +126,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
     // treasury already has TREASURY_ROLE from initialize
 
     /* ── set ptDiscountRate to 0 so mock 1:1 router matches expected PT output ── */
-    await strategy.connect(strategist).setPtDiscountRate(0);
+    await strategy.connect(admin).setPtDiscountRate(0);
 
     /* ── fund treasury ── */
     await usdc.mint(treasury.address, ethers.parseUnits("10000000", 6));
@@ -557,7 +557,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await f.strategy.connect(f.treasury).deposit(amt);
 
       // Restore discount rate so _ptToUsdc applies time-based discount
-      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
+      await f.strategy.connect(f.admin).setPtDiscountRate(1000);
       const tv = await f.strategy.totalValue();
       expect(tv).to.be.lt(amt);
       // Within 10% (max annual discount)
@@ -587,7 +587,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await f.strategy.connect(f.treasury).deposit(amt);
 
       // Restore discount rate so _ptToUsdc applies time-based discount
-      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
+      await f.strategy.connect(f.admin).setPtDiscountRate(1000);
       const ptBal = await f.strategy.ptBalance();
       const tv = await f.strategy.totalValue();
       // Clamped: discountBps = 1000 * 1yr / 1yr = 1000, valueBps = 9000
@@ -601,7 +601,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await f.strategy.connect(f.treasury).deposit(D6("1000000"));
 
       // Restore discount rate so _usdcToPt computes higher PT needed
-      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
+      await f.strategy.connect(f.admin).setPtDiscountRate(1000);
       const ptBefore = await f.strategy.ptBalance();
 
       await f.strategy.connect(f.treasury).withdraw(D6("100000"));
@@ -854,10 +854,13 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await expect(f.strategy.connect(f.user1).setSlippage(50)).to.be.reverted;
     });
 
-    it("setPtDiscountRate: non-strategist reverts", async () => {
+    it("setPtDiscountRate: non-timelock reverts", async () => {
       const f = await loadFixture(fixture);
       await expect(f.strategy.connect(f.user1).setPtDiscountRate(500)).to.be
         .reverted;
+      // strategist also reverts (no longer has access after C-STR-01)
+      await expect(f.strategy.connect(f.strategist).setPtDiscountRate(500)).to
+        .be.reverted;
     });
 
     it("setRolloverThreshold: non-strategist reverts", async () => {
@@ -934,15 +937,15 @@ describe("PendleStrategyV2 — Full Coverage", function () {
 
     it("setPtDiscountRate emits PtDiscountRateUpdated", async () => {
       const f = await loadFixture(fixture);
-      await expect(f.strategy.connect(f.strategist).setPtDiscountRate(500))
+      await expect(f.strategy.connect(f.admin).setPtDiscountRate(500))
         .to.emit(f.strategy, "PtDiscountRateUpdated")
         .withArgs(0, 500);
     });
 
-    it("setPtDiscountRate > 5000 reverts", async () => {
+    it("setPtDiscountRate > 2000 reverts", async () => {
       const f = await loadFixture(fixture);
       await expect(
-        f.strategy.connect(f.strategist).setPtDiscountRate(5001)
+        f.strategy.connect(f.admin).setPtDiscountRate(2001)
       ).to.be.revertedWithCustomError(f.strategy, "DiscountTooHigh");
     });
 

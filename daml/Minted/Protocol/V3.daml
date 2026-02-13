@@ -29,6 +29,7 @@ import DA.Text qualified as T
 import DA.Action (foldlA, when, void)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
+import Compliance (ComplianceRegistry, ValidateTransfer(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -222,13 +223,19 @@ template MintedMUSD
 
     -- | Transfer mUSD to another party
     -- Creates a TransferProposal that the newOwner must accept
+    -- H-DAML-01: Validates sender and receiver against ComplianceRegistry
     choice MUSD_Transfer : ContractId MUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        -- H-DAML-01: Check authoritative ComplianceRegistry for both parties
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = owner
+          receiver = newOwner
         create MUSDTransferProposal with
           issuer
           sender = owner
@@ -1044,6 +1051,7 @@ template CantonDirectMint
           observers = []
         
         -- Create bridge-out request to pipe backing to Ethereum
+        -- H-DAML-02: Pass validators for observer visibility
         bridgeReq <- create BridgeOutRequest with
           operator
           user
@@ -1053,6 +1061,7 @@ template CantonDirectMint
           nonce = nextNonce
           createdAt = now
           status = "pending"
+          validators
         
         -- Update service state
         newService <- create this with
@@ -1545,6 +1554,7 @@ template AttestationRequest
 -- ============================================================
 
 -- | BridgeOutRequest - Canton → ETH transfer.
+-- H-DAML-02: Added validators field for observer visibility (matches CantonDirectMint.daml)
 template BridgeOutRequest
   with
     operator : Party
@@ -1555,9 +1565,10 @@ template BridgeOutRequest
     nonce : Int
     createdAt : Time
     status : Text
+    validators : [Party]
   where
     signatory operator
-    observer user
+    observer user, validators
 
     -- | User sets target ETH address
     choice BridgeOut_SetTarget : ContractId BridgeOutRequest
