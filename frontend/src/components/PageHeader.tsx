@@ -3,6 +3,7 @@ import React from "react";
 interface PageHeaderProps {
   title: string;
   subtitle?: string;
+  description?: string;
   badge?: string;
   badgeColor?: "brand" | "emerald" | "warning";
   action?: React.ReactNode;
@@ -14,7 +15,8 @@ const badgeColors = {
   warning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
 };
 
-export function PageHeader({ title, subtitle, badge, badgeColor = "brand", action }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, description, badge, badgeColor = "brand", action }: PageHeaderProps) {
+  const helperText = subtitle ?? description;
   return (
     <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="space-y-2">
@@ -28,8 +30,8 @@ export function PageHeader({ title, subtitle, badge, badgeColor = "brand", actio
             </span>
           )}
         </div>
-        {subtitle && (
-          <p className="text-base text-gray-400">{subtitle}</p>
+        {helperText && (
+          <p className="text-base text-gray-400">{helperText}</p>
         )}
       </div>
       {action && <div>{action}</div>}
