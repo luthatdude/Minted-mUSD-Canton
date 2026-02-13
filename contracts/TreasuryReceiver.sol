@@ -83,9 +83,12 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     
     /// @notice Mapping of processed VAAs (to prevent replay)
     mapping(bytes32 => bool) public processedVAAs;
-    
+
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
+
+    /// @notice FIX CX-H-01: Claimable USDC for users whose mintFor failed
+    mapping(address => uint256) public pendingClaims;
     
     /// @notice Wormhole chain IDs
     uint16 public constant BASE_CHAIN_ID = 30;
@@ -108,6 +111,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     event TreasuryUpdated(address oldTreasury, address newTreasury);
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event FallbackClaimed(address indexed recipient, uint256 amount);
 
     // ============ Errors ============
     
@@ -195,10 +199,11 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
             processedVAAs[vm.hash] = true;
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
-            // If minting fails, forward to treasury as fallback (funds not lost)
+            // FIX CX-H-01: If minting fails, credit recipient's claimable balance
+            // instead of sending to treasury (which permanently orphans user funds).
+            // User can later call claimFallbackFunds() to retrieve their USDC.
             usdc.forceApprove(directMint, 0);
-            usdc.safeTransfer(treasury, received);
-            // Mark processed after successful fallback transfer
+            pendingClaims[recipient] += received;
             processedVAAs[vm.hash] = true;
             emit MintFallbackToTreasury(recipient, received, vm.hash);
         }
@@ -219,6 +224,20 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      */
     function isVAAProcessed(bytes32 vaaHash) external view returns (bool processed) {
         return processedVAAs[vaaHash];
+    }
+
+    // ============ FIX CX-H-01: User Claim for Fallback Funds ============
+
+    /**
+     * @notice Claim USDC that was credited when mintFor failed
+     * @dev Follows CEI pattern — zeroes balance before transfer
+     */
+    function claimFallbackFunds() external nonReentrant {
+        uint256 amount = pendingClaims[msg.sender];
+        require(amount > 0, "NO_PENDING_CLAIM");
+        pendingClaims[msg.sender] = 0;
+        usdc.safeTransfer(msg.sender, amount);
+        emit FallbackClaimed(msg.sender, amount);
     }
 
     // ============ Admin Functions ============

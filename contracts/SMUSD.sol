@@ -330,6 +330,38 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return shares.mulDiv(globalTotalAssets() + 1, totalShares + 10 ** _decimalsOffset(), rounding);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX CX-C-01: ERC-4626 compliance — maxWithdraw/maxRedeem must not
+    // overstate redeemable assets.  globalTotalAssets() returns Treasury TVL
+    // (all USDC backing), but the vault only holds local mUSD deposits +
+    // yield.  Without these overrides, maxWithdraw() promises more than the
+    // vault can transfer, violating EIP-4626 §maxWithdraw:
+    //   "MUST return the maximum amount … that would not cause a revert"
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Maximum assets owner can withdraw — capped at vault's mUSD balance
+    /// @dev Also returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    function maxWithdraw(address owner) public view override returns (uint256) {
+        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+            return 0;
+        }
+        uint256 ownerMax = _convertToAssets(balanceOf(owner), Math.Rounding.Floor);
+        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
+        return ownerMax < vaultBalance ? ownerMax : vaultBalance;
+    }
+
+    /// @notice Maximum shares owner can redeem — capped at vault's mUSD balance
+    /// @dev Also returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    function maxRedeem(address owner) public view override returns (uint256) {
+        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+            return 0;
+        }
+        uint256 ownerShares = balanceOf(owner);
+        uint256 vaultBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 maxRedeemableShares = _convertToShares(vaultBalance, Math.Rounding.Floor);
+        return ownerShares < maxRedeemableShares ? ownerShares : maxRedeemableShares;
+    }
+
     /// @notice Override totalAssets to return globalTotalAssets for ERC-4626 compliance.
     /// @dev    ERC-4626 requires totalAssets() to reflect all managed assets.
     ///         This vault serves both Ethereum and Canton shareholders, so the
