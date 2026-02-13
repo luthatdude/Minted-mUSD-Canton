@@ -120,6 +120,7 @@ const TREASURY_ABI = [
 class YieldKeeper {
   private provider: ethers.JsonRpcProvider;
   private wallet!: ethers.Signer;
+  private walletAddress: string = "";
   private treasury: ethers.Contract;
   private config: KeeperConfig;
   private running: boolean = false;
@@ -138,6 +139,7 @@ class YieldKeeper {
   /** Initialise the KMS-backed (or fallback) signer */
   async init(): Promise<void> {
     this.wallet = await createSigner(this.provider, "keeper_private_key", "KEEPER_PRIVATE_KEY");
+    this.walletAddress = await this.wallet.getAddress();
     // Re-bind treasury with signing capability
     this.treasury = new ethers.Contract(
       this.config.treasuryAddress,
@@ -291,7 +293,7 @@ class YieldKeeper {
       timestamp: new Date().toISOString(),
       event,
       amountUsdc: Number(amount) / 1e6,
-      keeper: this.wallet.address,
+      keeper: this.walletAddress,
     };
     console.log("📈 METRICS:", JSON.stringify(metrics));
   }
