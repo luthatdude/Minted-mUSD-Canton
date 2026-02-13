@@ -83,6 +83,18 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Mapping of processed VAAs (to prevent replay)
     mapping(bytes32 => bool) public processedVAAs;
+
+    struct PendingMint {
+        address recipient;
+        uint256 usdcAmount;
+        bool claimed;
+    }
+
+    /// @notice Pending mints keyed by VAA hash when DirectMint fails.
+    mapping(bytes32 => PendingMint) public pendingMints;
+
+    /// @notice Aggregate pending USDC amount per recipient.
+    mapping(address => uint256) public pendingCredits;
     
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
@@ -109,6 +121,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event MintQueued(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
+    event PendingMintClaimed(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
 
     // ============ Errors ============
     
@@ -117,6 +131,9 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     error VAAAlreadyProcessed();
     error UnauthorizedRouter();
     error MintFailed();
+    error NoPendingMint();
+    error PendingMintAlreadyClaimed();
+    error UnauthorizedClaim();
 
     // ============ Constructor ============
     
@@ -195,12 +212,17 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
             processedVAAs[vm.hash] = true;
             emit MUSDMinted(recipient, received, musdMinted, vm.hash);
         } catch {
-            // If minting fails, forward to treasury as fallback (funds not lost)
+            // Queue the mint for deterministic retry instead of forwarding to treasury.
+            // This preserves user attribution and avoids orphaned cross-chain credits.
             usdc.forceApprove(directMint, 0);
-            usdc.safeTransfer(treasury, received);
-            // Mark processed after successful fallback transfer
             processedVAAs[vm.hash] = true;
-            emit MintFallbackToTreasury(recipient, received, vm.hash);
+            pendingMints[vm.hash] = PendingMint({
+                recipient: recipient,
+                usdcAmount: received,
+                claimed: false
+            });
+            pendingCredits[recipient] += received;
+            emit MintQueued(recipient, received, vm.hash);
         }
         
         emit DepositReceived(
@@ -219,6 +241,33 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      */
     function isVAAProcessed(bytes32 vaaHash) external view returns (bool processed) {
         return processedVAAs[vaaHash];
+    }
+
+    /**
+     * @notice Retry minting for a previously queued VAA.
+     * @dev Callable by the intended recipient or admin.
+     */
+    function claimPendingMint(bytes32 vaaHash) external nonReentrant whenNotPaused returns (uint256 musdMinted) {
+        PendingMint storage pending = pendingMints[vaaHash];
+        if (pending.recipient == address(0)) revert NoPendingMint();
+        if (pending.claimed) revert PendingMintAlreadyClaimed();
+        if (msg.sender != pending.recipient && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+            revert UnauthorizedClaim();
+        }
+
+        uint256 amount = pending.usdcAmount;
+        usdc.forceApprove(directMint, amount);
+
+        try IDirectMint(directMint).mintFor(pending.recipient, amount) returns (uint256 minted) {
+            pending.claimed = true;
+            pendingCredits[pending.recipient] -= amount;
+            emit PendingMintClaimed(pending.recipient, amount, minted, vaaHash);
+            emit MUSDMinted(pending.recipient, amount, minted, vaaHash);
+            return minted;
+        } catch {
+            usdc.forceApprove(directMint, 0);
+            revert MintFailed();
+        }
     }
 
     // ============ Admin Functions ============

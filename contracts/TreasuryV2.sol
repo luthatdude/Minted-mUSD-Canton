@@ -879,6 +879,8 @@ contract TreasuryV2 is
                 // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
+                    // Clear temporary allowance after use (defense in depth).
+                    asset.forceApprove(strat, 0);
                 } catch {
                     emit RebalanceDepositFailed(strat, toDeposit);
                     asset.forceApprove(strat, 0); // Clear approval on failure
