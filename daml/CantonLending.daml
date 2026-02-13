@@ -1287,7 +1287,8 @@ template CantonLendingService
           timestamp = now
 
         let repayFromBorrows = min actualRepay totalBorrows
-        -- FIX C-01: Decrement cantonCurrentSupply on liquidation (mirrors RepayLoan)
+        -- FIX C-01: Decrement cantonCurrentSupply on liquidation (mirrors RepayLoan).
+        -- Liquidation burns mUSD, so supply tracking must decrement in lockstep.
         let repayFromSupply = min actualRepay cantonCurrentSupply
         newService <- create this with
           totalBorrows = totalBorrows - repayFromBorrows

@@ -303,6 +303,31 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return super._convertToAssets(shares, rounding);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // FIX CX-C-01: ERC-4626 compliance — maxWithdraw/maxRedeem must return 0
+    // when withdraw/redeem would revert (paused or cooldown active).
+    // EIP-4626 §maxWithdraw: "MUST return the maximum amount … that would
+    // not cause a revert"
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Maximum assets owner can withdraw
+    /// @dev Returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    function maxWithdraw(address owner) public view override returns (uint256) {
+        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+            return 0;
+        }
+        return super.maxWithdraw(owner);
+    }
+
+    /// @notice Maximum shares owner can redeem
+    /// @dev Returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    function maxRedeem(address owner) public view override returns (uint256) {
+        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+            return 0;
+        }
+        return super.maxRedeem(owner);
+    }
+
     // ============================================================
     //                     EMERGENCY CONTROLS
     // ============================================================
