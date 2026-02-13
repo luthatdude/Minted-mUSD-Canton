@@ -52,5 +52,5 @@ For each finding:
 - Choice: ChoiceName (if applicable)
 - Description: What the issue is
 - Impact: What an unauthorized party could do
-- Fix: Recommended remediation with code
+- Recommendation: Suggested remediation with code
 ```

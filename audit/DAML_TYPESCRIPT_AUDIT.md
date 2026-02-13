@@ -2,7 +2,7 @@
 ## DAML Templates & TypeScript Services
 
 **Audit Date:** 2025-01-XX  
-**Auditor:** Automated Security Review (Claude Opus 4.6)  
+**Auditor:** Minted Security Team  
 **Scope:** All DAML templates (`/daml/`) and all TypeScript services (`/relay/`, `/bot/src/`)  
 **Protocol Version:** Canton Network + Ethereum L1 bridge (BLEBridgeV9)
 

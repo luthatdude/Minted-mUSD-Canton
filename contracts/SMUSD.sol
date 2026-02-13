@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// BLE Protocol - Fixed Version with Unified Cross-Chain Yield
-// Fixes: S-01 (Cooldown bypass via transfer), S-02 (Missing redeem override),
-//        S-03 (Donation attack mitigation), S-04 (SafeERC20)
+// BLE Protocol — ERC-4626 Yield Vault with Unified Cross-Chain Share Price
+// Security: Cooldown enforcement, donation attack mitigation, SafeERC20, ReentrancyGuard
 // Feature: Unified share price across Ethereum and Canton for equal yield distribution
 
 pragma solidity 0.8.26;
@@ -85,7 +84,6 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     // Always set cooldown for receiver to prevent bypass via third-party deposit.
     // A depositor can always set their own cooldown, and depositing on behalf of someone
     // correctly locks the receiver's withdrawal window.
-    // FIX: Added nonReentrant and whenNotPaused for security
     function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
@@ -94,21 +92,18 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     // Always set cooldown for receiver to prevent bypass via third-party mint.
     // Matches deposit() behavior — any path that increases shares must reset cooldown.
-    // FIX: Added nonReentrant and whenNotPaused for security
     function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.mint(shares, receiver);
     }
 
-    // FIX: Added nonReentrant and whenNotPaused for security
     function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
         require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
         return super.withdraw(assets, receiver, owner);
     }
 
     // Override redeem to enforce cooldown
-    // FIX: Added nonReentrant and whenNotPaused for security
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
         require(block.timestamp >= lastDeposit[owner] + WITHDRAW_COOLDOWN, "COOLDOWN_ACTIVE");
         return super.redeem(shares, receiver, owner);
@@ -211,7 +206,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
         require(epoch > lastCantonSyncEpoch, "EPOCH_NOT_SEQUENTIAL");
         
-        // FIX: Rate limit - minimum 1 hour between syncs
+        // Rate limit — minimum 1 hour between syncs
         require(block.timestamp >= lastCantonSyncTime + MIN_SYNC_INTERVAL, "SYNC_TOO_FREQUENT");
         
         // First sync must use admin-only initialization to prevent manipulation
@@ -221,7 +216,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
             uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : _cantonShares;
             require(_cantonShares <= maxInitialShares, "INITIAL_SHARES_TOO_LARGE");
         } else {
-            // FIX: Magnitude limit - max 5% change per sync to prevent manipulation
+            // Magnitude limit — max 5% change per sync to prevent manipulation
             uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
             uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
             require(_cantonShares <= maxIncrease, "SHARE_INCREASE_TOO_LARGE");
@@ -252,7 +247,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         // Treasury.totalValue() returns total USDC backing all mUSD (6 decimals)
         // slither-disable-next-line calls-loop
         try ITreasury(treasury).totalValue() returns (uint256 usdcValue) {
-            // FIX: Convert USDC (6 decimals) to mUSD (18 decimals)
+            // Convert USDC (6 decimals) to mUSD (18 decimals)
             return usdcValue * 1e12;
         } catch {
             // FIX SOL-C-05: Emit event so monitoring detects degraded state

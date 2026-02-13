@@ -216,7 +216,7 @@ Production-hardened TypeScript bridge infrastructure in `relay/`.
 | `relay-service.ts` | ~600 | Watches Canton ledger for finalized attestations, submits to BLEBridgeV9 on Ethereum. DER→RSV signature conversion, duplicate tracking, bounded cache. |
 | `validator-node-v2.ts` | ~400 | Canton Asset API integration, AWS KMS signing, collateral ratio validation (110% default). |
 | `validator-node.ts` | ~300 | Base validator implementation. |
-| `signer.ts` | ~200 | DER-to-RSV ECDSA signature conversion with 40+ security fixes. |
+| `signer.ts` | ~200 | DER-to-RSV ECDSA signature conversion with 40+ security hardening measures. |
 
 Docker deployment (`docker-compose.yml`):
 - Relay + 3 validator nodes
@@ -426,7 +426,7 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 
 ## Security
 
-### Audit Fixes Applied
+### Security Remediations
 
 98 security findings resolved across Solidity and DAML:
 - Time manipulation: All user-supplied timestamps replaced with `getTime` (DAML) / `block.timestamp` (Solidity)

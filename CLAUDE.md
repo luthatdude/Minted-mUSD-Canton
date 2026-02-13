@@ -48,7 +48,7 @@ slither . --config-file slither.config.json
 
 ## Agent Teams
 
-This project uses Claude Code agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`). Agents are defined in `.github/agents/`:
+This project uses agent teams for coordinated development. Agents are defined in `.github/agents/`:
 
 ### Leadership
 - **team-leader** — Oversees the entire build. Coordinates all agents, sequences changes across the cross-chain stack, and ensures quality gates are met.

@@ -865,7 +865,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     uint256 public constant MAX_DRIFT_BPS = 500; // 5%
 
     /// @notice Reconcile totalBorrows with the actual sum of all user debts
-    /// @dev    Fixes H-01 — accounting drift can accumulate from rounding in
+    /// @dev    Accounting drift can accumulate from rounding in
     ///         interest accrual, repayment, and liquidation. This function
     ///         computes the true aggregate debt by iterating tracked borrowers
     ///         and snaps totalBorrows to that value.
