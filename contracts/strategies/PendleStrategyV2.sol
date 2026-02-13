@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IStrategy.sol";
+import "../TimelockGoverned.sol";
 
 /**
  * @title PendleStrategyV2
@@ -201,7 +202,8 @@ contract PendleStrategyV2 is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -228,6 +230,9 @@ contract PendleStrategyV2 is
     bytes32 public constant TREASURY_ROLE = keccak256("TREASURY_ROLE");
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
+    /// @notice FIX C-01: Declare TIMELOCK_ROLE explicitly — prevents admin from bypassing
+    /// 48h timelock delay on unpause(), recoverToken(), setMarketSelector(), and upgrades.
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
@@ -324,16 +329,19 @@ contract PendleStrategyV2 is
         address _marketSelector,
         address _treasury,
         address _admin,
-        string calldata _category
+        string calldata _category,
+        address _timelock
     ) external initializer {
         if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
+        require(_timelock != address(0), "ZERO_TIMELOCK");
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         usdc = IERC20(_usdc);
         marketSelector = IPendleMarketSelector(_marketSelector);
@@ -351,8 +359,15 @@ contract PendleStrategyV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
 
-        // Approve router for USDC
-        usdc.forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // FIX C-01: Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        // Without this, DEFAULT_ADMIN can grant itself TIMELOCK_ROLE and bypass the 48h
+        // upgrade delay, enabling instant implementation swap to drain all funds
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
+
+        // FIX C-02: Removed infinite approval (type(uint256).max) to Pendle Router.
+        // Per-operation approvals are set before each router interaction
+        // in deposit(), _depositToCurrentMarket(), and _redeemPt() to limit
+        // exposure if Pendle Router is compromised.
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -599,8 +614,8 @@ contract PendleStrategyV2 is
         (,, address yt) = IPendleMarket(bestMarket).readTokens();
         currentYT = yt;
 
-        // Approve PT for router
-        IERC20(currentPT).forceApprove(PENDLE_ROUTER, type(uint256).max);
+        // FIX C-02: Removed infinite PT approval. Per-operation approvals are
+        // set before each router call in _redeemPt() instead.
     }
 
     function _depositToCurrentMarket(uint256 usdcAmount) internal {
@@ -873,5 +888,6 @@ contract PendleStrategyV2 is
     // UUPS UPGRADE
     // ═══════════════════════════════════════════════════════════════════════
 
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice FIX CRIT-01: Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
