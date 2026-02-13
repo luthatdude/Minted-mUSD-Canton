@@ -16,7 +16,7 @@
 module CantonBoostPoolTest where
 
 import CantonBoostPool
-import CantonCoinToken (CantonCoin(..), CantonCoin_Split(..), CantonCoinTransferProposal(..))
+import CantonCoinToken (CantonCoin(..), CantonCoin_Split(..), CantonCoin_Transfer(..), CantonCoinTransferProposal(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonDirectMint (Money)
 import DA.Time
