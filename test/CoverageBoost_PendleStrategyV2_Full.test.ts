@@ -124,6 +124,9 @@ describe("PendleStrategyV2 — Full Coverage", function () {
     await strategy.connect(admin).grantRole(GUARDIAN, guardian.address);
     // treasury already has TREASURY_ROLE from initialize
 
+    /* ── set ptDiscountRate to 0 so mock 1:1 router matches expected PT output ── */
+    await strategy.connect(strategist).setPtDiscountRate(0);
+
     /* ── fund treasury ── */
     await usdc.mint(treasury.address, ethers.parseUnits("10000000", 6));
     await usdc
@@ -552,6 +555,8 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const amt = D6("1000000");
       await f.strategy.connect(f.treasury).deposit(amt);
 
+      // Restore discount rate so _ptToUsdc applies time-based discount
+      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
       const tv = await f.strategy.totalValue();
       expect(tv).to.be.lt(amt);
       // Within 10% (max annual discount)
@@ -580,10 +585,12 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const amt = D6("1000000");
       await f.strategy.connect(f.treasury).deposit(amt);
 
+      // Restore discount rate so _ptToUsdc applies time-based discount
+      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
       const ptBal = await f.strategy.ptBalance();
       const tv = await f.strategy.totalValue();
-      // Clamped: discount = 1000 BPS (full 10%), denom = 11000
-      const expected = (ptBal * 10000n) / 11000n;
+      // Clamped: discountBps = 1000 * 1yr / 1yr = 1000, valueBps = 9000
+      const expected = (ptBal * 9000n) / 10000n;
       expect(tv).to.be.gte(expected - 1n);
       expect(tv).to.be.lte(expected + 1n);
     });
@@ -591,6 +598,9 @@ describe("PendleStrategyV2 — Full Coverage", function () {
     it("_usdcToPt: more PT consumed than USDC value (discount)", async () => {
       const f = await loadFixture(fixture);
       await f.strategy.connect(f.treasury).deposit(D6("1000000"));
+
+      // Restore discount rate so _usdcToPt computes higher PT needed
+      await f.strategy.connect(f.strategist).setPtDiscountRate(1000);
       const ptBefore = await f.strategy.ptBalance();
 
       await f.strategy.connect(f.treasury).withdraw(D6("100000"));
@@ -925,7 +935,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const f = await loadFixture(fixture);
       await expect(f.strategy.connect(f.strategist).setPtDiscountRate(500))
         .to.emit(f.strategy, "PtDiscountRateUpdated")
-        .withArgs(1000, 500);
+        .withArgs(0, 500);
     });
 
     it("setPtDiscountRate > 5000 reverts", async () => {
@@ -1061,7 +1071,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       const f = await loadFixture(fixture);
       expect(await f.strategy.rolloverThreshold()).to.equal(7 * 86400);
       expect(await f.strategy.slippageBps()).to.equal(50);
-      expect(await f.strategy.ptDiscountRateBps()).to.equal(1000);
+      expect(await f.strategy.ptDiscountRateBps()).to.equal(0);
       expect(await f.strategy.active()).to.be.true;
       expect(await f.strategy.marketCategory()).to.equal("USD");
     });

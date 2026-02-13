@@ -90,7 +90,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy InterestRateModel (constructor takes admin address)
     const IRMF = await ethers.getContractFactory("InterestRateModel");
-    interestRateModel = await IRMF.deploy(admin.address, admin.address);
+    interestRateModel = await IRMF.deploy(admin.address);
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
@@ -98,7 +98,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy(admin.address);
+    vault = await CVF.deploy();
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -112,7 +112,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy SMUSD (constructor takes IERC20 _musd)
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress(), admin.address);
+    smusd = await SMUSDF.deploy(await musd.getAddress());
 
     // Deploy BorrowModule (constructor: vault, oracle, musd, interestRateBps, minDebt)
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -121,8 +121,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500, // 5% fixed fallback rate
-      ethers.parseEther("100"), // 100 mUSD min debt
-      admin.address
+      ethers.parseEther("100") // 100 mUSD min debt
     );
 
     // Deploy DirectMintV2 (constructor: usdc, musd, treasury, feeRecipient)
@@ -131,8 +130,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      admin.address, // fee recipient
-      admin.address
+      admin.address // fee recipient
     );
 
     // Deploy LiquidationEngine (constructor: vault, borrowModule, oracle, musd, closeFactorBps)
@@ -142,8 +140,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000, // 50% close factor
-      admin.address
+      5000 // 50% close factor
     );
 
     // Deploy MockStrategy (constructor: asset, treasury)
@@ -886,8 +883,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         2, // min 2 sigs
         await musd.getAddress(),
         11000, // 110% collateral ratio
-        ethers.parseEther("1000000"), // 1M daily limit
-        admin.address
+        ethers.parseEther("1000000") // 1M daily limit
       ]);
 
       const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));
@@ -904,14 +900,14 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     });
 
     async function signAttestation(
-      att: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint },
+      att: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint; entropy: string; cantonStateHash: string },
       bridgeAddr: string,
       signersList: SignerWithAddress[]
     ) {
       const chainId = (await ethers.provider.getNetwork()).chainId;
       const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
-        [att.id, att.cantonAssets, att.nonce, att.timestamp, chainId, bridgeAddr]
+        ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+        [att.id, att.cantonAssets, att.nonce, att.timestamp, att.entropy, att.cantonStateHash, chainId, bridgeAddr]
       );
 
       const sorted = [...signersList].sort(
@@ -927,11 +923,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should process valid attestation with sufficient signatures", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-1");
+      const cantonStateHash = ethers.id("state-1");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-attestation-1"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
@@ -943,11 +944,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should reject attestation with insufficient signatures", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-2");
+      const cantonStateHash = ethers.id("state-2");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-attestation-2"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1]);
@@ -956,11 +962,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should reject replay attestation", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-replay");
+      const cantonStateHash = ethers.id("state-replay");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-replay"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
@@ -971,11 +982,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should reject attestation with wrong nonce", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-nonce");
+      const cantonStateHash = ethers.id("state-nonce");
+      const id = await bridge.computeAttestationId(5n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-wrong-nonce"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 5n, // Wrong
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
@@ -985,11 +1001,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should reject expired attestation", async function () {
       // 7 hours ago (MAX_ATTESTATION_AGE = 6h)
       const oldTs = BigInt(await time.latest()) - 7n * 3600n;
+      const entropy = ethers.id("entropy-old");
+      const cantonStateHash = ethers.id("state-old");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), oldTs, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("old-attestation"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: oldTs,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);

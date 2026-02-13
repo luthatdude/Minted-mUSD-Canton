@@ -326,7 +326,7 @@ contract PendleStrategyV2 is
         address _admin,
         string calldata _category
     ) external initializer {
-        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0)) {
+        if (_usdc == address(0) || _marketSelector == address(0) || _treasury == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
 
@@ -587,6 +587,9 @@ contract PendleStrategyV2 is
         (address bestMarket, IPendleMarketSelector.MarketInfo memory info) =
             marketSelector.selectBestMarket(marketCategory);
 
+        require(bestMarket != address(0), "NO_VALID_MARKET");
+        require(info.pt != address(0), "INVALID_PT_TOKEN");
+
         currentMarket = bestMarket;
         currentPT = info.pt;
         currentSY = info.sy;
@@ -820,20 +823,26 @@ contract PendleStrategyV2 is
     }
 
     /**
-     * @notice Emergency withdraw all to USDC
+     * @notice Emergency withdraw all to USDC and send to recipient
+     * @param recipient Address to receive the USDC (must hold TREASURY_ROLE)
      */
-    function emergencyWithdraw() external onlyRole(GUARDIAN_ROLE) {
+    function emergencyWithdraw(address recipient) external onlyRole(GUARDIAN_ROLE) {
+        require(recipient != address(0), "ZERO_RECIPIENT");
+        require(hasRole(TREASURY_ROLE, recipient), "RECIPIENT_MUST_BE_TREASURY");
+
         _pause();
 
-        uint256 usdcOut = 0;
+        uint256 ptRedeemed = ptBalance;
         if (ptBalance > 0) {
-            usdcOut = _redeemPt(ptBalance);
+            _redeemPt(ptBalance);
         }
 
         uint256 balance = usdc.balanceOf(address(this));
-        emit EmergencyWithdraw(ptBalance, balance);
+        if (balance > 0) {
+            usdc.safeTransfer(recipient, balance);
+        }
 
-        // Keep USDC in contract for treasury to withdraw
+        emit EmergencyWithdraw(ptRedeemed, balance);
     }
 
     /**
@@ -846,7 +855,7 @@ contract PendleStrategyV2 is
     /**
      * @notice Unpause strategy
      */
-    function unpause() external onlyRole(GUARDIAN_ROLE) {
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 

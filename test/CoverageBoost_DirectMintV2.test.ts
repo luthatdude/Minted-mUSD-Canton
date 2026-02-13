@@ -64,8 +64,7 @@ describe("CoverageBoost — DirectMintV2", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      feeRecipient.address,
-      deployer.address, // timelock
+      feeRecipient.address
     );
     await directMint.waitForDeployment();
 
@@ -87,6 +86,10 @@ describe("CoverageBoost — DirectMintV2", function () {
 
     await usdc.mint(minter.address, INITIAL_USDC);
     await usdc.connect(minter).approve(await directMint.getAddress(), ethers.MaxUint256);
+
+    // Grant TIMELOCK_ROLE to deployer for setFees/setLimits
+    const TIMELOCK_ROLE = await directMint.TIMELOCK_ROLE();
+    await directMint.grantRole(TIMELOCK_ROLE, deployer.address);
   });
 
   // ================================================================
@@ -97,14 +100,14 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("Should revert when treasury is zero address", async function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
-        F.deploy(await usdc.getAddress(), await musd.getAddress(), ethers.ZeroAddress, feeRecipient.address, deployer.address),
+        F.deploy(await usdc.getAddress(), await musd.getAddress(), ethers.ZeroAddress, feeRecipient.address),
       ).to.be.revertedWith("INVALID_TREASURY");
     });
 
     it("Should revert when feeRecipient is zero address", async function () {
       const F = await ethers.getContractFactory("DirectMintV2");
       await expect(
-        F.deploy(await usdc.getAddress(), await musd.getAddress(), await treasury.getAddress(), ethers.ZeroAddress, deployer.address),
+        F.deploy(await usdc.getAddress(), await musd.getAddress(), await treasury.getAddress(), ethers.ZeroAddress),
       ).to.be.revertedWith("INVALID_FEE_RECIPIENT");
     });
   });
@@ -330,6 +333,7 @@ describe("CoverageBoost — DirectMintV2", function () {
     it("remainingMintable — cap == supply → 0", async function () {
       // Set cap to something small, then mint up to the cap
       await musd.setSupplyCap(ethers.parseEther("100"));
+      await musd.setLocalCapBps(10000); // 100% of supply cap on this chain
       await timelockSetFees(directMint, deployer, 0, 0);
 
       const usdcAmount = ethers.parseUnits("100", USDC_DECIMALS);

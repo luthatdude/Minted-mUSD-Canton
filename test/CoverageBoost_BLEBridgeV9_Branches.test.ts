@@ -37,8 +37,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT,
-      deployer.address
+      DAILY_CAP_LIMIT
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -47,23 +46,25 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     await musd.grantRole(await musd.CAP_MANAGER_ROLE(), await bridge.getAddress());
     await musd.grantRole(await musd.BRIDGE_ROLE(), deployer.address);
     await bridge.grantRole(await bridge.EMERGENCY_ROLE(), emergency.address);
-    await bridge.grantRole(await bridge.RELAYER_ROLE(), deployer.address);
     for (const v of validators) {
       await bridge.grantRole(await bridge.VALIDATOR_ROLE(), v.address);
     }
+
+    // Grant TIMELOCK_ROLE to deployer for admin function tests
+    await bridge.grantRole(await bridge.TIMELOCK_ROLE(), deployer.address);
   });
 
   // ── Helpers ──────────────────────────────────────────────────
 
   async function createSortedSignatures(
-    attestation: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint },
+    attestation: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint; entropy: string; cantonStateHash: string },
     signers: HardhatEthersSigner[]
   ): Promise<string[]> {
     const chainId = (await ethers.provider.getNetwork()).chainId;
     const bridgeAddr = await bridge.getAddress();
     const messageHash = ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
-      [attestation.id, attestation.cantonAssets, attestation.nonce, attestation.timestamp, chainId, bridgeAddr]
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+      [attestation.id, attestation.cantonAssets, attestation.nonce, attestation.timestamp, attestation.entropy, attestation.cantonStateHash, chainId, bridgeAddr]
     );
     const sigPairs = await Promise.all(
       signers.map(async (s) => ({
@@ -75,14 +76,17 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     return sigPairs.map((p) => p.sig);
   }
 
-  async function submitAttestation(cantonAssets: bigint, nonce: bigint, idSuffix: string) {
+  // Helper to create attestation with entropy and computed ID
+  async function createAttestation(nonce: bigint, cantonAssets: bigint, timestamp: bigint) {
+    const entropy = ethers.hexlify(ethers.randomBytes(32));
+    const cantonStateHash = ethers.hexlify(ethers.randomBytes(32));
+    const id = await bridge.computeAttestationId(nonce, cantonAssets, timestamp, entropy, cantonStateHash);
+    return { id, cantonAssets, nonce, timestamp, entropy, cantonStateHash };
+  }
+
+  async function submitAttestation(cantonAssets: bigint, nonce: bigint, _idSuffix: string) {
     const now = BigInt(await time.latest());
-    const att = {
-      id: ethers.keccak256(ethers.toUtf8Bytes(idSuffix)),
-      cantonAssets,
-      nonce,
-      timestamp: now,
-    };
+    const att = await createAttestation(nonce, cantonAssets, now);
     const sigs = await createSortedSignatures(att, validators.slice(0, 3));
     await bridge.processAttestation(att, sigs);
     return att;
@@ -94,7 +98,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should revert INVALID_DAILY_LIMIT when _dailyCapIncreaseLimit is 0", async function () {
       const F = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0, deployer.address])
+        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0])
       ).to.be.revertedWith("INVALID_DAILY_LIMIT");
     });
   });
@@ -110,7 +114,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       // emergency role (not admin) tries to reduce cap below totalSupply
       await expect(
         bridge.connect(emergency).emergencyReduceCap(ethers.parseEther("1000000"), "sub-supply test")
-      ).to.be.revertedWith("SUB_SUPPLY_CAP_REQUIRES_ADMIN");
+      ).to.be.revertedWith("CAP_BELOW_SUPPLY");
     });
 
     it("should revert REASON_REQUIRED when reason is empty", async function () {
@@ -162,7 +166,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       // only reachable via storage anomaly. Use hardhat_setStorageAt (slot 12).
       const bridgeAddr = await bridge.getAddress();
       const value = ethers.zeroPadValue(ethers.toBeHex(1000), 32);
-      await ethers.provider.send("hardhat_setStorageAt", [bridgeAddr, "0xc", value]);
+      await ethers.provider.send("hardhat_setStorageAt", [bridgeAddr, "0xb", value]);
       expect(await bridge.unpauseRequestTime()).to.equal(1000);
 
       // Now pause() should hit the if (unpauseRequestTime > 0) branch
@@ -193,7 +197,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
   describe("processAttestation — zero assets", function () {
     it("should revert ZERO_ASSETS when cantonAssets is 0", async function () {
       const now = BigInt(await time.latest());
-      const att = { id: ethers.keccak256(ethers.toUtf8Bytes("zero-a")), cantonAssets: 0n, nonce: 1n, timestamp: now };
+      const att = await createAttestation(1n, 0n, now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
       await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("ZERO_ASSETS");
     });
@@ -201,17 +205,12 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
 
   // ── 12. processAttestation: non-RELAYER caller ──────────────
 
-  describe("processAttestation — non-RELAYER", function () {
-    it("should revert when caller lacks RELAYER_ROLE", async function () {
+  describe("processAttestation — any caller", function () {
+    it("should allow any caller to process attestation (no RELAYER_ROLE required)", async function () {
       const now = BigInt(await time.latest());
-      const att = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("no-relayer")),
-        cantonAssets: ethers.parseEther("11000000"),
-        nonce: 1n,
-        timestamp: now,
-      };
+      const att = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
-      await expect(bridge.connect(user).processAttestation(att, sigs)).to.be.reverted;
+      await expect(bridge.connect(user).processAttestation(att, sigs)).to.emit(bridge, "AttestationReceived");
     });
   });
 
@@ -238,12 +237,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should not emit SupplyCapUpdated when calculated cap == current cap", async function () {
       // 11M assets at 110% → cap = 10M (matches initial MUSD cap)
       const now = BigInt(await time.latest());
-      const att = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("noop")),
-        cantonAssets: ethers.parseEther("11000000"),
-        nonce: 1n,
-        timestamp: now,
-      };
+      const att = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
       const tx = await bridge.processAttestation(att, sigs);
       await expect(tx).to.not.emit(bridge, "SupplyCapUpdated");
@@ -279,12 +273,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       // Second attestation: try to increase further → exhausted
       await time.increase(61);
       const now2 = BigInt(await time.latest());
-      const att2 = {
-        id: ethers.keccak256(ethers.toUtf8Bytes("exh-2")),
-        cantonAssets: ethers.parseEther("13200000"),
-        nonce: 2n,
-        timestamp: now2,
-      };
+      const att2 = await createAttestation(2n, ethers.parseEther("13200000"), now2);
       const sigs2 = await createSortedSignatures(att2, validators.slice(0, 3));
       await expect(bridge.processAttestation(att2, sigs2))
         .to.be.revertedWith("DAILY_CAP_LIMIT_EXHAUSTED");

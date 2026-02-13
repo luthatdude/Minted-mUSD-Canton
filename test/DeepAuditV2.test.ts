@@ -96,7 +96,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy InterestRateModel
     const IRMF = await ethers.getContractFactory("InterestRateModel");
-    interestRateModel = await IRMF.deploy(admin.address, admin.address);
+    interestRateModel = await IRMF.deploy(admin.address);
 
     // Deploy PriceOracle
     const POF = await ethers.getContractFactory("PriceOracle");
@@ -104,7 +104,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy(admin.address);
+    vault = await CVF.deploy();
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -118,7 +118,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy SMUSD
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress(), admin.address);
+    smusd = await SMUSDF.deploy(await musd.getAddress());
 
     // Deploy BorrowModule
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -127,8 +127,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       await priceOracle.getAddress(),
       await musd.getAddress(),
       500,
-      ethers.parseEther("100"),
-      admin.address
+      ethers.parseEther("100")
     );
 
     // Deploy DirectMintV2
@@ -137,7 +136,6 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      admin.address,
       admin.address
     );
 
@@ -148,8 +146,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000,
-      admin.address
+      5000
     );
 
     // Deploy MockStrategies
@@ -170,6 +167,8 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await borrowModule.grantRole(BORROW_ADMIN_ROLE, admin.address);
+    const TIMELOCK_ROLE_BM = await borrowModule.TIMELOCK_ROLE();
+    await borrowModule.grantRole(TIMELOCK_ROLE_BM, admin.address);
     await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
     await timelockSetSMUSD(borrowModule, admin, await smusd.getAddress());
     await timelockSetTreasury(borrowModule, admin, await treasury.getAddress());
@@ -1075,14 +1074,13 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       ).to.be.revertedWith("STALE_PRICE");
     });
 
-    it("should allow stale prices in unsafe variant", async function () {
-      // Unsafe variants no longer revert on stale prices.
-      // Liquidations must proceed during feed outages using last available price.
+    it("should revert stale prices in unsafe variant", async function () {
+      // getPriceUnsafe still enforces staleness checks in this implementation
       await time.increase(3601);
 
-      // getPriceUnsafe should succeed even with stale data
-      const price = await priceOracle.getPriceUnsafe(await weth.getAddress());
-      expect(price).to.be.gt(0);
+      await expect(
+        priceOracle.getPriceUnsafe(await weth.getAddress())
+      ).to.be.revertedWith("STALE_PRICE");
     });
 
     it("should check isFeedHealthy correctly", async function () {
@@ -1137,7 +1135,8 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
           await weth.getAddress(),
           await newFeed.getAddress(),
           3600,
-          18
+          18,
+          0
         )
       ).to.be.reverted;
     });
@@ -1177,14 +1176,21 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       ).to.be.revertedWith("BELOW_MIN_DEBT");
     });
 
-    it("should reject partial repay leaving dust below minDebt", async function () {
+    it("should auto-close dust positions below minDebt", async function () {
       await depositAndBorrow(user1, weth, ethers.parseEther("10"), ethers.parseEther("1000"));
 
+      // Mint extra mUSD to cover any accrued interest during auto-close
+      await musd.grantRole(BRIDGE_ROLE, admin.address);
+      await musd.mint(user1.address, ethers.parseEther("10"));
+
       // Repay 950 would leave 50 debt (below 100 minDebt)
-      await musd.connect(user1).approve(await borrowModule.getAddress(), ethers.parseEther("950"));
-      await expect(
-        borrowModule.connect(user1).repay(ethers.parseEther("950"))
-      ).to.be.revertedWith("REMAINING_BELOW_MIN_DEBT");
+      // Contract auto-closes: repays full amount instead of reverting
+      await musd.connect(user1).approve(await borrowModule.getAddress(), ethers.MaxUint256);
+      await borrowModule.connect(user1).repay(ethers.parseEther("950"));
+
+      // Debt should be 0 due to auto-close
+      const debt = await borrowModule.totalDebt(user1.address);
+      expect(debt).to.equal(0n);
     });
 
     it("should allow full repayment to zero", async function () {

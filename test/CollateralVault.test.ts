@@ -34,7 +34,7 @@ describe("CollateralVault", function () {
 
     // Deploy vault
     const VaultFactory = await ethers.getContractFactory("CollateralVault");
-    vault = await VaultFactory.deploy(deployer.address);
+    vault = await VaultFactory.deploy();
     await vault.waitForDeployment();
 
     // Grant roles
@@ -100,7 +100,7 @@ describe("CollateralVault", function () {
     it("should reject penalty > 20%", async function () {
       await expect(
         vault.addCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
-      ).to.be.revertedWith("INVALID_PENALTY");
+      ).to.be.revertedWith("PENALTY_TOO_HIGH");
     });
 
     it("should cap at 50 supported tokens", async function () {
@@ -215,10 +215,10 @@ describe("CollateralVault", function () {
 
     it("withdrawFor: should send collateral to specified recipient", async function () {
       const amount = ethers.parseEther("5");
-      const balBefore = await weth.balanceOf(user2.address);
-      // Add skipHealthCheck parameter (5th param) - true to skip health check for this test
-      await vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), amount, user2.address, true);
-      expect(await weth.balanceOf(user2.address)).to.equal(balBefore + amount);
+      const balBefore = await weth.balanceOf(leverageVault.address);
+      // skipHealthCheck=true restricts recipient to msg.sender or user
+      await vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), amount, leverageVault.address, true);
+      expect(await weth.balanceOf(leverageVault.address)).to.equal(balBefore + amount);
     });
 
     it("withdrawFor: should reject zero recipient", async function () {

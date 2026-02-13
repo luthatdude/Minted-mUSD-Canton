@@ -53,8 +53,7 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       await musd.getAddress(),
       await treasury.getAddress(),
-      feeRecipient.address,
-      deployer.address
+      feeRecipient.address
     );
     await directMint.waitForDeployment();
 
@@ -64,6 +63,10 @@ describe("DirectMintV2", function () {
 
     const VAULT_ROLE = await treasury.VAULT_ROLE();
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
+
+    // Grant TIMELOCK_ROLE to deployer for setFees/setLimits
+    const TIMELOCK_ROLE = await directMint.TIMELOCK_ROLE();
+    await directMint.grantRole(TIMELOCK_ROLE, deployer.address);
 
     // Mint USDC to user
     await usdc.mint(user.address, INITIAL_USDC);
@@ -87,11 +90,11 @@ describe("DirectMintV2", function () {
       const DirectMintFactory = await ethers.getContractFactory("DirectMintV2");
       
       await expect(
-        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address, deployer.address)
+        DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address)
       ).to.be.revertedWith("INVALID_USDC");
 
       await expect(
-        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address, deployer.address)
+        DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address)
       ).to.be.revertedWith("INVALID_MUSD");
     });
   });
