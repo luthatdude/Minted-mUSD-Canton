@@ -41,7 +41,7 @@ export function CantonDashboardMint() {
       // Exercise DirectMint_Mint on the DirectMintService
       const services = await loopWallet.queryContracts(templates.DirectMintService);
       if (services.length === 0) throw new Error("No DirectMintService found");
-      await loopWallet.exerciseChoice(services[0].contractId, "DirectMint_Mint", {
+      await loopWallet.exerciseChoice(templates.DirectMintService, services[0].contractId, "DirectMint_Mint", {
         usdcCid: usdcContracts[0].contractId,
         amount,
       });
