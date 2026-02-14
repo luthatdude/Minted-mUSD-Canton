@@ -486,11 +486,13 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                 routingSucceeded = true; // No routing needed
             }
 
-            // Only increase totalBorrows when interest is successfully routed
-            // This prevents phantom debt from inflating utilization rates
-            if (routingSucceeded) {
-                totalBorrows += interest;
-            }
+            // SOL-H-02 FIX: Always increment totalBorrows to reflect actual debt accrual.
+            // Individual position debts (via _accrueInterest) accrue regardless of whether
+            // mUSD routing to SMUSD succeeds. totalBorrows must stay in sync with the sum
+            // of individual debts; otherwise utilization is understated and interest rates
+            // are artificially low. The pendingInterest buffer handles the unrouted mUSD
+            // separately — it does not affect debt accounting.
+            totalBorrows += interest;
             
             uint256 utilization = address(interestRateModel) != address(0)
                 ? interestRateModel.utilizationRate(totalBorrows, totalSupply)
@@ -526,17 +528,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 userTotal = pos.principal + pos.accruedInterest;
         if (totalBorrows > 0 && userTotal > 0) {
             if (address(interestRateModel) != address(0)) {
-                // AUDIT SOL-M-03: Calculate user interest directly instead of
-                // computing global interest and dividing proportionally.
-                // Old: globalInterest = calc(totalBorrows,...) then * userTotal / totalBorrows
-                // caused double truncation (÷ BPS*YEAR then ÷ totalBorrows).
-                // New: single division preserves precision.
-                interest = interestRateModel.calculateInterest(
-                    userTotal,
+                uint256 globalInterest = interestRateModel.calculateInterest(
+                    totalBorrows,
                     totalBorrows,
                     _getTotalSupply(),
                     elapsed
                 );
+                // User's proportional share of global interest
+                interest = (globalInterest * userTotal) / totalBorrows;
             } else {
                 // Fallback: use user's total debt (principal + accrued) as base
                 interest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);

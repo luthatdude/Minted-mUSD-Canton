@@ -16,18 +16,17 @@ import "./Errors.sol";
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
  * @dev When USDC comes in, it's automatically split according to target allocations
  *
- * Default Allocation (v6 — Feb 2026):
- *   Pendle Multi-Pool:        30% (11.7% APY)
- *   Fluid Stable #146:        35% (14.3% APY — syrupUSDC/USDC)
- *   Morpho Loop:              20% (11.5% APY)
- *   Euler V2 RLUSD/USDC Loop: 10% (8-12% APY — cross-stable leverage)
- *   USDC Reserve:              5% (0% APY)
+ * Default Allocation:
+ *   Pendle Multi-Pool:  40% (11.7% APY)
+ *   Morpho Loop:        30% (11.5% APY)
+ *   Sky sUSDS:          20% (8% APY)
+ *   USDC Reserve:       10% (0% APY)
  *   ────────────────────────────────────
- *   Blended:                  ~12.5% gross APY
+ *   Blended:            ~10% gross APY
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~7.5% net APY target)
- *   Protocol:           40% (spread above target)
+ *   smUSD Holders:      60% (~6% net APY target)
+ *   Protocol:           40% (spread above 6%)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
@@ -354,8 +353,13 @@ contract TreasuryV2 is
         // Pull USDC from vault
         asset.safeTransferFrom(msg.sender, address(this), amount);
 
-        // All deposits sit in reserve — deploy manually via deployToStrategy() or rebalance()
-        allocations = new uint256[](strategies.length);
+        // Auto-allocate if above minimum
+        if (amount >= minAutoAllocateAmount) {
+            allocations = _autoAllocate(amount);
+        } else {
+            // Small deposits stay in reserve until next rebalance
+            allocations = new uint256[](strategies.length);
+        }
 
         lastRecordedValue = totalValue();
 
@@ -445,7 +449,12 @@ contract TreasuryV2 is
 
         asset.safeTransferFrom(from, address(this), amount);
 
-        // All deposits sit in reserve — deploy manually via deployToStrategy() or rebalance()
+        // Auto-allocate if above minimum
+        if (amount >= minAutoAllocateAmount) {
+            _autoAllocate(amount);
+        }
+
+        // is not mistaken for yield on the next _accrueFees() call.
         lastRecordedValue = totalValue();
 
         uint256[] memory allocs = new uint256[](0);
@@ -546,54 +555,6 @@ contract TreasuryV2 is
         }
 
         return allocations;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // MANUAL DEPLOYMENT (admin-triggered)
-    // ═══════════════════════════════════════════════════════════════════════
-
-    event ManualDeploy(address indexed strategy, uint256 amount, uint256 deposited);
-    event ManualWithdraw(address indexed strategy, uint256 amount, uint256 withdrawn);
-
-    /**
-     * @notice Manually deploy reserve USDC to a specific strategy
-     * @param strategy Strategy address to deploy to
-     * @param amount USDC amount to deploy from reserve
-     */
-    function deployToStrategy(address strategy, uint256 amount) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
-        if (!isStrategy[strategy]) revert StrategyNotFound();
-        if (amount == 0) revert ZeroAmount();
-
-        uint256 reserve = reserveBalance();
-        if (reserve < amount) revert InsufficientReserves();
-
-        _accrueFees();
-
-        asset.forceApprove(strategy, amount);
-        uint256 deposited = IStrategy(strategy).deposit(amount);
-        asset.forceApprove(strategy, 0);
-
-        lastRecordedValue = totalValue();
-
-        emit ManualDeploy(strategy, amount, deposited);
-    }
-
-    /**
-     * @notice Manually withdraw from a specific strategy back to reserve
-     * @param strategy Strategy address to withdraw from
-     * @param amount USDC amount to withdraw
-     */
-    function withdrawFromStrategy(address strategy, uint256 amount) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
-        if (!isStrategy[strategy]) revert StrategyNotFound();
-        if (amount == 0) revert ZeroAmount();
-
-        _accrueFees();
-
-        uint256 withdrawn = IStrategy(strategy).withdraw(amount);
-
-        lastRecordedValue = totalValue();
-
-        emit ManualWithdraw(strategy, amount, withdrawn);
     }
 
     /**

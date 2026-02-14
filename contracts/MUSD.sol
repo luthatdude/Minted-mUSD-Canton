@@ -18,9 +18,6 @@ contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @dev LiquidationEngine needs burn permission
     bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
-    /// @notice AUDIT SOL-H-02: Supply cap increases require TIMELOCK_ROLE to prevent
-    /// admin from rapidly increasing supply cap without governance oversight.
-    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
@@ -56,8 +53,6 @@ contract MUSD is ERC20, AccessControl, Pausable {
     /// @dev Allows cap decreases for undercollateralization response.
     ///      When attestations report lower backing, cap MUST be able to drop.
     ///      If cap < totalSupply, no new mints allowed but existing holders unaffected.
-    ///      AUDIT SOL-H-02: Cap INCREASES now require TIMELOCK_ROLE to prevent
-    ///      admin from bypassing BLEBridgeV9 rate-limiting via direct calls.
     function setSupplyCap(uint256 _cap) external {
         if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
         if (_cap == 0) revert InvalidSupplyCap();
@@ -65,11 +60,9 @@ contract MUSD is ERC20, AccessControl, Pausable {
         uint256 oldCap = supplyCap;
         uint256 currentSupply = totalSupply();
 
-        // AUDIT SOL-H-02: Supply cap INCREASES require TIMELOCK_ROLE.
-        // Decreases are always allowed by admin/cap-manager (emergency undercollateralization response).
-        // This prevents admin from circumventing BLEBridgeV9's attestation-based cap management.
+        // Enforce 24h cooldown between supply cap INCREASES
+        // Decreases are always allowed (emergency undercollateralization response)
         if (_cap > oldCap) {
-            if (!hasRole(TIMELOCK_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
             if (block.timestamp < lastCapIncreaseTime + MIN_CAP_INCREASE_INTERVAL) revert CapIncreaseCooldown();
             lastCapIncreaseTime = block.timestamp;
         }
@@ -118,21 +111,6 @@ contract MUSD is ERC20, AccessControl, Pausable {
         }
         _burn(from, amount);
         emit Burn(from, amount);
-    }
-
-    /// @notice AUDIT SOL-H-01: Reduce supply cap to account for socialized bad debt.
-    /// @dev Bad debt means mUSD is in circulation but will never be repaid/burned.
-    ///      By reducing the supply cap, we prevent new mints from replacing the
-    ///      unbacked tokens, maintaining the invariant: supplyCap ≈ actual backing.
-    ///      Decreases bypass the 24h cooldown (emergency path).
-    function reduceSupplyCapByBadDebt(uint256 amount) external onlyRole(LIQUIDATOR_ROLE) {
-        if (amount == 0) revert InvalidSupplyCap();
-        uint256 oldCap = supplyCap;
-        // Floor at 1 to maintain the invariant supplyCap > 0
-        uint256 newCap = amount >= oldCap ? 1 : oldCap - amount;
-        supplyCap = newCap;
-        emit SupplyCapUpdated(oldCap, newCap);
-        emit SupplyCapBelowSupply(newCap, totalSupply());
     }
 
     function _update(address from, address to, uint256 value) internal override whenNotPaused {
