@@ -7,7 +7,9 @@
 
 ---
 
-## Composite Score: 59 / 100
+## Composite Score: 59 / 100 -> 89 / 100 (post-remediation)
+
+### Pre-Remediation Scores (2026-02-14 initial audit)
 
 | Domain | Findings | Crit | High | Med | Low | Info | Score | Verdict |
 |--------|----------|------|------|-----|-----|------|-------|---------|
@@ -18,24 +20,42 @@
 | **Bridge (Cross-Layer)** | 23 | 3 | 4 | 7 | 5 | 4 | **28/100** | Not Ready |
 | **TOTAL** | **116** | **6** | **14** | **38** | **33** | **25** | | |
 
+### Post-Remediation Scores (2026-02-14 re-audit)
+
+| Domain | Remediated | Open | New | Score | Delta | Verdict |
+|--------|-----------|------|-----|-------|-------|---------|
+| **Solidity** | 10/10 | 0 Crit/High/Med | 1 Low | **85/100** | -2 | Ready |
+| **DAML** | 16/16 | 0 | 0 | **91/100** | +29 | Ready |
+| **TypeScript** | 8/8 | 0 | 0 | **81/100** | -1 | Ready |
+| **Infrastructure** | 21/21 | 0 | 0 | **96/100** | +22 | Ready |
+| **Bridge (Cross-Layer)** | 12/12 | 1 Med (accepted) | 1 High (fixed) | **91/100** | +63 | Ready |
+
+**Post-Remediation Composite: 0.25(85) + 0.20(91) + 0.15(81) + 0.15(96) + 0.25(91) = 89.35 -> 89/100**
+
 *Composite weighted: Solidity 25%, DAML 20%, TypeScript 15%, Infra 15%, Bridge 25%*
 
 ---
 
 ## Severity Distribution
 
-| Severity | Count |
-|----------|-------|
-| CRITICAL | 6 |
-| HIGH | 14 |
-| MEDIUM | 38 |
-| LOW | 33 |
-| INFORMATIONAL | 25 |
-| **TOTAL** | **116** |
+| Severity | Count | Remediated | Open | New (fixed) |
+|----------|-------|-----------|------|-------------|
+| CRITICAL | 6 | 6 | 0 | 0 |
+| HIGH | 14 | 14 | 0 | 1 (fixed) |
+| MEDIUM | 38 | 37 | 1 (accepted) | 0 |
+| LOW | 33 | — | 33 | 1 |
+| INFORMATIONAL | 25 | — | 25 | 0 |
+| **TOTAL** | **116** | **57** | **59** | **2** |
+
+**All 6 Critical + 14 High + 37 of 38 Medium findings are REMEDIATED.**
+- 1 Medium (BRIDGE-M-04: permissionless processAttestation) accepted with 4 documented compensating controls and tracked TODO
+- 1 new High (BRIDGE-NEW-01: signature sort hash mismatch) discovered and fixed during re-audit
+- 1 new Low (SOL-NEW-01: missing TIMELOCK_ROLE self-admin in 3 non-upgradeable contracts) — these are legacy, superseded by upgradeable counterparts
+- 33 Low + 25 Informational findings remain non-blocking for formal audit handoff
 
 ---
 
-## CRITICAL Findings (6) — Must Fix Before Handoff
+## CRITICAL Findings (6) — ~~Must Fix Before Handoff~~ ALL REMEDIATED
 
 ### Bridge Critical (3) — Canton-to-Ethereum Flow Is Non-Functional
 
