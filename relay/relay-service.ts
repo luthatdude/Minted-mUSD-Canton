@@ -518,7 +518,7 @@ class RelayService {
 
       // Bridge it
       console.log(`[Relay] Bridging attestation ${attestationId}...`);
-      await this.bridgeAttestation(payload, validatorSigs);
+      await this.bridgeAttestation(payload, validatorSigs, attestation);
       processedThisCycle++;
     }
 
@@ -547,7 +547,8 @@ class RelayService {
    */
   private async bridgeAttestation(
     payload: AttestationPayload,
-    validatorSigs: ValidatorSignature[]
+    validatorSigs: ValidatorSignature[],
+    attestation: CreateEvent<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
@@ -658,6 +659,24 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+
+        // SECURITY FIX BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
+        // the attestation request. Without this, stale attestation contracts remain on
+        // the Canton ledger, causing the relay to re-process them on every poll cycle
+        // (retry storms) and leaving DAML state inconsistent with Ethereum.
+        try {
+          await (this.ledger.exercise as any)(
+            "MintedProtocolV3:AttestationRequest",
+            attestation.contractId,
+            "Attestation_Complete",
+            {}
+          );
+          console.log(`[Relay] Attestation ${attestationId} marked complete on Canton`);
+        } catch (completeError: any) {
+          // Non-fatal: attestation is already bridged on Ethereum.
+          // The DAML contract will be cleaned up on next attempt or manually.
+          console.warn(`[Relay] Failed to complete attestation on Canton (non-fatal): ${completeError.message}`);
+        }
 
         // Trigger auto-deploy to yield strategies if configured
         if (this.config.triggerAutoDeploy && this.config.treasuryAddress) {

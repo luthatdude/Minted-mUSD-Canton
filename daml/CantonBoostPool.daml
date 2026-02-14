@@ -213,7 +213,11 @@ template CantonBoostPoolService
         smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
         assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
 
-        archive smusdCid
+        -- SECURITY FIX DAML-H-06: Removed archive+recreate pattern. Previously the
+        -- sMUSD was archived and recreated with a new ContractId, breaking any external
+        -- references (e.g., from lending escrow or other contracts). The BoostPool only
+        -- needs to READ the sMUSD to verify ownership and calculate the deposit cap —
+        -- it does not need to consume the token. The sMUSD remains untouched.
 
         -- Calculate deposit cap from sMUSD value
         let smusdValueMusd = smusd.shares * globalSharePrice
@@ -241,15 +245,7 @@ template CantonBoostPoolService
               cumulativeCantonValue = cantonValueMusd
             pure ()
 
-        -- Recreate sMUSD (gives it back to user but with a new contract ID)
         now <- getTime
-        _newSmusdCid <- create CantonSMUSD with
-          issuer = operator
-          owner = user
-          shares = smusd.shares
-          entrySharePrice = smusd.entrySharePrice
-          stakedAt = smusd.stakedAt
-          privacyObservers = smusd.privacyObservers
 
         -- Apply entry fee
         let feeAmount = canton.amount * intToNumeric entryFeeBps / 10000.0

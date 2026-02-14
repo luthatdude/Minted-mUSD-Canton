@@ -40,11 +40,22 @@ import * as fs from "fs";
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
 
-// Warn operators that V1 is deprecated and incompatible with V2 signatures
+// SECURITY FIX BRIDGE-H-04: V1 validator produces signatures with a 7-parameter hash
+// (missing cantonStateHash) while V2 uses 8 parameters matching BLEBridgeV9 on-chain.
+// Mixed V1/V2 signatures silently reduce the effective validator count below the BFT
+// threshold, potentially blocking all attestations. V1 is now hard-disabled.
+if (process.env.ALLOW_V1_VALIDATOR !== "true") {
+  console.error(
+    "FATAL: validator-node.ts (V1) is DISABLED. V1 signatures are incompatible with " +
+    "BLEBridgeV9 on-chain verification and will silently reduce effective security. " +
+    "Migrate to validator-node-v2.ts. Set ALLOW_V1_VALIDATOR=true to override (NOT recommended)."
+  );
+  process.exit(1);
+}
 console.warn(
-  "[DEPRECATED] validator-node.ts (V1) uses a 7-parameter message hash WITHOUT cantonStateHash. " +
-  "V2 uses 8 parameters. Mixed V1/V2 validators will produce incompatible signatures. " +
-  "Migrate all validators to validator-node-v2.ts before enabling cantonStateHash verification."
+  "[DEPRECATED] validator-node.ts (V1) is running with ALLOW_V1_VALIDATOR override. " +
+  "V1 uses a 7-parameter message hash WITHOUT cantonStateHash — signatures are INCOMPATIBLE " +
+  "with V2 and BLEBridgeV9. Migrate ALL validators to validator-node-v2.ts immediately."
 );
 
 // ============================================================
@@ -400,7 +411,7 @@ class ValidatorNode {
       await (this.ledger.exercise as any)(
         "MintedProtocolV3:AttestationRequest",
         contractId,
-        "ProvideSignature",
+        "Attestation_Sign",
         {
           validator: this.config.validatorParty,
           ecdsaSignature: signature,

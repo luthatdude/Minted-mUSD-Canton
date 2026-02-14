@@ -398,6 +398,12 @@ template CantonLoopRequest
         case cfg.complianceRegistryCid of
           Some regCid -> exercise regCid ValidateMint with minter = user
           None -> pure ()
+        -- SECURITY FIX DAML-C-03: Validate USDC issuer matches operator before
+        -- archiving dual-signatory token to prevent runtime authorization failures.
+        usdc <- fetch initialUsdcCid
+        assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
+        assertMsg "USDC_OWNER_MUST_BE_USER" (usdc.owner == user)
+
         -- Archive the USDC (deposited into strategy)
         archive initialUsdcCid
         now <- getTime
@@ -462,11 +468,19 @@ template CantonUnwindRequest
         -- Validate minimum return floor (10% of original deposit)
         let minReturn = totalDeposited * 0.1
         assertMsg "RETURN_BELOW_MINIMUM" (usdcReturned >= minReturn)
-        -- Archive sMUSD positions
-        _ <- mapA archive smusdToArchive
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator on all
+        -- dual-signatory tokens before archiving to prevent runtime failures.
+        _ <- mapA (\smusdCid -> do
+          smusd <- fetch smusdCid
+          assertMsg "SMUSD_ISSUER_MUST_BE_OPERATOR" (smusd.issuer == operator)
+          archive smusdCid
+          ) smusdToArchive
         -- Burn mUSD if provided
         case musdToBurn of
-          Some musdCid -> archive musdCid
+          Some musdCid -> do
+            musd <- fetch musdCid
+            assertMsg "MUSD_ISSUER_MUST_BE_OPERATOR" (musd.issuer == operator)
+            archive musdCid
           None -> pure ()
         -- Archive the unwinding position
         archive positionCid

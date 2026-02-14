@@ -621,7 +621,7 @@ class ValidatorNode {
       await (this.ledger.exercise as any)(
         "MintedProtocolV3:AttestationRequest",
         contractId,
-        "ProvideSignature",
+        "Attestation_Sign",
         {
           validator: this.config.validatorParty,
           ecdsaSignature: signature,
