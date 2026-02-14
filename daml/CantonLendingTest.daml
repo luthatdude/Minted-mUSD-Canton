@@ -164,10 +164,24 @@ testPriceFeedEmergencyOverride = do
   -- Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
   -- Emergency update bypasses movement cap
+  emergencyTime <- getTime
+  govProof <- submit setup.operator do
+    createCmd GovernanceActionLog with
+      operator = setup.operator
+      proposalId = "test-emergency-1"
+      actionType = EmergencyPause
+      description = "Flash crash on Temple DEX"
+      payload = ""
+      payloadHash = testMpaHash
+      targetModule = "CantonLending"
+      approvers = [setup.operator]
+      executedBy = setup.operator
+      executedAt = emergencyTime
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.05       -- 70% drop — would fail normal update
       reason = "Flash crash on Temple DEX"
+      governanceProofCid = govProof
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Emergency price set" ((fromSome feed).priceUsd == 0.05)
   debug "✅ 4. Emergency price override"
@@ -465,10 +479,24 @@ testLiquidation = do
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
   -- Advance time past the 5-minute emergency update cooldown
   passTime (minutes 6)
+  emergencyTime2 <- getTime
+  govProof2 <- submit setup.operator do
+    createCmd GovernanceActionLog with
+      operator = setup.operator
+      proposalId = "test-emergency-crash"
+      actionType = EmergencyPause
+      description = "CTN crash"
+      payload = ""
+      payloadHash = testMpaHash
+      targetModule = "CantonLending"
+      approvers = [setup.operator]
+      executedBy = setup.operator
+      executedAt = emergencyTime2
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
+      governanceProofCid = govProof2
 
   -- Liquidator gets mUSD to repay
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do

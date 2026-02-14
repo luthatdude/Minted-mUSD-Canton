@@ -721,6 +721,7 @@ template Vault
         (initialPoolCid, initialColOut) <- exercise poolCid Swap_mUSD_For_Collateral with
           musdCid = initialMusdCid
           receiver = owner
+          complianceRegistryCid = complianceRegistryCid
 
         let initialCol = newCollateral + initialColOut
 
@@ -741,6 +742,7 @@ template Vault
                   (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
                     musdCid = musdCid
                     receiver = owner
+                    complianceRegistryCid = complianceRegistryCid
                   return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
 
         -- DAML-M-04: Use currentTotalDebt (with accrued interest) as the starting debt for loops

@@ -106,6 +106,10 @@ testMintStakeUnstakeFlow = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      musdMintCap = 1000000.0
+      currentUnstakeMinted = 0.0
+      directMintServiceName = "test-mint-service"
+      globalMintCap = 10000000.0
       observers = [alice]
 
   -- Step 3: Alice stakes mUSD → gets smUSD shares
@@ -254,6 +258,10 @@ testSharePriceSyncWithinBounds = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      musdMintCap = 1000000.0
+      currentUnstakeMinted = 0.0
+      directMintServiceName = "test-mint-service"
+      globalMintCap = 10000000.0
       observers = [alice]
 
   -- Sync to 1.05 (5% increase — within 10% cap)
@@ -300,6 +308,10 @@ testSharePriceIncreaseTooLargeRejected = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      musdMintCap = 1000000.0
+      currentUnstakeMinted = 0.0
+      directMintServiceName = "test-mint-service"
+      globalMintCap = 10000000.0
       observers = []
 
   -- Try to increase price by 15% (1.0 → 1.15) — should be rejected (max 10%)
@@ -341,6 +353,10 @@ testSharePriceDecreaseTooLargeRejected = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      musdMintCap = 1000000.0
+      currentUnstakeMinted = 0.0
+      directMintServiceName = "test-mint-service"
+      globalMintCap = 10000000.0
       observers = []
 
   -- Try to decrease price by 15% (1.0 → 0.85) — should be rejected (max 10%)
@@ -424,10 +440,24 @@ testLiquidationFlow = do
 
   -- Crash price → position undercollateralized
   passTime (minutes 6)
+  emergencyTime <- getTime
+  govProof <- submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-emergency-1"
+      actionType = EmergencyPause
+      description = "CTN crash"
+      payload = ""
+      payloadHash = testMpaHash
+      targetModule = "CantonLending"
+      approvers = [operator]
+      executedBy = operator
+      executedAt = emergencyTime
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
+      governanceProofCid = govProof
 
   -- Keeper gets mUSD for repayment
   liqMusdCid <- submitMulti [operator, keeper] [] do
