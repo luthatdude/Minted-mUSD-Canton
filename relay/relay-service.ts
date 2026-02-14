@@ -705,7 +705,7 @@ class RelayService {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
 
-        // SECURITY FIX BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
+        // BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
         // the attestation request. Without this, stale attestation contracts remain on
         // the Canton ledger, causing the relay to re-process them on every poll cycle
         // (retry storms) and leaving DAML state inconsistent with Ethereum.

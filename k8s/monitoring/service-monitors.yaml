@@ -90,7 +90,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label to match deployment labels
+      # INFRA-H-01: Use standard K8s label to match deployment labels
       app.kubernetes.io/name: bridge-relay
   podMetricsEndpoints:
     - port: health
@@ -111,7 +111,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label
+      # INFRA-H-01: Use standard K8s label
       app.kubernetes.io/name: price-oracle
   podMetricsEndpoints:
     - port: health
@@ -132,7 +132,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label
+      # INFRA-H-01: Use standard K8s label
       app.kubernetes.io/name: yield-sync
   podMetricsEndpoints:
     - port: health

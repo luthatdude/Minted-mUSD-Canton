@@ -7,13 +7,13 @@
 --   1. Mint → Stake → Unstake (CantonDirectMint × CantonSMUSD)
 --   2. Deposit → Borrow → Repay → Withdraw (CantonLending full cycle)
 --   3. Share price sync within bounds (CantonSMUSD)
---   4. Share price increase > 10% rejected (CantonSMUSD FIX D-M09)
+--   4. Share price increase > 10% rejected (CantonSMUSD D-M09)
 --   5. Share price decrease > 10% rejected (CantonSMUSD)
 --   6. Liquidation of undercollateralized position (CantonLending)
 --   7. Healthy position cannot be liquidated (CantonLending)
---   8. sMUSD escrowed in Lending blocked from BoostPool (FIX D-M04)
---   9. Compliance blocks blacklisted transfers (FIX D-M08)
---  10. Supply cap coordination between Lending and DirectMint (FIX D-M02)
+--   8. sMUSD escrowed in Lending blocked from BoostPool (D-M04)
+--   9. Compliance blocks blacklisted transfers (D-M08)
+--  10. Supply cap coordination between Lending and DirectMint (D-M02)
 
 module CrossModuleIntegrationTest where
 
@@ -273,7 +273,7 @@ testSharePriceSyncWithinBounds = do
   debug "✅ Integration 3: Share price sync within bounds"
 
 -- ============================================================
---  4. INTEGRATION: SHARE PRICE INCREASE > 10% REJECTED (FIX D-M09)
+--  4. INTEGRATION: SHARE PRICE INCREASE > 10% REJECTED (D-M09)
 -- ============================================================
 
 testSharePriceIncreaseTooLargeRejected : Script ()
@@ -311,7 +311,7 @@ testSharePriceIncreaseTooLargeRejected = do
       epochNumber = 1
       attestationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
       validatorCount = 3
-  debug "✅ Integration 4: Share price increase >10% rejected (FIX D-M09)"
+  debug "✅ Integration 4: Share price increase >10% rejected (D-M09)"
 
 -- ============================================================
 --  5. INTEGRATION: SHARE PRICE DECREASE > 10% REJECTED
@@ -546,10 +546,10 @@ testHealthyPositionNotLiquidatable = do
   debug "✅ Integration 7: Healthy position cannot be liquidated"
 
 -- ============================================================
---  8. NOTE: sMUSD ESCROWED IN LENDING → BOOSTPOOL BLOCKED (FIX D-M04)
+--  8. NOTE: sMUSD ESCROWED IN LENDING → BOOSTPOOL BLOCKED (D-M04)
 --     CantonLending × CantonBoostPool cross-module invariant
 --
---     This test validates FIX D-M04 — preventing a user from using
+--     This test validates D-M04 — preventing a user from using
 --     sMUSD that is already escrowed as lending collateral to qualify for
 --     BoostPool deposits. The Deposit choice now checks via lookupByKey
 --     that no EscrowedCollateral exists for (operator, user, CTN_SMUSD).
@@ -559,7 +559,7 @@ testHealthyPositionNotLiquidatable = do
 -- ============================================================
 
 -- ============================================================
---  9. INTEGRATION: COMPLIANCE BLOCKS BLACKLISTED TRANSFERS (FIX D-M08)
+--  9. INTEGRATION: COMPLIANCE BLOCKS BLACKLISTED TRANSFERS (D-M08)
 --     CantonDirectMint × Compliance cross-module
 -- ============================================================
 
@@ -590,10 +590,10 @@ testComplianceBlocksBlacklistedTransfer = do
     exerciseCmd musdCid CantonMUSD_Transfer with
       newOwner = bob
       complianceRegistryCid = complianceCid
-  debug "✅ Integration 9: Compliance blocks transfer to blacklisted party (FIX D-M08)"
+  debug "✅ Integration 9: Compliance blocks transfer to blacklisted party (D-M08)"
 
 -- ============================================================
---  10. INTEGRATION: SUPPLY CAP COORDINATION (FIX D-M02)
+--  10. INTEGRATION: SUPPLY CAP COORDINATION (D-M02)
 --      CantonLending × CantonDirectMint cross-module
 -- ============================================================
 
@@ -607,7 +607,7 @@ testSupplyCapCoordination = do
 
   complianceCid <- createTestComplianceRegistry regulator operator
 
-  -- Create DirectMintService with a key — tests FIX D-M02
+  -- Create DirectMintService with a key — tests D-M02
   _dmServiceCid <- submit operator do
     createCmd CantonDirectMintService with
       operator
@@ -633,7 +633,7 @@ testSupplyCapCoordination = do
       mpaHash = testMpaHash
       mpaUri = testMpaUri
       authorizedMinters = [user]
-      serviceName = "default"  -- FIX D-M02: Key field for cross-module lookup
+      serviceName = "default"  -- D-M02: Key field for cross-module lookup
 
   -- Create Lending service pointing to the DirectMint service
   ctnFeedCid <- submit operator do
@@ -686,4 +686,4 @@ testSupplyCapCoordination = do
       borrowAmount = 11000000.0
       escrowCids = [escrowCid]
       priceFeedCids = [ctnFeedCid]
-  debug "✅ Integration 10: Supply cap coordination between Lending + DirectMint (FIX D-M02)"
+  debug "✅ Integration 10: Supply cap coordination between Lending + DirectMint (D-M02)"

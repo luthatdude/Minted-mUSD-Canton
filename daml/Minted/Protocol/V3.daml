@@ -191,7 +191,7 @@ template MUSDSupplyService
         assertMsg "THRESHOLD_MUST_BE_POSITIVE" (newThreshold > 0.0)
         create this with largeMintThreshold = newThreshold
 
-    -- SECURITY FIX DAML-H-01: Decrement currentSupply when mUSD is burned (repay/liquidation).
+    -- DAML-H-01: Decrement currentSupply when mUSD is burned (repay/liquidation).
     -- Without this, the supply cap is never freed up even though actual supply decreases,
     -- eventually bricking all new minting once the cap is reached.
     choice SupplyService_Burn : ContractId MUSDSupplyService
@@ -436,7 +436,7 @@ template PriceOracle
         assertMsg "PRICE_STALE" (age <= maxStaleness)
         return price
 
-    -- FIX D-M-04: Unsafe price query that skips staleness check.
+    -- D-M-04: Unsafe price query that skips staleness check.
     -- Used exclusively by liquidation paths where blocking on stale data
     -- would allow bad debt to accumulate during oracle outages.
     nonconsuming choice Oracle_GetPriceUnsafe : Money
@@ -720,7 +720,7 @@ template Vault
 
     -- | Repay debt
     -- DAML-H-05: Added token verification (blacklist check + issuer match)
-    -- SECURITY FIX DAML-H-01: Added supplyServiceCid to decrement global supply on repay
+    -- DAML-H-01: Added supplyServiceCid to decrement global supply on repay
     choice Vault_Repay : (ContractId Vault, ContractId MUSDSupplyService)
       with
         repayAmount : Money
@@ -795,7 +795,7 @@ template Vault
         create this with collateralAmount = newCollateral
 
     -- | Liquidate - Called by keepers when vault is undercollateralized
-    -- SECURITY FIX DAML-H-01: Added supplyServiceCid to decrement global supply on liquidation
+    -- DAML-H-01: Added supplyServiceCid to decrement global supply on liquidation
     choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt, ContractId MUSDSupplyService)
       with
         liquidator : Party
@@ -820,7 +820,7 @@ template Vault
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         let totalDebt = principalDebt + accruedInterest + newInterest
         
-        -- FIX D-M-04: Use Oracle_GetPriceUnsafe for liquidation path.
+        -- D-M-04: Use Oracle_GetPriceUnsafe for liquidation path.
         -- During volatile markets, Oracle_GetPrice may reject stale data,
         -- blocking liquidations and allowing bad debt to accumulate.
         -- Liquidations MUST proceed with the latest available price.
@@ -861,7 +861,7 @@ template Vault
         
         -- Update vault
         let newCollateral = collateralAmount - actualSeize
-        -- SECURITY FIX DAML-H-02: Properly separate principal and interest after
+        -- DAML-H-02: Properly separate principal and interest after
         -- partial liquidation. Previously stored all remaining debt as principalDebt
         -- with accruedInterest = 0, silently switching to compound interest.
         -- Repay interest first, then principal (matches Vault_Repay logic).
@@ -1084,7 +1084,7 @@ template CantonDirectMint
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
 
-        -- SECURITY FIX DAML-C-01: Validate deposit issuer matches operator before
+        -- DAML-C-01: Validate deposit issuer matches operator before
         -- archiving dual-signatory token. Without this check, archive fails at runtime
         -- if deposit.issuer != operator, bricking mint operations.
         assertMsg "DEPOSIT_ISSUER_MUST_BE_OPERATOR" (deposit.issuer == operator)
@@ -1280,7 +1280,7 @@ template CantonSMUSD
         let cooldownMicros = ticket.cooldownSeconds * 1000000
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
-        -- FIX DAML-H-05 / D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
+        -- DAML-H-05 / D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
         -- Previously used raw division: totalAssets / totalShares
         -- Deposit used virtual offset: (totalAssets + 1000.0) / (totalShares + 1000.0)
         -- This asymmetry meant depositors paid a higher price than withdrawers received,
@@ -1454,7 +1454,7 @@ template BridgeService
       && lastNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
-    -- SECURITY FIX DAML-C-02: Route minting through MUSDSupplyService to enforce
+    -- DAML-C-02: Route minting through MUSDSupplyService to enforce
     -- global supply cap. Previously minted mUSD directly without cap check, allowing
     -- unbounded minting via bridge.
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD, ContractId MUSDSupplyService)
