@@ -82,8 +82,10 @@ spec:
               memory: 32Mi
         # INFRA-CRIT-01: Generate JWT token for JSON API authentication
         # Uses the jwt-secret from json-api-credentials to create a signed token
+        # FIX(INFRA-C-01): Use alpine instead of busybox — busybox lacks openssl,
+        # which is required by the HMAC-SHA256 JWT signing command below.
         - name: generate-json-api-token
-          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          image: alpine:3.19@sha256:c5b1261d6d3e43071626931fc004f70149baeba2c8ec672bd4f27761f8e1ad6b
           command:
             - sh
             - -c
