@@ -283,7 +283,9 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         emit LimitsUpdated(_minMint, _maxMint, _minRedeem, _maxRedeem);
     }
 
-    function setFeeRecipient(address _recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Update fee recipient — requires timelock governance to prevent
+    ///         instant fee redirection by a compromised admin.
+    function setFeeRecipient(address _recipient) external onlyRole(TIMELOCK_ROLE) {
         if (_recipient == address(0)) revert InvalidRecipient();
         address old = feeRecipient;
         feeRecipient = _recipient;
