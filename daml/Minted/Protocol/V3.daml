@@ -360,6 +360,7 @@ template MUSDTransferProposal
     agreementHash : Text
     agreementUri : Text
     observers : [Party]
+    complianceRegistryCid : ContractId ComplianceRegistry
   where
     signatory issuer, sender
     observer receiver :: observers
@@ -370,6 +371,8 @@ template MUSDTransferProposal
     choice TransferProposal_Accept : ContractId MintedMUSD
       controller receiver
       do
+        -- Re-validate compliance at acceptance time (TOCTOU protection)
+        exercise complianceRegistryCid ValidateTransfer with sender = sender; receiver = receiver
         create MintedMUSD with
           issuer
           owner = receiver

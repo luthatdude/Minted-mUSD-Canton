@@ -64,8 +64,8 @@ template CantonUSDC
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- DAML-M-05: Validate recipient is not blacklisted/frozen
-        exercise complianceRegistryCid ValidateMint with minter = newOwner
+        -- DAML-M-05: Validate both sender and recipient compliance
+        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
         create CantonUSDCTransferProposal with
           usdc = this
           newOwner
