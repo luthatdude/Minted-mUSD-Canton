@@ -605,11 +605,17 @@ class LiquidationBot {
       logger.warn(`Chainlink ETH/USD read failed, falling back to API: ${e}`);
     }
     try {
-      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
       const data = await res.json() as { ethereum?: { usd?: number } };
-      if (data.ethereum?.usd && data.ethereum.usd > 0) {
+      if (data.ethereum?.usd && data.ethereum.usd > 100 && data.ethereum.usd < 100_000) {
         return data.ethereum.usd;
       }
+      logger.warn(`CoinGecko ETH/USD price out of range: ${data.ethereum?.usd}`);
     } catch (e) {
       logger.warn(`CoinGecko ETH/USD fetch failed: ${e}`);
     }
