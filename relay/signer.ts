@@ -239,9 +239,13 @@ export function sortSignaturesBySignerAddress(
   signatures: string[],
   messageHash: string
 ): string[] {
+  // BRIDGE-NEW-01 FIX: Apply EIP-191 prefix before recovery, matching Solidity's
+  // toEthSignedMessageHash(). Validators sign the EIP-191 prefixed hash, and Solidity
+  // recovers from the prefixed hash, so we must use the same digest for address recovery
+  // to ensure the sort order matches what Solidity will compute on-chain.
+  const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
   const signerPairs = signatures.map((sig) => {
-    // Use recoverAddress instead of verifyMessage (consistent with formatKMSSignature)
-    const signer = ethers.recoverAddress(messageHash, sig);
+    const signer = ethers.recoverAddress(ethSignedHash, sig);
     return { signature: sig, signer: signer.toLowerCase() };
   });
 
