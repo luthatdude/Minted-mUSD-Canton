@@ -27,6 +27,8 @@ interface IAggregatorV3 {
 contract PriceOracle is AccessControl {
     bytes32 public constant ORACLE_ADMIN_ROLE = keccak256("ORACLE_ADMIN_ROLE");
     bytes32 public constant KEEPER_ROLE = keccak256("KEEPER_ROLE");
+    /// @notice SOL-H-04 FIX: Critical feed/circuit-breaker changes require 48h timelock
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     struct FeedConfig {
         IAggregatorV3 feed;
@@ -61,7 +63,8 @@ contract PriceOracle is AccessControl {
         _grantRole(KEEPER_ROLE, msg.sender);
     }
 
-    function setCircuitBreakerCooldown(uint256 _cooldown) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @dev SOL-H-04 FIX: Timelock-gated — cooldown affects circuit breaker recovery timing
+    function setCircuitBreakerCooldown(uint256 _cooldown) external onlyRole(TIMELOCK_ROLE) {
         if (_cooldown < 15 minutes || _cooldown > 24 hours) revert CooldownOutOfRange();
         emit CircuitBreakerCooldownUpdated(circuitBreakerCooldown, _cooldown);
         circuitBreakerCooldown = _cooldown;
@@ -86,18 +89,21 @@ contract PriceOracle is AccessControl {
         emit KeeperRecovery(token, msg.sender, newPrice);
     }
 
-    function setMaxDeviation(uint256 _maxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @dev SOL-H-04 FIX: Timelock-gated — deviation threshold is a critical safety parameter
+    function setMaxDeviation(uint256 _maxDeviationBps) external onlyRole(TIMELOCK_ROLE) {
         if (_maxDeviationBps < 100 || _maxDeviationBps > 5000) revert DeviationOutOfRange();
         emit MaxDeviationUpdated(maxDeviationBps, _maxDeviationBps);
         maxDeviationBps = _maxDeviationBps;
     }
 
-    function setCircuitBreakerEnabled(bool _enabled) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @dev SOL-H-04 FIX: Timelock-gated — toggling circuit breaker is irreversible for current block
+    function setCircuitBreakerEnabled(bool _enabled) external onlyRole(TIMELOCK_ROLE) {
         circuitBreakerEnabled = _enabled;
         emit CircuitBreakerToggled(_enabled);
     }
 
-    function resetLastKnownPrice(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @dev SOL-H-04 FIX: Kept on KEEPER_ROLE (not timelock) for emergency circuit breaker recovery
+    function resetLastKnownPrice(address token) external onlyRole(KEEPER_ROLE) {
         FeedConfig storage config = feeds[token];
         if (!config.enabled) revert FeedNotEnabled();
         (, int256 answer, , , ) = config.feed.latestRoundData();
@@ -118,7 +124,8 @@ contract PriceOracle is AccessControl {
         uint256 stalePeriod,
         uint8 tokenDecimals,
         uint256 assetMaxDeviationBps
-    ) external onlyRole(ORACLE_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
+        // SOL-H-04 FIX: Feed changes are timelock-gated to prevent single-block oracle swap attacks
         if (token == address(0)) revert InvalidToken();
         if (feed == address(0)) revert InvalidFeed();
         if (stalePeriod == 0) revert InvalidStalePeriod();
@@ -159,7 +166,8 @@ contract PriceOracle is AccessControl {
 
     /// @notice Remove a price feed
     ///      state if the same token is later re-added with a new feed.
-    function removeFeed(address token) external onlyRole(ORACLE_ADMIN_ROLE) {
+    /// @dev SOL-H-04 FIX: Timelock-gated — removing a feed breaks all pricing for the asset
+    function removeFeed(address token) external onlyRole(TIMELOCK_ROLE) {
         if (!feeds[token].enabled) revert FeedNotFound();
         delete feeds[token];
         delete lastKnownPrice[token];
