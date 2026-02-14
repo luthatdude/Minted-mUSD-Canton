@@ -1,96 +1,163 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { StatCard } from "@/components/StatCard";
 import LeverageSlider from "@/components/LeverageSlider";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
 
-// DAML template IDs - adjust package ID as needed
+// ---------------------------------------------------------------------------
+//  DAML template IDs — CantonLoopStrategy module
+// ---------------------------------------------------------------------------
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "your-package-id";
-const VAULT_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`;
-const COLLATERAL_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:Collateral`;
-const POOL_TEMPLATE = `${PACKAGE_ID}:MintedProtocol:LiquidityPool`;
-const ORACLE_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`;
-const LEVERAGE_MANAGER_TEMPLATE = `${PACKAGE_ID}:MintedProtocol:LeverageManager`;
-const MUSD_TEMPLATE = `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`;
+const LOOP_SERVICE_TEMPLATE  = `${PACKAGE_ID}:CantonLoopStrategy:CantonLoopStrategyService`;
+const LOOP_REQUEST_TEMPLATE  = `${PACKAGE_ID}:CantonLoopStrategy:CantonLoopRequest`;
+const LOOP_POSITION_TEMPLATE = `${PACKAGE_ID}:CantonLoopStrategy:CantonLoopPosition`;
+const LOOP_CONFIG_TEMPLATE   = `${PACKAGE_ID}:CantonLoopStrategy:CantonLoopStrategyConfig`;
+const USDC_TEMPLATE   = `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`;
+const USDCX_TEMPLATE  = `${PACKAGE_ID}:CantonDirectMint:USDCx`;
+const CTN_TEMPLATE     = `${PACKAGE_ID}:CantonCoinToken:CantonCoin`;
 
+// ---------------------------------------------------------------------------
+//  Collateral type config  (mirrors DAML LoopDepositType)
+// ---------------------------------------------------------------------------
+type DepositType = "LoopDeposit_USDC" | "LoopDeposit_USDCx" | "LoopDeposit_CTN";
+
+interface CollateralOption {
+  depositType: DepositType;
+  label: string;
+  symbol: string;
+  icon: string;
+  templateId: string;
+  ltvBps: number;        // target LTV in bps (from LoopConfig)
+  maxLeverageX10: number; // hard UI cap: slider max = f(LTV, maxLoops)
+}
+
+/** Geometric leverage for N loops at a given LTV ratio */
+function calcLeverage(ltv: number, loops: number): number {
+  if (loops <= 1) return 1;
+  let acc = 1;
+  let power = 1;
+  for (let i = 1; i < loops; i++) {
+    power *= ltv;
+    acc += power;
+  }
+  return acc;
+}
+
+/** Inverse: how many loops to reach a target leverage */
+function loopsForLeverage(ltv: number, target: number, maxLoops: number): number {
+  for (let n = 1; n <= maxLoops; n++) {
+    if (calcLeverage(ltv, n) >= target) return n;
+  }
+  return maxLoops;
+}
+
+// ---------------------------------------------------------------------------
+//  Component
+// ---------------------------------------------------------------------------
 export function CantonLeverage() {
   const loopWallet = useLoopWallet();
-  
+
+  // ---- form state ----
+  const [depositType, setDepositType] = useState<DepositType>("LoopDeposit_USDC");
   const [depositAmount, setDepositAmount] = useState("");
-  const [leverageX10, setLeverageX10] = useState(20); // Default 2x
-  const [slippageBps, setSlippageBps] = useState("50"); // H-09: Default 0.5% slippage tolerance
+  const [leverageX10, setLeverageX10] = useState(20); // 2.0x
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Contract IDs
-  const [collateralCid, setCollateralCid] = useState("");
-  const [vaultCid, setVaultCid] = useState("");
-  const [poolCid, setPoolCid] = useState("");
-  const [oracleCid, setOracleCid] = useState("");
+  // ---- on-ledger contracts ----
+  const [usdcTokens, setUsdcTokens]   = useState<LoopContract[]>([]);
+  const [usdcxTokens, setUsdcxTokens] = useState<LoopContract[]>([]);
+  const [ctnTokens, setCtnTokens]     = useState<LoopContract[]>([]);
+  const [positions, setPositions]      = useState<LoopContract[]>([]);
+  const [serviceCid, setServiceCid]    = useState<string | null>(null);
+  const [configCid, setConfigCid]      = useState<string | null>(null);
+  const [loopConfig, setLoopConfig]    = useState<{ maxLoops: number; targetLtvBps: number; ctnTargetLtvBps: number; minHealthFactorBps: number } | null>(null);
 
-  // State
-  const [collaterals, setCollaterals] = useState<LoopContract[]>([]);
-  const [vaults, setVaults] = useState<LoopContract[]>([]);
-  const [pools, setPools] = useState<LoopContract[]>([]);
-  const [leverageManagers, setLeverageManagers] = useState<LoopContract[]>([]);
-  const [hasPosition, setHasPosition] = useState(false);
-  const [currentVault, setCurrentVault] = useState<any>(null);
+  // ---- collateral options (derived from on-chain config) ----
+  const collateralOptions: CollateralOption[] = useMemo(() => {
+    const maxLoops = loopConfig?.maxLoops ?? 5;
+    const stableLtv = loopConfig?.targetLtvBps ?? 9000;
+    const ctnLtv = loopConfig?.ctnTargetLtvBps ?? 6000;
+    const stableMaxLev = Math.floor(calcLeverage(stableLtv / 10000, maxLoops) * 10);
+    const ctnMaxLev = Math.floor(calcLeverage(ctnLtv / 10000, maxLoops) * 10);
+    return [
+      { depositType: "LoopDeposit_USDC",  label: "USDC",       symbol: "USDC",  icon: "💵", templateId: USDC_TEMPLATE,  ltvBps: stableLtv, maxLeverageX10: stableMaxLev },
+      { depositType: "LoopDeposit_USDCx", label: "USDCx (Bridged)", symbol: "USDCx", icon: "🌉", templateId: USDCX_TEMPLATE, ltvBps: stableLtv, maxLeverageX10: stableMaxLev },
+      { depositType: "LoopDeposit_CTN",   label: "CantonCoin",  symbol: "CTN",   icon: "🪙", templateId: CTN_TEMPLATE,   ltvBps: ctnLtv,    maxLeverageX10: ctnMaxLev },
+    ];
+  }, [loopConfig]);
 
-  // Load contracts using Loop SDK
+  const selectedOption = collateralOptions.find(o => o.depositType === depositType)!;
+
+  // ---- available tokens for the selected deposit type ----
+  const tokensForType = useMemo(() => {
+    switch (depositType) {
+      case "LoopDeposit_USDC":  return usdcTokens;
+      case "LoopDeposit_USDCx": return usdcxTokens;
+      case "LoopDeposit_CTN":   return ctnTokens;
+    }
+  }, [depositType, usdcTokens, usdcxTokens, ctnTokens]);
+
+  const [selectedTokenCid, setSelectedTokenCid] = useState("");
+
+  // auto-select first token when type changes
+  useEffect(() => {
+    setSelectedTokenCid(tokensForType[0]?.contractId ?? "");
+    setDepositAmount(tokensForType[0]?.payload?.amount?.toString() ?? "");
+  }, [tokensForType]);
+
+  // clamp leverage when switching collateral type
+  useEffect(() => {
+    if (leverageX10 > selectedOption.maxLeverageX10) {
+      setLeverageX10(selectedOption.maxLeverageX10);
+    }
+  }, [selectedOption.maxLeverageX10]);
+
+  // ---- load ledger data ----
   const loadContracts = useCallback(async () => {
     if (!loopWallet.isConnected) return;
-    
     try {
-      const [v, c, p, o, lm] = await Promise.all([
-        loopWallet.queryContracts(VAULT_TEMPLATE),
-        loopWallet.queryContracts(COLLATERAL_TEMPLATE),
-        loopWallet.queryContracts(POOL_TEMPLATE),
-        loopWallet.queryContracts(ORACLE_TEMPLATE),
-        loopWallet.queryContracts(LEVERAGE_MANAGER_TEMPLATE),
+      const [usdc, usdcx, ctn, pos, svc, cfg] = await Promise.all([
+        loopWallet.queryContracts(USDC_TEMPLATE),
+        loopWallet.queryContracts(USDCX_TEMPLATE),
+        loopWallet.queryContracts(CTN_TEMPLATE),
+        loopWallet.queryContracts(LOOP_POSITION_TEMPLATE),
+        loopWallet.queryContracts(LOOP_SERVICE_TEMPLATE),
+        loopWallet.queryContracts(LOOP_CONFIG_TEMPLATE),
       ]);
-      
-      setVaults(v);
-      setCollaterals(c);
-      setPools(p);
-      setLeverageManagers(lm);
-      
-      // Find user's vault
-      const userVault = v.find(vault => vault.payload.owner === loopWallet.partyId);
-      if (userVault) {
-        setVaultCid(userVault.contractId);
-        setCurrentVault(userVault.payload);
-        setHasPosition(userVault.payload.debtAmount > 0);
+      setUsdcTokens(usdc.filter(t => t.payload.owner === loopWallet.partyId));
+      setUsdcxTokens(usdcx.filter(t => t.payload.owner === loopWallet.partyId));
+      setCtnTokens(ctn.filter(t => t.payload.owner === loopWallet.partyId));
+      setPositions(pos.filter(p => p.payload.user === loopWallet.partyId));
+      if (svc.length > 0) setServiceCid(svc[0].contractId);
+      if (cfg.length > 0) {
+        setConfigCid(cfg[0].contractId);
+        setLoopConfig(cfg[0].payload.config);
       }
-      
-      // Set first available contracts
-      if (c.length > 0) setCollateralCid(c[0].contractId);
-      if (p.length > 0) setPoolCid(p[0].contractId);
-      if (o.length > 0) setOracleCid(o[0].contractId);
-      
     } catch (err: any) {
       console.error("Failed to load contracts:", err);
       setError(err.message);
     }
   }, [loopWallet.isConnected, loopWallet.partyId, loopWallet.queryContracts]);
 
-  useEffect(() => {
-    loadContracts();
-  }, [loadContracts]);
+  useEffect(() => { loadContracts(); }, [loadContracts]);
 
-  // Calculate loops needed for target leverage
-  const calculateLoops = (targetLeverage: number): number => {
-    // Approximate: each loop adds ~LTV of current position
-    // For 150% collateral ratio (66% LTV), need ~log(leverage)/log(1.66) loops
-    const ltv = 0.66; // Approximate
-    const loopsNeeded = Math.ceil(Math.log(targetLeverage / 10) / Math.log(1 + ltv));
-    return Math.min(Math.max(loopsNeeded, 1), 10);
-  };
+  // ---- derived estimates ----
+  const ltv = selectedOption.ltvBps / 10000;
+  const maxLoops = loopConfig?.maxLoops ?? 5;
+  const estimatedLoops = loopsForLeverage(ltv, leverageX10 / 10, maxLoops);
+  const effectiveLeverage = calcLeverage(ltv, estimatedLoops);
+  const totalStaked = parseFloat(depositAmount || "0") * effectiveLeverage;
+  const totalBorrowed = totalStaked - parseFloat(depositAmount || "0");
+  const healthFactor = totalBorrowed > 0
+    ? (totalStaked * (selectedOption.ltvBps + 300) / 10000) / totalBorrowed
+    : 999;
 
-  // Open leveraged position using Loop SDK
-  async function handleOpenPosition() {
-    if (!collateralCid || !poolCid || !oracleCid) {
-      setError("Missing required contracts");
+  // ---- one-click loop ----
+  async function handleLoop() {
+    if (!serviceCid || !configCid || !selectedTokenCid) {
+      setError("Missing service or token. Refresh and try again.");
       return;
     }
     setLoading(true);
@@ -98,328 +165,299 @@ export function CantonLeverage() {
     setResult(null);
 
     try {
-      const loops = calculateLoops(leverageX10);
-      
-      // First, create or get existing vault
-      let targetVaultCid = vaultCid;
-      
-      if (!targetVaultCid) {
-        // Create new vault with initial collateral
-        const createRes = await loopWallet.exerciseChoice(
-          COLLATERAL_TEMPLATE,
-          collateralCid,
-          "CreateVault",
-          { minCollateralRatio: 1.5 }
-        );
-        targetVaultCid = createRes.vaultCid;
-      } else {
-        // Deposit more collateral to existing vault
-        if (depositAmount && parseFloat(depositAmount) > 0) {
-          await loopWallet.exerciseChoice(
-            VAULT_TEMPLATE,
-            targetVaultCid,
-            "Vault_Deposit",
-            { depositCid: collateralCid }
-          );
-        }
-      }
-
-      // Find LeverageManager for this user
-      const manager = leverageManagers.find(
-        lm => lm.payload.user === loopWallet.partyId
-      );
-      
-      if (!manager) {
-        setError("No LeverageManager found. Contact admin to enable leverage.");
-        setLoading(false);
-        return;
-      }
-
-      // Execute leverage loops via Loop SDK
-      const leverageRes = await loopWallet.exerciseChoice(
-        LEVERAGE_MANAGER_TEMPLATE,
-        manager.contractId,
-        "Loop_Leverage",
+      // Exercise Loop_Open on the service — creates position directly
+      await loopWallet.exerciseChoice(
+        LOOP_SERVICE_TEMPLATE,
+        serviceCid,
+        "Loop_Open",
         {
-          vaultCid: targetVaultCid,
-          oracleCid: oracleCid,
-          poolCid: poolCid,
-          loops: loops,
-          slippageToleranceBps: parseInt(slippageBps) || 50, // H-09: Pass slippage tolerance
+          user: loopWallet.partyId,
+          depositAmount: parseFloat(depositAmount),
+          depositType,
+          requestedLoops: estimatedLoops,
+          loopConfigCid: configCid,
         }
       );
 
-      setResult(`Opened ${(leverageX10 / 10).toFixed(1)}x position with ${loops} loops`);
-      setHasPosition(true);
+      setResult(
+        `Opened ${effectiveLeverage.toFixed(1)}x ${selectedOption.symbol} loop with ${estimatedLoops} loops`
+      );
       setDepositAmount("");
-      
-      // Refresh contracts
       await loadContracts();
-      
     } catch (err: any) {
-      setError(err.message || "Failed to open position");
+      setError(err.message || "Failed to open loop position");
     } finally {
       setLoading(false);
     }
   }
 
-  // Close position (repay debt and withdraw)
-  async function handleClosePosition() {
-    if (!vaultCid) return;
+  // ---- unwind ----
+  async function handleUnwind(positionCid: string) {
     setLoading(true);
     setError(null);
     setResult(null);
-
     try {
-      // Get mUSD to repay
-      const musdContracts = await loopWallet.queryContracts(MUSD_TEMPLATE);
-      const userMusd = musdContracts.find(m => m.payload.owner === loopWallet.partyId);
-      
-      if (!userMusd) {
-        setError("No mUSD available to repay debt");
-        setLoading(false);
-        return;
-      }
-
-      // Repay all debt
       await loopWallet.exerciseChoice(
-        VAULT_TEMPLATE,
-        vaultCid,
-        "Vault_Repay",
-        { musdCid: userMusd.contractId }
+        LOOP_POSITION_TEMPLATE,
+        positionCid,
+        "LoopPosition_Unwind",
+        {}
       );
-
-      // Withdraw all collateral
-      await loopWallet.exerciseChoice(
-        VAULT_TEMPLATE,
-        vaultCid,
-        "Vault_WithdrawCollateral",
-        { amount: currentVault?.collateralAmount || 0 }
-      );
-
-      setResult("Position closed successfully");
-      setHasPosition(false);
-      setCurrentVault(null);
-      
-      // Refresh contracts
+      setResult("Unwind initiated — operator will finalize shortly.");
       await loadContracts();
-      
     } catch (err: any) {
-      setError(err.message || "Failed to close position");
+      setError(err.message || "Failed to unwind");
     } finally {
       setLoading(false);
     }
   }
 
-  // Not connected state
+  // ---- not connected ----
   if (!loopWallet.isConnected) {
     return (
       <div className="space-y-6">
-        <h1 className="text-3xl font-bold text-white">Leverage Vault</h1>
-        <p className="text-purple-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
-        
-        <div className="max-w-md mx-auto">
-          <WalletConnector mode="canton" />
-        </div>
-        
-        <div className="text-center text-gray-400 py-8">
-          Connect your Loop Wallet to use Canton leverage
-        </div>
+        <h1 className="text-3xl font-bold text-white">sMUSD Maxi Loop</h1>
+        <p className="text-emerald-400 text-sm font-medium">Canton Network · Leveraged sMUSD Strategy</p>
+        <div className="max-w-md mx-auto"><WalletConnector mode="canton" /></div>
+        <div className="text-center text-gray-400 py-8">Connect your Loop Wallet to start</div>
       </div>
     );
   }
 
-  const effectiveLeverage = currentVault && currentVault.collateralAmount > 0
-    ? (currentVault.collateralAmount / (currentVault.collateralAmount - currentVault.debtAmount * 1.5)).toFixed(2)
-    : "1.0";
+  // ---- total balances ----
+  const totalUsdc  = usdcTokens.reduce((s, t) => s + (t.payload.amount ?? 0), 0);
+  const totalUsdcx = usdcxTokens.reduce((s, t) => s + (t.payload.amount ?? 0), 0);
+  const totalCtn   = ctnTokens.reduce((s, t) => s + (t.payload.amount ?? 0), 0);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white">Leverage Vault</h1>
-      <p className="text-emerald-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
+      <h1 className="text-3xl font-bold text-white">sMUSD Maxi Loop</h1>
+      <p className="text-emerald-400 text-sm font-medium">Canton Network · Leveraged sMUSD Strategy</p>
 
-      {/* Stats Row */}
+      {/* Wallet balances */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard 
-          label="Available Collateral" 
-          value={collaterals[0]?.payload?.amount?.toFixed(2) || "0"} 
-        />
-        <StatCard 
-          label="Current Leverage" 
-          value={hasPosition ? `${effectiveLeverage}x` : "None"}
-        />
-        <StatCard 
-          label="Vault Debt" 
-          value={currentVault?.debtAmount?.toFixed(2) || "0"}
-          subValue="mUSD"
-        />
-        <StatCard 
-          label="Health Factor" 
-          value={currentVault?.healthFactor?.toFixed(2) || "∞"}
-        />
+        <StatCard label="USDC Balance"  value={totalUsdc.toFixed(2)}  subValue="USDC" />
+        <StatCard label="USDCx Balance" value={totalUsdcx.toFixed(2)} subValue="USDCx" />
+        <StatCard label="CTN Balance"   value={totalCtn.toFixed(2)}   subValue="CTN" />
+        <StatCard label="Active Positions" value={positions.length.toString()} />
       </div>
 
-      {!hasPosition ? (
-        /* Open Position Form */
-        <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
-          <h2 className="text-xl font-semibold text-white mb-6">Open Leveraged Position</h2>
+      {/* ================================================================ */}
+      {/*  OPEN POSITION — collateral dropdown + leverage slider + button  */}
+      {/* ================================================================ */}
+      <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+        <h2 className="text-xl font-semibold text-white mb-6">Open Leveraged Loop</h2>
 
-          {/* Collateral Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Collateral Contract
-            </label>
+        {/* ---- 1. Collateral Type Dropdown ---- */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-400 mb-2">
+            Collateral Asset
+          </label>
+          <div className="relative">
             <select
-              value={collateralCid}
-              onChange={(e) => setCollateralCid(e.target.value)}
-              className="w-full bg-gray-800 text-white rounded-xl px-4 py-3 border border-gray-700 
-                focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+              value={depositType}
+              onChange={(e) => setDepositType(e.target.value as DepositType)}
+              className="w-full bg-gray-800 text-white rounded-xl px-4 py-3 pr-10 border border-gray-700 
+                focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none appearance-none"
             >
-              {collaterals.map((c) => (
-                <option key={c.contractId} value={c.contractId}>
-                  {c.payload.symbol}: {c.payload.amount?.toFixed(4)}
+              {collateralOptions.map((opt) => (
+                <option key={opt.depositType} value={opt.depositType}>
+                  {opt.icon}  {opt.label}  —  Target LTV {(opt.ltvBps / 100).toFixed(0)}%  ·  Max {(opt.maxLeverageX10 / 10).toFixed(1)}x
                 </option>
               ))}
             </select>
-          </div>
-
-          {/* Leverage Slider */}
-          <div className="mb-6">
-            <LeverageSlider
-              value={leverageX10}
-              onChange={setLeverageX10}
-              maxLeverage={30}
-              disabled={loading}
-            />
-          </div>
-
-          {/* H-09: Slippage Tolerance */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-400 mb-2">
-              Slippage Tolerance
-            </label>
-            <div className="flex items-center gap-3">
-              <div className="flex gap-1">
-                {[10, 50, 100, 200].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setSlippageBps(v.toString())}
-                    className={`px-3 py-2 text-sm rounded-lg transition-colors ${
-                      slippageBps === v.toString()
-                        ? "bg-emerald-600 text-white"
-                        : "bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700"
-                    }`}
-                  >
-                    {(v / 100).toFixed(1)}%
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  className="w-20 bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-emerald-500 outline-none"
-                  min="1"
-                  max="500"
-                  value={slippageBps}
-                  onChange={(e) => setSlippageBps(e.target.value)}
-                />
-                <span className="text-gray-500 text-sm">bps</span>
-              </div>
-              {parseInt(slippageBps) > 200 && (
-                <span className="text-yellow-400 text-xs">⚠ High slippage</span>
-              )}
+            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-400">
+              ▾
             </div>
           </div>
 
-          {/* Preview */}
-          <div className="bg-gray-800 rounded-xl p-4 mb-6">
-            <h4 className="text-sm font-medium text-gray-400 mb-3">Position Preview</h4>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-gray-500">Target Leverage:</span>
-                <span className="text-white ml-2">{(leverageX10 / 10).toFixed(1)}x</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Estimated Loops:</span>
-                <span className="text-white ml-2">{calculateLoops(leverageX10)}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Min Collateral Ratio:</span>
-                <span className="text-white ml-2">150%</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Liquidation Risk:</span>
-                <span className={`ml-2 ${leverageX10 > 20 ? 'text-red-400' : 'text-green-400'}`}>
-                  {leverageX10 > 25 ? 'High' : leverageX10 > 20 ? 'Medium' : 'Low'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Action Button */}
-          <button
-            onClick={handleOpenPosition}
-            disabled={loading || !collateralCid || collaterals.length === 0}
-            className={`w-full py-4 rounded-xl font-semibold text-lg transition-all
-              ${loading || !collateralCid
-                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-              }`}
+          {/* Per-type info pill */}
+          <div className={`mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium
+            ${depositType === "LoopDeposit_CTN"
+              ? "bg-amber-900/40 text-amber-300 border border-amber-700"
+              : "bg-emerald-900/40 text-emerald-300 border border-emerald-700"}`}
           >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                Opening Position...
-              </span>
-            ) : (
-              `Open ${(leverageX10 / 10).toFixed(1)}x Position`
-            )}
-          </button>
+            {depositType === "LoopDeposit_CTN"
+              ? "⚠ Volatile asset — 60% LTV, lower max leverage"
+              : "✓ Stablecoin — 90% LTV, up to ~4.1x leverage"}
+          </div>
         </div>
-      ) : (
-        /* Current Position */
-        <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
-          <h2 className="text-xl font-semibold text-white mb-6">Your Position</h2>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mb-6">
-            <div className="bg-gray-800 rounded-xl p-4">
-              <p className="text-sm text-gray-400">Collateral</p>
-              <p className="text-xl font-bold text-white">
-                {currentVault?.collateralAmount?.toFixed(4) || "0"}
+        {/* ---- Token + Amount ---- */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-400 mb-2">
+            Token to Deposit
+          </label>
+          {tokensForType.length > 0 ? (
+            <div className="flex gap-3">
+              <select
+                value={selectedTokenCid}
+                onChange={(e) => {
+                  setSelectedTokenCid(e.target.value);
+                  const tok = tokensForType.find(t => t.contractId === e.target.value);
+                  setDepositAmount(tok?.payload?.amount?.toString() ?? "");
+                }}
+                className="flex-1 bg-gray-800 text-white rounded-xl px-4 py-3 border border-gray-700 
+                  focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none"
+              >
+                {tokensForType.map((t) => (
+                  <option key={t.contractId} value={t.contractId}>
+                    {selectedOption.symbol}: {t.payload.amount?.toFixed(4)}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                placeholder="Amount"
+                value={depositAmount}
+                onChange={(e) => setDepositAmount(e.target.value)}
+                className="w-36 bg-gray-800 text-white rounded-xl px-4 py-3 border border-gray-700 
+                  focus:border-emerald-500 outline-none text-right"
+              />
+            </div>
+          ) : (
+            <div className="bg-gray-800 rounded-xl px-4 py-3 text-gray-500 border border-gray-700">
+              No {selectedOption.symbol} tokens available — mint or bridge first
+            </div>
+          )}
+        </div>
+
+        {/* ---- 2. Leverage Slider ---- */}
+        <div className="mb-6">
+          <LeverageSlider
+            value={leverageX10}
+            onChange={setLeverageX10}
+            maxLeverage={selectedOption.maxLeverageX10}
+            disabled={loading}
+          />
+        </div>
+
+        {/* ---- Position Preview ---- */}
+        <div className="bg-gray-800 rounded-xl p-4 mb-6">
+          <h4 className="text-sm font-medium text-gray-400 mb-3">Position Preview</h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <span className="text-gray-500">Collateral</span>
+              <p className="text-white font-medium">{selectedOption.symbol}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Effective Leverage</span>
+              <p className="text-white font-medium">{effectiveLeverage.toFixed(2)}x</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Loops</span>
+              <p className="text-white font-medium">{estimatedLoops} / {maxLoops}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Target LTV</span>
+              <p className="text-white font-medium">{(selectedOption.ltvBps / 100).toFixed(0)}%</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Total Staked (est.)</span>
+              <p className="text-emerald-400 font-medium">{totalStaked.toFixed(2)} mUSD</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Total Borrowed (est.)</span>
+              <p className="text-yellow-400 font-medium">{totalBorrowed.toFixed(2)} mUSD</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Health Factor</span>
+              <p className={`font-medium ${healthFactor > 1.5 ? 'text-green-400' : healthFactor > 1.2 ? 'text-yellow-400' : 'text-red-400'}`}>
+                {healthFactor >= 999 ? "∞" : healthFactor.toFixed(2)}
               </p>
             </div>
-            <div className="bg-gray-800 rounded-xl p-4">
-              <p className="text-sm text-gray-400">Debt</p>
-              <p className="text-xl font-bold text-white">
-                {currentVault?.debtAmount?.toFixed(2) || "0"} mUSD
-              </p>
-            </div>
-            <div className="bg-gray-800 rounded-xl p-4">
-              <p className="text-sm text-gray-400">Effective Leverage</p>
-              <p className="text-xl font-bold text-emerald-400">
-                {effectiveLeverage}x
+            <div>
+              <span className="text-gray-500">Liquidation Risk</span>
+              <p className={`font-medium ${leverageX10 > selectedOption.maxLeverageX10 * 0.8 ? 'text-red-400' : leverageX10 > selectedOption.maxLeverageX10 * 0.5 ? 'text-yellow-400' : 'text-green-400'}`}>
+                {leverageX10 > selectedOption.maxLeverageX10 * 0.8 ? 'High' : leverageX10 > selectedOption.maxLeverageX10 * 0.5 ? 'Medium' : 'Low'}
               </p>
             </div>
           </div>
+        </div>
 
-          <button
-            onClick={handleClosePosition}
-            disabled={loading}
-            className={`w-full py-4 rounded-xl font-semibold text-lg transition-all
-              ${loading
-                ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                : 'bg-red-600 hover:bg-red-500 text-white'
-              }`}
-          >
-            {loading ? "Closing..." : "Close Position & Repay Debt"}
-          </button>
+        {/* ---- 3. One-Click Loop Button ---- */}
+        <button
+          onClick={handleLoop}
+          disabled={loading || !selectedTokenCid || !depositAmount || parseFloat(depositAmount) <= 0}
+          className={`w-full py-4 rounded-xl font-semibold text-lg transition-all
+            ${loading || !selectedTokenCid
+              ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+              : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-900/30'
+            }`}
+        >
+          {loading ? (
+            <span className="flex items-center justify-center gap-2">
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              Opening Loop...
+            </span>
+          ) : (
+            `🔄 Loop ${effectiveLeverage.toFixed(1)}x ${selectedOption.symbol} → sMUSD`
+          )}
+        </button>
+      </div>
+
+      {/* ================================================================ */}
+      {/*  ACTIVE POSITIONS                                                */}
+      {/* ================================================================ */}
+      {positions.length > 0 && (
+        <div className="bg-gray-900 rounded-2xl p-6 border border-gray-800">
+          <h2 className="text-xl font-semibold text-white mb-4">Your Positions</h2>
+          <div className="space-y-4">
+            {positions.map((pos) => {
+              const p = pos.payload;
+              const depTypeLabel =
+                p.depositType === "LoopDeposit_USDC" ? "USDC" :
+                p.depositType === "LoopDeposit_USDCx" ? "USDCx" : "CTN";
+              const posHF = p.totalBorrowed > 0
+                ? ((p.totalStaked * 0.93) / p.totalBorrowed).toFixed(2)
+                : "∞";
+
+              return (
+                <div key={pos.contractId} className="bg-gray-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center gap-4">
+                  <div className="flex-1 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-500">Asset</span>
+                      <p className="text-white font-medium">{depTypeLabel}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Deposited</span>
+                      <p className="text-white font-medium">{p.totalDeposited?.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Leverage</span>
+                      <p className="text-emerald-400 font-medium">{p.leverageMultiplier?.toFixed(1)}x</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Health Factor</span>
+                      <p className={`font-medium ${parseFloat(posHF) > 1.3 ? 'text-green-400' : 'text-red-400'}`}>{posHF}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Status</span>
+                      <p className={`font-medium ${p.status === 'active' ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                        {p.status}
+                      </p>
+                    </div>
+                  </div>
+                  {p.status === "active" && (
+                    <button
+                      onClick={() => handleUnwind(pos.contractId)}
+                      disabled={loading}
+                      className="px-6 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50"
+                    >
+                      Unwind
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {/* Result/Error Messages */}
+      {/* Result / Error feedback */}
       {result && (
         <div className="bg-emerald-900/30 border border-emerald-700 rounded-xl p-4 text-emerald-300">
           ✓ {result}
