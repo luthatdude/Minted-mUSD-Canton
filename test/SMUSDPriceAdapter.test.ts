@@ -52,7 +52,8 @@ describe("SMUSDPriceAdapter", function () {
     const AdapterFactory = await ethers.getContractFactory("SMUSDPriceAdapter");
     adapter = await AdapterFactory.deploy(
       await mockSmusd.getAddress(),
-      admin.address
+      admin.address,
+      admin.address  // _timelockController — admin acts as timelock in tests
     );
     await adapter.waitForDeployment();
 
@@ -89,7 +90,7 @@ describe("SMUSDPriceAdapter", function () {
     it("should revert with zero address for smusd", async function () {
       const AdapterFactory = await ethers.getContractFactory("SMUSDPriceAdapter");
       await expect(
-        AdapterFactory.deploy(ethers.ZeroAddress, admin.address)
+        AdapterFactory.deploy(ethers.ZeroAddress, admin.address, admin.address)
       ).to.be.revertedWithCustomError(adapter, "SMUSDZeroAddress");
     });
   });

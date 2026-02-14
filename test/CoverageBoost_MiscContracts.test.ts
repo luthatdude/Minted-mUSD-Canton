@@ -1328,13 +1328,13 @@ describe("CoverageBoost — Misc Contracts", function () {
       mockSmusd = await MockSMUSD.deploy(1e18.toString()); // 1:1 price
 
       const Adapter = await ethers.getContractFactory("SMUSDPriceAdapter");
-      adapter = await Adapter.deploy(await mockSmusd.getAddress(), admin.address);
+      adapter = await Adapter.deploy(await mockSmusd.getAddress(), admin.address, admin.address);
     });
 
     // --- constructor: zero address revert ---
     it("should revert constructor with zero smusd", async function () {
       const A = await ethers.getContractFactory("SMUSDPriceAdapter");
-      await expect(A.deploy(ethers.ZeroAddress, admin.address))
+      await expect(A.deploy(ethers.ZeroAddress, admin.address, admin.address))
         .to.be.revertedWithCustomError(A, "SMUSDZeroAddress");
     });
 
