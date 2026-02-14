@@ -12,6 +12,7 @@ import { LIQUIDATION_ENGINE_ABI } from "@/abis/LiquidationEngine";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
+import { GLOBAL_PAUSE_REGISTRY_ABI } from "@/abis/GlobalPauseRegistry";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -25,6 +26,7 @@ const ABI_MAP: Record<string, readonly string[]> = {
   BLEBridgeV9: BLE_BRIDGE_V9_ABI,
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
+  GlobalPauseRegistry: GLOBAL_PAUSE_REGISTRY_ABI,
 };
 
 /**
@@ -65,6 +67,7 @@ export function useWCContracts() {
         liquidation: null,
         bridge: null,
         oracle: null,
+        globalPause: null,
       };
     }
 
@@ -86,6 +89,7 @@ export function useWCContracts() {
       liquidation: createContract("LiquidationEngine"),
       bridge: createContract("BLEBridgeV9"),
       oracle: createContract("PriceOracle"),
+      globalPause: createContract("GlobalPauseRegistry"),
     };
   }, [signer, provider, isConnected]);
 }

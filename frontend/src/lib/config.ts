@@ -14,21 +14,6 @@ export const CONTRACTS: Record<string, string> = {
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
-  ReferralRegistry: process.env.NEXT_PUBLIC_REFERRAL_REGISTRY_ADDRESS || "",
-};
-
-// Strategy contract addresses — populate in .env.local to enable admin UI selection
-export const STRATEGY_ADDRESSES: Record<string, string> = {
-  FluidLoop: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
-  Pendle: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
-  MorphoLoop: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
-  EulerCrossStable: process.env.NEXT_PUBLIC_EULER_CROSS_STRATEGY_ADDRESS || "",
-  AaveV3Loop: process.env.NEXT_PUBLIC_AAVE_STRATEGY_ADDRESS || "",
-  CompoundV3Loop: process.env.NEXT_PUBLIC_COMPOUND_STRATEGY_ADDRESS || "",
-  ContangoLoop: process.env.NEXT_PUBLIC_CONTANGO_STRATEGY_ADDRESS || "",
-  EulerV2Loop: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
-  SkySUSDS: process.env.NEXT_PUBLIC_SKY_STRATEGY_ADDRESS || "",
-  MetaVault: process.env.NEXT_PUBLIC_METAVAULT_ADDRESS || "",
 };
 
 // Validate contract addresses at config time
