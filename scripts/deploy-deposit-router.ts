@@ -142,7 +142,9 @@ async function deployDepositRouter(config: typeof CONFIG[string]) {
     config.tokenBridge,
     config.treasuryAddress,
     config.directMintAddress,
-    config.feeBps
+    config.feeBps,
+    (await ethers.getSigners())[0].address, // admin
+    config.timelockController || (await ethers.getSigners())[0].address // timelockController
   );
 
   await router.waitForDeployment();

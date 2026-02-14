@@ -164,7 +164,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         address _treasuryAddress,
         address _directMintAddress,
         uint256 _feeBps,
-        address _admin
+        address _admin,
+        address _timelockController
     ) {
         if (_usdc == address(0)) revert InvalidAddress();
         if (_wormholeRelayer == address(0)) revert InvalidAddress();
@@ -172,6 +173,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         if (_treasuryAddress == address(0)) revert InvalidAddress();
         if (_directMintAddress == address(0)) revert InvalidAddress();
         if (_admin == address(0)) revert InvalidAddress();
+        if (_timelockController == address(0)) revert InvalidAddress();
         if (_feeBps > 500) revert FeeTooHigh(); // Max 5%
         
         usdc = IERC20(_usdc);
@@ -184,6 +186,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(ROUTER_ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     // ============ External Functions ============

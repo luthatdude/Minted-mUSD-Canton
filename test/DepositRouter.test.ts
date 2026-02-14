@@ -34,7 +34,8 @@ describe("DepositRouter", function () {
       treasury.address,
       directMint.address,
       DEFAULT_FEE_BPS,
-      admin.address
+      admin.address,
+      admin.address // timelockController
     );
 
     // Mint USDC to users
@@ -91,6 +92,7 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           DEFAULT_FEE_BPS,
+          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "InvalidAddress");
@@ -108,6 +110,7 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           501, // > 5%
+          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "FeeTooHigh");
