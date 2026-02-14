@@ -1,7 +1,10 @@
--- BLE Protocol - Fixed Version (DEPRECATED — DO NOT USE IN PRODUCTION)
+-- BLE Protocol - DEPRECATED (DO NOT USE)
 -- Fixes: D-01 (TOCTOU), D-02 (Signature Uniqueness), D-03 (Timestamp Validation)
 --
 -- ╔══════════════════════════════════════════════════════════════════════════════╗
+-- ║  DEPRECATED: This module is superseded by BLEBridgeProtocol.daml.          ║
+-- ║  All templates have `ensure False` to prevent accidental instantiation.    ║
+-- ║                                                                            ║
 -- ║  C-3 CRITICAL: ValidatorSignature has `signatory aggregator`, NOT validator  ║
 -- ║  A compromised aggregator can forge signatures and bypass BFT validation.   ║
 -- ║  USE BLEBridgeProtocol.daml INSTEAD — it makes validator the signatory      ║
@@ -33,8 +36,8 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    -- FIX D-M03: Require strictly positive totalValue
-    ensure totalValue > 0.0
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
 
     key (bank, aggregator) : (Party, Party)
     maintainer key._1
@@ -78,8 +81,8 @@ template AttestationRequest
     signatory aggregator
     observer validatorGroup
 
-    -- FIX H-6: Bound validator group size to prevent DoS via O(n^2) dedup
-    ensure length validatorGroup > 0 && length validatorGroup <= 100
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
 
     -- FIX D-01: Consuming choice to prevent TOCTOU
     -- Positions are locked when attestation begins
@@ -184,6 +187,9 @@ template ValidatorSignature
   where
     signatory aggregator
     observer validator
+
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
 
 
 -- 5. HELPER: Create new attestation request

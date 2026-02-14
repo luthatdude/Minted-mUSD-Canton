@@ -1,5 +1,8 @@
 -- | CantonLending
--- Canton-native lending module with actual token escrowing
+-- Canton-native lending module with actual token escrowing.
+-- For the V3 bridge-integrated vault/CDP system, see Minted.Protocol.V3 (Vault template).
+-- This standalone module is the authoritative Canton-native lending implementation
+-- with multi-collateral support, real token escrowing, and compliance gating.
 --
 -- Architecture:
 --   Users deposit Canton-native assets (CantonCoin, CantonUSDC, USDCx, CantonSMUSD)
@@ -176,17 +179,24 @@ template CantonPriceFeed
 
     -- | Emergency price override (bypasses movement cap)
     -- Only for circuit-breaker scenarios where price moved >50%
+    -- DAML-M-06: Requires governance co-signature to prevent unilateral oracle manipulation
     choice PriceFeed_EmergencyUpdate : ContractId CantonPriceFeed
       with
         newPriceUsd : Money
         reason      : Text
+        governanceProofCid : ContractId GovernanceActionLog  -- DAML-M-06: Governance required
       controller operator
       do
+        -- DAML-M-06: Consume governance proof to prevent replay
+        proof <- exercise governanceProofCid ConsumeProof
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
         assertMsg "REASON_REQUIRED" (DA.Text.length reason > 0)
         now <- getTime
         let timeSinceUpdate = subTime now lastUpdated
-        assertMsg "EMERGENCY_UPDATE_COOLDOWN" (timeSinceUpdate >= minutes 5)
+        -- DAML-M-06: Rate limit: minimum 30 minutes between emergency updates
+        assertMsg "EMERGENCY_UPDATE_COOLDOWN" (timeSinceUpdate >= minutes 30)
         create this with
           priceUsd = newPriceUsd
           lastUpdated = now
@@ -1141,12 +1151,14 @@ template CantonLendingService
           pure ()
 
         -- rather than resetting to now (which would unfairly restart cooldown timers)
+        -- DAML-M-03: Use current sMUSD price from feed instead of hardcoded 1.0
+        currentSharePrice <- getCtxPrice operator "sMUSD" priceFeedCids True (seconds (getConfig CTN_SMUSD configs).maxStalenessSecs)
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = withdrawAmount
-          entrySharePrice = 1.0  -- Placeholder; real share price is tracked by CantonStakingService
+          entrySharePrice = currentSharePrice  -- DAML-M-03: Use live share price from price feed
           stakedAt = escrow.depositedAt
           privacyObservers = userObs
 

@@ -93,6 +93,8 @@ contract LiquidationEngineUpgradeable is
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ENGINE_ADMIN_ROLE, msg.sender);
         _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     /// @dev Only the MintedTimelockController can authorize upgrades (48h delay enforced by OZ TimelockController)
@@ -234,5 +236,6 @@ contract LiquidationEngineUpgradeable is
     // ── Pause / Unpause ─────────────────────────────────────────────────
 
     function pause() external onlyRole(PAUSER_ROLE) { _pause(); }
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) { _unpause(); }
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyRole(TIMELOCK_ROLE) { _unpause(); }
 }

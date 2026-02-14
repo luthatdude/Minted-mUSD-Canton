@@ -58,8 +58,11 @@ jobs:
 
       - name: Coverage report
         run: npx hardhat coverage
-        # Coverage can fail on CI due to memory limits but should not block
-        continue-on-error: true
+        # INFRA-M-07: Removed continue-on-error: true — the 90% coverage threshold
+        # MUST be enforced. If coverage fails due to memory limits, increase the
+        # runner memory (e.g., use ubuntu-latest-8-cores) rather than silently skipping.
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Check coverage threshold
         run: |
@@ -159,20 +162,20 @@ jobs:
           sarif: results.sarif
           fail-on: high
           slither-config: slither.config.json
-          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,arbitrary-send-erc20,arbitrary-send-eth,pragma,solc-version,missing-inheritance,shadowing-local,events-maths,missing-zero-check,calls-loop,reentrancy-benign,reentrancy-events,reentrancy-no-eth,reentrancy-balance,timestamp,low-level-calls,unused-return,divide-before-multiply,incorrect-equality,locked-ether,unindexed-event-address,unused-state,cache-array-length,immutable-states,dead-code,cyclomatic-complexity,costly-loop,assembly,uninitialized-local
-          # Only fail on HIGH severity - medium often has false positives
-          # Excluded detectors explanation:
-          # - arbitrary-send-*: Admin-only emergency functions with proper access control
-          # - reentrancy-*: Functions protected by nonReentrant + CEI pattern; reentrancy-balance
-          #   false-positive in TreasuryV2.withdrawToVault (balance re-read after external calls)
-          # - calls-loop: Bounded loops over admin-controlled strategy arrays
-          # - incorrect-equality: Valid zero checks for early returns (elapsed==0, debt==0)
-          # - divide-before-multiply: Intentional order for APY calculations with sufficient precision
-          # - locked-ether: Mock contracts for testing only
-          # - timestamp: Legitimate usage for cooldowns and rate limiting
-          # - unused-return: Intentional ignoring of certain return values
-          # - pragma/solc-version: OpenZeppelin uses different pragma versions
-          # - Other informational detectors excluded for audit noise reduction
+          # INFRA-M-08: Reduced exclusion list — only exclude detectors with documented justification.
+          # Previously excluded 25+ detectors which masked real vulnerabilities.
+          # Removed: missing-inheritance, shadowing-local, events-maths, missing-zero-check,
+          #   low-level-calls, unused-return, unindexed-event-address, unused-state,
+          #   immutable-states, dead-code, costly-loop (these should be reviewed, not suppressed).
+          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,pragma,solc-version,calls-loop,reentrancy-benign,reentrancy-events,timestamp,locked-ether,cache-array-length,cyclomatic-complexity
+          # Remaining exclusions (each requires justification):
+          # - naming-convention: Project uses custom names (MUSD, SMUSD, etc.)
+          # - pragma,solc-version: OpenZeppelin v5 uses different pragma versions
+          # - calls-loop: Bounded loops over admin-controlled strategy arrays (max 10 strategies)
+          # - reentrancy-benign,reentrancy-events: Functions use CEI pattern; only event ordering differs
+          # - timestamp: Legitimate use for cooldowns, rate limiting, and yield accrual
+          # - locked-ether: Only triggers on mock contracts in test paths
+          # - cache-array-length,cyclomatic-complexity: Informational/gas-optimization only
 
       - name: Upload Slither SARIF
         if: always()

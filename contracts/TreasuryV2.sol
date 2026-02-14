@@ -817,7 +817,8 @@ contract TreasuryV2 is
     function pause() external onlyRole(GUARDIAN_ROLE) {
         _pause();
     }
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev Requires timelock (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyTimelock {
         _unpause();
     }
     // ═══════════════════════════════════════════════════════════════════════

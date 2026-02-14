@@ -120,19 +120,20 @@ const BPS_BASE = BigInt(10000);
 const YEAR_SECONDS = BigInt(31536000);
 
 /** Convert a number or ledger string to fixed-point BigInt (18 decimals).
- *  TS-H-01 FIX: Strings are parsed directly to BigInt — no parseFloat intermediate.
- *  This avoids float64 precision loss on values > ~2^53 (~9 quadrillion). */
+ *  TS-H-01/M-01: Strings are parsed directly to BigInt — no parseFloat intermediate.
+ *  This avoids IEEE 754 precision loss on values with 18+ significant digits.
+ *  For number inputs (config values, small constants), falls back to
+ *  string conversion via toFixed(18). */
 function toFixed(value: number | string): bigint {
-  const str = typeof value === "number" ? value.toFixed(18) : String(value);
-  // Handle negative values
-  const isNegative = str.startsWith("-");
-  const abs = isNegative ? str.slice(1) : str;
-  const [intPart, fracPart = "0"] = abs.split(".");
-  const whole = BigInt(intPart || "0");
-  // Pad or truncate fractional part to exactly 18 digits
-  const frac = BigInt(fracPart.padEnd(18, "0").slice(0, 18));
+  const str = typeof value === "string" ? value : value.toFixed(18);
+  const negative = str.startsWith("-");
+  const abs = negative ? str.slice(1) : str;
+  const parts = abs.split(".");
+  const whole = BigInt(parts[0] || "0");
+  const fracStr = (parts[1] || "").padEnd(18, "0").slice(0, 18);
+  const frac = BigInt(fracStr);
   const result = whole * PRECISION + frac;
-  return isNegative ? -result : result;
+  return negative ? -result : result;
 }
 
 /** Convert fixed-point BigInt back to number (for display/logging only) */
@@ -145,8 +146,8 @@ function fromFixed(value: bigint): number {
 interface DebtPosition {
   contractId: string;
   borrower: string;
-  principalDebt: number;
-  accruedInterest: number;
+  principalDebt: string;   // Raw ledger string — use toFixed() for BigInt math
+  accruedInterest: string; // Raw ledger string — use toFixed() for BigInt math
   lastAccrualTime: string;
   interestRateBps: number;
 }
@@ -155,7 +156,7 @@ interface EscrowPosition {
   contractId: string;
   owner: string;
   collateralType: string;
-  amount: number;
+  amount: string;  // Raw ledger string — use toFixed() for BigInt math
 }
 
 interface LiquidationCandidate {
@@ -242,25 +243,16 @@ export class LendingKeeperBot {
       {}
     );
 
-    return contracts.map((c: any) => {
-      // TS-H-01 FIX: Use Number() instead of parseFloat — rejects trailing garbage like "5.0abc"
-      const principalDebt = Number(c.payload.principalDebt);
-      if (Number.isNaN(principalDebt) || principalDebt > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Invalid or oversized debt value: ${c.payload.principalDebt}`);
-      }
-      const accruedInterest = Number(c.payload.accruedInterest);
-      if (Number.isNaN(accruedInterest) || accruedInterest > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Invalid or oversized interest value: ${c.payload.accruedInterest}`);
-      }
-      return {
-        contractId: c.contractId,
-        borrower: c.payload.borrower,
-        principalDebt,
-        accruedInterest,
-        lastAccrualTime: c.payload.lastAccrualTime,
-        interestRateBps: parseInt(c.payload.interestRateBps, 10),
-      };
-    });
+    return contracts.map((c: any) => ({
+      contractId: c.contractId,
+      borrower: c.payload.borrower,
+      // TS-H-01/M-01: Preserve raw ledger strings to avoid IEEE 754 precision loss on
+      // financial values with 18+ significant digits. Use toFixed() for BigInt math.
+      principalDebt: String(c.payload.principalDebt),
+      accruedInterest: String(c.payload.accruedInterest),
+      lastAccrualTime: c.payload.lastAccrualTime,
+      interestRateBps: parseInt(c.payload.interestRateBps, 10),
+    }));
   }
 
   /**
@@ -274,19 +266,13 @@ export class LendingKeeperBot {
       { owner: borrower }
     );
 
-    return contracts.map((c: any) => {
-      // TS-H-01 FIX: Use Number() instead of parseFloat
-      const collateralAmount = Number(c.payload.amount);
-      if (Number.isNaN(collateralAmount) || collateralAmount > Number.MAX_SAFE_INTEGER) {
-        console.warn(`[LendingKeeper] Invalid or oversized collateral value: ${c.payload.amount}`);
-      }
-      return {
-        contractId: c.contractId,
-        owner: c.payload.owner,
-        collateralType: c.payload.collateralType,
-        amount: collateralAmount,
-      };
-    });
+    return contracts.map((c: any) => ({
+      contractId: c.contractId,
+      owner: c.payload.owner,
+      collateralType: c.payload.collateralType,
+      // TS-H-01/M-01: Preserve raw ledger string to avoid IEEE 754 precision loss
+      amount: String(c.payload.amount),
+    }));
   }
 
   /**
@@ -571,10 +557,10 @@ export class LendingKeeperBot {
         };
       }
 
-      // Find an mUSD contract with enough balance
-      // TS-H-01 FIX: Use Number() instead of parseFloat
+      // TS-H-01/M-01: Use BigInt comparison to avoid precision loss on large amounts
+      const maxRepayBig = toFixed(candidate.maxRepay);
       const musdContract = keeperMusd.find(
-        (c: any) => Number(c.payload.amount) >= candidate.maxRepay
+        (c: any) => toFixed(String(c.payload.amount)) >= maxRepayBig
       );
 
       if (!musdContract) {

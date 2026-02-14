@@ -1,4 +1,8 @@
 -- | CantonSMUSD
+-- Canton-native staked mUSD (smUSD) with global share price model and cooldown enforcement.
+-- For the V3 bridge-integrated yield vault, see Minted.Protocol.V3 (CantonSMUSD template).
+-- This standalone module is the authoritative Canton-native staking implementation.
+--
 -- Canton-side staked mUSD (smUSD) with UNIFIED yield from Ethereum
 --
 -- Architecture:
