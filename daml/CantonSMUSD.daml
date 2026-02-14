@@ -122,6 +122,11 @@ template CantonStakingService
     lastSyncEpoch : Int         -- Last synced epoch from Ethereum
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
+    -- SECURITY FIX DAML-H-03: Supply cap tracking for mUSD minted on unstake.
+    -- Yield accrual means unstake can mint MORE mUSD than was originally staked.
+    -- Without a cap, the staking service could mint unbounded mUSD.
+    musdMintCap : Money         -- Maximum total mUSD mintable through unstake
+    currentUnstakeMinted : Money -- Running total of mUSD minted via unstake
     paused : Bool
     -- DAML-H-04: Mandatory compliance — all stakers must pass blacklist/freeze checks
     complianceRegistryCid : ContractId ComplianceRegistry
@@ -134,6 +139,7 @@ template CantonStakingService
     observer observers
 
     ensure totalShares >= 0.0 && globalSharePrice > 0.0
+        && musdMintCap > 0.0 && currentUnstakeMinted >= 0.0
 
     -- | Current share price: uses GLOBAL share price for unified yield
     nonconsuming choice GetSharePrice : Money
@@ -209,6 +215,10 @@ template CantonStakingService
         -- Calculate mUSD value using GLOBAL share price
         let musdAmount = smusd.shares * globalSharePrice
 
+        -- SECURITY FIX DAML-H-03: Enforce supply cap on unstake minting.
+        -- Yield means unstake mints more than was staked, creating net new mUSD.
+        assertMsg "UNSTAKE_EXCEEDS_MUSD_MINT_CAP" (currentUnstakeMinted + musdAmount <= musdMintCap)
+
         -- Burn smUSD shares
         archive smusdCid
 
@@ -222,9 +232,10 @@ template CantonStakingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- Update pool state
+        -- Update pool state (DAML-H-03: track minted amount)
         newService <- create this with
           totalShares = totalShares - smusd.shares
+          currentUnstakeMinted = currentUnstakeMinted + musdAmount
 
         return (newService, musdCid)
 
@@ -273,6 +284,13 @@ template CantonStakingService
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
+        -- SECURITY FIX DAML-H-04: Apply same share price bounds as SyncGlobalSharePrice.
+        -- Without bounds, a malicious or buggy oracle could set an extreme value,
+        -- causing massive over/under-payments on unstake.
+        let minAllowedPrice = globalSharePrice * 0.9
+        let maxAllowedPrice = globalSharePrice * 1.1
+        assertMsg "SYNC_YIELD_PRICE_DECREASE_TOO_LARGE" (newSharePrice >= minAllowedPrice)
+        assertMsg "SYNC_YIELD_PRICE_INCREASE_TOO_LARGE" (newSharePrice <= maxAllowedPrice)
         create this with
           globalSharePrice = newSharePrice
           globalTotalAssets = newTotalTreasuryAssets

@@ -560,6 +560,10 @@ template CantonLendingService
         let cfg = getConfig CTN_Coin configs
         assertMsg "CTN_NOT_ENABLED" cfg.enabled
 
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before archiving
+        -- dual-signatory token. Without this, archive fails if issuer != operator.
+        assertMsg "CTN_ISSUER_MUST_BE_OPERATOR" (coin.issuer == operator)
+
         -- Consume the actual token (escrow it)
         archive coinCid
 
@@ -613,6 +617,9 @@ template CantonLendingService
         let cfg = getConfig CTN_USDC configs
         assertMsg "USDC_NOT_ENABLED" cfg.enabled
 
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
+
         archive usdcCid
 
         now <- getTime
@@ -665,6 +672,9 @@ template CantonLendingService
         let cfg = getConfig CTN_USDCx configs
         assertMsg "USDCx_NOT_ENABLED" cfg.enabled
 
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "USDCx_ISSUER_MUST_BE_OPERATOR" (usdcx.issuer == operator)
+
         archive usdcxCid
 
         now <- getTime
@@ -716,6 +726,9 @@ template CantonLendingService
         assertMsg "NOT_OWNER" (smusd.owner == user)
         let cfg = getConfig CTN_SMUSD configs
         assertMsg "SMUSD_NOT_ENABLED" cfg.enabled
+
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "SMUSD_ISSUER_MUST_BE_OPERATOR" (smusd.issuer == operator)
 
         archive smusdCid
 
@@ -785,7 +798,10 @@ template CantonLendingService
             dm <- fetch dmCid
             let combinedSupply = dm.currentSupply + cantonCurrentSupply + borrowAmount
             assertMsg "EXCEEDS_GLOBAL_MINT_CAP" (combinedSupply <= globalMintCap)
-          None -> pure () -- DirectMint not deployed yet; rely on module-level cap
+          -- SECURITY FIX DAML-H-05: When DirectMint is not deployed, still enforce the
+          -- global mint cap against lending supply alone. Previously this was `pure ()`,
+          -- skipping the global cap entirely and relying only on the module-level cap.
+          None -> assertMsg "EXCEEDS_GLOBAL_MINT_CAP" (cantonCurrentSupply + borrowAmount <= globalMintCap)
 
         -- DAML-H-04: Mandatory compliance check — borrower must not be blacklisted
         exercise complianceRegistryCid ValidateMint with minter = user

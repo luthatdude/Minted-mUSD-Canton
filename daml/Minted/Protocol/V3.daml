@@ -191,6 +191,19 @@ template MUSDSupplyService
         assertMsg "THRESHOLD_MUST_BE_POSITIVE" (newThreshold > 0.0)
         create this with largeMintThreshold = newThreshold
 
+    -- SECURITY FIX DAML-H-01: Decrement currentSupply when mUSD is burned (repay/liquidation).
+    -- Without this, the supply cap is never freed up even though actual supply decreases,
+    -- eventually bricking all new minting once the cap is reached.
+    choice SupplyService_Burn : ContractId MUSDSupplyService
+      with
+        burnAmount : Money
+      controller operator
+      do
+        assertMsg "BURN_AMOUNT_POSITIVE" (burnAmount > 0.0)
+        assertMsg "BURN_EXCEEDS_SUPPLY" (burnAmount <= currentSupply)
+        create this with
+          currentSupply = currentSupply - burnAmount
+
 -- ============================================================
 --                     1. MINTED MUSD TOKEN
 -- ============================================================
@@ -272,36 +285,49 @@ template MintedMUSD
 
     -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
     -- DAML-H-04: Fetch validators/aggregator from BridgeService instead of user input
-    choice MUSD_BridgeToEthereum : ContractId AttestationRequest
+    -- BRIDGE-H-02: Nonce is now server-assigned from BridgeService to prevent collisions
+    choice MUSD_BridgeToEthereum : (ContractId AttestationRequest, ContractId BridgeService)
       with
         ethAddress : Text                    -- Target Ethereum address
         chainId : Int                        -- Target chain (1 = mainnet)
         bridgeServiceCid : ContractId BridgeService  -- Bridge service for validators
-        nonce : Int
         expiresAt : Time
+        entropy : Text                       -- BRIDGE-C-03: Hex-encoded entropy from aggregator/caller
+        cantonStateHash : Text               -- BRIDGE-C-03: Canton ledger state hash
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
+        -- BRIDGE-C-03: Validate entropy format (must be hex-encoded, at least 64 chars for 32 bytes)
+        assertMsg "INVALID_ENTROPY" (T.length entropy >= 64)
+        assertMsg "INVALID_CANTON_STATE_HASH" (T.length cantonStateHash >= 64)
 
         -- DAML-H-04: Fetch trusted validators and operator from BridgeService
         bridgeSvc <- fetch bridgeServiceCid
 
+        -- BRIDGE-H-02: Assign nonce from BridgeService (monotonically increasing, no user control)
+        (newBridgeSvcCid, assignedNonce) <- exercise bridgeServiceCid Bridge_AssignNonce
+
         -- Token is consumed (burned) on Canton
-        create AttestationRequest with
+        attestationCid <- create AttestationRequest with
           aggregator = bridgeSvc.operator
           validatorGroup = bridgeSvc.validators
           payload = AttestationPayload with
-            attestationId = "bridge-" <> show nonce
+            attestationId = "bridge-" <> show assignedNonce
             globalCantonAssets = amount
             targetAddress = ethAddress
             amount = amount
             isMint = True  -- Mint on Ethereum side
-            nonce
+            nonce = assignedNonce
             chainId
             expiresAt
+            entropy           -- BRIDGE-C-03: Pass through entropy
+            cantonStateHash   -- BRIDGE-C-03: Pass through canton state hash
           collectedSignatures = Set.empty
+          ecdsaSignatures = []  -- BRIDGE-C-01: Initialize empty ECDSA signature list
           direction = CantonToEthereum
+
+        return (attestationCid, newBridgeSvcCid)
 
     -- | Set blacklist status (issuer only)
     choice MUSD_SetBlacklist : ContractId MintedMUSD
@@ -675,10 +701,12 @@ template Vault
 
     -- | Repay debt
     -- DAML-H-05: Added token verification (blacklist check + issuer match)
-    choice Vault_Repay : ContractId Vault
+    -- SECURITY FIX DAML-H-01: Added supplyServiceCid to decrement global supply on repay
+    choice Vault_Repay : (ContractId Vault, ContractId MUSDSupplyService)
       with
         repayAmount : Money
         musdCid : ContractId MintedMUSD
+        supplyServiceCid : ContractId MUSDSupplyService  -- DAML-H-01: Required for supply decrement
       controller owner
       do
         musd <- fetch musdCid
@@ -706,20 +734,26 @@ template Vault
         let yearSeconds = 31536000.0 : Money
         let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
         let totalInterest = accruedInterest + newInterest
-        
+
         -- Pay interest first, then principal
-        let (remainingRepay, newAccrued) = 
+        let (remainingRepay, newAccrued) =
               if repayAmount >= totalInterest
                 then (repayAmount - totalInterest, 0.0)
                 else (0.0, totalInterest - repayAmount)
-        let newPrincipal = if remainingRepay > principalDebt 
-                           then 0.0 
+        let newPrincipal = if remainingRepay > principalDebt
+                           then 0.0
                            else principalDebt - remainingRepay
-        
-        create this with
+
+        -- DAML-H-01: Decrement global supply tracking to reflect burned mUSD
+        newSupplyServiceCid <- exercise supplyServiceCid SupplyService_Burn with
+          burnAmount = repayAmount
+
+        vaultCid <- create this with
           principalDebt = newPrincipal
           accruedInterest = newAccrued
           lastInterestUpdate = now
+
+        return (vaultCid, newSupplyServiceCid)
 
     -- | Withdraw collateral (must maintain health)
     choice Vault_WithdrawCollateral : ContractId Vault
@@ -742,12 +776,14 @@ template Vault
         create this with collateralAmount = newCollateral
 
     -- | Liquidate - Called by keepers when vault is undercollateralized
-    choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt)
+    -- SECURITY FIX DAML-H-01: Added supplyServiceCid to decrement global supply on liquidation
+    choice Liquidate : (ContractId Vault, ContractId LiquidationReceipt, ContractId MUSDSupplyService)
       with
         liquidator : Party
         repayAmount : Money
         oracleCid : ContractId PriceOracle
         musdCid : ContractId MintedMUSD
+        supplyServiceCid : ContractId MUSDSupplyService  -- DAML-H-01: Required for supply decrement
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
@@ -806,13 +842,22 @@ template Vault
         
         -- Update vault
         let newCollateral = collateralAmount - actualSeize
-        let newDebt = totalDebt - actualRepay
+        -- SECURITY FIX DAML-H-02: Properly separate principal and interest after
+        -- partial liquidation. Previously stored all remaining debt as principalDebt
+        -- with accruedInterest = 0, silently switching to compound interest.
+        -- Repay interest first, then principal (matches Vault_Repay logic).
+        let totalInterest = accruedInterest + newInterest
+        let (newPrincipal, newAccrued) =
+              if actualRepay >= totalInterest
+                then (principalDebt - (actualRepay - totalInterest), 0.0)
+                else (principalDebt, totalInterest - actualRepay)
+        let newDebt = newPrincipal + newAccrued
         let healthAfter = if newDebt == 0.0 then 999.0 else (newCollateral * price) / newDebt
-        
+
         newVault <- create this with
           collateralAmount = newCollateral
-          principalDebt = newDebt
-          accruedInterest = 0.0
+          principalDebt = newPrincipal
+          accruedInterest = newAccrued
           lastInterestUpdate = now
         
         -- Create immutable receipt
@@ -829,8 +874,12 @@ template Vault
           healthAfter
           isFullLiquidation = newDebt == 0.0
           timestamp = now
-        
-        return (newVault, receipt)
+
+        -- DAML-H-01: Decrement global supply tracking to reflect burned mUSD
+        newSupplyServiceCid <- exercise supplyServiceCid SupplyService_Burn with
+          burnAmount = actualRepay
+
+        return (newVault, receipt, newSupplyServiceCid)
 
 -- ============================================================
 --                     5. VAULT MANAGER
@@ -1015,7 +1064,12 @@ template CantonDirectMint
         
         assertMsg "BELOW_MIN_AMOUNT" (depositAmount >= config.minAmount)
         assertMsg "ABOVE_MAX_AMOUNT" (depositAmount <= config.maxAmount)
-        
+
+        -- SECURITY FIX DAML-C-01: Validate deposit issuer matches operator before
+        -- archiving dual-signatory token. Without this check, archive fails at runtime
+        -- if deposit.issuer != operator, bricking mint operations.
+        assertMsg "DEPOSIT_ISSUER_MUST_BE_OPERATOR" (deposit.issuer == operator)
+
         archive depositCid
         
         let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
@@ -1381,13 +1435,17 @@ template BridgeService
       && lastNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
-    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD)
+    -- SECURITY FIX DAML-C-02: Route minting through MUSDSupplyService to enforce
+    -- global supply cap. Previously minted mUSD directly without cap check, allowing
+    -- unbounded minting via bridge.
+    choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD, ContractId MUSDSupplyService)
       with
         attestationCid : ContractId AttestationRequest
         recipient : Party
         amount : Money
         mpaHash : Text
         mpaUri : Text
+        supplyServiceCid : ContractId MUSDSupplyService  -- DAML-C-02: Required for supply cap check
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
@@ -1406,29 +1464,28 @@ template BridgeService
         let sigParties = Set.toList attestation.collectedSignatures
         assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
 
-        -- DAML-H-03: Use BFT formula instead of stored requiredSignatures
+        -- BRIDGE-H-01: Use stored requiredSignatures from BridgeService to match
+        -- the Solidity BLEBridgeV9.minSignatures() threshold, ensuring Canton and
+        -- Ethereum agree on exactly how many signatures are needed.
         let sigCount = Set.size attestation.collectedSignatures
-        let bftRequired = (length attestation.validatorGroup * 2 + 2) / 3
-        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= bftRequired)
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
 
         -- Archive attestation (consumed)
         archive attestationCid
 
-        -- Mint mUSD on Canton
-        musdCid <- create MintedMUSD with
-          issuer = operator
-          owner = recipient
-          amount
-          blacklisted = False
+        -- DAML-C-02: Mint mUSD through supply service to enforce global supply cap.
+        -- Previously created MintedMUSD directly, bypassing supply cap checks entirely.
+        (newSupplyServiceCid, musdCid) <- exercise supplyServiceCid SupplyService_VaultMint with
+          borrower = recipient
+          borrowAmount = amount
           agreementHash = mpaHash
           agreementUri = mpaUri
-          observers = []
 
         newService <- create this with
           totalBridgedIn = totalBridgedIn + amount
           lastNonce = attestation.payload.nonce
 
-        return (newService, musdCid)
+        return (newService, musdCid, newSupplyServiceCid)
 
     -- | Assign nonce to a bridge-out request
     choice Bridge_AssignNonce : (ContractId BridgeService, Int)
@@ -1477,6 +1534,7 @@ data BridgeDirection = CantonToEthereum | EthereumToCanton
   deriving (Eq, Show)
 
 -- | AttestationPayload - Data being attested
+-- BRIDGE-C-03: Added entropy and cantonStateHash fields required by BLEBridgeV9
 data AttestationPayload = AttestationPayload with
     attestationId : Text
     globalCantonAssets : Money
@@ -1486,23 +1544,31 @@ data AttestationPayload = AttestationPayload with
     nonce : Int
     chainId : Int
     expiresAt : Time
+    entropy : Text             -- BRIDGE-C-03: Hex-encoded entropy for attestation ID unpredictability
+    cantonStateHash : Text     -- BRIDGE-C-03: Canton ledger state hash for on-chain verification
   deriving (Eq, Show)
 
 -- | AttestationRequest - Multi-party validation for bridge operations.
+-- BRIDGE-C-01: Added ecdsaSignatures field to store actual ECDSA signature bytes
+--   alongside the party set, so the relay can read them for Ethereum submission.
 template AttestationRequest
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : AttestationPayload
     collectedSignatures : Set.Set Party
+    ecdsaSignatures : [(Party, Text)]  -- BRIDGE-C-01: Maps Party to hex-encoded ECDSA signature
+    requiredSignatures : Int           -- BRIDGE-H-01: Threshold from BridgeService, matches Solidity minSignatures
     direction : BridgeDirection
   where
     signatory aggregator
     observer validatorGroup
 
     ensure length validatorGroup > 0 && length validatorGroup <= 100
+        && requiredSignatures > 0 && requiredSignatures <= length validatorGroup
 
     -- | Validator signs the attestation
+    -- BRIDGE-C-01: Now stores ECDSA signature bytes alongside party tracking
     choice Attestation_Sign : ContractId AttestationRequest
       with
         validator : Party
@@ -1512,27 +1578,27 @@ template AttestationRequest
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
         assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature >= 130)
-        
+
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
-        
-        create this with collectedSignatures = Set.insert validator collectedSignatures
+
+        -- BRIDGE-C-01: Store both party and ECDSA signature bytes
+        create this with
+          collectedSignatures = Set.insert validator collectedSignatures
+          ecdsaSignatures = (validator, ecdsaSignature) :: ecdsaSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- Previously used 50%+1, which is insufficient for BFT guarantees
+    -- BRIDGE-H-01: Use stored requiredSignatures (from BridgeService, matching Solidity
+    -- BLEBridgeV9.minSignatures()) instead of computing a separate BFT formula.
     choice Attestation_Complete : ()
       controller aggregator
       do
-        -- For 5 validators: ceil(3.33) = 4 required (80%)
-        -- For 7 validators: ceil(4.67) = 5 required (71%)
-        let n = length validatorGroup
-        let requiredSignatures = (n * 2 + 2) / 3  -- ceil(2n/3) using integer arithmetic
         let sigCount = Set.size collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
-        
+
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
-        
+
         return ()
 
     -- | Cancel attestation
