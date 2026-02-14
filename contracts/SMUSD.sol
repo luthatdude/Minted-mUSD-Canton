@@ -298,11 +298,29 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERC-4626 compliance — maxWithdraw/maxRedeem must return 0
-    // when withdraw/redeem would revert (paused or cooldown active).
-    // EIP-4626 §maxWithdraw: "MUST return the maximum amount … that would
-    // not cause a revert"
+    // ERC-4626 compliance — max* functions must return 0 when the
+    // corresponding deposit/mint/withdraw/redeem would revert.
+    // EIP-4626: "MUST return the maximum amount … that would not cause
+    // a revert"
     // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Maximum assets that can be deposited for `receiver`
+    /// @dev Returns 0 when paused (deposit has whenNotPaused modifier)
+    function maxDeposit(address receiver) public view override returns (uint256) {
+        if (paused()) {
+            return 0;
+        }
+        return super.maxDeposit(receiver);
+    }
+
+    /// @notice Maximum shares that can be minted for `receiver`
+    /// @dev Returns 0 when paused (mint has whenNotPaused modifier)
+    function maxMint(address receiver) public view override returns (uint256) {
+        if (paused()) {
+            return 0;
+        }
+        return super.maxMint(receiver);
+    }
 
     /// @notice Maximum assets owner can withdraw
     /// @dev Returns 0 when paused or cooldown is active (ERC-4626 compliance)

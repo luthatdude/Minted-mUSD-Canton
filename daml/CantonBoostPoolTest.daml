@@ -779,7 +779,7 @@ test_PauseUnpause = script do
       newPaused = True
 
   setTime (addRelTime baseTime (seconds 172801))
-  -- Withdraw succeeds even when paused (H-B1 fix: operator cannot lock user funds)
+  -- Withdraw succeeds even when paused (H-B1: operator cannot lock user funds)
   (_, returnedCantonCid) <- submitMulti [alice] [operator] do
     exerciseCmd poolCid5 Withdraw with
       user = alice
@@ -1098,7 +1098,7 @@ test_CantonCoinTransfer = script do
 
   cantonCid <- createCanton operator alice 500.0
 
-  -- DAML-H-01 FIX: Create compliance registry for transfer validation
+  -- DAML-H-01: Create compliance registry for transfer validation
   now <- getTime
   complianceCid <- submit regulator do
     createCmd ComplianceRegistry with

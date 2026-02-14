@@ -29,6 +29,8 @@ data:
   # For AWS: "my-org-musd-canton-backups-us-east-1"
   # For GCS: "my-org-musd-canton-backups" (and use gsutil cp instead of aws s3 cp)
   BACKUP_S3_BUCKET: "REPLACE_WITH_ACTUAL_BUCKET_NAME"
+  # For GCS-based backup (alternative to S3). Set to your GCS bucket name.
+  BACKUP_GCS_BUCKET: "REPLACE_WITH_ACTUAL_GCS_BUCKET_NAME"
 ---
 # PVC for storing database backups
 apiVersion: v1
@@ -123,7 +125,7 @@ spec:
                   pg_restore --list "${BACKUP_FILE}" > /dev/null 2>&1
                   echo "[$(date -u)] Backup integrity check passed."
 
-                  # INFRA-H-02 FIX: Upload backup to off-cluster storage (S3/GCS)
+                  # INFRA-H-02: Upload backup to off-cluster storage (S3/GCS)
                   # Ensures disaster recovery even if the entire cluster is lost
                   if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
                     S3_KEY="canton-backups/${BACKUP_FILE##*/}"
@@ -160,18 +162,18 @@ spec:
                   value: canton
                 # INFRA-H-05: DB credentials read from volume-mounted secrets at /run/secrets/
                 # PGUSER and PGPASSWORD are set from files by the entrypoint script below
-                # INFRA-H-02 FIX: Off-cluster backup bucket configuration
+                # INFRA-H-02: Off-cluster backup bucket configuration
                 - name: BACKUP_S3_BUCKET
                   valueFrom:
                     configMapKeyRef:
                       name: backup-config
-                      key: s3-bucket
+                      key: BACKUP_S3_BUCKET
                       optional: true
                 - name: BACKUP_GCS_BUCKET
                   valueFrom:
                     configMapKeyRef:
                       name: backup-config
-                      key: gcs-bucket
+                      key: BACKUP_GCS_BUCKET
                       optional: true
               resources:
                 requests:

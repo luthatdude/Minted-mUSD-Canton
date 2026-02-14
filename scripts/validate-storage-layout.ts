@@ -1,5 +1,5 @@
 /**
- * M-05 FIX: Storage Layout Validation for UUPS Upgradeable Contracts
+ * M-05: Storage Layout Validation for UUPS Upgradeable Contracts
  *
  * Compiles all upgradeable contracts via Hardhat and uses
  * @openzeppelin/upgrades-core to verify that no storage collisions or

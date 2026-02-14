@@ -201,9 +201,9 @@ spec:
               value: "5"
             - name: PGBOUNCER_RESERVE_POOL_TIMEOUT
               value: "3"
-            # INFRA-H-01 FIX: Removed secretKeyRef env vars (visible in /proc/<pid>/environ).
+            # INFRA-H-01: Removed secretKeyRef env vars (visible in /proc/<pid>/environ).
             # Credentials are loaded from file-mounted secrets via entrypoint wrapper.
-          # INFRA-H-01 FIX: Wrap entrypoint to load credentials from mounted secret files
+          # INFRA-H-01: Wrap entrypoint to load credentials from mounted secret files
           command:
             - /bin/sh
             - -c
@@ -226,7 +226,7 @@ spec:
           volumeMounts:
             - name: pgbouncer-tmp
               mountPath: /tmp
-            # INFRA-H-01 FIX: Mount DB credentials as files
+            # INFRA-H-01: Mount DB credentials as files
             - name: db-credentials
               mountPath: /run/secrets/db-username
               subPath: username
@@ -271,7 +271,7 @@ spec:
                   name: postgres-credentials
                   key: password
             - name: DATA_SOURCE_URI
-              # INFRA-H-02 FIX: Use sslmode=require (postgres has TLS enabled via args)
+              # INFRA-H-02: Use sslmode=require (postgres has TLS enabled via args)
               value: "127.0.0.1:5432/canton?sslmode=require"
             # Disable default metrics that require superuser and enable safe collectors
             - name: PG_EXPORTER_DISABLE_DEFAULT_METRICS

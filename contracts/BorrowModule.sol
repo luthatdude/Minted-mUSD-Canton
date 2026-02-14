@@ -167,7 +167,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Set the interest rate model (enables dynamic rates)
-    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setInterestRateModel(address _model) external onlyRole(TIMELOCK_ROLE) {
         if (_model == address(0)) revert ZeroAddress();
         address old = address(interestRateModel);
@@ -176,7 +176,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Set the SMUSD vault for interest routing
-    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setSMUSD(address _smusd) external onlyRole(TIMELOCK_ROLE) {
         if (_smusd == address(0)) revert ZeroAddress();
         address old = address(smusd);
@@ -185,7 +185,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Set the Treasury for supply calculation
-    /// @dev SOL-H-01 FIX: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setTreasury(address _treasury) external onlyRole(TIMELOCK_ROLE) {
         if (_treasury == address(0)) revert ZeroAddress();
         address old = address(treasury);
@@ -486,7 +486,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                 routingSucceeded = true; // No routing needed
             }
 
-            // SOL-H-02 FIX: Always increment totalBorrows to reflect actual debt accrual.
+            // SOL-H-02: Always increment totalBorrows to reflect actual debt accrual.
             // Individual position debts (via _accrueInterest) accrue regardless of whether
             // mUSD routing to SMUSD succeeds. totalBorrows must stay in sync with the sum
             // of individual debts; otherwise utilization is understated and interest rates

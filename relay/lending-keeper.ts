@@ -75,7 +75,7 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
   // INFRA-H-06: Validated below — requireHTTPS(tradecraftBaseUrl)
 
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "15000", 10),  // 15s
-  // TS-H-01 FIX: Use Number() + validation instead of parseFloat for financial values
+  // TS-H-01: Use Number() + validation instead of parseFloat for financial values
   // parseFloat silently accepts garbage like "5.0abc" → 5.0, risking misconfiguration
   minProfitUsd: (() => {
     const v = Number(process.env.MIN_PROFIT_USD || "5.0");
@@ -96,7 +96,7 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
   },
 
   // Read sMUSD price from env (production: synced from yield-sync-service)
-  // TS-H-01 FIX: Strict numeric validation
+  // TS-H-01: Strict numeric validation
   smusdPrice: (() => {
     const v = Number(process.env.SMUSD_PRICE || "1.05");
     if (Number.isNaN(v) || v <= 0) throw new Error("SMUSD_PRICE must be a positive number");

@@ -140,7 +140,7 @@ error InsufficientMusdBalance();
 error SwapFailedOrphanedDebt();
 error SwapReturnedZero();
 error MaxTwentyPct();
-error InvalidTwapPeriod();  // SOL-H-03 FIX: Invalid TWAP configuration
+error InvalidTwapPeriod();  // SOL-H-03: Invalid TWAP configuration
 
 // ─── Bridge / Attestation ───────────────────────────────────────────────
 error MinSigsTooLow();

@@ -1,15 +1,15 @@
 -- | SUPERSEDED: Use Minted.Protocol.V3 (daml/Minted/Protocol/V3.daml) for production.
--- V3 consolidates all V2Fixed fixes into a unified module. This file is retained for
--- audit trail purposes — all security fix IDs (D-H01 through 5C-H02) originated here.
+-- V3 consolidates all V2 changes into a unified module. This file is retained for
+-- audit trail purposes — all security IDs (D-H01 through 5C-H02) originated here.
 --
 -- MintedProtocolV2Fixed
--- Full audited Daml protocol with security fixes applied
+-- Full audited Daml protocol with security updates applied
 --
 -- ============================================================
 -- SECURITY REVIEW & AUDIT LOG
 -- ============================================================
 --
--- CRITICAL FIXES APPLIED:
+-- CRITICAL CHANGES APPLIED:
 -- 1. TIME MANIPULATION: Removed user-provided `currentTime` parameters across all choices
 --    (Vault, Oracle, Liquidation). Replaced with `getTime` (Ledger Effective Time) to
 --    prevent interest manipulation and oracle staleness bypasses.
@@ -627,7 +627,7 @@ template Vault
 
         colData <- fetch collateral
 
-        -- Fix: GetPrice no longer takes Time
+        -- GetPrice no longer takes Time
         priceOpt <- exercise oracleCid GetPrice with
           symbol = collateralSymbol
 
@@ -900,7 +900,7 @@ template LeverageManager
   where
     signatory operator, user
 
-    -- Fix: Loop logic updated to handle new pool contract ID return type
+    -- Loop logic updated to handle new pool contract ID return type
     -- Use foldlA instead of local recursion (Daml-LF doesn't support local recursive definitions)
     choice Loop_Leverage : VaultId
       with

@@ -1,5 +1,5 @@
 # Pod Disruption Budgets — ensure availability during node maintenance
-# INFRA-H-03 FIX: Changed from minAvailable:1 to maxUnavailable:1
+# INFRA-H-03: Changed from minAvailable:1 to maxUnavailable:1
 # minAvailable:1 on single-replica blocks kubectl drain entirely
 ---
 apiVersion: policy/v1

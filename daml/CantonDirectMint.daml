@@ -128,14 +128,14 @@ template USDCx
       controller owner
       do create this with privacyObservers = newObservers
 
-    -- DAML-H-01 FIX: Mandatory compliance check on USDCx transfers
+    -- DAML-H-01: Mandatory compliance check on USDCx transfers
     choice USDCx_Transfer : ContractId USDCxTransferProposal
       with
         newOwner : Party
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- DAML-H-01 FIX: Validate sender not frozen/blacklisted, receiver not blacklisted
+        -- DAML-H-01: Validate sender not frozen/blacklisted, receiver not blacklisted
         exercise complianceRegistryCid ValidateTransfer with
           sender = owner
           receiver = newOwner
@@ -167,7 +167,7 @@ template USDCxTransferProposal
     signatory usdcx.issuer, usdcx.owner
     observer newOwner
 
-    -- DAML-H-01 FIX: Re-validate compliance at acceptance time
+    -- DAML-H-01: Re-validate compliance at acceptance time
     -- (status may have changed between proposal creation and acceptance)
     choice USDCxTransferProposal_Accept : ContractId USDCx
       with
@@ -224,7 +224,7 @@ template CantonMUSD
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- FIX D-M08: Validate sender and recipient against compliance registry
+        -- D-M08: Validate sender and recipient against compliance registry
         exercise complianceRegistryCid ValidateTransfer with
           sender = owner
           receiver = newOwner
@@ -476,12 +476,12 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
-    serviceName : Text           -- FIX D-M02: Unique service name for lookupByKey
+    serviceName : Text           -- D-M02: Unique service name for lookupByKey
   where
     signatory operator
     observer usdcIssuer, authorizedMinters
 
-    -- FIX D-M02: Contract key for cross-module supply cap coordination
+    -- D-M02: Contract key for cross-module supply cap coordination
     key (operator, serviceName) : (Party, Text)
     maintainer key._1
 
@@ -690,15 +690,15 @@ template CantonDirectMintService
         return (newService, redemptionCid)
 
     -- Admin controls
-    -- FIX HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
-    -- FIX C-DAML-03: Governance proof required for supply cap changes
+    -- HIGH-02: Supply cap increase cooldown — prevents chaining 20% increases
+    -- C-DAML-03: Governance proof required for supply cap changes
     choice DirectMint_UpdateSupplyCap : ContractId CantonDirectMintService
       with
         newCap : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
-        -- FIX: Consume governance proof to prevent replay
+        -- Consume governance proof to prevent replay
         proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == SupplyCapChange)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
@@ -797,7 +797,7 @@ template RedemptionRequest
 --                     SECTION 7: BURN RATE LIMITER
 -- ============================================================
 
--- | FIX C-DAML-02: BurnRateLimiter — rate-limits mUSD burns to prevent
+-- | C-DAML-02: BurnRateLimiter — rate-limits mUSD burns to prevent
 -- flash-unwind attacks on loop positions. Tracks daily burn volume
 -- and enforces a maximum per 24h window.
 template BurnRateLimiter

@@ -137,17 +137,17 @@ template InterestRateService
         return (supplierAmount, reserveAmount)
 
     -- | Sync market state from Ethereum (via bridge attestation)
-    -- FIX D-M-03: Require governance co-signature and attestation for market state sync
+    -- D-M-03: Require governance co-signature and attestation for market state sync
     choice RateService_SyncMarketState : ContractId InterestRateService
       with
         newTotalBorrows : Decimal
         newTotalSupply : Decimal
         ethBlockNumber : Int
-        attestationHash : Text    -- FIX D-M-03: SHA-256 attestation from bridge validators
+        attestationHash : Text    -- D-M-03: SHA-256 attestation from bridge validators
       controller operator, governance
       do
         assertMsg "STALE_DATA" (ethBlockNumber > marketState.ethBlockNumber)
-        -- FIX D-M-03: Require non-empty attestation hash to prevent unverified syncs
+        -- D-M-03: Require non-empty attestation hash to prevent unverified syncs
         assertMsg "ATTESTATION_REQUIRED" (attestationHash /= "")
         now <- getTime
         create this with

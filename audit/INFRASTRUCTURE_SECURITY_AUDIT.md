@@ -1,6 +1,6 @@
 # Minted mUSD Protocol — Infrastructure & Operational Security Audit
 
-**Auditor Agent:** infra-reviewer  
+**Auditor:** Minted Security Team — Infrastructure  
 **Date:** 2026-02-13  
 **Scope:** All infrastructure, deployment, CI/CD, Docker, Kubernetes, and configuration files  
 **Repository:** `/Users/luiscuello/Minted-mUSD-Canton/`

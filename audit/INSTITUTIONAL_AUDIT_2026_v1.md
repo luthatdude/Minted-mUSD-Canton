@@ -2,11 +2,10 @@
 ## Minted mUSD Canton Protocol — Full Re-Audit
 ### February 13, 2026
 
-**Auditors**: Minted Security Team (6-Agent Coordinated Review)  
+**Auditors**: Minted Security Team (Coordinated Review)  
 **Methodology**: Trail of Bits / Spearbit / Consensys Diligence hybrid framework  
 **Scope**: Every source file across all layers (~160+ files)  
 **Languages**: Solidity 0.8.26, DAML, TypeScript, YAML/K8s  
-**Agents Deployed**: solidity-auditor, daml-auditor, typescript-reviewer, infra-reviewer, testing-agent, gas-optimizer
 
 ---
 
@@ -29,7 +28,7 @@
 
 ## SCORING BREAKDOWN
 
-| # | Category (Weight) | Score | Agent | Key Observations |
+| # | Category (Weight) | Score | Reviewer | Key Observations |
 |---|---|---|---|---|
 | 1 | **Smart Contract Security** (25%) | 8.2 / 10 | solidity-auditor | Strong RBAC, CEI compliance, ReentrancyGuard throughout. PendleStrategyV2 upgrade auth and unlimited approval are the only HIGH findings. No criticals in Solidity. |
 | 2 | **Cross-Chain Bridge Security** (15%) | 8.5 / 10 | solidity-auditor | Multi-layered replay protection exceeds industry standard. Attestation entropy + state hash + nonce + timestamp bounds + rate limiting. |
@@ -37,7 +36,7 @@
 | 4 | **TypeScript Services** (10%) | 7.5 / 10 | typescript-reviewer | TLS enforcement, secret sanitization, KMS key management. dotenv in yield-api breaks secret model (HIGH). parseFloat precision loss in financial calcs (HIGH). |
 | 5 | **Infrastructure & DevOps** (10%) | 8.5 / 10 | infra-reviewer | Pod Security Standards `restricted`, default-deny NetworkPolicies, ESO integration, SHA-pinned Actions, 9 security scanners in CI. ~~Placeholder Canton image digests~~ pinned to verified Docker Hub SHA-256 (CRIT-03 RESOLVED). |
 | 6 | **Operational Security** (10%) | 7.8 / 10 | infra-reviewer | Health endpoints, Prometheus alerting, graceful shutdown. ServiceMonitor label mismatch means metrics not scraped. |
-| 7 | **Test Coverage** (10%) | 7.5 / 10 | testing-agent | 1,769 Hardhat tests, 91 Certora rules, 35 Foundry fuzz tests, 245 DAML scenarios. 10/21 contracts lack formal verification. Zero frontend tests. |
+| 7 | **Test Coverage** (10%) | 7.5 / 10 | Testing | 1,769 Hardhat tests, 91 Certora rules, 35 Foundry fuzz tests, 245 DAML scenarios. 10/21 contracts lack formal verification. Zero frontend tests. |
 | 8 | **Gas Efficiency** (10%) | 6.5 / 10 | gas-optimizer | Immutables correct, calldata used, short-circuit in loops. But string requires everywhere (~139 total), uncached storage reads, missing unchecked on bounded loops. ~80-120k gas saveable per borrow/repay cycle. |
 
 ### Weighted Composite Score
@@ -50,7 +49,7 @@ $$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \appro
 ## CRITICAL FINDINGS (3)
 
 ### CRIT-01: Deprecated DAML Templates Still Compilable — Signature Forgery Vector
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/BLEBridgeProtocol.daml` (deprecated V1/V2)
 - **Status**: ✅ **RESOLVED** (commit `64ed868`)
 - **Description**: Deprecated bridge templates were still compiled and deployable. The V1 `ValidatorSignature` template uses `signatory aggregator` instead of the validator party, meaning a compromised aggregator could forge validator signatures. V2 templates bypass compliance checks entirely and lack rate limits or cross-module supply coordination.
@@ -58,15 +57,15 @@ $$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \appro
 - **Remediation Applied**: Archived 6 deprecated DAML files to `archive/daml/` (outside the `daml/` source directory). Files archived: `BLEProtocol.daml`, `BLEBridgeProtocol.daml`, `MintedMUSD.daml`, `MUSD_Protocol.daml`, `TokenInterface.daml`, `InstitutionalAssetV4.daml`. Verified zero active modules import any archived file. `daml.yaml` (`source: .`) only compiles files within `daml/`, so archived files are excluded from compilation. Added `archive/daml/DEPRECATED.md` documenting why each file was archived.
 
 ### ~~CRIT-02: Deprecated CantonDirectMint Bypasses All Compliance~~ — RETRACTED (False Positive)
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonDirectMint.daml`
 - **Status**: ❌ **RETRACTED** — False positive identified during remediation
 - **Verification**: `CantonDirectMint.daml` is the **active production module**, imported by 9 other modules (CantonLending, CantonSMUSD, CantonLoopStrategy, CantonBoostPool, CantonCoinToken, and 4 test files). It contains **12 compliance references** (`ComplianceRegistry`, `ValidateMint`, `ValidateRedemption`, `ValidateTransfer`), mandatory compliance enforcement, rate limiting via `BurnRateLimiter`, and cross-module supply coordination via `CantonDirectMintService`.
-- **Root Cause of False Positive**: The audit agent confused the standalone `CantonDirectMint.daml` (active, with full compliance) with the V3-embedded `CantonDirectMint` template inside `Minted/Protocol/V3.daml`. Both are production code; neither is deprecated.
+- **Root Cause of False Positive**: The review confused the standalone `CantonDirectMint.daml` (active, with full compliance) with the V3-embedded `CantonDirectMint` template inside `Minted/Protocol/V3.daml`. Both are production code; neither is deprecated.
 - **Finding Count Adjustment**: Total criticals reduced from 3 to 2 (1 resolved, 1 retracted, 1 open).
 
 ### CRIT-03: Placeholder Container Image Digests in Canton K8s Deployments
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `k8s/canton/participant-deployment.yaml`
 - **Status**: ✅ **RESOLVED**
 - **Description**: Canton/DAML deployment manifests used placeholder image digests (`sha256:MUST_REPLACE_WITH_REAL_DIGEST`) instead of real SHA-256 hashes. In a cluster that enforces image digest verification (standard for institutional deployments), these pods would fail to start.
@@ -83,86 +82,86 @@ $$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \appro
 ## HIGH FINDINGS (13)
 
 ### SOL-H-01: PendleStrategyV2 Grants Unlimited Router Approval
-- **Agent**: solidity-auditor
+- **Reviewer**: Solidity
 - **File**: `contracts/strategies/PendleStrategyV2.sol`
 - **Description**: `type(uint256).max` approval granted to Pendle Router. SkySUSDSStrategy already uses per-operation approvals (remediated in prior audit), but PendleStrategyV2 was missed.
 - **Impact**: If Pendle Router is compromised or upgraded maliciously, all strategy funds are drainable in a single transaction.
 - **Recommendation**: Use per-operation `forceApprove(amount)` + `forceApprove(0)` pattern matching SkySUSDSStrategy.
 
 ### SOL-H-02: PendleStrategyV2 _authorizeUpgrade Bypasses Timelock
-- **Agent**: solidity-auditor
+- **Reviewer**: Solidity
 - **File**: `contracts/strategies/PendleStrategyV2.sol`
 - **Description**: `_authorizeUpgrade` requires `DEFAULT_ADMIN_ROLE` instead of `TIMELOCK_ROLE`, allowing immediate upgrades without the 48h governance delay enforced on other upgradeable contracts.
 - **Impact**: Compromised admin can upgrade strategy implementation instantly, bypassing governance safeguards.
 - **Recommendation**: Change to `onlyRole(TIMELOCK_ROLE)` with `_setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE)`.
 
 ### DAML-H-01: PriceFeed_EmergencyUpdate Bypasses Attestation Requirements
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonLending.daml:174-188`
 - **Description**: `PriceFeed_EmergencyUpdate` bypasses the ±50% price movement cap of `PriceFeed_Update`. Only a positive-price check and 5-minute cooldown exist. A compromised operator key can set arbitrary prices.
 - **Impact**: Manipulated oracle prices affect all collateral valuations, potentially enabling unjust liquidations or undercollateralized borrowing.
 - **Recommendation**: Add a wider cap (±90%) or require multi-party governance proof for emergency updates.
 
 ### DAML-H-02: CantonLoopStrategy Compliance Registry is Optional
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonLoopStrategy.daml:74`
 - **Description**: `complianceRegistryCid` is `Optional (ContractId ComplianceRegistry)`. When `None`, all compliance checks are skipped. Other modules (CantonLending, CantonDirectMint) use mandatory compliance.
 - **Impact**: Blacklisted parties can use loop strategies to interact with the protocol, bypassing sanctions/AML controls.
 - **Recommendation**: Change to mandatory `ContractId ComplianceRegistry`.
 
 ### DAML-H-03: Legacy SyncYield Choice Lacks Modern Attestation Caps
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonSMUSD.daml`
 - **Description**: The legacy `SyncYield` choice lacks the attestation requirements and movement caps present in the newer `SyncGlobalSharePrice` choice.
 - **Impact**: If exercised, allows unattested yield updates without bounds checking.
 - **Recommendation**: Remove or gate the legacy choice behind governance controls.
 
 ### DAML-H-04: V3 MUSDSupplyService Uncoordinated With CantonDirectMint
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **Description**: Supply tracking in `MUSDSupplyService` operates independently from `CantonDirectMintService` supply tracking, allowing potential supply cap bypass through module interaction.
 - **Recommendation**: Implement cross-module supply cap enforcement or a shared supply ledger.
 
 ### DAML-H-05: Nonconsuming Deposit Choices Return Stale Contract IDs
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonLending.daml:512-561`
 - **Description**: Deposit choices are `nonconsuming` but modify ledger state (archive tokens, create escrows). The returned `self` CID may be stale if concurrent deposits race.
 - **Impact**: Race condition could cause deposit failure or double-counting in rapid succession.
 - **Recommendation**: Document concurrency expectations or switch to consuming pattern with explicit re-creation.
 
 ### TS-H-01: Yield API Uses dotenv Breaking Docker Secrets Model
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **File**: `bot/src/yield-api.ts` (or similar)
 - **Description**: `dotenv.config()` call loads `.env` file, bypassing the Docker secrets / environment variable pattern used by all other services.
 - **Impact**: Secrets could be committed in `.env` files, and the inconsistent pattern creates operational confusion.
 - **Recommendation**: Remove `dotenv` import. Use Docker secrets or environment variables directly.
 
 ### TS-H-02: Insecure Default RPC URL
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **Description**: A service falls back to `http://localhost:8545` when no RPC URL is provided, using unencrypted HTTP.
 - **Impact**: In production, connections to localhost would fail silently or connect to an unintended local process. The HTTP scheme bypasses TLS.
 - **Recommendation**: Require explicit RPC URL. Remove default. Enforce HTTPS validation.
 
 ### TS-H-03: parseFloat Precision Loss in Financial Calculations
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **File**: `bot/src/lending-keeper.ts:110-120`
 - **Description**: `toFixed()` helper uses `parseFloat()` for string-to-number conversion, losing precision for values > 2^53. A $10M position with 18-decimal precision produces 10^25, far beyond float64's integer range.
 - **Impact**: Health factor miscalculation for large positions ($10M+), potentially causing missed or premature liquidations.
 - **Recommendation**: Parse strings directly as BigInt. Split on `.`, handle integer and fractional parts separately.
 
 ### TEST-H-01: No Certora Spec for CollateralVault
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `certora/specs/` (missing)
 - **Description**: CollateralVault holds ALL protocol collateral but has no formal verification spec. It is the highest-value target for invariant violations.
 - **Recommendation**: Create CollateralVault.spec verifying: total deposits ≥ sum of user deposits, no withdrawal exceeds balance, enabled tokens only.
 
 ### TEST-H-02: No Certora Spec for RedemptionQueue
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `certora/specs/` (missing)
 - **Description**: RedemptionQueue manages FIFO ordering and daily withdrawal limits without formal verification.
 - **Recommendation**: Create RedemptionQueue.spec verifying FIFO ordering invariant and daily cap enforcement.
 
 ### TEST-H-03: Zero Frontend Tests
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `frontend/` (no test files)
 - **Description**: The React frontend has no unit tests, integration tests, or E2E tests. Given it handles wallet connections, transaction signing, and displays financial data, this is a significant coverage gap.
 - **Recommendation**: Add React Testing Library unit tests for critical components (wallet connection, transaction forms, balance displays). Add Cypress/Playwright E2E for key user flows.
@@ -222,7 +221,7 @@ $$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \appro
 
 ## LOW FINDINGS (25)
 
-| ID | Agent | Summary |
+| ID | Reviewer | Summary |
 |---|---|---|
 | SOL-L-01 | solidity | PriceOracle auto-recovery clears circuit breaker silently |
 | SOL-L-02 | solidity | DepositRouter refund absorption on ETH send failure |
@@ -254,7 +253,7 @@ $$= 2.05 + 1.275 + 0.87 + 0.75 + 0.85 + 0.78 + 0.75 + 0.65 = \mathbf{7.98 \appro
 
 ## INFORMATIONAL FINDINGS (10)
 
-| ID | Agent | Summary |
+| ID | Reviewer | Summary |
 |---|---|---|
 | SOL-I-01 | solidity | CEI pattern compliance confirmed across all contracts ✅ |
 | SOL-I-02 | solidity | Event coverage complete — all state changes emit events ✅ |
@@ -401,6 +400,6 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 
 ---
 
-*Report generated by coordinated 6-agent review: solidity-auditor, daml-auditor, typescript-reviewer, infra-reviewer, testing-agent, gas-optimizer*
+*Report generated by Minted Security Team*
 *Methodology: Trail of Bits / Spearbit / Consensys Diligence hybrid framework*
 *Date: February 13, 2026*
