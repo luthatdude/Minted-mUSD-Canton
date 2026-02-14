@@ -29,8 +29,6 @@ import DA.Text qualified as T
 import DA.Action (foldlA, when, void)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
--- AUDIT DAML-H-01/02/03: Import Compliance module for pre-transaction validation
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -237,20 +235,13 @@ template MintedMUSD
 
     -- | Transfer mUSD to another party
     -- Creates a TransferProposal that the newOwner must accept
-    -- AUDIT DAML-H-02: Added compliance check before transfer
     choice MUSD_Transfer : ContractId MUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry  -- AUDIT DAML-H-02: Required for compliance
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
-        -- AUDIT DAML-H-02: Validate transfer against ComplianceRegistry.
-        -- Checks sender not blacklisted/frozen, receiver not blacklisted.
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = owner
-          receiver = newOwner
         create MUSDTransferProposal with
           issuer
           sender = owner
@@ -295,24 +286,17 @@ template MintedMUSD
     -- | Bridge mUSD to Ethereum - burns Canton token and creates attestation request
     -- DAML-H-04: Fetch validators/aggregator from BridgeService instead of user input
     -- BRIDGE-H-02: Nonce is now server-assigned from BridgeService to prevent collisions
-    -- AUDIT-CRIT-01: Added supplyServiceCid to decrement global supply on bridge-out
-    choice MUSD_BridgeToEthereum : (ContractId AttestationRequest, ContractId BridgeService, ContractId MUSDSupplyService)
+    choice MUSD_BridgeToEthereum : (ContractId AttestationRequest, ContractId BridgeService)
       with
         ethAddress : Text                    -- Target Ethereum address
         chainId : Int                        -- Target chain (1 = mainnet)
         bridgeServiceCid : ContractId BridgeService  -- Bridge service for validators
-        supplyServiceCid : ContractId MUSDSupplyService  -- AUDIT-CRIT-01: Required for supply decrement
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
         expiresAt : Time
         entropy : Text                       -- BRIDGE-C-03: Hex-encoded entropy from aggregator/caller
         cantonStateHash : Text               -- BRIDGE-C-03: Canton ledger state hash
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
-        -- BLOCK-2: Validate bridge-out sender is not blacklisted or frozen.
-        -- A sanctioned party burning mUSD on Canton and creating a bridge attestation
-        -- would allow them to receive funds on Ethereum, evading compliance.
-        exercise complianceRegistryCid ValidateRedemption with redeemer = owner
         assertMsg "INVALID_ETH_ADDRESS" (T.length ethAddress == 42)
         -- BRIDGE-C-03: Validate entropy format (must be hex-encoded, at least 64 chars for 32 bytes)
         assertMsg "INVALID_ENTROPY" (T.length entropy >= 64)
@@ -329,12 +313,6 @@ template MintedMUSD
 
         -- BRIDGE-H-02: Assign nonce from BridgeService (monotonically increasing, no user control)
         (newBridgeSvcCid, assignedNonce) <- exercise bridgeServiceCid Bridge_AssignNonce
-
-        -- AUDIT-CRIT-01: Decrement global supply BEFORE creating attestation.
-        -- Previously, the token was archived (burned) but MUSDSupplyService.currentSupply
-        -- was never decremented, causing the supply cap to fill up permanently.
-        newSupplyServiceCid <- exercise supplyServiceCid SupplyService_Burn with
-          burnAmount = amount
 
         -- Token is consumed (burned) on Canton
         attestationCid <- create AttestationRequest with
@@ -356,7 +334,7 @@ template MintedMUSD
           requiredSignatures = bridgeSvc.requiredSignatures  -- BRIDGE-H-01: Threshold from BridgeService
           direction = CantonToEthereum
 
-        return (attestationCid, newBridgeSvcCid, newSupplyServiceCid)
+        return (attestationCid, newBridgeSvcCid)
 
     -- | Set blacklist status (issuer only)
     choice MUSD_SetBlacklist : ContractId MintedMUSD
@@ -384,15 +362,9 @@ template MUSDTransferProposal
     ensure amount > 0.0
 
     -- | Receiver accepts the transfer, becoming owner
-    -- BLOCK-2: Re-validate compliance at acceptance time (status may have changed)
     choice TransferProposal_Accept : ContractId MintedMUSD
-      with
-        complianceRegistryCid : ContractId ComplianceRegistry
       controller receiver
       do
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = sender
-          receiver = receiver
         create MintedMUSD with
           issuer
           owner = receiver
@@ -510,16 +482,12 @@ template LiquidityPool
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
 
     -- | Swap mUSD for collateral
-    -- BLOCK-2: Added compliance check on DEX swap
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, Money)
       with
         musdCid : ContractId MintedMUSD  -- Require actual token contract
         receiver : Party
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller receiver
       do
-        -- BLOCK-2: Validate swapper is not blacklisted/frozen
-        exercise complianceRegistryCid ValidateRedemption with redeemer = receiver
         musd <- fetch musdCid
         assertMsg "NOT_OWNER" (musd.owner == receiver)
         assertMsg "TOKEN_BLACKLISTED" (not musd.blacklisted)
@@ -540,16 +508,12 @@ template LiquidityPool
 
     -- | Swap collateral for mUSD
     -- The proof must be created by a validator after verifying the on-chain deposit.
-    -- BLOCK-2: Added compliance check on DEX swap
     choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money, ContractId CollateralDepositProof)
       with
         depositProofCid : ContractId CollateralDepositProof
         receiver : Party
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller operator
       do
-        -- BLOCK-2: Validate swap recipient is not blacklisted
-        exercise complianceRegistryCid ValidateMint with minter = receiver
         proof <- fetch depositProofCid
         assertMsg "PROOF_ALREADY_USED" (not proof.used)
         assertMsg "WRONG_DEPOSITOR" (proof.depositor == receiver)
@@ -602,9 +566,6 @@ template Vault
       && principalDebt >= 0.0
       && config.liquidationThreshold >= 1.0        -- At least 100% collateralization
       && config.liquidationThreshold <= 10.0       -- Max 1000% (reasonable upper bound)
-      -- AUDIT DAML-M-01: Bound interestRateBps to prevent extreme rates at template level
-      && config.interestRateBps >= 0               -- No negative interest
-      && config.interestRateBps <= 5000            -- Max 50% APR (5000 bps)
       && config.closeFactorBps >= 0
       && config.closeFactorBps <= 10000            -- Max 100% per liquidation
       && config.liquidationPenaltyBps >= 0
@@ -686,12 +647,9 @@ template Vault
         agreementHash : Text        -- Required for MintedMUSD
         agreementUri : Text         -- Required for MintedMUSD
         loops : Int
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
-        -- BLOCK-2: Validate borrower is not blacklisted before allowing leverage
-        exercise complianceRegistryCid ValidateMint with minter = owner
 
         -- DAML-M-04: Accrue interest before reading current debt to prevent stale calculations
         now <- getTime
@@ -721,7 +679,6 @@ template Vault
         (initialPoolCid, initialColOut) <- exercise poolCid Swap_mUSD_For_Collateral with
           musdCid = initialMusdCid
           receiver = owner
-          complianceRegistryCid = complianceRegistryCid
 
         let initialCol = newCollateral + initialColOut
 
@@ -742,7 +699,6 @@ template Vault
                   (newPoolCid, colOut) <- exercise pCid Swap_mUSD_For_Collateral with
                     musdCid = musdCid
                     receiver = owner
-                    complianceRegistryCid = complianceRegistryCid
                   return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
 
         -- DAML-M-04: Use currentTotalDebt (with accrued interest) as the starting debt for loops
@@ -819,16 +775,12 @@ template Vault
         return (vaultCid, newSupplyServiceCid)
 
     -- | Withdraw collateral (must maintain health)
-    -- BLOCK-2: Added compliance check to prevent frozen parties from extracting collateral
     choice Vault_WithdrawCollateral : ContractId Vault
       with
         withdrawAmount : Money
         oracleCid : ContractId PriceOracle
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller owner
       do
-        -- BLOCK-2: Validate owner is not frozen/blacklisted before allowing withdrawal
-        exercise complianceRegistryCid ValidateRedemption with redeemer = owner
         assertMsg "INSUFFICIENT_COLLATERAL" (collateralAmount >= withdrawAmount)
         let newCollateral = collateralAmount - withdrawAmount
         
@@ -851,12 +803,9 @@ template Vault
         oracleCid : ContractId PriceOracle
         musdCid : ContractId MintedMUSD
         supplyServiceCid : ContractId MUSDSupplyService  -- DAML-H-01: Required for supply decrement
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= owner)
-        -- BLOCK-2: Validate liquidator is not blacklisted (they receive seized collateral)
-        exercise complianceRegistryCid ValidateMint with minter = liquidator
 
         -- DAML-C-01: Fetch and validate mUSD token for burn
         musd <- fetch musdCid
@@ -1011,10 +960,8 @@ template VaultManager
 -- ============================================================
 
 -- | LiquidationReceipt - Immutable audit trail per liquidation.
--- AUDIT DAML-H-04: Added vaultOwner as signatory (alongside operator).
--- The receipt is always created within Vault.Liquidate which has {operator, owner}
--- in scope, so this is safe. Having vaultOwner as signatory prevents the operator
--- from unilaterally archiving/modifying receipts after the fact.
+-- The operator (protocol) signs the receipt, with both vaultOwner and liquidator as observers
+-- This allows the receipt to be created within the Vault.Liquidate choice context
 template LiquidationReceipt
   with
     operator : Party
@@ -1030,8 +977,8 @@ template LiquidationReceipt
     isFullLiquidation : Bool
     timestamp : Time
   where
-    signatory operator, vaultOwner
-    observer liquidator  -- Liquidator can see the receipt
+    signatory operator
+    observer vaultOwner, liquidator  -- Both parties can see the receipt
 
 -- ============================================================
 --                     7. LIQUIDATION ORDER
@@ -1122,21 +1069,13 @@ template CantonDirectMint
     observer observers
 
     -- | Mint mUSD by depositing stables
-    -- AUDIT DAML-H-01: Added complianceRegistryCid for mint compliance check
-    choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest, ContractId MUSDSupplyService)
+    choice CantonMint_Mint : (ContractId CantonDirectMint, ContractId MintedMUSD, ContractId BridgeOutRequest)
       with
         user : Party
         depositCid : ContractId CantonUSDC
-        complianceRegistryCid : ContractId ComplianceRegistry  -- AUDIT DAML-H-01: Required for compliance
-        supplyServiceCid : ContractId MUSDSupplyService  -- BLOCK-1: Required for global supply cap tracking
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
-        
-        -- AUDIT DAML-H-01: Validate minter against ComplianceRegistry.
-        -- Prevents blacklisted/sanctioned parties from minting mUSD.
-        exercise complianceRegistryCid ValidateMint with
-          minter = user
         
         deposit <- fetch depositCid
         assertMsg "DEPOSIT_OWNER_MISMATCH" (deposit.owner == user)
@@ -1167,17 +1106,17 @@ template CantonDirectMint
               else (dailyMinted, lastRateLimitReset)
         assertMsg "DAILY_MINT_LIMIT" (resetMinted + netAmount <= dailyMintLimit)
         
-        -- BLOCK-1: Mint mUSD through MUSDSupplyService to enforce global supply cap.
-        -- Previously used raw `create MintedMUSD` which only checked local supplyCap,
-        -- allowing this template to mint beyond the global supply limit.
-        (newSupplyServiceCid, musdCid) <- exercise supplyServiceCid SupplyService_VaultMint with
-          borrower = user
-          borrowAmount = netAmount
+        -- Mint mUSD to user
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          blacklisted = False
           agreementHash = mpaHash
           agreementUri = mpaUri
+          observers = []
         
         -- Create bridge-out request to pipe backing to Ethereum
-        -- AUDIT DAML-M-03: Include expiresAt to prevent indefinite pending requests
         bridgeReq <- create BridgeOutRequest with
           operator
           user
@@ -1186,7 +1125,6 @@ template CantonDirectMint
           targetTreasury
           nonce = nextNonce
           createdAt = now
-          expiresAt = addRelTime now (hours 24)  -- AUDIT DAML-M-03: 24h expiry
           status = "pending"
         
         -- Update service state
@@ -1197,25 +1135,16 @@ template CantonDirectMint
           dailyMinted = resetMinted + netAmount
           lastRateLimitReset = resetTime
         
-        return (newService, musdCid, bridgeReq, newSupplyServiceCid)
+        return (newService, musdCid, bridgeReq)
 
     -- | Redeem mUSD for stables (creates bridge-in request from Ethereum)
-    -- AUDIT DAML-H-03: Added complianceRegistryCid for redemption compliance check
-    -- AUDIT DAML-M-02: Added supplyServiceCid to decrement global supply on redeem
-    choice CantonMint_Redeem : (ContractId CantonDirectMint, ContractId BridgeInRequest, ContractId MUSDSupplyService)
+    choice CantonMint_Redeem : (ContractId CantonDirectMint, ContractId BridgeInRequest)
       with
         user : Party
         musdCid : ContractId MintedMUSD
-        complianceRegistryCid : ContractId ComplianceRegistry  -- AUDIT DAML-H-03: Required for compliance
-        supplyServiceCid : ContractId MUSDSupplyService        -- AUDIT DAML-M-02: Required for global supply decrement
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
-        
-        -- AUDIT DAML-H-03: Validate redeemer against ComplianceRegistry.
-        -- Prevents blacklisted/frozen parties from redeeming mUSD.
-        exercise complianceRegistryCid ValidateRedemption with
-          redeemer = user
         
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
@@ -1228,12 +1157,6 @@ template CantonDirectMint
         
         -- Burn mUSD
         archive musdCid
-        
-        -- AUDIT DAML-M-02: Decrement global supply through SupplyService.
-        -- Previously only decremented local currentSupply, leaving
-        -- MUSDSupplyService.currentSupply stale (phantom supply).
-        newSupplyServiceCid <- exercise supplyServiceCid SupplyService_Burn with
-          burnAmount = musd.amount
         
         -- Create bridge-in request (pull stables from Ethereum)
         now <- getTime
@@ -1252,7 +1175,7 @@ template CantonDirectMint
           accumulatedFees = accumulatedFees + feeAmount
           nextNonce = nextNonce + 1
         
-        return (newService, bridgeIn, newSupplyServiceCid)
+        return (newService, bridgeIn)
 
     -- | Update service config
     choice CantonMint_UpdateConfig : ContractId CantonDirectMint
@@ -1305,22 +1228,12 @@ template CantonSMUSD
         return (virtualAssets / virtualShares)
 
     -- | Deposit mUSD → receive smUSD shares
-    -- AUDIT-CRIT-02: Added supplyServiceCid to decrement supply on deposit (mUSD burned)
-    -- AUDIT DAML-M-04: Added complianceRegistryCid to validate depositor is not blacklisted
-    choice SMUSD_Deposit : (ContractId CantonSMUSD, ContractId CooldownTicket, ContractId MUSDSupplyService)
+    choice SMUSD_Deposit : (ContractId CantonSMUSD, ContractId CooldownTicket)
       with
         user : Party
         musdCid : ContractId MintedMUSD
-        supplyServiceCid : ContractId MUSDSupplyService  -- AUDIT-CRIT-02: Required for supply decrement
-        complianceRegistryCid : ContractId ComplianceRegistry  -- AUDIT DAML-M-04: Blacklist check
       controller user
       do
-        -- AUDIT DAML-M-04: Validate depositor is not blacklisted before accepting mUSD.
-        -- Prevents sanctioned/frozen parties from staking into the yield vault.
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = user
-          receiver = operator
-        
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
@@ -1331,12 +1244,8 @@ template CantonSMUSD
         let sharePrice = virtualAssets / virtualShares
         let newShares = musd.amount / sharePrice
         
-        -- AUDIT-CRIT-02: Burn mUSD through supply service to decrement global supply.
-        -- Previously used raw `archive musdCid` which destroyed the token without
-        -- updating MUSDSupplyService.currentSupply, causing phantom supply accumulation.
+        -- Burn mUSD
         archive musdCid
-        newSupplyServiceCid <- exercise supplyServiceCid SupplyService_Burn with
-          burnAmount = musd.amount
         
         -- Issue cooldown ticket (tracks stake time)
         now <- getTime
@@ -1353,20 +1262,15 @@ template CantonSMUSD
           totalShares = totalShares + newShares
           totalAssets = totalAssets + musd.amount
         
-        return (newService, ticket, newSupplyServiceCid)
+        return (newService, ticket)
 
     -- | Withdraw smUSD shares → mUSD (after cooldown)
-    -- AUDIT-CRIT-02: Added supplyServiceCid to mint through supply service (cap-tracked)
-    choice SMUSD_Withdraw : (ContractId CantonSMUSD, ContractId MintedMUSD, ContractId MUSDSupplyService)
+    choice SMUSD_Withdraw : (ContractId CantonSMUSD, ContractId MintedMUSD)
       with
         user : Party
         ticketCid : ContractId CooldownTicket
-        supplyServiceCid : ContractId MUSDSupplyService  -- AUDIT-CRIT-02: Required for cap-tracked minting
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller user
       do
-        -- BLOCK-2: Validate withdrawer is not blacklisted/frozen
-        exercise complianceRegistryCid ValidateRedemption with redeemer = user
         ticket <- fetch ticketCid
         assertMsg "OWNER_MISMATCH" (ticket.owner == user)
         
@@ -1391,21 +1295,22 @@ template CantonSMUSD
         -- Burn ticket
         archive ticketCid
         
-        -- AUDIT-CRIT-02: Mint mUSD through supply service to enforce global supply cap.
-        -- Previously used raw `create MintedMUSD` which bypassed supply cap checks entirely,
-        -- allowing unbounded mUSD minting through repeated deposit/withdraw cycles.
-        (newSupplyServiceCid, musdCid) <- exercise supplyServiceCid SupplyService_VaultMint with
-          borrower = user
-          borrowAmount = musdAmount
+        -- Mint mUSD to user (includes yield)
+        musdCid <- create MintedMUSD with
+          issuer = operator
+          owner = user
+          amount = musdAmount
+          blacklisted = False
           agreementHash = mpaHash
           agreementUri = mpaUri
+          observers = []
         
         -- Update pool
         newService <- create this with
           totalShares = totalShares - ticket.shares
           totalAssets = totalAssets - musdAmount
         
-        return (newService, musdCid, newSupplyServiceCid)
+        return (newService, musdCid)
 
     -- | Sync yield from Ethereum via attestation
     -- DAML-H-06: Added yield bounds and epoch gap limit
@@ -1541,10 +1446,7 @@ template BridgeService
     signatory operator, governance
     observer validators, observers
 
-    -- HIGH-03: requiredSignatures >= 2 to match Solidity BLEBridgeV9.minSignatures minimum.
-    -- Previously allowed requiredSignatures == 1, enabling a single compromised validator
-    -- to create attestations that pass Canton-side checks.
-    ensure requiredSignatures >= 2
+    ensure requiredSignatures > 0
       && requiredSignatures <= length validators
       && length validators > 0
       && totalBridgedIn >= 0.0
@@ -1563,12 +1465,9 @@ template BridgeService
         mpaHash : Text
         mpaUri : Text
         supplyServiceCid : ContractId MUSDSupplyService  -- DAML-C-02: Required for supply cap check
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
-        -- BLOCK-2: Validate bridge-in recipient is not blacklisted/sanctioned
-        exercise complianceRegistryCid ValidateMint with minter = recipient
 
         attestation <- fetch attestationCid
         -- DAML-M-01: Verify attestation aggregator matches bridge operator to prevent
@@ -1576,15 +1475,9 @@ template BridgeService
         assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
-        -- MED-04: Verify isMint flag consistency with direction.
-        -- A malformed attestation with isMint=False but direction=EthereumToCanton
-        -- would bypass semantic validation and incorrectly mint mUSD on Canton.
-        assertMsg "MUST_BE_MINT" (attestation.payload.isMint)
 
-        -- AUDIT DAML-H-06: Strict nonce monotonicity (no gaps allowed).
-        -- Previously used `>` which allowed nonce 5 → nonce 7, skipping 6.
-        -- Gaps could indicate dropped/replayed attestations.
-        assertMsg "NONCE_NOT_SEQUENTIAL" (attestation.payload.nonce == lastNonce + 1)
+        -- DAML-H-02: Nonce monotonicity check
+        assertMsg "NONCE_NOT_MONOTONIC" (attestation.payload.nonce > lastNonce)
 
         -- DAML-H-03: Attestation expiration check
         now <- getTime
@@ -1745,7 +1638,6 @@ template AttestationRequest
 -- ============================================================
 
 -- | BridgeOutRequest - Canton → ETH transfer.
--- LOW-03: Added expiresAt field to prevent requests from lingering indefinitely.
 template BridgeOutRequest
   with
     operator : Party
@@ -1755,13 +1647,10 @@ template BridgeOutRequest
     targetTreasury : Text
     nonce : Int
     createdAt : Time
-    expiresAt : Time    -- LOW-03: Request expiry; operator can cancel after this time
     status : Text
   where
     signatory operator
     observer user
-
-    ensure status `elem` ["pending", "bridged", "cancelled", "expired"]
 
     -- | User sets target ETH address
     choice BridgeOut_SetTarget : ContractId BridgeOutRequest
@@ -1770,9 +1659,6 @@ template BridgeOutRequest
       controller user
       do
         assertMsg "INVALID_ETH_ADDRESS" (T.length targetAddress == 42)
-        -- LOW-03: Reject target updates on expired requests
-        now <- getTime
-        assertMsg "REQUEST_EXPIRED" (now < expiresAt)
         create this with targetTreasury = targetAddress
 
     -- | Operator assigns nonce

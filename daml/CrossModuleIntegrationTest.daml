@@ -22,9 +22,9 @@ import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
 import DA.Set qualified as Set
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Transfer(..), CantonDirectMintService(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Transfer(..), CantonUSDC(..), CantonDirectMintService(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..), CantonStakingService(..), SyncGlobalSharePrice(..), Stake(..), Unstake(..), GetSharePrice(..))
-import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_EmergencyUpdate(..))
+import CantonLending (CantonLendingService(..), CantonPriceFeed(..), EscrowedCollateral(..), CantonDebtPosition(..), CantonLiquidationReceipt(..), CollateralType(..), CollateralConfig(..), defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig, Lending_DepositCTN(..), Lending_Borrow(..), Lending_Repay(..), Lending_WithdrawCTN(..), Lending_Liquidate(..), PriceFeed_EmergencyUpdate(..))
 import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
@@ -106,10 +106,6 @@ testMintStakeUnstakeFlow = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      musdMintCap = 1000000.0
-      currentUnstakeMinted = 0.0
-      directMintServiceName = "test-mint-service"
-      globalMintCap = 10000000.0
       observers = [alice]
 
   -- Step 3: Alice stakes mUSD → gets smUSD shares
@@ -165,7 +161,7 @@ testLendingFullCycleIntegration = do
   serviceCid <- submit operator do
     createCmd CantonLendingService with
       operator
-      configs = [defaultCTNConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500
       reserveFactorBps = 1000
@@ -182,7 +178,6 @@ testLendingFullCycleIntegration = do
       mpaUri = testMpaUri
       serviceName = "lending-test"
       observers = [user, liquidator]
-      governance = operator
 
   -- Step 1: Deposit 10000 CTN
   coinCid <- submitMulti [operator, user] [] do
@@ -259,10 +254,6 @@ testSharePriceSyncWithinBounds = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      musdMintCap = 1000000.0
-      currentUnstakeMinted = 0.0
-      directMintServiceName = "test-mint-service"
-      globalMintCap = 10000000.0
       observers = [alice]
 
   -- Sync to 1.05 (5% increase — within 10% cap)
@@ -309,10 +300,6 @@ testSharePriceIncreaseTooLargeRejected = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      musdMintCap = 1000000.0
-      currentUnstakeMinted = 0.0
-      directMintServiceName = "test-mint-service"
-      globalMintCap = 10000000.0
       observers = []
 
   -- Try to increase price by 15% (1.0 → 1.15) — should be rejected (max 10%)
@@ -354,10 +341,6 @@ testSharePriceDecreaseTooLargeRejected = do
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash
       mpaUri = testMpaUri
-      musdMintCap = 1000000.0
-      currentUnstakeMinted = 0.0
-      directMintServiceName = "test-mint-service"
-      globalMintCap = 10000000.0
       observers = []
 
   -- Try to decrease price by 15% (1.0 → 0.85) — should be rejected (max 10%)
@@ -401,7 +384,7 @@ testLiquidationFlow = do
   serviceCid <- submit operator do
     createCmd CantonLendingService with
       operator
-      configs = [defaultCTNConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500
       reserveFactorBps = 1000
@@ -418,7 +401,6 @@ testLiquidationFlow = do
       mpaUri = testMpaUri
       serviceName = "lending-liq"
       observers = [borrower, keeper]
-      governance = operator
 
   -- Deposit collateral + borrow near limit
   coinCid <- submitMulti [operator, borrower] [] do
@@ -441,25 +423,11 @@ testLiquidationFlow = do
       priceFeedCids = [ctnFeedCid]
 
   -- Crash price → position undercollateralized
-  passTime (minutes 31)
-  emergencyTime <- getTime
-  govProof <- submit operator do
-    createCmd GovernanceActionLog with
-      operator
-      proposalId = "test-emergency-1"
-      actionType = EmergencyPause
-      description = "CTN crash"
-      payload = ""
-      payloadHash = testMpaHash
-      targetModule = "CantonLending"
-      approvers = [operator]
-      executedBy = operator
-      executedAt = emergencyTime
+  passTime (minutes 6)
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
-      governanceProofCid = govProof
 
   -- Keeper gets mUSD for repayment
   liqMusdCid <- submitMulti [operator, keeper] [] do
@@ -517,7 +485,7 @@ testHealthyPositionNotLiquidatable = do
   serviceCid <- submit operator do
     createCmd CantonLendingService with
       operator
-      configs = [defaultCTNConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500
       reserveFactorBps = 1000
@@ -534,7 +502,6 @@ testHealthyPositionNotLiquidatable = do
       mpaUri = testMpaUri
       serviceName = "lending-healthy"
       observers = [borrower, keeper]
-      governance = operator
 
   coinCid <- submitMulti [operator, borrower] [] do
     createCmd CantonCoin with
@@ -667,7 +634,6 @@ testSupplyCapCoordination = do
       mpaUri = testMpaUri
       authorizedMinters = [user]
       serviceName = "default"  -- FIX D-M02: Key field for cross-module lookup
-      governance = operator
 
   -- Create Lending service pointing to the DirectMint service
   ctnFeedCid <- submit operator do
@@ -682,7 +648,7 @@ testSupplyCapCoordination = do
   lendingCid <- submit operator do
     createCmd CantonLendingService with
       operator
-      configs = [defaultCTNConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
       interestRateBps = 500
       reserveFactorBps = 1000
@@ -699,7 +665,6 @@ testSupplyCapCoordination = do
       mpaUri = testMpaUri
       serviceName = "lending-cap"
       observers = [user]
-      governance = operator
 
   -- Deposit collateral
   coinCid <- submitMulti [operator, user] [] do
