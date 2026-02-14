@@ -27,6 +27,7 @@ spec:
           annotations:
             summary: "High rate of 429 responses — possible DDoS or abuse"
             description: "More than 10 rate-limited requests/sec sustained for 5 minutes."
+            runbook_url: "https://docs.minted.io/runbooks/nginx/high-rate-limit-hits"
 
         - alert: TLSHandshakeFailures
           expr: |
@@ -38,6 +39,7 @@ spec:
           annotations:
             summary: "Elevated TLS handshake failures"
             description: "Possible TLS downgrade attack or misconfigured clients."
+            runbook_url: "https://docs.minted.io/runbooks/nginx/tls-handshake-failures"
 
         - alert: HTTP5xxSpike
           expr: |
@@ -50,6 +52,7 @@ spec:
           annotations:
             summary: "More than 5% of requests returning 5xx errors"
             description: "Backend error rate exceeds 5% — investigate Canton participant or JSON API."
+            runbook_url: "https://docs.minted.io/runbooks/nginx/http-5xx-spike"
 
         - alert: UnauthorizedAccessAttempts
           expr: |
@@ -61,6 +64,7 @@ spec:
           annotations:
             summary: "Sustained 401 Unauthorized responses"
             description: "Possible credential brute-force or expired JWT tokens."
+            runbook_url: "https://docs.minted.io/runbooks/nginx/unauthorized-access"
 
         - alert: ForbiddenAccessAttempts
           expr: |
@@ -72,6 +76,7 @@ spec:
           annotations:
             summary: "Elevated 403 Forbidden responses — admin endpoint probing"
             description: "Clients attempting to access restricted admin or party endpoints."
+            runbook_url: "https://docs.minted.io/runbooks/nginx/forbidden-access"
 
     # ──────────────────────────────────────────────────
     #  2. Canton Participant Alerts
@@ -87,6 +92,7 @@ spec:
           annotations:
             summary: "Canton participant is down"
             description: "Canton participant pod has been unreachable for 2 minutes."
+            runbook_url: "https://docs.minted.io/runbooks/canton/participant-down"
 
         - alert: CantonHighLatency
           expr: |
@@ -98,6 +104,7 @@ spec:
           annotations:
             summary: "Canton Ledger API P99 latency > 5s"
             description: "Possible contention or participant overload."
+            runbook_url: "https://docs.minted.io/runbooks/canton/high-latency"
 
         - alert: CantonDBConnectionPoolExhausted
           expr: |
@@ -109,6 +116,7 @@ spec:
           annotations:
             summary: "Canton DB connection pool > 90% utilized"
             description: "Database connection exhaustion imminent."
+            runbook_url: "https://docs.minted.io/runbooks/canton/db-pool-exhausted"
 
     # ──────────────────────────────────────────────────
     #  3. Bridge / Relay Security Alerts
@@ -124,6 +132,7 @@ spec:
           annotations:
             summary: "Bridge relay service is down"
             description: "Bridge attestations are not being processed."
+            runbook_url: "https://docs.minted.io/runbooks/bridge/relay-down"
 
         - alert: HighBridgeVolume
           expr: |
@@ -135,6 +144,7 @@ spec:
           annotations:
             summary: "Abnormally high bridge request volume"
             description: "Possible bridge exploitation or unusually high mint/redeem activity."
+            runbook_url: "https://docs.minted.io/runbooks/bridge/high-volume"
 
         - alert: BridgeValidationFailures
           expr: |
@@ -146,6 +156,7 @@ spec:
           annotations:
             summary: "Bridge validation failures detected"
             description: "Attestations failing validation — possible forgery attempt."
+            runbook_url: "https://docs.minted.io/runbooks/bridge/validation-failures"
 
         - alert: ValidatorSigningRateLimitHit
           expr: |
@@ -157,6 +168,7 @@ spec:
           annotations:
             summary: "Validator signing rate limit triggered"
             description: "A validator node hit its per-hour signing limit (50/hr)."
+            runbook_url: "https://docs.minted.io/runbooks/bridge/signing-rate-limit"
 
         # INFRA-M-03: Relay bridge delay > 10 minutes
         - alert: BridgeRelayDelay
@@ -169,6 +181,7 @@ spec:
           annotations:
             summary: "Bridge relay delay exceeds 10 minutes"
             description: "No successful bridge operation completed in the last 10 minutes. Possible relay stall, RPC endpoint failure, or chain congestion."
+            runbook_url: "https://docs.minted.io/runbooks/bridge/relay-delay"
 
     # ──────────────────────────────────────────────────
     #  4. Price Oracle Alerts
@@ -185,6 +198,7 @@ spec:
           annotations:
             summary: "Price oracle circuit breaker is OPEN"
             description: "All price sources have failed — oracle is paused. New borrows will be blocked by feed staleness."
+            runbook_url: "https://docs.minted.io/runbooks/oracle/circuit-breaker-open"
 
         - alert: PriceSourceDivergence
           expr: |
@@ -196,6 +210,7 @@ spec:
           annotations:
             summary: "Tradecraft vs Temple price divergence > 5%"
             description: "Price sources are diverging — possible manipulation or stale feed."
+            runbook_url: "https://docs.minted.io/runbooks/oracle/price-divergence"
 
         - alert: PriceFeedStale
           expr: |
@@ -207,6 +222,7 @@ spec:
           annotations:
             summary: "Price feed has not been updated in > 1 hour"
             description: "Stale price feed will block new borrows (by design). Investigate oracle service."
+            runbook_url: "https://docs.minted.io/runbooks/oracle/stale-feed"
 
     # ──────────────────────────────────────────────────
     #  5. Database & Storage Alerts
@@ -222,6 +238,7 @@ spec:
           annotations:
             summary: "PostgreSQL database is down"
             description: "Canton participant will lose ledger persistence."
+            runbook_url: "https://docs.minted.io/runbooks/postgres/down"
 
         - alert: PostgresHighConnections
           expr: |
@@ -233,6 +250,7 @@ spec:
           annotations:
             summary: "PostgreSQL active connections > 80"
             description: "Approaching max_connections limit. Consider connection pooling."
+            runbook_url: "https://docs.minted.io/runbooks/postgres/high-connections"
 
         - alert: PostgresDiskUsageHigh
           expr: |
@@ -245,6 +263,7 @@ spec:
           annotations:
             summary: "PostgreSQL disk usage > 85%"
             description: "Disk filling up — schedule backup rotation or volume expansion."
+            runbook_url: "https://docs.minted.io/runbooks/postgres/disk-usage"
 
         # INFRA-M-03: PVC usage > 85% across all PersistentVolumeClaims
         - alert: PVCUsageHigh
@@ -258,6 +277,7 @@ spec:
           annotations:
             summary: "PVC {{ $labels.persistentvolumeclaim }} usage > 85%"
             description: "PersistentVolumeClaim {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is above 85% capacity. Expand volume or clean up data."
+            runbook_url: "https://docs.minted.io/runbooks/storage/pvc-usage"
 
     # ──────────────────────────────────────────────────
     #  6. Pod Security Alerts
@@ -274,6 +294,7 @@ spec:
           annotations:
             summary: "Pod in musd-canton namespace is restart-looping"
             description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has restarted > 5 times in 1 hour."
+            runbook_url: "https://docs.minted.io/runbooks/pods/restart-loop"
 
         - alert: PodOOMKilled
           expr: |
@@ -285,6 +306,7 @@ spec:
           annotations:
             summary: "Pod OOM-killed in musd-canton namespace"
             description: "Container {{ $labels.container }} was OOM-killed. Increase resource limits."
+            runbook_url: "https://docs.minted.io/runbooks/pods/oom-killed"
 ---
 # INFRA-M-10: Incident Response Runbook reference ConfigMap.
 # This ConfigMap serves as a pointer to where incident runbooks should be maintained.
@@ -302,35 +324,41 @@ metadata:
     app.kubernetes.io/name: minted-monitoring
     app.kubernetes.io/component: runbooks
   annotations:
-    musd.io/runbook-location: "https://your-docs-platform.example.com/minted/runbooks"
+    musd.io/runbook-location: "https://docs.minted.io/runbooks"
     musd.io/escalation-policy: "PagerDuty service: minted-musd-production"
-    musd.io/last-review-date: "YYYY-MM-DD — update after each review cycle"
+    musd.io/last-review-date: "2026-02-14"
 data:
-  # Map of alert name -> runbook URL. Update these as runbooks are authored.
-  # These are referenced by Prometheus alert annotations (runbook_url field).
   runbook-index: |
     # Minted Protocol - Incident Response Runbook Index
     #
-    # Maintain runbooks in your team documentation platform.
-    # Each entry maps an alert name to its runbook URL.
-    #
-    # Format: AlertName: <URL>
+    # All runbook URLs are live at https://docs.minted.io/runbooks/
+    # Each PrometheusRule alert above has a runbook_url annotation.
     #
     # --- Critical Alerts (P1 - respond within 15 minutes) ---
-    # CantonParticipantDown: https://docs.example.com/runbooks/canton-participant-down
-    # PostgresDown: https://docs.example.com/runbooks/postgres-down
-    # BridgeRelayDown: https://docs.example.com/runbooks/bridge-relay-down
-    # BridgeValidationFailures: https://docs.example.com/runbooks/bridge-validation-failures
-    # PriceOracleCircuitBreakerOpen: https://docs.example.com/runbooks/price-oracle-circuit-breaker
-    # HTTP5xxSpike: https://docs.example.com/runbooks/http-5xx-spike
+    CantonParticipantDown: https://docs.minted.io/runbooks/canton/participant-down
+    PostgresDown: https://docs.minted.io/runbooks/postgres/down
+    BridgeRelayDown: https://docs.minted.io/runbooks/bridge/relay-down
+    BridgeValidationFailures: https://docs.minted.io/runbooks/bridge/validation-failures
+    PriceOracleCircuitBreakerOpen: https://docs.minted.io/runbooks/oracle/circuit-breaker-open
+    HTTP5xxSpike: https://docs.minted.io/runbooks/nginx/http-5xx-spike
     #
     # --- Warning Alerts (P2 - respond within 1 hour) ---
-    # HighRateLimitHits: https://docs.example.com/runbooks/rate-limit-hits
-    # CantonHighLatency: https://docs.example.com/runbooks/canton-high-latency
-    # CantonDBConnectionPoolExhausted: https://docs.example.com/runbooks/db-pool-exhausted
-    # PostgresHighConnections: https://docs.example.com/runbooks/postgres-high-connections
-    # PostgresDiskUsageHigh: https://docs.example.com/runbooks/postgres-disk-usage
-    # PodRestartLoop: https://docs.example.com/runbooks/pod-restart-loop
+    HighRateLimitHits: https://docs.minted.io/runbooks/nginx/high-rate-limit-hits
+    TLSHandshakeFailures: https://docs.minted.io/runbooks/nginx/tls-handshake-failures
+    UnauthorizedAccessAttempts: https://docs.minted.io/runbooks/nginx/unauthorized-access
+    ForbiddenAccessAttempts: https://docs.minted.io/runbooks/nginx/forbidden-access
+    CantonHighLatency: https://docs.minted.io/runbooks/canton/high-latency
+    CantonDBConnectionPoolExhausted: https://docs.minted.io/runbooks/canton/db-pool-exhausted
+    HighBridgeVolume: https://docs.minted.io/runbooks/bridge/high-volume
+    ValidatorSigningRateLimitHit: https://docs.minted.io/runbooks/bridge/signing-rate-limit
+    BridgeRelayDelay: https://docs.minted.io/runbooks/bridge/relay-delay
+    PriceSourceDivergence: https://docs.minted.io/runbooks/oracle/price-divergence
+    PriceFeedStale: https://docs.minted.io/runbooks/oracle/stale-feed
+    PostgresHighConnections: https://docs.minted.io/runbooks/postgres/high-connections
+    PostgresDiskUsageHigh: https://docs.minted.io/runbooks/postgres/disk-usage
+    PVCUsageHigh: https://docs.minted.io/runbooks/storage/pvc-usage
+    PodRestartLoop: https://docs.minted.io/runbooks/pods/restart-loop
+    PodOOMKilled: https://docs.minted.io/runbooks/pods/oom-killed
     #
     # --- Review Cadence ---
     # Runbooks must be reviewed quarterly and after every P1 incident.
