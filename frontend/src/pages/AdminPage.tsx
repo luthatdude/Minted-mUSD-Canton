@@ -10,6 +10,7 @@ import { useWCContracts } from "@/hooks/useWCContracts";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
+import { YieldScanner } from "@/components/YieldScanner";
 
 type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
 
@@ -484,6 +485,9 @@ export function AdminPage() {
             <strong>Manual Deployment:</strong> All deposits sit idle in the reserve until you explicitly deploy them below.
             No funds are auto-allocated.
           </div>
+
+          {/* ── DeFi Yield Scanner (live market data) ── */}
+          <YieldScanner />
 
           {/* ── AI Yield Optimizer ── */}
           <AIYieldOptimizer

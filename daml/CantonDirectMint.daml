@@ -298,9 +298,16 @@ template CantonMUSDTransferProposal
     signatory musd.issuer, musd.owner
     observer newOwner
 
+    -- BLOCK-2: Re-validate compliance at acceptance time
     choice CantonMUSDTransferProposal_Accept : ContractId CantonMUSD
+      with
+        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller newOwner
-      do create musd with owner = newOwner
+      do
+        exercise complianceRegistryCid ValidateTransfer with
+          sender = musd.owner
+          receiver = newOwner
+        create musd with owner = newOwner
 
     choice CantonMUSDTransferProposal_Reject : ContractId CantonMUSD
       controller newOwner

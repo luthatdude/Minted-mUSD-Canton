@@ -541,6 +541,8 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- BLOCK-2: Validate depositor is not blacklisted before accepting collateral
+        exercise complianceRegistryCid ValidateMint with minter = user
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
         let cfg = getConfig CTN_Coin configs
@@ -598,6 +600,8 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- BLOCK-2: Validate depositor is not blacklisted before accepting collateral
+        exercise complianceRegistryCid ValidateMint with minter = user
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
         let cfg = getConfig CTN_SMUSD configs
@@ -791,6 +795,8 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- BLOCK-2: Validate withdrawer is not blacklisted/frozen before extracting collateral
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
@@ -860,6 +866,8 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        -- BLOCK-2: Validate withdrawer is not blacklisted/frozen before extracting collateral
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
@@ -936,6 +944,8 @@ template CantonLendingService
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
+        -- BLOCK-2: Validate liquidator is not blacklisted (they receive seized collateral)
+        exercise complianceRegistryCid ValidateMint with minter = liquidator
 
         -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
         assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
@@ -1129,6 +1139,8 @@ template CantonLendingService
         create this with closeFactorBps = newCloseFactorBps
 
     -- | Withdraw protocol reserves
+    -- BLOCK-1: Added supply cap enforcement. Previously created raw CantonMUSD
+    -- bypassing all supply caps, allowing unbounded reserve minting.
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
       with
         amount : Money
@@ -1139,6 +1151,18 @@ template CantonLendingService
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "INSUFFICIENT_RESERVES" (amount <= protocolReserves)
+        -- BLOCK-1: Enforce supply cap before minting reserve mUSD.
+        -- Reserves are protocol revenue from interest — minting them creates new mUSD
+        -- that must be tracked against the supply cap.
+        assertMsg "RESERVE_MINT_EXCEEDS_SUPPLY_CAP" (cantonCurrentSupply + amount <= cantonSupplyCap)
+        -- BLOCK-1: Cross-module global cap check
+        directMintOpt <- lookupByKey @CantonDirectMintService (operator, directMintServiceName)
+        case directMintOpt of
+          Some dmCid -> do
+            dm <- fetch dmCid
+            let combinedSupply = dm.currentSupply + cantonCurrentSupply + amount
+            assertMsg "RESERVE_MINT_EXCEEDS_GLOBAL_CAP" (combinedSupply <= globalMintCap)
+          None -> assertMsg "RESERVE_MINT_EXCEEDS_GLOBAL_CAP" (cantonCurrentSupply + amount <= globalMintCap)
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = operator
@@ -1148,6 +1172,7 @@ template CantonLendingService
           privacyObservers = []
         newService <- create this with
           protocolReserves = protocolReserves - amount
+          cantonCurrentSupply = cantonCurrentSupply + amount
         return (newService, musdCid)
 
     -- | DAML-H-04: Update compliance registry reference
