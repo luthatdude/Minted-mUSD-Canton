@@ -1,0 +1,8 @@
+{
+    "importFilesToOrigRelpaths": {},
+    "primary_contract": "PriceOracle",
+    "specfile": "certora/specs/PriceOracle.spec",
+    "specfileOrigRelpath": "certora/specs/PriceOracle.spec",
+    "specfilesToImportDecls": {},
+    "type": "spec"
+}

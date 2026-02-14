@@ -1,0 +1,8 @@
+{
+    "importFilesToOrigRelpaths": {},
+    "primary_contract": "LiquidationEngine",
+    "specfile": "certora/specs/LiquidationEngine.spec",
+    "specfileOrigRelpath": "certora/specs/LiquidationEngine.spec",
+    "specfilesToImportDecls": {},
+    "type": "spec"
+}

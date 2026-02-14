@@ -1,0 +1,90 @@
+/// @title BLEBridgeV9 Formal Verification Spec
+/// @notice Certora spec for the attestation-based bridge
+/// @dev Verifies nonce monotonicity, attestation ID permanence, and signature bounds
+
+// ═══════════════════════════════════════════════════════════════════
+// METHODS
+// ═══════════════════════════════════════════════════════════════════
+
+methods {
+    function minSignatures() external returns (uint256) envfree;
+    function currentNonce() external returns (uint256) envfree;
+    function usedAttestationIds(bytes32) external returns (bool) envfree;
+    function attestedCantonAssets() external returns (uint256) envfree;
+    function paused() external returns (bool) envfree;
+
+    // Summarize external MUSD token calls
+    function _.setSupplyCap(uint256) external => NONDET;
+    function _.supplyCap() external => PER_CALLEE_CONSTANT;
+    function _.totalSupply() external => PER_CALLEE_CONSTANT;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Exclude proxy upgrades and initializer from parametric rules
+/// @dev upgradeToAndCall can delegatecall arbitrary code, violating any invariant.
+///      initialize is guarded by OpenZeppelin's initializer modifier (single-use),
+///      but the prover starts from arbitrary state and cannot model this guard.
+///      Additionally, initialize only validates _minSigs >= 2, not <= 10.
+definition isUpgradeOrInit(method f) returns bool =
+    f.selector == sig:upgradeToAndCall(address, bytes).selector
+    || f.selector == sig:initialize(uint256, address, uint256, uint256).selector;
+
+// ═══════════════════════════════════════════════════════════════════
+// RULES: NONCE SECURITY
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Nonce is monotonically non-decreasing across all operations
+rule nonce_monotonic(method f)
+    filtered { f ->
+        f.selector != sig:forceUpdateNonce(uint256, string).selector
+        && !isUpgradeOrInit(f)
+    }
+{
+    env e;
+    calldataarg args;
+    uint256 nonceBefore = currentNonce();
+
+    f(e, args);
+
+    assert currentNonce() >= nonceBefore,
+        "Nonce must never decrease";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RULES: ATTESTATION ID PERMANENCE
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Once an attestation ID is used, it can never be un-set
+rule attestation_id_permanence(bytes32 id, method f)
+    filtered { f -> !isUpgradeOrInit(f) }
+{
+    env e;
+    calldataarg args;
+    require usedAttestationIds(id) == true;
+
+    f(e, args);
+
+    assert usedAttestationIds(id) == true,
+        "Used attestation ID was reset to false";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RULES: SIGNATURE BOUNDS
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice minSignatures stays within valid range [2, 10] (inductive)
+rule min_signatures_preserved(method f)
+    filtered { f -> !isUpgradeOrInit(f) }
+{
+    env e;
+    calldataarg args;
+    require minSignatures() >= 2 && minSignatures() <= 10;
+
+    f(e, args);
+
+    assert minSignatures() >= 2 && minSignatures() <= 10,
+        "minSignatures out of valid range [2, 10]";
+}

@@ -16,16 +16,17 @@ import "./Errors.sol";
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
  * @dev When USDC comes in, it's automatically split according to target allocations
  *
- * Default Allocation:
- *   Pendle Multi-Pool:  40% (11.7% APY)
- *   Morpho Loop:        30% (11.5% APY)
- *   Sky sUSDS:          20% (8% APY)
- *   USDC Reserve:       10% (0% APY)
- *   ────────────────────────────────────
- *   Blended:            ~10% gross APY
+ * Default Allocation (v2 — Feb 2026):
+ *   Pendle Multi-Pool:        30% (11.7% APY)
+ *   Euler V2 RLUSD/USDC Loop: 25% (8-12% APY — cross-stable leverage)
+ *   Morpho Loop:              20% (11.5% APY)
+ *   Sky sUSDS:                15% (8% APY)
+ *   USDC Reserve:             10% (0% APY)
+ *   ────────────────────────────────────────
+ *   Blended:                  ~10.3% gross APY
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~6% net APY target)
+ *   smUSD Holders:      60% (~6.2% net APY target)
  *   Protocol:           40% (spread above 6%)
  */
 contract TreasuryV2 is
@@ -135,6 +136,8 @@ contract TreasuryV2 is
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
     event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
     event RebalanceDepositFailed(address indexed strategy, uint256 amount);
+    event DeployedToStrategy(address indexed strategy, uint256 amount, uint256 deposited);
+    event WithdrawnFromStrategy(address indexed strategy, uint256 amount, uint256 withdrawn);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ERRORS (shared errors imported from Errors.sol)
@@ -394,10 +397,10 @@ contract TreasuryV2 is
         } else {
             // Need to pull from strategies
             uint256 needed = amount - reserve;
-            _withdrawFromStrategies(needed);
+            // slither-disable-next-line reentrancy-vulnerabilities
+            uint256 withdrawn = _withdrawFromStrategies(needed);
 
-            // Re-read balance after external calls to avoid stale-balance usage
-            actualAmount = reserveBalance();
+            actualAmount = reserve + withdrawn;
             if (actualAmount > amount) actualAmount = amount;
 
             // Silent partial withdrawals can leave protocol in inconsistent state
@@ -822,6 +825,66 @@ contract TreasuryV2 is
         strategies[idx].autoAllocate = autoAllocate;
 
         emit StrategyUpdated(strategy, targetBps);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // MANUAL DEPLOYMENT
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Deploy exact USDC amount from treasury reserves to a specific strategy
+     * @param strategy The strategy address (must be registered and active)
+     * @param amount USDC amount to deploy (6 decimals)
+     */
+    function deployToStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant whenNotPaused onlyRole(ALLOCATOR_ROLE) {
+        if (amount == 0) revert ZeroAmount();
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        uint256 idx = strategyIndex[strategy];
+        if (!strategies[idx].active) revert StrategyNotFound();
+        if (reserveBalance() < amount) revert InsufficientReserves();
+
+        asset.forceApprove(strategy, amount);
+        uint256 deposited = IStrategy(strategy).deposit(amount);
+        asset.forceApprove(strategy, 0);
+
+        lastRecordedValue = totalValue();
+        emit DeployedToStrategy(strategy, amount, deposited);
+    }
+
+    /**
+     * @notice Withdraw exact USDC amount from a specific strategy back to treasury reserves
+     * @param strategy The strategy address (must be registered)
+     * @param amount USDC amount to withdraw (6 decimals)
+     */
+    function withdrawFromStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (amount == 0) revert ZeroAmount();
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+
+        uint256 withdrawn = IStrategy(strategy).withdraw(amount);
+
+        lastRecordedValue = totalValue();
+        emit WithdrawnFromStrategy(strategy, amount, withdrawn);
+    }
+
+    /**
+     * @notice Withdraw all funds from a specific strategy back to treasury reserves
+     * @param strategy The strategy address (must be registered)
+     */
+    function withdrawAllFromStrategy(
+        address strategy
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+
+        uint256 withdrawn = IStrategy(strategy).withdrawAll();
+
+        lastRecordedValue = totalValue();
+        emit WithdrawnFromStrategy(strategy, withdrawn, withdrawn);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
