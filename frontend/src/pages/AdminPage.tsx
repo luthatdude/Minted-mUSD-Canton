@@ -263,6 +263,8 @@ export function AdminPage() {
   const [mvAddAddr, setMvAddAddr] = useState("");
   const [mvAddTarget, setMvAddTarget] = useState("");
   const [mvDeployAmounts, setMvDeployAmounts] = useState<Record<string, string>>({});
+  const [mvDeployAmt, setMvDeployAmt] = useState("");
+  const [mvWithdrawAmt, setMvWithdrawAmt] = useState("");
 
   // Current values display
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -514,8 +516,18 @@ export function AdminPage() {
         const active = await metaVault!.strategyActive();
         const rbThresh = await metaVault!.rebalanceThresholdBps();
 
+        // Also load Treasury idle reserves for deploy panel
+        let treasuryReserve = "...";
+        if (treasury) {
+          try {
+            const rb = await treasury.reserveBalance();
+            treasuryReserve = "$" + (Number(rb) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          } catch {}
+        }
+
         setCurrentValues((prev) => ({
           ...prev,
+          mvTreasuryReserve: treasuryReserve,
           mvTotalValue: "$" + (Number(tv) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
           mvSharePrice: (Number(sp) / 1e18).toFixed(6),
           mvTotalShares: (Number(ts) / 1e18).toFixed(4),
@@ -2032,7 +2044,7 @@ export function AdminPage() {
           <div className="card">
             <h3 className="mb-3 font-semibold text-gray-300">Sub-Vault Allocations</h3>
             <p className="mb-3 text-sm text-gray-400">
-              MetaVault distributes USDC across these sub-strategies. Register it as a single strategy in TreasuryV2 via <span className="font-mono text-brand-400">addStrategy(metaVault, targetBps, …)</span>.
+              MetaVault distributes deposited USDC across these sub-strategies according to their target weights.
             </p>
             {mvVaults.length === 0 ? (
               <div className="py-6 text-center text-sm text-gray-500">
@@ -2280,23 +2292,99 @@ export function AdminPage() {
             </div>
           </div>
 
-          {/* How to register in TreasuryV2 */}
+          {/* Deploy / Withdraw from Treasury */}
           <div className="card border border-brand-500/30">
-            <h3 className="mb-2 font-semibold text-brand-400">📋 Register MetaVault in TreasuryV2</h3>
-            <p className="text-sm text-gray-400">
-              MetaVault implements <code className="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-300">IStrategy</code>. Go to the <strong>Treasury</strong> tab →
-              Add Strategy → paste the MetaVault address with your desired target allocation. TreasuryV2
-              will then auto-deploy USDC into MetaVault alongside Pendle, Morpho, Fluid, and Euler —
-              and MetaVault will further split it across its own sub-vaults.
+            <h3 className="mb-3 font-semibold text-brand-400">💰 Deploy / Withdraw (Treasury ↔ MetaVault)</h3>
+            <p className="mb-3 text-sm text-gray-400">
+              Manually move USDC between Treasury idle reserves and MetaVault.
+              No auto-allocation — you control when and how much to deploy.
             </p>
-            {metaVault && (
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-xs text-gray-500">Address:</span>
-                <code className="rounded bg-gray-800 px-2 py-1 font-mono text-xs text-brand-400">
-                  {CONTRACTS.MetaVault || "Not configured"}
-                </code>
+
+            <div className="grid gap-4 sm:grid-cols-3 mb-4">
+              <div className="rounded-lg bg-gray-800/60 px-4 py-3 text-center">
+                <span className="text-xs text-gray-500 block">Treasury Idle</span>
+                <span className="text-lg font-bold text-gray-200">{currentValues.mvTreasuryReserve || "..."}</span>
               </div>
-            )}
+              <div className="rounded-lg bg-gray-800/60 px-4 py-3 text-center">
+                <span className="text-xs text-gray-500 block">MetaVault Value</span>
+                <span className="text-lg font-bold text-emerald-400">{currentValues.mvTotalValue || "..."}</span>
+              </div>
+              <div className="rounded-lg bg-gray-800/60 px-4 py-3 text-center">
+                <span className="text-xs text-gray-500 block">MetaVault Address</span>
+                <span className="font-mono text-xs text-brand-400">{CONTRACTS.MetaVault ? `${CONTRACTS.MetaVault.slice(0, 6)}…${CONTRACTS.MetaVault.slice(-4)}` : "Not set"}</span>
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              {/* Deploy: Treasury → MetaVault */}
+              <div>
+                <label className="label">Deploy USDC to MetaVault</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      placeholder="0.00"
+                      value={mvDeployAmt}
+                      onChange={(e) => setMvDeployAmt(e.target.value)}
+                      className="input w-full py-2 pr-14 text-right"
+                      min="0"
+                      step="100"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">USDC</span>
+                  </div>
+                  <TxButton
+                    onClick={() => {
+                      const usdcWei = BigInt(Math.floor(parseFloat(mvDeployAmt) * 1e6));
+                      tx.send(() => treasury!.deployToStrategy(CONTRACTS.MetaVault, usdcWei));
+                    }}
+                    loading={tx.loading}
+                    disabled={!mvDeployAmt || parseFloat(mvDeployAmt) <= 0 || !treasury || !CONTRACTS.MetaVault}
+                  >
+                    Deploy →
+                  </TxButton>
+                </div>
+              </div>
+
+              {/* Withdraw: MetaVault → Treasury */}
+              <div>
+                <label className="label">Withdraw USDC from MetaVault</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      placeholder="0.00"
+                      value={mvWithdrawAmt}
+                      onChange={(e) => setMvWithdrawAmt(e.target.value)}
+                      className="input w-full py-2 pr-14 text-right"
+                      min="0"
+                      step="100"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500">USDC</span>
+                  </div>
+                  <TxButton
+                    onClick={() => {
+                      const usdcWei = BigInt(Math.floor(parseFloat(mvWithdrawAmt) * 1e6));
+                      tx.send(() => treasury!.withdrawFromStrategy(CONTRACTS.MetaVault, usdcWei));
+                    }}
+                    loading={tx.loading}
+                    disabled={!mvWithdrawAmt || parseFloat(mvWithdrawAmt) <= 0 || !treasury || !CONTRACTS.MetaVault}
+                    variant="secondary"
+                  >
+                    ← Pull
+                  </TxButton>
+                </div>
+              </div>
+            </div>
+
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => tx.send(() => treasury!.withdrawAllFromStrategy(CONTRACTS.MetaVault))}
+              loading={tx.loading}
+              disabled={!treasury || !CONTRACTS.MetaVault}
+              variant="danger"
+            >
+              Withdraw All from MetaVault → Treasury
+            </TxButton>
           </div>
         </div>
       )}
