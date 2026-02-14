@@ -18,23 +18,29 @@ import "./Errors.sol";
  *
  * Default Allocation (50/50 Strategy Split):
  *
- *   ── Existing Strategies (50%) ──────────────
- *   Pendle Multi-Pool:  20% (11.7% APY)
- *   Morpho Loop:        15% (11.5% APY)
- *   Sky sUSDS:          15% (8% APY)
+ *   Derived from original: Pendle 40%, Morpho 30%, Sky 20%, Reserve 10%.
+ *   Reserve stays at 10%. Deployable capital (90%) split 50/50 = 45% each.
+ *   Existing strategies keep their relative weights (4:3:2) within 45%.
  *
- *   ── 3x Basis Trade (50%) ──────────────────
- *   Basis Trading:      50% (~30% APY gross, 3x leveraged funding)
+ *   ── Existing Strategies (45% — half of deployable) ──
+ *   Pendle Multi-Pool:  20% (was 40%, = 4/9 × 45%)  11.7% APY
+ *   Morpho Loop:        15% (was 30%, = 3/9 × 45%)  11.5% APY
+ *   Sky sUSDS:          10% (was 20%, = 2/9 × 45%)   8.0% APY
  *
- *   USDC Reserve:       10% (0% APY, deducted before split)
- *   ─────────────────────────────────────────────
- *   Blended:            ~18.5% gross APY
- *     Existing leg:     (20%×11.7 + 15%×11.5 + 15%×8) / 50 = ~10.6%
- *     Basis leg:        ~30% × 50/90 = ~16.7% contribution
- *     Weighted:         ~18.5% gross on deployed capital
+ *   ── 3x Basis Trade (45% — half of deployable) ──────
+ *   Basis Trading:      45%                          ~30% APY gross (3x funding)
+ *
+ *   USDC Reserve:       10% (unchanged)                0% APY
+ *   ──────────────────────────────────────────────────────
+ *   Total:              100% (20 + 15 + 10 + 45 + 10)
+ *
+ *   Blended gross APY on deployed capital (90%):
+ *     Existing leg:     (20×11.7 + 15×11.5 + 10×8.0) / 90 = ~5.7% contribution
+ *     Basis leg:        (45×30)                       / 90 = ~15.0% contribution
+ *     Weighted total:   ~20.7% gross APY
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~11% net APY target)
+ *   smUSD Holders:      60% (~12.4% net APY target)
  *   Protocol:           40% (spread above target)
  */
 contract TreasuryV2 is

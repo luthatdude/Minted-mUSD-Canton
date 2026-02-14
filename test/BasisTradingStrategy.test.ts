@@ -613,31 +613,54 @@ describe("BasisTradingStrategy", function () {
   });
 
   describe("50/50 Allocation Integration", function () {
-    it("Should work with TreasuryV2 allocation pattern", async function () {
+    it("Should work with TreasuryV2 allocation pattern (45% of total)", async function () {
       const { strategy, treasury, usdc } = await loadFixture(deployFixture);
 
-      // Simulate what TreasuryV2 does: deposit 50% of deployable capital
-      const totalDeposit = ethers.parseUnits("1000000", 6); // $1M
-      const basisAllocation = totalDeposit / 2n; // 50% = $500k
+      // TreasuryV2 50/50 split derived from original allocation:
+      //   Original: Pendle 40%, Morpho 30%, Sky 20%, Reserve 10%
+      //   Reserve stays 10%, deployable = 90%, split 50/50 = 45% each
+      //   Basis gets 45% of total (4500 bps in addStrategy)
+      const totalDeposit = ethers.parseUnits("1000000", 6); // $1M total into treasury
+      const reserveAmount = totalDeposit * 1000n / 10000n;   // 10% = $100k reserve
+      const deployable = totalDeposit - reserveAmount;        // $900k deployable
+      const basisAllocation = deployable / 2n;                // 45% of total = $450k
 
       await strategy.connect(treasury).deposit(basisAllocation);
 
       expect(await strategy.totalPrincipal()).to.equal(basisAllocation);
       expect(await strategy.totalValue()).to.equal(basisAllocation);
 
-      // With 3x leverage on $500k, notional exposure = $1.5M
+      // With 3x leverage on $450k, notional exposure = $1.35M
       const leverage = await strategy.getCurrentLeverage();
       expect(leverage).to.equal(300); // 3x confirmed
+
+      // Verify the other 45% would go to existing strategies:
+      // Pendle: 4/9 × 45% = 20% of total = $200k
+      // Morpho: 3/9 × 45% = 15% of total = $150k
+      // Sky:    2/9 × 45% = 10% of total = $100k
+      const existingAllocation = deployable - basisAllocation; // $450k
+      const pendleShare = existingAllocation * 4n / 9n;   // ~$200k
+      const morphoShare = existingAllocation * 3n / 9n;   // ~$150k
+      const skyShare = existingAllocation - pendleShare - morphoShare; // ~$100k (remainder)
+
+      expect(pendleShare).to.equal(ethers.parseUnits("200000", 6));
+      expect(morphoShare).to.equal(ethers.parseUnits("150000", 6));
+      expect(skyShare).to.equal(ethers.parseUnits("100000", 6));
+
+      // Confirm total = 100%
+      const totalAllocated = reserveAmount + basisAllocation + pendleShare + morphoShare + skyShare;
+      expect(totalAllocated).to.equal(totalDeposit);
     });
 
     it("Should handle proportional withdrawal for rebalancing", async function () {
       const { strategy, treasury, usdc } = await loadFixture(deployFixture);
 
-      const deposit = ethers.parseUnits("500000", 6);
+      // 45% of $1M = $450k to basis strategy
+      const deposit = ethers.parseUnits("450000", 6);
       await strategy.connect(treasury).deposit(deposit);
 
       // Withdraw 20% for rebalancing
-      const withdrawAmt = ethers.parseUnits("100000", 6);
+      const withdrawAmt = ethers.parseUnits("90000", 6);
       const balBefore = await usdc.balanceOf(treasury.address);
 
       await strategy.connect(treasury).withdraw(withdrawAmt);
