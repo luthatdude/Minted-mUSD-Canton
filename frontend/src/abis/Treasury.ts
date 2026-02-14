@@ -15,16 +15,11 @@ export const TREASURY_ABI = [
   "function asset() view returns (address)",
   "function vault() view returns (address)",
   "function fees() view returns (uint256 performanceFeeBps, uint256 accruedFees, address feeRecipient)",
-  "function isStrategy(address) view returns (bool)",
   // Vault interface
   "function deposit(address from, uint256 amount)",
   "function withdraw(address to, uint256 amount)",
   "function depositFromVault(uint256 amount) returns (uint256[])",
   "function withdrawToVault(uint256 amount) returns (uint256)",
-  // Manual deployment
-  "function deployToStrategy(address strategy, uint256 amount)",
-  "function withdrawFromStrategy(address strategy, uint256 amount)",
-  "function withdrawAllFromStrategy(address strategy)",
   // Admin functions
   "function addStrategy(address strategy, uint256 targetBps, uint256 minBps, uint256 maxBps, bool autoAllocate)",
   "function removeStrategy(address strategy)",
@@ -51,6 +46,4 @@ export const TREASURY_ABI = [
   "event FeesClaimed(address indexed recipient, uint256 amount)",
   "event Rebalanced(uint256 totalValue)",
   "event EmergencyWithdraw(uint256 amount)",
-  "event DeployedToStrategy(address indexed strategy, uint256 amount, uint256 deposited)",
-  "event WithdrawnFromStrategy(address indexed strategy, uint256 amount, uint256 withdrawn)",
 ] as const;

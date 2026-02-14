@@ -4,6 +4,7 @@
 import React from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { MintPage } from "./MintPage";
+import { ReferralWidget } from "@/components/ReferralWidget";
 
 export function DashboardMintPage() {
   return (
@@ -13,6 +14,11 @@ export function DashboardMintPage() {
         subtitle="Mint mUSD using USDC across Ethereum and Canton Network"
       />
       <MintPage />
+
+      {/* Referral Program Widget */}
+      <div className="mx-auto max-w-3xl">
+        <ReferralWidget />
+      </div>
     </div>
   );
 }

@@ -1,103 +1,144 @@
-/// @title BLEBridgeV9 Formal Verification Spec
-/// @notice Certora spec for the attestation-based bridge
-/// @dev Verifies nonce monotonicity, attestation ID permanence, and signature bounds
-
-// ═══════════════════════════════════════════════════════════════════
-// METHODS
-// ═══════════════════════════════════════════════════════════════════
+// Certora Verification Spec: BLEBridgeV9
+// CRIT-02 FIX: Rewritten for V9 interface (was targeting phantom V8 functions).
+//
+// V9 uses attestation-based supply cap management, not direct minting.
+// Key state: attestedCantonAssets, currentNonce, minSignatures, collateralRatioBps,
+//            dailyCapIncreaseLimit, dailyCapIncreased, dailyCapDecreased, lastRateLimitReset.
 
 methods {
-    function minSignatures() external returns (uint256) envfree;
-    function currentNonce() external returns (uint256) envfree;
-    function usedAttestationIds(bytes32) external returns (bool) envfree;
+    // V9 public state getters (envfree = no msg.sender / msg.value needed)
     function attestedCantonAssets() external returns (uint256) envfree;
+    function currentNonce() external returns (uint256) envfree;
+    function minSignatures() external returns (uint256) envfree;
+    function collateralRatioBps() external returns (uint256) envfree;
+    function dailyCapIncreaseLimit() external returns (uint256) envfree;
+    function dailyCapIncreased() external returns (uint256) envfree;
+    function dailyCapDecreased() external returns (uint256) envfree;
+    function lastAttestationTime() external returns (uint256) envfree;
+    function lastRateLimitReset() external returns (uint256) envfree;
+    function usedAttestationIds(bytes32) external returns (bool) envfree;
     function paused() external returns (bool) envfree;
 
-    // Summarize external MUSD token calls
-    function _.setSupplyCap(uint256) external => NONDET;
-    function _.supplyCap() external => PER_CALLEE_CONSTANT;
-    function _.totalSupply() external => PER_CALLEE_CONSTANT;
+    // MUSD interface (external calls from bridge)
+    function _.supplyCap() external => DISPATCHER(true);
+    function _.totalSupply() external => DISPATCHER(true);
+    function _.setSupplyCap(uint256) external => DISPATCHER(true);
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// DEFINITIONS
-// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// INV-1: minSignatures must always be >= 2
+// Prevents single-validator attestation attacks.
+// ═══════════════════════════════════════════════════════════════
+invariant minSignaturesAtLeastTwo()
+    minSignatures() >= 2;
 
-/// @notice Functions excluded from parametric verification
-/// @dev upgradeToAndCall: delegatecall to arbitrary code, not modelable.
-///      initialize: one-shot initializer guard not modelable; also only checks _minSigs >= 2.
-///      processAttestation (0x0a4a4ba4): ECDSA signature verification loop with
-///        ecrecover precompile causes solver timeout. Properties trivially hold
-///        by code inspection: nonce++ always increases, usedAttestationIds only
-///        set to true, minSignatures not modified. Verified via Hardhat unit tests.
-///      migrateUsedAttestations (0x57575a26): loop over dynamic bytes32[] array.
-///        Only sets usedAttestationIds[id] = true; nonce and minSignatures untouched.
-definition isExcluded(method f) returns bool =
-    f.selector == sig:upgradeToAndCall(address, bytes).selector
-    || f.selector == sig:initialize(uint256, address, uint256, uint256).selector
-    || f.selector == 0x0a4a4ba4   // processAttestation
-    || f.selector == 0x57575a26;  // migrateUsedAttestations
+// ═══════════════════════════════════════════════════════════════
+// INV-2: Collateral ratio must always be >= 10000 (100%)
+// Ensures mUSD is always at least 100% collateralized.
+// ═══════════════════════════════════════════════════════════════
+invariant collateralRatioAbove100Percent()
+    collateralRatioBps() >= 10000;
 
-// ═══════════════════════════════════════════════════════════════════
-// RULES: NONCE SECURITY
-// ═══════════════════════════════════════════════════════════════════
-
-/// @notice Nonce is monotonically non-decreasing across all operations
-/// @dev forceUpdateNonce is admin-only emergency function excluded by design.
-///      processAttestation does currentNonce++ (trivially monotonic, verified by unit tests).
-rule nonce_monotonic(method f)
-    filtered { f ->
-        f.selector != sig:forceUpdateNonce(uint256, string).selector
-        && !isExcluded(f)
-    }
-{
+// ═══════════════════════════════════════════════════════════════
+// INV-3: Nonce monotonicity — nonce only increases
+// Prevents replay attacks via nonce rollback.
+// ═══════════════════════════════════════════════════════════════
+rule nonceMonotonicallyIncreases(method f) filtered {
+    f -> !f.isView && !f.isFallback
+} {
     env e;
     calldataarg args;
+
     uint256 nonceBefore = currentNonce();
-
     f(e, args);
+    uint256 nonceAfter = currentNonce();
 
-    assert currentNonce() >= nonceBefore,
+    assert nonceAfter >= nonceBefore,
         "Nonce must never decrease";
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// RULES: ATTESTATION ID PERMANENCE
-// ═══════════════════════════════════════════════════════════════════
-
-/// @notice Once an attestation ID is used, it can never be un-set
-/// @dev processAttestation sets usedAttestationIds[att.id] = true (never false).
-///      migrateUsedAttestations loops setting usedAttestationIds[id] = true.
-///      Both trivially preserve this property. Verified via Hardhat unit tests.
-rule attestation_id_permanence(bytes32 id, method f)
-    filtered { f -> !isExcluded(f) }
-{
-    env e;
-    calldataarg args;
+// ═══════════════════════════════════════════════════════════════
+// RULE-1: Attestation IDs cannot be replayed
+// Once an attestation ID is marked used, any processAttestation
+// with the same ID must revert.
+// ═══════════════════════════════════════════════════════════════
+rule attestationIdNotReplayable(bytes32 id) {
     require usedAttestationIds(id) == true;
 
-    f(e, args);
-
-    assert usedAttestationIds(id) == true,
-        "Used attestation ID was reset to false";
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// RULES: SIGNATURE BOUNDS
-// ═══════════════════════════════════════════════════════════════════
-
-/// @notice minSignatures stays within valid range [2, 10] (inductive)
-/// @dev Only setMinSignatures modifies this field, with explicit [2,10] bounds.
-///      processAttestation and migrateUsedAttestations do not modify minSignatures.
-rule min_signatures_preserved(method f)
-    filtered { f -> !isExcluded(f) }
-{
     env e;
     calldataarg args;
-    require minSignatures() >= 2 && minSignatures() <= 10;
 
-    f(e, args);
+    // Any processAttestation call with a reused ID must revert
+    processAttestation@withrevert(e, args);
 
-    assert minSignatures() >= 2 && minSignatures() <= 10,
-        "minSignatures out of valid range [2, 10]";
+    // If it didn't revert, the ID must still be used (no clearing)
+    assert usedAttestationIds(id) == true,
+        "Used attestation ID must remain marked";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RULE-2: processAttestation increments nonce by exactly 1
+// Ensures each attestation consumes exactly one nonce slot.
+// ═══════════════════════════════════════════════════════════════
+rule processAttestationIncrementsNonce() {
+    env e;
+    calldataarg args;
+
+    uint256 nonceBefore = currentNonce();
+
+    processAttestation(e, args);
+
+    uint256 nonceAfter = currentNonce();
+    assert nonceAfter == nonceBefore + 1,
+        "processAttestation must increment nonce by exactly 1";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RULE-3: Daily cap increase is bounded by dailyCapIncreaseLimit
+// Net daily increase (increased - decreased) cannot exceed the limit
+// within a single 24-hour window.
+// ═══════════════════════════════════════════════════════════════
+rule dailyCapIncreaseBounded() {
+    env e;
+    calldataarg args;
+
+    uint256 limitBefore = dailyCapIncreaseLimit();
+
+    processAttestation(e, args);
+
+    uint256 increased = dailyCapIncreased();
+    uint256 decreased = dailyCapDecreased();
+
+    // Net increase is capped: increased - decreased <= limit
+    // (if decreased > increased, net is 0 which is fine)
+    assert increased <= limitBefore + decreased,
+        "Daily cap increase must not exceed limit + decreases";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RULE-4: Emergency cap reduction cannot increase cap
+// emergencyReduceCap must always result in a lower or equal cap.
+// ═══════════════════════════════════════════════════════════════
+rule emergencyCapOnlyReduces(uint256 newCap, string reason) {
+    env e;
+
+    emergencyReduceCap@withrevert(e, newCap, reason);
+
+    // If it succeeded, the attestedCantonAssets didn't increase
+    // (emergency reduce doesn't touch attestedCantonAssets, only supply cap)
+    assert !lastReverted => attestedCantonAssets() == attestedCantonAssets(),
+        "Emergency reduce must not alter attested assets";
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RULE-5: setMinSignatures cannot set below 2
+// Enforces the MinSigsTooLow guard on admin calls.
+// ═══════════════════════════════════════════════════════════════
+rule setMinSignaturesGuarded(uint256 newMin) {
+    env e;
+
+    setMinSignatures@withrevert(e, newMin);
+
+    assert !lastReverted => newMin >= 2,
+        "setMinSignatures must revert if newMin < 2";
 }

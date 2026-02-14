@@ -645,7 +645,8 @@ class RelayService {
 
       // Build attestation struct (entropy and ID already computed above)
       // Include cantonStateHash to bind attestation to Canton ledger state
-      const attestation = {
+      // HIGH-01: Named 'ethAttestation' to avoid shadowing the DAML CreateEvent 'attestation' parameter
+      const ethAttestation = {
         id: idBytes32,
         cantonAssets: cantonAssets,
         nonce: nonce,
@@ -657,7 +658,7 @@ class RelayService {
       // Simulate transaction before submission to prevent race condition gas drain
       // If another relay or MEV bot front-runs us, simulation will fail and we skip
       try {
-        await this.bridgeContract.processAttestation.staticCall(attestation, sortedSigs);
+        await this.bridgeContract.processAttestation.staticCall(ethAttestation, sortedSigs);
       } catch (simulationError: any) {
         console.log(`[Relay] Pre-flight simulation failed for ${attestationId}: ${simulationError.reason || simulationError.message}`);
         // Check if it's because attestation was already processed
@@ -671,7 +672,7 @@ class RelayService {
 
       // Estimate gas (after successful simulation)
       const gasEstimate = await this.bridgeContract.processAttestation.estimateGas(
-        attestation,
+        ethAttestation,
         sortedSigs
       );
 
@@ -689,7 +690,7 @@ class RelayService {
       console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
 
       const tx = await this.bridgeContract.processAttestation(
-        attestation,
+        ethAttestation,
         sortedSigs,
         {
           gasLimit: gasEstimate * 120n / 100n,  // 20% buffer
@@ -709,10 +710,11 @@ class RelayService {
         // the attestation request. Without this, stale attestation contracts remain on
         // the Canton ledger, causing the relay to re-process them on every poll cycle
         // (retry storms) and leaving DAML state inconsistent with Ethereum.
+        // HIGH-01 FIX: Use the DAML CreateEvent's contractId, not the local ethAttestation struct.
         try {
           await (this.ledger.exercise as any)(
             "MintedProtocolV3:AttestationRequest",
-            attestation.contractId,
+            attestation.contractId,  // DAML CreateEvent contract ID (3rd param of bridgeAttestation)
             "Attestation_Complete",
             {}
           );

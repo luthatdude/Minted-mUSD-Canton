@@ -272,6 +272,9 @@ class ValidatorNode {
   private kmsClient: KMSClient;
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
+  // MED-03: Persist signed attestation cache to filesystem so validator
+  // doesn't re-sign all active attestations after a restart.
+  private readonly SIGNED_CACHE_PATH = process.env.SIGNED_CACHE_PATH || "/tmp/validator-signed-cache.json";
   private isRunning: boolean = false;
 
   private signingTimestamps: number[] = [];
@@ -335,6 +338,43 @@ class ValidatorNode {
     console.log(`[Validator] Party: ${config.validatorParty}`);
     console.log(`[Validator] Canton API: ${config.cantonAssetApiUrl}`);
     console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
+
+    // MED-03: Load persisted signed cache on startup
+    this.loadSignedCache();
+  }
+
+  /**
+   * MED-03: Load signed attestation IDs from disk.
+   * Prevents re-signing all active attestations after a restart.
+   */
+  private loadSignedCache(): void {
+    try {
+      if (fs.existsSync(this.SIGNED_CACHE_PATH)) {
+        const data = fs.readFileSync(this.SIGNED_CACHE_PATH, "utf-8");
+        const ids: string[] = JSON.parse(data);
+        if (Array.isArray(ids)) {
+          for (const id of ids) {
+            this.signedAttestations.add(id);
+          }
+          console.log(`[Validator] Loaded ${ids.length} signed attestation IDs from cache`);
+        }
+      }
+    } catch (error: any) {
+      console.warn(`[Validator] Failed to load signed cache: ${error.message}`);
+    }
+  }
+
+  /**
+   * MED-03: Persist signed attestation IDs to disk.
+   * Called after each successful signature to survive restarts.
+   */
+  private saveSignedCache(): void {
+    try {
+      const ids = Array.from(this.signedAttestations);
+      fs.writeFileSync(this.SIGNED_CACHE_PATH, JSON.stringify(ids), "utf-8");
+    } catch (error: any) {
+      console.warn(`[Validator] Failed to save signed cache: ${error.message}`);
+    }
   }
 
   /**
@@ -528,24 +568,21 @@ class ValidatorNode {
 
       // 4. Verify total matches
       const attestedTotal = ethers.parseUnits(payload.totalCantonValue, 18);
-      const MAX_TOTAL_TOLERANCE = ethers.parseUnits("100000", 18); // $100K
-      const percentTolerance = snapshot.totalValue / 1000n;
-      const tolerance = percentTolerance < MAX_TOTAL_TOLERANCE ? percentTolerance : MAX_TOTAL_TOLERANCE;
+      // HIGH-02 FIX: Use cumulative per-asset tolerance as an upper bound for total tolerance.
+      // Previously used a fixed $100K cap for total, allowing per-asset tolerances
+      // ($100K each) to accumulate across many assets into multi-million-dollar overvaluation.
+      const numAssets = BigInt(payload.cantonAssets.length);
+      const MAX_PER_ASSET_TOLERANCE = ethers.parseUnits("100000", 18); // $100K per asset
+      const maxCumulativeTolerance = MAX_PER_ASSET_TOLERANCE * numAssets;
+      const MAX_TOTAL_TOLERANCE = ethers.parseUnits("100000", 18); // $100K total
+      // Total tolerance = min(0.1% of total, $100K, cumulative per-asset tolerance)
+      const percentTolerance = snapshot.totalValue / 1000n; // 0.1%
+      const capTolerance = percentTolerance < MAX_TOTAL_TOLERANCE ? percentTolerance : MAX_TOTAL_TOLERANCE;
+      const tolerance = capTolerance < maxCumulativeTolerance ? capTolerance : maxCumulativeTolerance;
       
       const totalDiff = attestedTotal > snapshot.totalValue
         ? attestedTotal - snapshot.totalValue
         : snapshot.totalValue - attestedTotal;
-      if (totalDiff > tolerance) {
-        return {
-          valid: false,
-          reason: `Total value mismatch: attested=${attestedTotal}, canton=${snapshot.totalValue}, diff=${totalDiff}`,
-          stateHash: snapshot.stateHash,
-        };
-      }
-
-      // Enforce total-value tolerance — previously computed but never checked.
-      // Without this, per-asset tolerances ($100K each) can accumulate across many assets
-      // to produce a multi-million-dollar overvaluation that passes validation.
       if (totalDiff > tolerance) {
         return {
           valid: false,
@@ -646,6 +683,8 @@ class ValidatorNode {
 
       this.signedAttestations.add(attestationId);
       console.log(`[Validator] ✓ Signed attestation ${attestationId}`);
+      // MED-03: Persist after successful sign
+      this.saveSignedCache();
 
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
         const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);

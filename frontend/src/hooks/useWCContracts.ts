@@ -12,14 +12,6 @@ import { LIQUIDATION_ENGINE_ABI } from "@/abis/LiquidationEngine";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
-import { PENDLE_STRATEGY_ABI } from "@/abis/PendleStrategy";
-import { PENDLE_MARKET_SELECTOR_ABI } from "@/abis/PendleMarketSelector";
-import { MORPHO_STRATEGY_ABI } from "@/abis/MorphoStrategy";
-import { MORPHO_MARKET_REGISTRY_ABI } from "@/abis/MorphoMarketRegistry";
-import { YIELD_SCANNER_ABI } from "@/abis/YieldScanner";
-import { StrategyFactoryABI } from "@/abis/StrategyFactory";
-import { YieldVerifierABI } from "@/abis/YieldVerifier";
-import { META_VAULT_ABI } from "@/abis/MetaVault";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -33,14 +25,6 @@ const ABI_MAP: Record<string, readonly string[]> = {
   BLEBridgeV9: BLE_BRIDGE_V9_ABI,
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
-  PendleStrategy: PENDLE_STRATEGY_ABI,
-  PendleMarketSelector: PENDLE_MARKET_SELECTOR_ABI,
-  MorphoStrategy: MORPHO_STRATEGY_ABI,
-  MorphoMarketRegistry: MORPHO_MARKET_REGISTRY_ABI,
-  YieldScanner: YIELD_SCANNER_ABI,
-  StrategyFactory: StrategyFactoryABI,
-  YieldVerifier: YieldVerifierABI,
-  MetaVault: META_VAULT_ABI,
 };
 
 /**
@@ -81,14 +65,6 @@ export function useWCContracts() {
         liquidation: null,
         bridge: null,
         oracle: null,
-        pendleStrategy: null,
-        pendleSelector: null,
-        morphoStrategy: null,
-        morphoRegistry: null,
-        yieldScanner: null,
-        strategyFactory: null,
-        yieldVerifier: null,
-        metaVault: null,
       };
     }
 
@@ -110,14 +86,6 @@ export function useWCContracts() {
       liquidation: createContract("LiquidationEngine"),
       bridge: createContract("BLEBridgeV9"),
       oracle: createContract("PriceOracle"),
-      pendleStrategy: createContract("PendleStrategy"),
-      pendleSelector: createContract("PendleMarketSelector"),
-      morphoStrategy: createContract("MorphoStrategy"),
-      morphoRegistry: createContract("MorphoMarketRegistry"),
-      yieldScanner: createContract("YieldScanner"),
-      strategyFactory: createContract("StrategyFactory"),
-      yieldVerifier: createContract("YieldVerifier"),
-      metaVault: createContract("MetaVault"),
     };
   }, [signer, provider, isConnected]);
 }
