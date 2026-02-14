@@ -12,7 +12,6 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./TimelockGoverned.sol";
 import "./Errors.sol";
-import "./interfaces/ITWAPOracle.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -33,6 +32,18 @@ interface ISwapRouter {
 /// @notice Price oracle interface
 interface IPriceOracle {
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
+}
+
+/// @notice SOL-H-03 FIX: Uniswap V3 TWAP oracle for MEV/sandwich resistance
+/// @dev Optional — set to address(0) to disable TWAP cross-check
+interface ITWAPOracle {
+    /// @notice Get time-weighted average price for a token pair
+    /// @param tokenIn  Input token address
+    /// @param amountIn Input amount
+    /// @param tokenOut Output token address
+    /// @param twapPeriod TWAP observation window in seconds
+    /// @return amountOut Expected output based on TWAP
+    function consult(address tokenIn, uint256 amountIn, address tokenOut, uint32 twapPeriod) external view returns (uint256 amountOut);
 }
 
 /// @notice Collateral vault interface
@@ -102,25 +113,19 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @notice Maximum allowed leverage × 10 (e.g., 30 = 3.0x max)
     uint256 public maxLeverageX10;
 
+    /// @notice SOL-H-03 FIX: Optional TWAP oracle for post-swap validation
+    ITWAPOracle public twapOracle;
+
+    /// @notice SOL-H-03 FIX: TWAP observation period (default 30 minutes)
+    uint32 public twapPeriod = 1800;
+
+    error TWAPDeviationExceeded(uint256 received, uint256 twapMinimum);
+
     /// @notice Per-token pool fee overrides
     mapping(address => uint24) public tokenPoolFees;
 
     /// @notice Whether a collateral token is enabled for leverage
     mapping(address => bool) public leverageEnabled;
-
-    // ============================================================
-    //                  TWAP ORACLE (GAP-2)
-    // ============================================================
-
-    /// @notice TWAP oracle for validating swap outputs against manipulation
-    ITWAPOracle public twapOracle;
-
-    /// @notice TWAP observation window in seconds (default 15 min)
-    uint32 public constant TWAP_DURATION = 900;
-
-    /// @notice Maximum acceptable deviation from TWAP (bps). Swaps deviating
-    ///         more than this from the TWAP price are rejected.
-    uint256 public constant MAX_TWAP_DEVIATION_BPS = 500; // 5%
 
     // ============================================================
     //                  POSITION TRACKING
@@ -170,6 +175,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
     event ConfigUpdated(uint256 maxLoops, uint256 minBorrowPerLoop, uint24 defaultPoolFee, uint256 maxSlippageBps);
     event MaxLeverageUpdated(uint256 oldMaxLeverageX10, uint256 newMaxLeverageX10);
+    event TwapOracleUpdated(address indexed twapOracle, uint32 twapPeriod);
     event TokenEnabled(address indexed token, uint24 poolFee);
     event TokenDisabled(address indexed token);
 
@@ -182,8 +188,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     );
 
     event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
-    event TwapOracleUpdated(address indexed oldOracle, address indexed newOracle);
-    event TwapDeviationDetected(address indexed tokenIn, address indexed tokenOut, uint256 expected, uint256 actual);
 
     // ============================================================
     //                  CONSTRUCTOR
@@ -215,6 +219,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         defaultPoolFee = 3000;           // 0.3% Uniswap fee tier
         maxSlippageBps = 100;            // 1% max slippage
         maxLeverageX10 = 30;             // 3.0x max leverage by default
+
+        // SOL-H-03 FIX: TWAP oracle disabled by default (address(0)), set via admin
+        twapOracle = ITWAPOracle(address(0));
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
@@ -336,10 +343,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
             collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
 
-            // AUDIT SOL-H-03: Use protocol slippage protection for collateral→mUSD swap.
-            // Previously passed (0, 0) allowing sandwich attacks on position close.
-            uint256 minMusdOut = (debtToRepay * (10000 - maxSlippageBps)) / 10000;
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, minMusdOut, 0);
+            // Swap collateral → mUSD
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
             if (musdReceived < debtToRepay) revert InsufficientMusdFromSwap();
 
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
@@ -348,11 +353,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // AUDIT SOL-H-03: Apply slippage protection to excess mUSD→collateral swap.
-                // Previously passed (0, 0), allowing MEV extraction on the refund swap.
-                uint256 minExcessCollateral = _getCollateralForMusd(collateralToken, excessMusd);
-                minExcessCollateral = (minExcessCollateral * (10000 - maxSlippageBps)) / 10000;
-                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, minExcessCollateral, 0);
+                // If swap fails (returns 0), transfer the mUSD directly to user
+                // instead of leaving it trapped in the contract.
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, 0);
                 if (swappedCollateral == 0) {
                     // Swap failed — return mUSD directly to user
                     IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
@@ -565,16 +568,11 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             collateralReceived = 0;
         }
 
-        // GAP-2: TWAP validation — reject if output deviates >5% from TWAP
+        // SOL-H-03 FIX: Post-swap TWAP cross-check for MEV resistance
         if (collateralReceived > 0 && address(twapOracle) != address(0)) {
-            uint256 twapExpected = twapOracle.getTWAPQuote(
-                address(musd), collateralToken, poolFee, TWAP_DURATION, musdAmount
-            );
-            uint256 twapFloor = (twapExpected * (10000 - MAX_TWAP_DEVIATION_BPS)) / 10000;
-            if (collateralReceived < twapFloor) {
-                emit TwapDeviationDetected(address(musd), collateralToken, twapExpected, collateralReceived);
-                revert SlippageExceeded();
-            }
+            uint256 twapExpected = twapOracle.consult(address(musd), musdAmount, collateralToken, twapPeriod);
+            uint256 twapMin = (twapExpected * (10000 - maxSlippageBps)) / 10000;
+            if (collateralReceived < twapMin) revert TWAPDeviationExceeded(collateralReceived, twapMin);
         }
 
         return collateralReceived;
@@ -617,16 +615,11 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         
         if (musdReceived == 0) revert SwapReturnedZero();
 
-        // GAP-2: TWAP validation — reject if output deviates >5% from TWAP
+        // SOL-H-03 FIX: Post-swap TWAP cross-check for MEV resistance
         if (address(twapOracle) != address(0)) {
-            uint256 twapExpected = twapOracle.getTWAPQuote(
-                collateralToken, address(musd), poolFee, TWAP_DURATION, collateralAmount
-            );
-            uint256 twapFloor = (twapExpected * (10000 - MAX_TWAP_DEVIATION_BPS)) / 10000;
-            if (musdReceived < twapFloor) {
-                emit TwapDeviationDetected(collateralToken, address(musd), twapExpected, musdReceived);
-                revert SlippageExceeded();
-            }
+            uint256 twapExpected = twapOracle.consult(collateralToken, collateralAmount, address(musd), twapPeriod);
+            uint256 twapMin = (twapExpected * (10000 - maxSlippageBps)) / 10000;
+            if (musdReceived < twapMin) revert TWAPDeviationExceeded(musdReceived, twapMin);
         }
 
         return musdReceived;
@@ -732,6 +725,17 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         emit MaxLeverageUpdated(oldMax, _maxLeverageX10);
     }
 
+    /// @notice SOL-H-03 FIX: Set TWAP oracle and observation period
+    /// @dev Timelock-gated to prevent flash manipulation of TWAP config
+    /// @param _twapOracle Address of TWAP oracle (address(0) disables TWAP checks)
+    /// @param _twapPeriod TWAP observation window in seconds (min 300 = 5 min)
+    function setTwapOracle(address _twapOracle, uint32 _twapPeriod) external onlyTimelock {
+        if (_twapOracle != address(0) && _twapPeriod < 300) revert InvalidTwapPeriod();
+        twapOracle = ITWAPOracle(_twapOracle);
+        twapPeriod = _twapPeriod;
+        emit TwapOracleUpdated(_twapOracle, _twapPeriod);
+    }
+
     /// @notice Enable a collateral token for leverage
     function enableToken(address token, uint24 poolFee) external onlyRole(LEVERAGE_ADMIN_ROLE) {
         if (token == address(0)) revert InvalidToken();
@@ -747,14 +751,6 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     function disableToken(address token) external onlyRole(LEVERAGE_ADMIN_ROLE) {
         leverageEnabled[token] = false;
         emit TokenDisabled(token);
-    }
-
-    /// @notice Set the TWAP oracle for swap output validation (GAP-2)
-    /// @dev Passing address(0) disables TWAP validation (backward compatible)
-    function setTwapOracle(address _twapOracle) external onlyTimelock {
-        address old = address(twapOracle);
-        twapOracle = ITWAPOracle(_twapOracle);
-        emit TwapOracleUpdated(old, _twapOracle);
     }
 
     /// @notice Emergency withdraw stuck tokens

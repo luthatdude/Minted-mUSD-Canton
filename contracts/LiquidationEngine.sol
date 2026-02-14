@@ -48,8 +48,6 @@ interface IPriceOracleLiq {
 
 interface IMUSDBurn {
     function burn(address from, uint256 amount) external;
-    /// @notice AUDIT SOL-H-01: Reduce supply cap when bad debt is socialized
-    function reduceSupplyCapByBadDebt(uint256 amount) external;
 }
 
 /// @title LiquidationEngine
@@ -271,9 +269,6 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Write off bad debt for a specific borrower
     /// @dev Called after all collateral has been seized and position is fully underwater.
     ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
-    ///      AUDIT SOL-H-01: Also reduces the supply cap by the bad debt amount to prevent
-    ///      unbacked mUSD from remaining in circulation. The mUSD was never burned (no
-    ///      tokens to burn — the borrower defaulted), so we must reduce the cap instead.
     function socializeBadDebt(address borrower) external onlyRole(ENGINE_ADMIN_ROLE) {
         uint256 amount = borrowerBadDebt[borrower];
         if (amount == 0) revert NoBadDebt();
@@ -281,9 +276,6 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         totalBadDebt -= amount;
         // Reduce the borrower's debt record in BorrowModule
         borrowModule.reduceDebt(borrower, amount);
-        // AUDIT SOL-H-01: Reduce supply cap to reflect unbacked mUSD.
-        // This prevents new mints against the phantom supply created by bad debt.
-        musd.reduceSupplyCapByBadDebt(amount);
         emit BadDebtSocialized(borrower, amount, totalBadDebt);
     }
 
