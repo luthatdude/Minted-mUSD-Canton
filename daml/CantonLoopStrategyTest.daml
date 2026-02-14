@@ -9,7 +9,7 @@ import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
 import DA.Set qualified as Set
-import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..))
+import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..), USDCx(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonCoinToken (CantonCoin(..))
 import CantonLoopStrategy
@@ -242,7 +242,10 @@ testLoopRequestExecute = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -285,7 +288,10 @@ testLoopRequestRejectsBlacklisted = do
       user = badUser
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -308,7 +314,10 @@ testLoopRequestCancel = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 500.0
       requestedLoops = 3
       requestedAt = now
@@ -336,7 +345,10 @@ testRecordLoop = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -384,7 +396,10 @@ testRecordLoopMaxReached = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = singleLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 1
       requestedAt = now
@@ -431,7 +446,10 @@ testUnwindLifecycle = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -487,7 +505,10 @@ testUnwindRejectDoubleUnwind = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -517,7 +538,10 @@ testUnwindCancel = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -554,7 +578,10 @@ testUnwindSmusdCountMismatch = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -611,7 +638,10 @@ testUnwindRequiresMusdBurnWhenDebt = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -655,7 +685,10 @@ testUnwindMinReturnFloor = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -717,7 +750,7 @@ testHealthFactorCalculation = do
 
 testStrategyEstimate : Script ()
 testStrategyEstimate = do
-  let est = estimateStrategy SMUSDMaxiLoop defaultLoopConfig 1000.0 5 0.06 0.04
+  let est = estimateStrategy SMUSDMaxiLoop defaultLoopConfig LoopDeposit_USDC 1000.0 5 0.06 0.04
   assertMsg "Leverage > 4" (est.leverage > 4.0)
   assertMsg "Net APY positive" (est.netAPY > 0.0)
   assertMsg "Health factor > 1" (est.healthFactor > 1.0)
@@ -739,7 +772,10 @@ testUnwindRejectsBlacklistedUser = do
       user = setup.user
       strategy = SMUSDMaxiLoop
       config = defaultLoopConfig
-      initialUsdcCid = usdcCid
+      depositType = LoopDeposit_USDC
+      initialUsdcCid = Some usdcCid
+      initialUsdcxCid = None
+      initialCtnCid = None
       initialAmount = 1000.0
       requestedLoops = 3
       requestedAt = now
@@ -773,3 +809,123 @@ testUnwindRejectsBlacklistedUser = do
       musdToBurn = None
       configCid = newCfgCid
   debug "✅ 23. Blacklisted user rejected on unwind"
+
+-- ============================================================
+--               8. MULTI-ASSET DEPOSIT TESTS
+-- ============================================================
+
+-- | Create a USDCx token for a user
+createUSDCx : Party -> Party -> Money -> Script (ContractId USDCx)
+createUSDCx operator user amount = do
+  submitMulti [operator, user] [] do
+    createCmd USDCx with
+      issuer = operator
+      owner = user
+      amount
+      sourceChain = "ethereum"
+      cctpNonce = 1
+      privacyObservers = []
+
+-- | Create a CantonCoin token for a user
+createCTN : Party -> Party -> Money -> Script (ContractId CantonCoin)
+createCTN operator user amount = do
+  submitMulti [operator, user] [] do
+    createCmd CantonCoin with
+      issuer = operator
+      owner = user
+      amount
+      privacyObservers = []
+
+testLoopRequestUsdcxDeposit : Script ()
+testLoopRequestUsdcxDeposit = do
+  setup <- setupLoopTest
+  usdcxCid <- createUSDCx setup.operator setup.user 1000.0
+
+  now <- getTime
+  reqCid <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonLoopRequest with
+      operator = setup.operator
+      user = setup.user
+      strategy = SMUSDMaxiLoop
+      config = defaultLoopConfig
+      depositType = LoopDeposit_USDCx
+      initialUsdcCid = None
+      initialUsdcxCid = Some usdcxCid
+      initialCtnCid = None
+      initialAmount = 1000.0
+      requestedLoops = 3
+      requestedAt = now
+      configCid = setup.configCid
+
+  -- Operator executes
+  posCid <- submit setup.operator do
+    exerciseCmd reqCid LoopRequest_Execute
+
+  pos <- queryContractId setup.operator posCid
+  let p = fromSome pos
+  assertMsg "Active status" (p.status == "active")
+  assertMsg "Deposited 1000" (p.totalDeposited == 1000.0)
+  assertMsg "Deposit type is USDCx" (p.depositType == LoopDeposit_USDCx)
+  debug "✅ 24. USDCx deposit loop request execute"
+
+testLoopRequestCtnDeposit : Script ()
+testLoopRequestCtnDeposit = do
+  setup <- setupLoopTest
+  ctnCid <- createCTN setup.operator setup.user 500.0
+
+  now <- getTime
+  reqCid <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonLoopRequest with
+      operator = setup.operator
+      user = setup.user
+      strategy = SMUSDMaxiLoop
+      config = defaultLoopConfig
+      depositType = LoopDeposit_CTN
+      initialUsdcCid = None
+      initialUsdcxCid = None
+      initialCtnCid = Some ctnCid
+      initialAmount = 500.0
+      requestedLoops = 3
+      requestedAt = now
+      configCid = setup.configCid
+
+  -- Operator executes
+  posCid <- submit setup.operator do
+    exerciseCmd reqCid LoopRequest_Execute
+
+  pos <- queryContractId setup.operator posCid
+  let p = fromSome pos
+  assertMsg "Active status" (p.status == "active")
+  assertMsg "Deposited 500" (p.totalDeposited == 500.0)
+  assertMsg "Deposit type is CTN" (p.depositType == LoopDeposit_CTN)
+  debug "✅ 25. CantonCoin deposit loop request execute"
+
+-- ============================================================
+--               9. CTN LTV GOVERNANCE TEST
+-- ============================================================
+
+testConfigUpdateCtnTargetLtv : Script ()
+testConfigUpdateCtnTargetLtv = do
+  setup <- setupLoopTest
+  proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-ctn-ltv"
+  newCfgCid <- submit setup.operator do
+    exerciseCmd setup.configCid LoopConfig_UpdateCtnTargetLtv with
+      newCtnTargetLtvBps = 5000
+      governanceProofCid = proof
+  cfg <- queryContractId setup.operator newCfgCid
+  assertMsg "CTN target LTV updated to 5000" ((fromSome cfg).config.ctnTargetLtvBps == 5000)
+
+  -- Reject out-of-range CTN LTV (> 7500)
+  proof2 <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "unsafe-ctn-ltv"
+  submitMustFail setup.operator do
+    exerciseCmd newCfgCid LoopConfig_UpdateCtnTargetLtv with
+      newCtnTargetLtvBps = 8000
+      governanceProofCid = proof2
+
+  -- Reject out-of-range CTN LTV (< 3000)
+  proof3 <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "low-ctn-ltv"
+  submitMustFail setup.operator do
+    exerciseCmd newCfgCid LoopConfig_UpdateCtnTargetLtv with
+      newCtnTargetLtvBps = 2000
+      governanceProofCid = proof3
+  debug "✅ 26. Governance-gated CTN target LTV update with safety bounds"
