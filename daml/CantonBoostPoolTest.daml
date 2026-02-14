@@ -818,6 +818,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 100
+      governanceProofCid = feeProof1
 
   -- Invalid: entry fee > 500 bps (5%)
   feeProof2 <- submit operator do
@@ -836,6 +837,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 600
       newExitFeeBps = 100
+      governanceProofCid = feeProof2
 
   -- Invalid: exit fee > 500 bps
   feeProof3 <- submit operator do
@@ -854,6 +856,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 501
+      governanceProofCid = feeProof3
 
   -- Valid: zero fees
   feeProof4 <- submit operator do
@@ -872,6 +875,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
+      governanceProofCid = feeProof4
 
   debug "TEST 12 PASSED: Fee update — bounds enforced"
   pure ()
@@ -1493,10 +1497,24 @@ test_NonOperatorAdmin = script do
       newPaused = True
 
   -- Attacker cannot update fees
+  now <- getTime
+  attackProof <- submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "attacker-fee-attempt"
+      actionType = ParameterUpdate
+      description = "test"
+      payload = ""
+      payloadHash = ""
+      targetModule = "CantonBoostPool"
+      approvers = [operator]
+      executedBy = operator
+      executedAt = now
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
+      governanceProofCid = attackProof
 
   -- Attacker cannot distribute rewards
   submitMultiMustFail [attacker] [operator] do

@@ -110,10 +110,21 @@ test_UnauthorizedTransfer = do
       agreementUri = "https://example.com"
       observers = []
 
+  -- Create compliance registry
+  now <- getTime
+  registryCid <- submit operator do
+    createCmd ComplianceRegistry with
+      regulator = operator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+
   -- Attacker tries to initiate transfer (not the owner)
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = attacker
+      complianceRegistryCid = registryCid
 
   return ()
 
@@ -139,10 +150,21 @@ test_BlacklistedCannotTransfer = do
       agreementUri = "https://example.com"
       observers = []
 
+  -- Create compliance registry
+  now <- getTime
+  registryCid <- submit operator do
+    createCmd ComplianceRegistry with
+      regulator = operator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+
   -- Owner tries to transfer blacklisted token
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver
+      complianceRegistryCid = registryCid
 
   return ()
 
@@ -422,16 +444,28 @@ test_DoubleSpendPrevented = do
       agreementUri = "https://example.com"
       observers = []
 
+  -- Create compliance registry
+  now <- getTime
+  registryCid <- submit operator do
+    createCmd ComplianceRegistry with
+      regulator = operator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+
   -- First transfer (valid)
   proposalCid <- submit owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
+      complianceRegistryCid = registryCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
+      complianceRegistryCid = registryCid
 
   return ()
 
