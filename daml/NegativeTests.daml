@@ -98,6 +98,7 @@ test_UnauthorizedTransfer = do
   operator <- allocateParty "Operator"
   owner <- allocateParty "Owner"
   attacker <- allocateParty "Attacker"
+  regulator <- allocateParty "Regulator"
 
   -- Create mUSD held by owner
   musdCid <- submitMulti [operator, owner] [] do
@@ -112,9 +113,9 @@ test_UnauthorizedTransfer = do
 
   -- Create compliance registry
   now <- getTime
-  registryCid <- submit operator do
+  registryCid <- submit regulator do
     createCmd ComplianceRegistry with
-      regulator = operator
+      regulator
       operator
       blacklisted = Set.empty
       frozen = Set.empty
@@ -138,6 +139,7 @@ test_BlacklistedCannotTransfer = do
   operator <- allocateParty "Operator"
   owner <- allocateParty "Owner"
   receiver <- allocateParty "Receiver"
+  regulator <- allocateParty "Regulator"
 
   -- Create BLACKLISTED mUSD
   musdCid <- submitMulti [operator, owner] [] do
@@ -152,9 +154,9 @@ test_BlacklistedCannotTransfer = do
 
   -- Create compliance registry
   now <- getTime
-  registryCid <- submit operator do
+  registryCid <- submit regulator do
     createCmd ComplianceRegistry with
-      regulator = operator
+      regulator
       operator
       blacklisted = Set.empty
       frozen = Set.empty
@@ -395,14 +397,15 @@ test_UnauthorizedUpgradeActivation : Script ()
 test_UnauthorizedUpgradeActivation = do
   operator <- allocateParty "Operator"
   gov1 <- allocateParty "Governor1"
+  gov2 <- allocateParty "Governor2"
   
   now <- getTime
 
   proposalCid <- submit operator do
     createCmd UpgradeProposal with
       operator
-      governance = [gov1]
-      approvalThreshold = 1
+      governance = [gov1, gov2]
+      approvalThreshold = 2
       approvals = Set.empty  -- No approvals yet
       sourceVersion = "V2"
       targetVersion = "V3"
@@ -432,6 +435,7 @@ test_DoubleSpendPrevented = do
   owner <- allocateParty "Owner"
   receiver1 <- allocateParty "Receiver1"
   receiver2 <- allocateParty "Receiver2"
+  regulator <- allocateParty "Regulator"
 
   -- Create mUSD
   musdCid <- submitMulti [operator, owner] [] do
@@ -446,23 +450,23 @@ test_DoubleSpendPrevented = do
 
   -- Create compliance registry
   now <- getTime
-  registryCid <- submit operator do
+  registryCid <- submit regulator do
     createCmd ComplianceRegistry with
-      regulator = operator
+      regulator
       operator
       blacklisted = Set.empty
       frozen = Set.empty
       lastUpdated = now
 
-  -- First transfer (valid)
-  proposalCid <- submit owner do
+  -- First transfer (valid) — needs readAs operator for ComplianceRegistry visibility
+  proposalCid <- submitMulti [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
       complianceRegistryCid = registryCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
-  submitMustFail owner do
+  submitMultiMustFail [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
       complianceRegistryCid = registryCid
