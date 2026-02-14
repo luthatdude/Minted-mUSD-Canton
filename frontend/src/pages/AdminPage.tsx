@@ -9,6 +9,7 @@ import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
+import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
 
 type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
 
@@ -132,6 +133,25 @@ function strategyColor(addr: string): string {
     (s) => s.address && s.address.toLowerCase() === addr.toLowerCase()
   );
   return found?.color || "#6b7280";
+}
+
+/** Map shortName → optimizer engine key for the AI yield optimizer */
+const STRATEGY_KEY_MAP: Record<string, string> = {
+  "Fluid #146": "fluid",
+  "Pendle": "pendle",
+  "Morpho": "morpho",
+  "Euler xStable": "eulerCross",
+  "Aave V3": "aave",
+  "Compound": "compound",
+  "Contango": "contango",
+  "Euler V2": "euler",
+  "Sky sUSDS": "sky",
+  "MetaVault": "metavault",
+};
+
+function strategyKey(addr: string): string {
+  const name = strategyName(addr);
+  return STRATEGY_KEY_MAP[name] || addr.toLowerCase();
 }
 
 export function AdminPage() {
@@ -464,6 +484,36 @@ export function AdminPage() {
             <strong>Manual Deployment:</strong> All deposits sit idle in the reserve until you explicitly deploy them below.
             No funds are auto-allocated.
           </div>
+
+          {/* ── AI Yield Optimizer ── */}
+          <AIYieldOptimizer
+            totalValueUsd={parseFloat((currentValues.totalBacking || "0").replace(/[^0-9.]/g, ""))}
+            reserveBalanceUsd={parseFloat((currentValues.reserveBalance || "0").replace(/[^0-9.]/g, ""))}
+            currentStrategies={strategyList.map((s) => ({
+              key: strategyKey(s.strategy),
+              bps: Number(s.targetBps),
+            }))}
+            onApply={(diffs) => {
+              // Show a summary; actual deploy/withdraw still done manually below
+              const summary = diffs
+                .map((d) => `${d.action} ${d.shortName}: ${(d.currentBps / 100).toFixed(1)}% → ${(d.recommendedBps / 100).toFixed(1)}%`)
+                .join("\n");
+              if (confirm(`Apply AI recommendation?\n\n${summary}\n\nThis will queue the first deploy/withdraw. Execute each manually below.`)) {
+                // Pre-fill the deploy form with the first NEW/DEPLOY action
+                const firstDeploy = diffs.find((d) => d.action === "NEW" || d.action === "DEPLOY");
+                if (firstDeploy) {
+                  const strat = strategyList.find(
+                    (s) => strategyKey(s.strategy) === firstDeploy.key
+                  );
+                  if (strat) {
+                    setDeployStratAddr(strat.strategy);
+                    const amt = Math.abs(firstDeploy.deltaUsd);
+                    setDeployAmount(amt.toFixed(2));
+                  }
+                }
+              }
+            }}
+          />
 
           {/* ── Active Strategies (on-chain registered) ── */}
           <div className="card">
