@@ -2,7 +2,7 @@
 
 **Date:** February 13, 2026  
 **Scope:** All test layers — Hardhat, Foundry, Certora, DAML, TypeScript, Integration  
-**Auditor:** testing-agent
+**Auditor:** Minted Security Team
 
 ---
 

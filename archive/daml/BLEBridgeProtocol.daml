@@ -9,7 +9,7 @@
 --   Supply cap attestations keep bridge supply in sync
 --
 -- Inherits the validator multi-sig and attestation security from the
--- original BLEProtocol (D-01 TOCTOU fix, D-02 signature uniqueness,
+-- original BLEProtocol (D-01 TOCTOU, D-02 signature uniqueness,
 -- D-03 timestamp validation).
 
 module BLEBridgeProtocol where
@@ -21,7 +21,7 @@ import DA.Foldable hiding (elem, length, all, sum)
 import DA.Text qualified as T
 import Compliance (ComplianceRegistry(..))
 
--- | FIX CRIT-01: Validate ECDSA signature format before accepting.
+-- | CRIT-01: Validate ECDSA signature format before accepting.
 -- DAML cannot verify ECDSA cryptographically, but we enforce:
 --   1. Correct length (65 bytes = 130 hex chars, or 132 with "0x" prefix)
 --   2. Non-empty signature
@@ -40,7 +40,7 @@ type Money = Numeric 18
 type Bps = Int
 
 -- ============================================================
---  FIX C-01: Validator Self-Attestation for on-ledger cryptographic binding
+--  C-01: Validator Self-Attestation for on-ledger cryptographic binding
 -- ============================================================
 
 -- | Validator independently commits to an attestation payload.
@@ -97,7 +97,7 @@ template InstitutionalEquityPosition
     signatory bank
     observer aggregator, validatorGroup
 
-    -- FIX D-C02: Require strictly positive value to prevent collateral verification bypass
+    -- D-C02: Require strictly positive value to prevent collateral verification bypass
     ensure totalValue > 0.0
 
     key (bank, aggregator) : (Party, Party)
@@ -125,7 +125,7 @@ data BridgeOutPayload = BridgeOutPayload with
     nonce : Int                   -- Unique per bridge request
     chainId : Int                 -- Target chain (1 = Ethereum mainnet)
     expiresAt : Time              -- D-03: Expiration timestamp
-    -- FIX H-12: Track originating party for compliance checks on bridge-out
+    -- H-12: Track originating party for compliance checks on bridge-out
     sender : Party                -- Party initiating the bridge-out
     recipientEthAddress : Text    -- Ethereum destination address
   deriving (Eq, Show)
@@ -133,38 +133,38 @@ data BridgeOutPayload = BridgeOutPayload with
 -- | Bridge-out attestation request.
 -- Created when backing stables need to move from Canton to Ethereum Treasury.
 -- Validators verify the Canton reserve matches, then sign.
--- FIX D-02: Added signedValidators set to prevent duplicate signatures
+-- D-02: Added signedValidators set to prevent duplicate signatures
 template BridgeOutAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeOutPayload
     positionCids : [ContractId InstitutionalEquityPosition]
-    signedValidators : [Party]    -- FIX D-02: Track who has already signed
-    -- FIX H-12: Compliance registry for blacklist verification on bridge-out
+    signedValidators : [Party]    -- D-02: Track who has already signed
+    -- H-12: Compliance registry for blacklist verification on bridge-out
     complianceRegistryCid : ContractId ComplianceRegistry
   where
     signatory aggregator
     observer validatorGroup
 
-    -- FIX D-02: Made CONSUMING to update signedValidators and prevent double-signing
+    -- D-02: Made CONSUMING to update signedValidators and prevent double-signing
     -- Previously nonconsuming allowed validators to sign the same attestation multiple times
     choice BridgeOut_Sign : (ContractId BridgeOutAttestation, ContractId BridgeOutSignature)
       with
         validator : Party
         ecdsaSignature : Text
-        -- FIX C-01: Require validator's self-attestation to prove independent participation
+        -- C-01: Require validator's self-attestation to prove independent participation
         selfAttestationCid : ContractId ValidatorSelfAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX D-02: Prevent duplicate signatures
+        -- D-02: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        -- FIX CRIT-01: Validate ECDSA signature format
+        -- CRIT-01: Validate ECDSA signature format
         validateSignatureFormat ecdsaSignature
 
-        -- FIX C-01: Verify self-attestation matches this validator and payload nonce
+        -- C-01: Verify self-attestation matches this validator and payload nonce
         -- Since ValidatorSelfAttestation has `signatory validator`, only the actual
         -- validator's participant can create it — operator cannot forge
         selfAtt <- fetch selfAttestationCid
@@ -172,7 +172,7 @@ template BridgeOutAttestation
         assertMsg "SELF_ATTESTATION_NONCE_MISMATCH" (selfAtt.nonce == payload.nonce)
         assertMsg "SELF_ATTESTATION_SIGNATURE_MISMATCH" (selfAtt.ecdsaSignature == ecdsaSignature)
 
-        -- FIX H-12: Enforce compliance — blacklisted/frozen senders cannot bridge out
+        -- H-12: Enforce compliance — blacklisted/frozen senders cannot bridge out
         registry <- fetch complianceRegistryCid
         assertMsg "SENDER_BLACKLISTED" (not (Set.member payload.sender registry.blacklisted))
         assertMsg "SENDER_FROZEN" (not (Set.member payload.sender registry.frozen))
@@ -193,19 +193,19 @@ template BridgeOutAttestation
           ecdsaSignature
           nonce = payload.nonce
         
-        -- FIX D-02: Return updated attestation with validator added to signedValidators
+        -- D-02: Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Aggregator finalizes — archives the attestation (replay prevention)
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- D-H01: Use 67% BFT supermajority instead of 50% majority
     -- BFT consensus requires >2/3 honest validators to prevent Byzantine attacks
     choice BridgeOut_Finalize : [ContractId BridgeOutSignature]
       with
         signatureCids : [ContractId BridgeOutSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        -- D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
         let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -258,18 +258,18 @@ data BridgeInPayload = BridgeInPayload with
 
 -- | Bridge-in attestation.
 -- Created when Ethereum Treasury sends USDC back to Canton for redemptions.
--- FIX M-5: Added signedValidators tracking for consistency with BridgeOutAttestation
+-- M-5: Added signedValidators tracking for consistency with BridgeOutAttestation
 template BridgeInAttestation
   with
     aggregator : Party
     validatorGroup : [Party]
     payload : BridgeInPayload
-    signedValidators : [Party]    -- FIX M-5: Track who has already signed
+    signedValidators : [Party]    -- M-5: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
-    -- FIX M-5: Changed from nonconsuming to consuming to prevent double-signing
+    -- M-5: Changed from nonconsuming to consuming to prevent double-signing
     -- Mirrors BridgeOut_Sign pattern: archives old, creates new with updated tracker
     choice BridgeIn_Sign : (ContractId BridgeInAttestation, ContractId BridgeInSignature)
       with
@@ -278,10 +278,10 @@ template BridgeInAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX M-5: Prevent duplicate signatures
+        -- M-5: Prevent duplicate signatures
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        -- FIX CRIT-01: Validate ECDSA signature format
+        -- CRIT-01: Validate ECDSA signature format
         validateSignatureFormat ecdsaSignature
 
         now <- getTime
@@ -294,18 +294,18 @@ template BridgeInAttestation
           ecdsaSignature
           nonce = payload.nonce
 
-        -- FIX M-5: Return updated attestation with validator added to signedValidators
+        -- M-5: Return updated attestation with validator added to signedValidators
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize and archive — USDC can now be minted on Canton
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- D-H01: Use 67% BFT supermajority instead of 50% majority
     choice BridgeIn_Finalize : [ContractId BridgeInSignature]
       with
         signatureCids : [ContractId BridgeInSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        -- D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
         let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
@@ -357,14 +357,14 @@ template SupplyCapAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : SupplyCapPayload
-    signedValidators : [Party]  -- FIX C-01: Track who has already signed
+    signedValidators : [Party]  -- C-01: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
 
     ensure payload.totalGlobalSupply == payload.cantonMUSDSupply + payload.ethereumMUSDSupply
 
-    -- FIX C-01: Changed to consuming choice to prevent double-signing
+    -- C-01: Changed to consuming choice to prevent double-signing
     choice SupplyCap_Sign : (ContractId SupplyCapAttestation, ContractId SupplyCapSignature)
       with
         validator : Party
@@ -372,10 +372,10 @@ template SupplyCapAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX C-01: Prevent double-signing
+        -- C-01: Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        -- FIX CRIT-01: Validate ECDSA signature format
+        -- CRIT-01: Validate ECDSA signature format
         validateSignatureFormat ecdsaSignature
 
         sig <- create SupplyCapSignature with
@@ -385,24 +385,24 @@ template SupplyCapAttestation
           ecdsaSignature
           nonce = payload.nonce
         
-        -- FIX C-01: Update attestation with new signed validator
+        -- C-01: Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize: archives attestation, returns the verified global state
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- D-H01: Use 67% BFT supermajority instead of 50% majority
     choice SupplyCap_Finalize : SupplyCapPayload
       with
         signatureCids : [ContractId SupplyCapSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        -- D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
         let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        -- Verify nonce instead of requestCid (since attestation is recreated on each sign)
         let sigNonces = map (.nonce) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)
@@ -448,7 +448,7 @@ template YieldAttestation
     aggregator : Party
     validatorGroup : [Party]
     payload : YieldPayload
-    signedValidators : [Party]  -- FIX C-02: Track who has already signed
+    signedValidators : [Party]  -- C-02: Track who has already signed
   where
     signatory aggregator
     observer validatorGroup
@@ -456,7 +456,7 @@ template YieldAttestation
     -- Treasury assets must be >= mUSD supply (no undercollateralization)
     ensure payload.totalTreasuryAssets >= payload.totalMUSDSupply
 
-    -- FIX C-02: Changed to consuming choice to prevent double-signing
+    -- C-02: Changed to consuming choice to prevent double-signing
     choice Yield_Sign : (ContractId YieldAttestation, ContractId YieldSignature)
       with
         validator : Party
@@ -464,10 +464,10 @@ template YieldAttestation
       controller validator
       do
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX C-02: Prevent double-signing
+        -- C-02: Prevent double-signing
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (validator `elem` signedValidators))
 
-        -- FIX CRIT-01: Validate ECDSA signature format
+        -- CRIT-01: Validate ECDSA signature format
         validateSignatureFormat ecdsaSignature
 
         sig <- create YieldSignature with
@@ -477,24 +477,24 @@ template YieldAttestation
           ecdsaSignature
           nonce = payload.nonce
         
-        -- FIX C-02: Update attestation with new signed validator
+        -- C-02: Update attestation with new signed validator
         newAttestation <- create this with signedValidators = validator :: signedValidators
         return (newAttestation, sig)
 
     -- Finalize: returns verified yield data for smUSD sync
-    -- FIX D-H01: Use 67% BFT supermajority instead of 50% majority
+    -- D-H01: Use 67% BFT supermajority instead of 50% majority
     choice Yield_Finalize : YieldPayload
       with
         signatureCids : [ContractId YieldSignature]
       controller aggregator
       do
-        -- FIX D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
+        -- D-H01: BFT supermajority threshold: (2n / 3) + 1 (minimum 67%)
         let requiredSignatures = ((length validatorGroup * 2) / 3) + 1
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
-        -- FIX: Verify nonce instead of requestCid (since attestation is recreated on each sign)
+        -- Verify nonce instead of requestCid (since attestation is recreated on each sign)
         let sigNonces = map (.nonce) sigs
 
         assertMsg "SIGNATURE_NONCE_MISMATCH" (all (== payload.nonce) sigNonces)

@@ -37,7 +37,7 @@ import { ethers, upgrades } from "hardhat";
 import { BLEBridgeV8, BLEBridgeV9, MUSD } from "../typechain-types";
 
 // ============================================================
-//  SC-01 FIX: Pre-flight safety checks before migration
+//  SC-01: Pre-flight safety checks before migration
 // ============================================================
 
 /**

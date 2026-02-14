@@ -447,7 +447,7 @@ template CantonLoopRequest
           Some regCid -> exercise regCid ValidateMint with minter = user
           None -> pure ()
 
-        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before
+        -- DAML-C-03: Validate issuer matches operator before
         -- archiving dual-signatory token to prevent runtime authorization failures.
         -- Branch on deposit type to archive the correct token.
         case depositType of
@@ -536,7 +536,7 @@ template CantonUnwindRequest
         -- Validate minimum return floor (10% of original deposit)
         let minReturn = totalDeposited * 0.1
         assertMsg "RETURN_BELOW_MINIMUM" (usdcReturned >= minReturn)
-        -- SECURITY FIX DAML-C-03: Validate issuer matches operator on all
+        -- DAML-C-03: Validate issuer matches operator on all
         -- dual-signatory tokens before archiving to prevent runtime failures.
         _ <- mapA (\smusdCid -> do
           smusd <- fetch smusdCid

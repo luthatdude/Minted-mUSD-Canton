@@ -64,7 +64,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant ENGINE_ADMIN_ROLE = keccak256("ENGINE_ADMIN_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
-    /// @notice SOL-H-01 FIX: TIMELOCK_ROLE for critical parameter changes
+    /// @notice SOL-H-01: TIMELOCK_ROLE for critical parameter changes
     bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     ICollateralVaultLiq public immutable vault;
@@ -251,7 +251,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     //                  ADMIN
     // ============================================================
 
-    /// @dev SOL-H-01 FIX: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-H-01: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setCloseFactor(uint256 _bps) external onlyRole(TIMELOCK_ROLE) {
         if (_bps == 0 || _bps > 10000) revert InvalidCloseFactor();
         uint256 old = closeFactorBps;
@@ -259,7 +259,7 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         emit CloseFactorUpdated(old, _bps);
     }
 
-    /// @dev SOL-H-01 FIX: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-H-01: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
     function setFullLiquidationThreshold(uint256 _bps) external onlyRole(TIMELOCK_ROLE) {
         if (_bps == 0 || _bps >= 10000) revert InvalidThreshold();
         emit FullLiquidationThresholdUpdated(fullLiquidationThreshold, _bps);

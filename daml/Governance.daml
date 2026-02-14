@@ -121,7 +121,7 @@ template MultiSigProposal
     actionType : ActionType
     description : Text                  -- Human-readable description
     payload : Text                      -- JSON-encoded action parameters
-    targetModule : Text                 -- FIX C-DAML-03: Target module for scoped governance
+    targetModule : Text                 -- C-DAML-03: Target module for scoped governance
     payloadHash : Text                  -- SHA-256 of payload for verification
     requiredApprovals : Int             -- Threshold for this action type
     approvals : Set.Set Party           -- Collected approvals
@@ -332,9 +332,9 @@ template MinterRegistry
 -- ============================================================
 
 -- | GovernanceActionLog - Record of executed governance actions.
--- FIX C-DAML-01: Added ConsumeProof choice for one-time use and targetModule for scoping.
+-- C-DAML-01: Added ConsumeProof choice for one-time use and targetModule for scoping.
 -- After execution, the proof must be consumed to prevent replay across modules.
--- | FIX D-H-01: Changed signatory from (operator, executedBy) to (operator) only.
+-- | D-H-01: Changed signatory from (operator, executedBy) to (operator) only.
 -- Previously, MinterRegistry_AddMinter, MinterRegistry_RemoveMinter, MinterRegistry_ReplenishQuota,
 -- and EmergencyPause_Resume all call `archive governanceProofCid` within choices controlled
 -- by `operator` alone. DAML requires ALL signatories to authorize an archive. When
@@ -349,7 +349,7 @@ template GovernanceActionLog
     description : Text
     payload : Text
     payloadHash : Text
-    targetModule : Text           -- FIX C-DAML-03: Module scope to prevent cross-module replay
+    targetModule : Text           -- C-DAML-03: Module scope to prevent cross-module replay
     approvers : [Party]
     executedBy : Party
     executedAt : Time
@@ -357,16 +357,16 @@ template GovernanceActionLog
     signatory operator
     observer executedBy
 
-    -- FIX C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
+    -- C-DAML-01: ConsumeProof archives this log entry after use, preventing replay.
     -- Returns the log data so the caller can verify actionType and targetModule.
-    -- DAML-H-02 FIX: Added executor authorization — only the original executedBy party
+    -- DAML-H-02: Added executor authorization — only the original executedBy party
     -- or the operator can consume the proof, preventing unauthorized proof consumption.
     choice ConsumeProof : GovernanceActionLog
       with
         consumedBy : Party
       controller operator
       do
-        -- DAML-H-02 FIX: Validate the consumer is authorized (operator or original executor)
+        -- DAML-H-02: Validate the consumer is authorized (operator or original executor)
         assertMsg "UNAUTHORIZED_CONSUMER: must be operator or original executor"
           (consumedBy == operator || consumedBy == executedBy)
         return this

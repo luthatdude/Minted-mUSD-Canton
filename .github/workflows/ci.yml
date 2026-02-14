@@ -300,13 +300,13 @@ jobs:
           # Create DAML directories
           mkdir -p "$DAML_HOME/bin" "$DAML_HOME/sdk/$DAML_SDK_VERSION"
 
-          # CRIT-02 FIX: Download installer to file, verify integrity, then execute
+          # CRIT-02: Download installer to file, verify integrity, then execute
           # This prevents supply-chain attacks via compromised CDN or MITM
           export TERM=xterm
           INSTALLER_PATH="$(mktemp)"
           curl -sSL -o "$INSTALLER_PATH" https://get.daml.com/
           
-          # CRIT-02 FIX: Mandatory integrity verification — never execute unverified code
+          # CRIT-02: Mandatory integrity verification — never execute unverified code
           # Hash pinned from https://get.daml.com/ installer script
           # Re-verify: curl -sSL https://get.daml.com/ | sha256sum
           # Update this hash ONLY when intentionally upgrading the DAML SDK installer
@@ -406,7 +406,7 @@ jobs:
           trivyignores: relay/.trivyignore
           # Fail on CRITICAL/HIGH vulnerabilities
 
-      # INFRA-H-04 FIX: Generate SBOM for supply-chain transparency
+      # INFRA-H-04: Generate SBOM for supply-chain transparency
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.17.8
         with:
@@ -421,7 +421,7 @@ jobs:
           path: relay-sbom.spdx.json
           retention-days: 90
 
-      # INFRA-H-04 FIX: Sign container image with cosign (keyless / OIDC)
+      # INFRA-H-04: Sign container image with cosign (keyless / OIDC)
       # Only runs on push to main to avoid signing ephemeral CI images
       - name: Install cosign
         if: github.ref == 'refs/heads/main'

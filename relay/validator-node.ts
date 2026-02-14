@@ -40,7 +40,7 @@ import * as fs from "fs";
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
 
-// SECURITY FIX BRIDGE-H-04: V1 validator produces signatures with a 7-parameter hash
+// BRIDGE-H-04: V1 validator produces signatures with a 7-parameter hash
 // (missing cantonStateHash) while V2 uses 8 parameters matching BLEBridgeV9 on-chain.
 // Mixed V1/V2 signatures silently reduce the effective validator count below the BFT
 // threshold, potentially blocking all attestations. V1 is now hard-disabled.

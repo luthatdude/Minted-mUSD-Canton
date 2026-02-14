@@ -1,7 +1,7 @@
 # Minted mUSD Protocol — Institutional Security Audit Report
 
 **Date:** 2026-02-14
-**Auditors:** 5-agent team (Solidity, DAML, TypeScript, Infrastructure, Cross-Chain Bridge)
+**Auditors:** Minted Security Team (Solidity, DAML, TypeScript, Infrastructure, Cross-Chain Bridge)
 **Scope:** Full codebase — 26 Solidity contracts, 18 DAML modules, 28 TypeScript files, K8s/CI/CD infra, end-to-end bridge flows
 **Purpose:** Pre-handoff institutional-grade assessment for formal audit engagement
 
@@ -280,7 +280,7 @@ Ethereum → Canton: AT-RISK
 
 ## Audit Methodology
 
-Each domain was audited by a specialized agent reading every relevant file in the codebase (not sampling). The agents followed standardized checklists covering:
+Each domain was audited by a specialized reviewer reading every relevant file in the codebase (not sampling). The reviewers followed standardized checklists covering:
 
 - **Solidity**: OWASP Smart Contract Top 10, ERC compliance, access control, reentrancy, flash loan vectors, oracle manipulation, upgrade safety
 - **DAML**: Canton authorization model, signatory analysis, propose-accept compliance, financial precision, bridge attestation lifecycle
