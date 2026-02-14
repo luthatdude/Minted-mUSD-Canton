@@ -1,0 +1,8 @@
+{
+    "importFilesToOrigRelpaths": {},
+    "primary_contract": "InterestRateModel",
+    "specfile": "certora/specs/InterestRateModel.spec",
+    "specfileOrigRelpath": "certora/specs/InterestRateModel.spec",
+    "specfilesToImportDecls": {},
+    "type": "spec"
+}

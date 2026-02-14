@@ -14,6 +14,13 @@ export const CONTRACTS: Record<string, string> = {
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
+  PendleStrategy: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
+  PendleMarketSelector: process.env.NEXT_PUBLIC_PENDLE_SELECTOR_ADDRESS || "",
+  MorphoStrategy: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
+  MorphoMarketRegistry: process.env.NEXT_PUBLIC_MORPHO_REGISTRY_ADDRESS || "",
+  YieldScanner: process.env.NEXT_PUBLIC_YIELD_SCANNER_ADDRESS || "",
+  StrategyFactory: process.env.NEXT_PUBLIC_STRATEGY_FACTORY_ADDRESS || "",
+  YieldVerifier: process.env.NEXT_PUBLIC_YIELD_VERIFIER_ADDRESS || "",
 };
 
 // Validate contract addresses at config time

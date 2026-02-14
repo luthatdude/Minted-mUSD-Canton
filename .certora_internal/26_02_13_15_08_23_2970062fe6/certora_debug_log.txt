@@ -1,0 +1,117 @@
+Saving last configuration file to .certora_internal/26_02_13_15_08_23_2970062fe6/run.conf
+There is no TAC file. Going to script CertoraProver/certoraBuild.py to main_with_args()
+main build cache key computed based on {'files': ['contracts/InterestRateModel.sol'], 'package_version_for_build_cache': 'certora-cli 8.8.0', 'packages': ['@openzeppelin/contracts=node_modules/@openzeppelin/contracts'], 'packages_path': 'node_modules', 'solc': 'solc', 'solc_allow_path': 'contracts', 'solc_optimize': '200', 'test_condition': 'True'}
+Creating dir /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config
+In /Users/luiscuello/Minted-mUSD-Canton/certora/specs/InterestRateModel.spec, found the imports: []
+copying spec file /Users/luiscuello/Minted-mUSD-Canton/certora/specs/InterestRateModel.spec to /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/.0_InterestRateModel.spec.spec
+writing /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_verify.json
+
+building file contracts/InterestRateModel.sol
+Running cmd solc --version
+stdout, stderr = .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/version_check_solc.stdout, .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/version_check_solc.stderr
+Exitcode 0
+Solc run solc --version time: 0.1406
+Running cmd solc -o ".certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0/" --overwrite --allow-paths "contracts",.,"node_modules/@openzeppelin/contracts" --standard-json
+stdout, stderr = .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stdout.json, .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stderr.json
+Exitcode 0
+Solc run solc -o ".certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0/" --overwrite --allow-paths "contracts",.,"node_modules/@openzeppelin/contracts" --standard-json time: 0.2556
+reading standard json data from .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stdout.json
+collecting worklist for /Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/AccessControl.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/IAccessControl.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/Context.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol to worklist
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/Context.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/IAccessControl.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/AccessControl.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Contracts in InterestRateModel.sol_0 (file contracts/InterestRateModel.sol): ['InterestRateModel']
+Contracts with their chosen addresses: [(274184521717934524641157099916833587200, '/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol:InterestRateModel'), (274184521717934524641157099916833587201, 'node_modules/@openzeppelin/contracts/access/AccessControl.sol:AccessControl'), (274184521717934524641157099916833587202, 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol:IAccessControl'), (274184521717934524641157099916833587203, 'node_modules/@openzeppelin/contracts/utils/Context.sol:Context'), (274184521717934524641157099916833587204, 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol:ERC165'), (274184521717934524641157099916833587205, 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol:IERC165')]
+Report source list={0: '/Users/luiscuello/Minted-mUSD-Canton/contracts/Errors.sol', 1: '/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol', 2: 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 3: 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 4: 'node_modules/@openzeppelin/contracts/utils/Context.sol', 5: 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 6: 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'}
+Finding report source file, abs path /Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol relative to /Users/luiscuello/Minted-mUSD-Canton
+Working on contract InterestRateModel
+Working on contract InterestRateModel
+Working on contract AccessControl
+Working on contract AccessControl
+Working on contract IAccessControl
+Working on contract IAccessControl
+Working on contract Context
+Working on contract Context
+Working on contract ERC165
+Working on contract ERC165
+Working on contract IERC165
+Working on contract IERC165
+For contracts of primary InterestRateModel
+finding primary contract address of /Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol:InterestRateModel in [(274184521717934524641157099916833587200, '/Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol:InterestRateModel'), (274184521717934524641157099916833587201, 'node_modules/@openzeppelin/contracts/access/AccessControl.sol:AccessControl'), (274184521717934524641157099916833587202, 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol:IAccessControl'), (274184521717934524641157099916833587203, 'node_modules/@openzeppelin/contracts/utils/Context.sol:Context'), (274184521717934524641157099916833587204, 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol:ERC165'), (274184521717934524641157099916833587205, 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol:IERC165')]
+Contracts in SDC InterestRateModel.sol_0: ['InterestRateModel', 'AccessControl', 'IAccessControl', 'Context', 'ERC165', 'IERC165']
+Building source tree
+Copying /Users/luiscuello/Minted-mUSD-Canton/contracts/Errors.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/Errors.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/Context.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/node_modules/@openzeppelin/contracts/utils/Context.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/AccessControl.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/node_modules/@openzeppelin/contracts/access/AccessControl.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/contracts/InterestRateModel.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/certora/InterestRateModel.conf to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/certora/InterestRateModel.conf
+Copying /Users/luiscuello/Minted-mUSD-Canton/certora/specs/InterestRateModel.spec to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/certora/specs/InterestRateModel.spec
+Copying /Users/luiscuello/Minted-mUSD-Canton/foundry.toml to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/foundry.toml
+Copying /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol
+Copying /Users/luiscuello/Minted-mUSD-Canton/package.json to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/package.json
+Copying /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/IAccessControl.sol to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/node_modules/@openzeppelin/contracts/access/IAccessControl.sol
+Report source list={0: 'contracts/Errors.sol', 1: 'contracts/InterestRateModel.sol', 2: 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 3: 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 4: 'node_modules/@openzeppelin/contracts/utils/Context.sol', 5: 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 6: 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'}
+Backing up current .certora_sources to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/.pre_autofinders.0
+Running cmd solc -o ".certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0/" --overwrite --allow-paths "/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts",.,"node_modules/@openzeppelin/contracts" --standard-json
+stdout, stderr = .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stdout.json, .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stderr.json
+Exitcode 0
+Solc run solc -o ".certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0/" --overwrite --allow-paths "/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts",.,"node_modules/@openzeppelin/contracts" --standard-json time: 0.2384
+reading standard json data from .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_config/InterestRateModel.sol_0.standard.stdout.json
+collecting worklist for /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/AccessControl.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/IAccessControl.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/Context.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol to worklist
+Adding a base contract link ref /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol to worklist
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/utils/Context.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/IAccessControl.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Processing dependencies from file /Users/luiscuello/Minted-mUSD-Canton/node_modules/@openzeppelin/contracts/access/AccessControl.sol
+available keys: dict_keys(['/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol', 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 'node_modules/@openzeppelin/contracts/utils/Context.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'])
+Contracts in InterestRateModel.sol_0 (file .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol): ['InterestRateModel']
+Contracts with their chosen addresses: [(274184521717934524641157099916833587206, '/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol:InterestRateModel'), (274184521717934524641157099916833587207, 'node_modules/@openzeppelin/contracts/access/AccessControl.sol:AccessControl'), (274184521717934524641157099916833587208, 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol:IAccessControl'), (274184521717934524641157099916833587209, 'node_modules/@openzeppelin/contracts/utils/Context.sol:Context'), (274184521717934524641157099916833587210, 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol:ERC165'), (274184521717934524641157099916833587211, 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol:IERC165')]
+Report source list={0: 'contracts/Errors.sol', 1: 'contracts/InterestRateModel.sol', 2: 'node_modules/@openzeppelin/contracts/access/AccessControl.sol', 3: 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol', 4: 'node_modules/@openzeppelin/contracts/utils/Context.sol', 5: 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol', 6: 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol'}
+Finding report source file, abs path /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol relative to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources
+Working on contract InterestRateModel
+Working on contract InterestRateModel
+Working on contract AccessControl
+Working on contract AccessControl
+Working on contract IAccessControl
+Working on contract IAccessControl
+Working on contract Context
+Working on contract Context
+Working on contract ERC165
+Working on contract ERC165
+Working on contract IERC165
+Working on contract IERC165
+For contracts of primary InterestRateModel
+finding primary contract address of /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol:InterestRateModel in [(274184521717934524641157099916833587206, '/Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/contracts/InterestRateModel.sol:InterestRateModel'), (274184521717934524641157099916833587207, 'node_modules/@openzeppelin/contracts/access/AccessControl.sol:AccessControl'), (274184521717934524641157099916833587208, 'node_modules/@openzeppelin/contracts/access/IAccessControl.sol:IAccessControl'), (274184521717934524641157099916833587209, 'node_modules/@openzeppelin/contracts/utils/Context.sol:Context'), (274184521717934524641157099916833587210, 'node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol:ERC165'), (274184521717934524641157099916833587211, 'node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol:IERC165')]
+Contracts in SDC InterestRateModel.sol_0: ['InterestRateModel', 'AccessControl', 'IAccessControl', 'Context', 'ERC165', 'IERC165']
+Backing up instrumented .certora_sources to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/.post_autofinders.0
+Rolling back .certora_sources to .certora_internal/26_02_13_15_08_23_2970062fe6/.certora_sources/.pre_autofinders.0 version
+Libraries to add = []
+writing file /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_build.json
+writing file /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_build_output_props.json
+writing /Users/luiscuello/Minted-mUSD-Canton/.certora_internal/26_02_13_15_08_23_2970062fe6/.certora_verify.json
