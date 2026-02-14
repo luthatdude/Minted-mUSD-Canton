@@ -31,8 +31,12 @@ describe("PendleMarketSelector", function () {
     // Grant roles
     const MARKET_ADMIN_ROLE = await selector.MARKET_ADMIN_ROLE();
     const PARAMS_ADMIN_ROLE = await selector.PARAMS_ADMIN_ROLE();
+    const TIMELOCK_ROLE = await selector.TIMELOCK_ROLE();
     await selector.connect(admin).grantRole(MARKET_ADMIN_ROLE, marketAdmin.address);
     await selector.connect(admin).grantRole(PARAMS_ADMIN_ROLE, paramsAdmin.address);
+    // whitelistMarket/removeMarket/setParams now require TIMELOCK_ROLE (SOL-H-04)
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, marketAdmin.address);
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, paramsAdmin.address);
 
     return { selector, admin, marketAdmin, paramsAdmin, user1, market1, market2, market3 };
   }

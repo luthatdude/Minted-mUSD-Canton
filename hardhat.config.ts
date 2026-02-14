@@ -23,6 +23,7 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
+      allowUnlimitedContractSize: true,  // PendleStrategyV2 exceeds 24KB — required for test
     },
     sepolia: {
       url: RPC_URL || "https://eth-sepolia.g.alchemy.com/v2/demo",
