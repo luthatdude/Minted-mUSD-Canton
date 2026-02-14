@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useReferral } from "@/hooks/useReferral";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 
@@ -25,6 +25,20 @@ export function ReferralWidget() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [applySuccess, setApplySuccess] = useState(false);
+
+  // Auto-detect ?ref= query param from shared referral links
+  useEffect(() => {
+    if (typeof window === "undefined" || isReferred) return;
+    const params = new URLSearchParams(window.location.search);
+    const refCode = params.get("ref");
+    if (refCode && /^MNTD-[A-Z0-9]{6}$/.test(refCode.toUpperCase())) {
+      setInputCode(refCode.toUpperCase());
+      // Clean the URL without reload
+      const url = new URL(window.location.href);
+      url.searchParams.delete("ref");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, [isReferred]);
 
   if (!isConnected) return null;
 
