@@ -38,7 +38,8 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT
+      DAILY_CAP_LIMIT,
+      deployer.address  // _timelockController
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -58,6 +59,10 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     // Grant TIMELOCK_ROLE to deployer for admin function tests
     const TIMELOCK_ROLE = await bridge.TIMELOCK_ROLE();
     await bridge.grantRole(TIMELOCK_ROLE, deployer.address);
+
+    // CRIT-01: Grant RELAYER_ROLE to deployer so processAttestation calls work
+    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    await bridge.grantRole(RELAYER_ROLE, deployer.address);
   });
 
   async function createSortedSignatures(

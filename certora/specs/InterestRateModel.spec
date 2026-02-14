@@ -121,9 +121,6 @@ invariant reserve_factor_bounded()
 invariant kink_bounded()
     kinkBps() <= 10000;
 
-/// @notice Max annual rate at 100% utilization is capped at 100%
-/// @dev Matches the weighted formula used in setParams validation
+/// @notice Max annual rate capped at 100%
 invariant max_rate_bounded()
-    to_mathint(baseRateBps()) +
-    (to_mathint(kinkBps()) * to_mathint(multiplierBps())) / 10000 +
-    ((10000 - to_mathint(kinkBps())) * to_mathint(jumpMultiplierBps())) / 10000 <= 10000;
+    baseRateBps() + multiplierBps() + jumpMultiplierBps() <= 10000;

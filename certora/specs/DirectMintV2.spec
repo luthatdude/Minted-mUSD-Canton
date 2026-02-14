@@ -24,16 +24,6 @@ methods {
     function paused() external returns (bool) envfree;
     function setFees(uint256, uint256) external;
     function setLimits(uint256, uint256, uint256, uint256) external;
-
-    // External call summaries (ERC20, MUSD, Treasury)
-    function _.transferFrom(address, address, uint256) external => NONDET;
-    function _.approve(address, uint256) external => NONDET;
-    function _.transfer(address, uint256) external => NONDET;
-    function _.mint(address, uint256) external => NONDET;
-    function _.burn(address, uint256) external => NONDET;
-    function _.deposit(address, uint256) external => NONDET;
-    function _.totalSupply() external => PER_CALLEE_CONSTANT;
-    function _.supplyCap() external => PER_CALLEE_CONSTANT;
 }
 
 // ═══════════════════════════════════════════════════════════════════
