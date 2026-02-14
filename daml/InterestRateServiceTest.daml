@@ -1,0 +1,4 @@
+module InterestRateServiceTest where
+
+-- Placeholder for interest rate service tests
+-- Tests are implemented in NegativeTests.daml and CrossModuleIntegrationTest.daml

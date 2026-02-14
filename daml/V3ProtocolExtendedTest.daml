@@ -1,0 +1,4 @@
+module V3ProtocolExtendedTest where
+
+-- Placeholder for V3 protocol extended tests
+-- Tests are implemented in NegativeTests.daml and CrossModuleIntegrationTest.daml

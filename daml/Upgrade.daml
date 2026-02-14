@@ -22,7 +22,7 @@ import DA.Set qualified as Set
 import DA.List (dedup)
 import DA.Optional (isSome, fromSome)
 import DA.Text qualified as T
-import DA.Action (forA_)
+import DA.Action (forA)
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -245,7 +245,7 @@ template MigrationTicket
         
         -- BLOCK-3: Verify each migration step was completed for this ticket's contracts
         assertMsg "STEP_COUNT_MISMATCH" (length migrationStepCids == length contractsToMigrate)
-        forA_ migrationStepCids $ \stepCid -> do
+        _ <- forA migrationStepCids $ \stepCid -> do
           step <- fetch stepCid
           assertMsg "STEP_NOT_COMPLETED" step.completed
           assertMsg "STEP_HOLDER_MISMATCH" (step.holder == holder)
