@@ -331,6 +331,7 @@ template MintedMUSD
             cantonStateHash   -- BRIDGE-C-03: Pass through canton state hash
           collectedSignatures = Set.empty
           ecdsaSignatures = []  -- BRIDGE-C-01: Initialize empty ECDSA signature list
+          requiredSignatures = bridgeSvc.requiredSignatures  -- BRIDGE-H-01: Threshold from BridgeService
           direction = CantonToEthereum
 
         return (attestationCid, newBridgeSvcCid)
