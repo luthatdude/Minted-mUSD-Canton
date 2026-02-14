@@ -883,7 +883,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         2, // min 2 sigs
         await musd.getAddress(),
         11000, // 110% collateral ratio
-        ethers.parseEther("1000000") // 1M daily limit
+        ethers.parseEther("1000000"), // 1M daily limit
+        admin.address  // _timelockController
       ]);
 
       const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));
