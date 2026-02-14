@@ -275,6 +275,16 @@ class ValidatorNode {
   private isRunning: boolean = false;
 
   private signingTimestamps: number[] = [];
+  // BRIDGE-M-06: Rate limit coordination between validator and DAML layers.
+  // The DAML BridgeService controls attestation creation rate (via Bridge_AssignNonce and
+  // CantonDirectMint.dailyMintLimit). This validator-side rate limit is a secondary safety
+  // net to prevent KMS key abuse if the DAML layer is compromised.
+  //
+  // IMPORTANT: This limit MUST be >= the maximum attestation creation rate on the DAML side
+  // to prevent valid signatures from being rejected. The DAML dailyMintLimit caps mints
+  // per 24h; if that produces N attestations/hour, MAX_SIGNS_PER_WINDOW must be >= N.
+  // Default: 50/hour is conservative. Increase if DAML throughput is higher.
+  // If this limit is hit, attestations will be delayed (not lost) until the window resets.
   private readonly MAX_SIGNS_PER_WINDOW = parseInt(process.env.MAX_SIGNS_PER_WINDOW || "50", 10);
   private readonly SIGNING_WINDOW_MS = parseInt(process.env.SIGNING_WINDOW_MS || "3600000", 10); // 1 hour
   private lastSignedTotalValue: bigint = 0n;
@@ -441,8 +451,13 @@ class ValidatorNode {
       const now = Date.now();
       this.signingTimestamps = this.signingTimestamps.filter(t => now - t < this.SIGNING_WINDOW_MS);
       if (this.signingTimestamps.length >= this.MAX_SIGNS_PER_WINDOW) {
-        console.error(`[Validator] ⚠️ RATE LIMIT: ${this.signingTimestamps.length} signatures in window. ` +
-          `Max=${this.MAX_SIGNS_PER_WINDOW}. Pausing to prevent key abuse.`);
+        // BRIDGE-M-06: If this fires frequently, it may indicate a conflict with
+        // DAML-side throughput. Increase MAX_SIGNS_PER_WINDOW to match DAML attestation
+        // creation rate, or reduce DAML dailyMintLimit. Attestations are NOT lost —
+        // they will be signed on the next poll cycle once the window clears.
+        console.error(`[Validator] RATE LIMIT: ${this.signingTimestamps.length} signatures in ${this.SIGNING_WINDOW_MS}ms window. ` +
+          `Max=${this.MAX_SIGNS_PER_WINDOW}. Deferring to prevent KMS key abuse. ` +
+          `If this persists, increase MAX_SIGNS_PER_WINDOW to match DAML throughput.`);
         continue;
       }
 
@@ -621,7 +636,7 @@ class ValidatorNode {
       await (this.ledger.exercise as any)(
         "MintedProtocolV3:AttestationRequest",
         contractId,
-        "ProvideSignature",
+        "Attestation_Sign",
         {
           validator: this.config.validatorParty,
           ecdsaSignature: signature,

@@ -12,6 +12,24 @@
 #   gunzip restore.sql.gz
 #   psql -h <host> -U <user> -d canton < restore.sql
 ---
+# INFRA-H-04: ConfigMap for offsite backup configuration
+# Set BACKUP_S3_BUCKET to the target S3/GCS bucket for cross-region disaster recovery.
+# The backup CronJob will upload each backup to this bucket after the local dump completes.
+# Ensure the pod's ServiceAccount (or IRSA / Workload Identity) has write access to this bucket.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+data:
+  # Replace with your actual backup bucket name.
+  # For AWS: "my-org-musd-canton-backups-us-east-1"
+  # For GCS: "my-org-musd-canton-backups" (and use gsutil cp instead of aws s3 cp)
+  BACKUP_S3_BUCKET: "REPLACE_WITH_ACTUAL_BUCKET_NAME"
+---
 # PVC for storing database backups
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -132,6 +150,7 @@ spec:
                   # List remaining backups
                   echo "[$(date -u)] Current backups:"
                   ls -lh /backups/canton_backup_*.sql.gz 2>/dev/null || echo "  (none)"
+
               env:
                 - name: PGHOST
                   value: postgres.musd-canton.svc.cluster.local

@@ -164,6 +164,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         _grantRole(PARAMS_ADMIN_ROLE, _admin);
         // Grant TIMELOCK_ROLE to timelock controller
         _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
         // Default parameters
         // 30 days minimum - shorter pools often have 1-2% APY premium
@@ -428,7 +430,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      * @param market Market address
      * @param category Asset category (e.g., "USD", "ETH")
      */
-    function whitelistMarket(address market, string calldata category) external onlyRole(MARKET_ADMIN_ROLE) {
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — whitelisted markets control where funds are deployed
+    function whitelistMarket(address market, string calldata category) external onlyRole(TIMELOCK_ROLE) {
         if (market == address(0)) revert ZeroAddress();
         if (!isWhitelisted[market]) {
             if (whitelistedMarkets.length >= MAX_WHITELISTED_MARKETS) revert MaxMarketsReached();
@@ -445,10 +448,11 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      * @param markets Array of market addresses
      * @param categories Array of categories
      */
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — whitelisted markets control where funds are deployed
     function whitelistMarkets(
         address[] calldata markets,
         string[] calldata categories
-    ) external onlyRole(MARKET_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (markets.length != categories.length) revert LengthMismatch();
         if (markets.length > 50) revert BatchTooLarge();
 
@@ -469,7 +473,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
      * @notice Remove a market from whitelist
      * @param market Market address
      */
-    function removeMarket(address market) external onlyRole(MARKET_ADMIN_ROLE) {
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — market removal affects fund deployment
+    function removeMarket(address market) external onlyRole(TIMELOCK_ROLE) {
         if (!isWhitelisted[market]) revert MarketNotWhitelisted();
 
         isWhitelisted[market] = false;
@@ -490,13 +495,14 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     /**
      * @notice Update selection parameters
      */
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — selection parameters affect market scoring and fund deployment
     function setParams(
         uint256 _minTimeToExpiry,
         uint256 _minTvlUsd,
         uint256 _minApyBps,
         uint256 _tvlWeight,
         uint256 _apyWeight
-    ) external onlyRole(PARAMS_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (_tvlWeight + _apyWeight != BPS) revert InvalidWeights();
 
         minTimeToExpiry = _minTimeToExpiry;
