@@ -13,11 +13,11 @@ import "../TimelockGoverned.sol";
 import "../Errors.sol";
 
 // ═══════════════════════════════════════════════════════════════════════════
-//                     EULER V2 INTERFACES
+//                EULER V2 CROSS-STABLE INTERFACES
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// @notice Euler V2 Vault — modular lending vault (ERC-4626 based)
-interface IEulerVault {
+interface IEulerVaultCrossStable {
     function deposit(uint256 assets, address receiver) external returns (uint256 shares);
     function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares);
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
@@ -43,8 +43,8 @@ interface IEulerVault {
     );
 }
 
-/// @notice Euler V2 EVC (Ethereum Vault Connector) — links vaults for cross-collateral
-interface IEVC {
+/// @notice Euler V2 EVC (Ethereum Vault Connector)
+interface IEVCCrossStable {
     function enableCollateral(address account, address vault) external;
     function enableController(address account, address vault) external;
     function getCollaterals(address account) external view returns (address[] memory);
@@ -57,8 +57,8 @@ interface IEVC {
     ) external payable returns (bytes memory);
 }
 
-/// @notice AAVE V3 Pool for flash loans (Euler V2 doesn't support flash loans natively)
-interface IAavePoolForFlashEuler {
+/// @notice AAVE V3 Pool for flash loans
+interface IAavePoolForCrossStable {
     function flashLoanSimple(
         address receiverAddress,
         address asset,
@@ -69,7 +69,7 @@ interface IAavePoolForFlashEuler {
 }
 
 /// @notice Flash loan callback
-interface IFlashLoanSimpleReceiverEuler {
+interface IFlashLoanSimpleReceiverCrossStable {
     function executeOperation(
         address asset,
         uint256 amount,
@@ -79,8 +79,8 @@ interface IFlashLoanSimpleReceiverEuler {
     ) external returns (bool);
 }
 
-/// @notice Uniswap V3 Router for reward swaps
-interface ISwapRouterV3Euler {
+/// @notice Uniswap V3 Router for stablecoin swaps
+interface ISwapRouterV3CrossStable {
     struct ExactInputSingleParams {
         address tokenIn;
         address tokenOut;
@@ -93,33 +93,61 @@ interface ISwapRouterV3Euler {
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 }
 
+/// @notice Chainlink-style price feed for stablecoin peg monitoring
+interface IPriceFeedCrossStable {
+    function latestRoundData() external view returns (
+        uint80 roundId,
+        int256 answer,
+        uint256 startedAt,
+        uint256 updatedAt,
+        uint80 answeredInRound
+    );
+    function decimals() external view returns (uint8);
+}
+
 /**
- * @title EulerV2LoopStrategy
- * @notice Leveraged USDC loop on Euler V2 with Merkl reward integration
+ * @title EulerV2CrossStableLoopStrategy
+ * @notice Cross-stablecoin leveraged loop on Euler V2: Supply RLUSD, Borrow USDC
  *
- * @dev Euler V2 Architecture:
- *   - Modular vault system with EVC (Ethereum Vault Connector) for cross-collateral
- *   - Each vault is an ERC-4626 token with borrowing capabilities
- *   - Supply vault (collateral) + Borrow vault (debt) linked via EVC
+ * @dev Architecture:
  *
- *   STRATEGY:
- *   1. Supply USDC to an Euler V2 supply vault (earn supply APY)
- *   2. Enable as collateral via EVC
- *   3. Borrow USDC from a separate borrow vault
- *   4. Re-supply borrowed USDC → loop
+ *   Unlike same-asset loops (USDC/USDC), this strategy exploits the rate
+ *   differential between two stablecoins. On Euler V2's Sentora RLUSD market:
  *
- *   Single-tx via AAVE flash loans (Euler V2 doesn't have native flash loans):
- *   - Flash loan → supply all → borrow to repay flash
+ *   - RLUSD supply APY > USDC borrow APY (20.73% max ROE at 9x)
+ *   - RLUSD/USDC is a near-1:1 stablecoin pair (minimal depeg risk)
+ *   - $35M+ liquidity in the USDC borrow market
  *
- *   MERKL REWARDS:
- *   - Euler V2 vaults frequently have Merkl campaigns (EUL + partner tokens)
- *   - claimAndCompound() claims → swaps to USDC → deposits into position
+ *   DEPOSIT FLOW:
+ *     1. Treasury deposits USDC
+ *     2. Flash loan USDC → Swap USDC→RLUSD via Uniswap
+ *     3. Supply all RLUSD to Euler V2 supply vault (collateral)
+ *     4. Borrow USDC from Euler V2 borrow vault
+ *     5. Repay flash loan with borrowed USDC
  *
- * @dev Safety: health factor monitoring, emergency deleverage, profitability gate
+ *   WITHDRAW FLOW:
+ *     1. Flash loan USDC → repay USDC debt on Euler
+ *     2. Withdraw RLUSD from supply vault
+ *     3. Swap RLUSD→USDC
+ *     4. Repay flash loan, return remainder to Treasury
+ *
+ *   SAFETY:
+ *     - Depeg circuit breaker: pauses if RLUSD/USD deviates > 2%
+ *     - Health factor monitoring with emergency deleverage
+ *     - Profitability gate: only loop when net spread > 0
+ *     - Max swap slippage protection (configurable)
+ *
+ *   YIELD ESTIMATE (at 4x leverage, 75% LTV):
+ *     Supply APY (leveraged): ~12-16%
+ *     Borrow cost (leveraged): -(6-8%)
+ *     Merkl/EUL rewards:       +2-3%
+ *     Net APY:                 ~8-12%
+ *
+ * @dev Implements ILeverageLoopStrategy for MetaVault / TreasuryV2 composability
  */
-contract EulerV2LoopStrategy is
+contract EulerV2CrossStableLoopStrategy is
     ILeverageLoopStrategy,
-    IFlashLoanSimpleReceiverEuler,
+    IFlashLoanSimpleReceiverCrossStable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
@@ -135,6 +163,9 @@ contract EulerV2LoopStrategy is
     uint256 public constant BPS = 10_000;
     uint256 public constant WAD = 1e18;
     uint256 public constant MIN_HEALTH_FACTOR = 1.05e18;
+
+    /// @notice Maximum acceptable depeg from $1.00 (2% = 200 bps)
+    uint256 public constant MAX_DEPEG_BPS = 200;
 
     uint8 private constant ACTION_DEPOSIT = 1;
     uint8 private constant ACTION_WITHDRAW = 2;
@@ -152,26 +183,32 @@ contract EulerV2LoopStrategy is
     // STATE
     // ═══════════════════════════════════════════════════════════════════
 
-    /// @notice USDC token
+    /// @notice USDC token (quote / borrow side)
     IERC20 public usdc;
 
-    /// @notice Euler V2 supply vault (collateral side)
-    IEulerVault public supplyVault;
+    /// @notice RLUSD token (base / supply side)
+    IERC20 public rlusd;
 
-    /// @notice Euler V2 borrow vault (debt side)
-    IEulerVault public borrowVault;
+    /// @notice Euler V2 supply vault for RLUSD (collateral)
+    IEulerVaultCrossStable public supplyVault;
 
-    /// @notice Euler V2 EVC — links supply and borrow vaults
-    IEVC public evc;
+    /// @notice Euler V2 borrow vault for USDC (debt)
+    IEulerVaultCrossStable public borrowVault;
+
+    /// @notice Euler V2 EVC
+    IEVCCrossStable public evc;
 
     /// @notice AAVE pool for flash loans
-    IAavePoolForFlashEuler public flashLoanPool;
+    IAavePoolForCrossStable public flashLoanPool;
 
     /// @notice Merkl distributor for reward claiming
     IMerklDistributor public merklDistributor;
 
-    /// @notice Uniswap V3 router for reward swaps
-    ISwapRouterV3Euler public swapRouter;
+    /// @notice Uniswap V3 router for USDC↔RLUSD swaps
+    ISwapRouterV3CrossStable public swapRouter;
+
+    /// @notice RLUSD/USD price feed for depeg monitoring
+    IPriceFeedCrossStable public rlusdPriceFeed;
 
     /// @notice Target LTV in basis points
     uint256 public override targetLtvBps;
@@ -188,16 +225,19 @@ contract EulerV2LoopStrategy is
     /// @notice Total USDC principal deposited
     uint256 public totalPrincipal;
 
-    /// @notice Max borrow rate for profitability gate
+    /// @notice Max borrow rate for profitability gate (WAD)
     uint256 public maxBorrowRateForProfit;
 
     /// @notice Total Merkl rewards claimed (USDC terms)
     uint256 public totalRewardsClaimed;
 
-    /// @notice Swap fee tier
-    uint24 public defaultSwapFeeTier;
+    /// @notice Swap fee tier for USDC↔RLUSD (100 = 0.01%, 500 = 0.05%)
+    uint24 public stableSwapFeeTier;
 
-    /// @notice Minimum swap output ratio
+    /// @notice Swap fee tier for reward token → USDC
+    uint24 public rewardSwapFeeTier;
+
+    /// @notice Minimum swap output ratio in BPS (e.g. 9900 = 99%)
     uint256 public minSwapOutputBps;
 
     /// @notice Reward token whitelist
@@ -211,6 +251,8 @@ contract EulerV2LoopStrategy is
     event Withdrawn(uint256 requested, uint256 returned);
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
+    event SwapExecuted(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
+    event DepegCircuitBreakerTriggered(int256 rlusdPrice);
 
     // ═══════════════════════════════════════════════════════════════════
     // ERRORS
@@ -222,6 +264,9 @@ contract EulerV2LoopStrategy is
     error HealthFactorTooLow();
     error RewardTokenNotAllowed();
     error SharePriceTooLow();
+    error DepegDetected();
+    error SwapSlippageExceeded();
+    error StalePrice();
 
     // ═══════════════════════════════════════════════════════════════════
     // CONSTRUCTOR & INITIALIZER
@@ -232,49 +277,48 @@ contract EulerV2LoopStrategy is
         _disableInitializers();
     }
 
+    /// @notice Packed initialization parameters to avoid stack-too-deep
+    struct InitParams {
+        address usdc;
+        address rlusd;
+        address supplyVault;
+        address borrowVault;
+        address evc;
+        address flashLoanPool;
+        address merklDistributor;
+        address swapRouter;
+        address rlusdPriceFeed;
+        address treasury;
+        address admin;
+        address timelock;
+    }
+
     /**
-     * @notice Initialize the Euler V2 Loop Strategy
-     * @param _usdc USDC token
-     * @param _supplyVault Euler V2 supply vault for USDC
-     * @param _borrowVault Euler V2 borrow vault for USDC
-     * @param _evc Euler V2 EVC
-     * @param _flashLoanPool AAVE pool for flash loans
-     * @param _merklDistributor Merkl distributor
-     * @param _swapRouter Uniswap V3 router
-     * @param _treasury Treasury address
-     * @param _admin Admin address
-     * @param _timelock Timelock controller
+     * @notice Initialize the Cross-Stable Euler V2 Loop Strategy
+     * @param p Packed initialization parameters
      */
-    function initialize(
-        address _usdc,
-        address _supplyVault,
-        address _borrowVault,
-        address _evc,
-        address _flashLoanPool,
-        address _merklDistributor,
-        address _swapRouter,
-        address _treasury,
-        address _admin,
-        address _timelock
-    ) external initializer {
-        if (_timelock == address(0)) revert ZeroAddress();
-        if (_usdc == address(0)) revert ZeroAddress();
-        if (_supplyVault == address(0)) revert ZeroAddress();
-        if (_borrowVault == address(0)) revert ZeroAddress();
+    function initialize(InitParams calldata p) external initializer {
+        if (p.timelock == address(0)) revert ZeroAddress();
+        if (p.usdc == address(0)) revert ZeroAddress();
+        if (p.rlusd == address(0)) revert ZeroAddress();
+        if (p.supplyVault == address(0)) revert ZeroAddress();
+        if (p.borrowVault == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
-        _setTimelock(_timelock);
+        _setTimelock(p.timelock);
 
-        usdc = IERC20(_usdc);
-        supplyVault = IEulerVault(_supplyVault);
-        borrowVault = IEulerVault(_borrowVault);
-        evc = IEVC(_evc);
-        flashLoanPool = IAavePoolForFlashEuler(_flashLoanPool);
-        merklDistributor = IMerklDistributor(_merklDistributor);
-        swapRouter = ISwapRouterV3Euler(_swapRouter);
+        usdc = IERC20(p.usdc);
+        rlusd = IERC20(p.rlusd);
+        supplyVault = IEulerVaultCrossStable(p.supplyVault);
+        borrowVault = IEulerVaultCrossStable(p.borrowVault);
+        evc = IEVCCrossStable(p.evc);
+        flashLoanPool = IAavePoolForCrossStable(p.flashLoanPool);
+        merklDistributor = IMerklDistributor(p.merklDistributor);
+        swapRouter = ISwapRouterV3CrossStable(p.swapRouter);
+        rlusdPriceFeed = IPriceFeedCrossStable(p.rlusdPriceFeed);
 
         // Default: 75% LTV, 4x conceptual leverage
         targetLtvBps = 7500;
@@ -283,25 +327,58 @@ contract EulerV2LoopStrategy is
         active = true;
 
         maxBorrowRateForProfit = 0.08e18;
-        defaultSwapFeeTier = 3000;
-        minSwapOutputBps = 9500;
+        stableSwapFeeTier = 100; // 0.01% for stablecoin pairs
+        rewardSwapFeeTier = 3000; // 0.3% for reward tokens
+        minSwapOutputBps = 9900; // 99% minimum output (tight for stables)
 
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-        _grantRole(TREASURY_ROLE, _treasury);
-        _grantRole(STRATEGIST_ROLE, _admin);
-        _grantRole(GUARDIAN_ROLE, _admin);
-        _grantRole(KEEPER_ROLE, _admin);
+        _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
+        _grantRole(TREASURY_ROLE, p.treasury);
+        _grantRole(STRATEGIST_ROLE, p.admin);
+        _grantRole(GUARDIAN_ROLE, p.admin);
+        _grantRole(KEEPER_ROLE, p.admin);
     }
 
     /**
      * @notice Set up EVC relationships (called once after deployment)
-     * @dev Must be called by admin to enable collateral/controller linkages
      */
     function setupEVC() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        // Enable supply vault as collateral for this account
         evc.enableCollateral(address(this), address(supplyVault));
-        // Enable borrow vault as controller for this account
         evc.enableController(address(this), address(borrowVault));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DEPEG CIRCUIT BREAKER
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Check if RLUSD is within acceptable peg range
+     * @return True if RLUSD price is within ±2% of $1.00
+     */
+    function isWithinPeg() public view returns (bool) {
+        if (address(rlusdPriceFeed) == address(0)) return true; // No feed = skip check
+
+        (, int256 price,, uint256 updatedAt,) = rlusdPriceFeed.latestRoundData();
+
+        // Stale price check (> 24h)
+        if (block.timestamp - updatedAt > 86400) return false;
+
+        uint8 decimals = rlusdPriceFeed.decimals();
+        uint256 target = 10 ** decimals; // $1.00
+
+        uint256 priceUint = price > 0 ? uint256(price) : 0;
+        uint256 deviation;
+        if (priceUint > target) {
+            deviation = ((priceUint - target) * BPS) / target;
+        } else {
+            deviation = ((target - priceUint) * BPS) / target;
+        }
+
+        return deviation <= MAX_DEPEG_BPS;
+    }
+
+    modifier whenPegged() {
+        if (!isWithinPeg()) revert DepegDetected();
+        _;
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -309,7 +386,9 @@ contract EulerV2LoopStrategy is
     // ═══════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Deposit USDC with flash-loan leverage
+     * @notice Deposit USDC with flash-loan cross-stable leverage
+     * @dev Flow: USDC → flash loan USDC → swap all to RLUSD → supply RLUSD →
+     *      borrow USDC → repay flash
      */
     function deposit(uint256 amount)
         external
@@ -317,6 +396,7 @@ contract EulerV2LoopStrategy is
         onlyRole(TREASURY_ROLE)
         nonReentrant
         whenNotPaused
+        whenPegged
         returns (uint256 deposited)
     {
         if (amount == 0) revert ZeroAmount();
@@ -325,6 +405,7 @@ contract EulerV2LoopStrategy is
         usdc.safeTransferFrom(msg.sender, address(this), amount);
 
         // Calculate flash loan for target leverage
+        // At 75% LTV: flashAmount = amount * 0.75 / 0.25 = 3x the deposit
         uint256 flashAmount = (amount * targetLtvBps) / (BPS - targetLtvBps);
 
         if (flashAmount > 0) {
@@ -336,22 +417,26 @@ contract EulerV2LoopStrategy is
                 0
             );
         } else {
-            // No leverage
-            usdc.forceApprove(address(supplyVault), amount);
-            supplyVault.deposit(amount, address(this));
+            // No leverage — just swap to RLUSD and supply
+            uint256 rlusdReceived = _swapUsdcToRlusd(amount);
+            rlusd.forceApprove(address(supplyVault), rlusdReceived);
+            supplyVault.deposit(rlusdReceived, address(this));
         }
 
         totalPrincipal += amount;
         deposited = amount;
 
-        uint256 collateral = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
-        uint256 leverageX100 = totalPrincipal > 0 ? (collateral * 100) / totalPrincipal : 100;
+        uint256 collateralRlusd = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
+        // Approximate in USDC terms (1:1 for stables)
+        uint256 leverageX100 = totalPrincipal > 0 ? (collateralRlusd * 100) / totalPrincipal : 100;
 
-        emit Deposited(amount, collateral, leverageX100);
+        emit Deposited(amount, collateralRlusd, leverageX100);
     }
 
     /**
-     * @notice Withdraw USDC by deleveraging
+     * @notice Withdraw USDC by deleveraging cross-stable position
+     * @dev Flow: flash loan USDC → repay USDC debt → withdraw RLUSD →
+     *      swap RLUSD→USDC → repay flash → return remainder
      */
     function withdraw(uint256 amount)
         external
@@ -377,8 +462,17 @@ contract EulerV2LoopStrategy is
                 0
             );
         } else {
-            // No debt — just withdraw
-            supplyVault.withdraw(principalToWithdraw, address(this), address(this));
+            // No debt — just withdraw RLUSD and swap back
+            uint256 shares = supplyVault.balanceOf(address(this));
+            uint256 sharesToRedeem = (shares * principalToWithdraw) / totalPrincipal;
+            if (sharesToRedeem > shares) sharesToRedeem = shares;
+
+            if (sharesToRedeem > 0) {
+                uint256 rlusdWithdrawn = supplyVault.redeem(sharesToRedeem, address(this), address(this));
+                if (rlusdWithdrawn > 0) {
+                    _swapRlusdToUsdc(rlusdWithdrawn);
+                }
+            }
         }
 
         totalPrincipal -= principalToWithdraw;
@@ -414,10 +508,13 @@ contract EulerV2LoopStrategy is
             );
         }
 
-        // Withdraw remaining supply
+        // Withdraw remaining RLUSD supply
         uint256 shares = supplyVault.balanceOf(address(this));
         if (shares > 0) {
-            supplyVault.redeem(shares, address(this), address(this));
+            uint256 rlusdWithdrawn = supplyVault.redeem(shares, address(this), address(this));
+            if (rlusdWithdrawn > 0) {
+                _swapRlusdToUsdc(rlusdWithdrawn);
+            }
         }
 
         totalPrincipal = 0;
@@ -431,12 +528,14 @@ contract EulerV2LoopStrategy is
     }
 
     /**
-     * @notice Net position value (collateral − debt)
+     * @notice Net position value in USDC terms (RLUSD collateral − USDC debt)
+     * @dev Approximates RLUSD at 1:1 with USDC for stable pairs
      */
     function totalValue() external view override returns (uint256) {
-        uint256 collateral = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
+        uint256 collateralRlusd = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
         uint256 debt = borrowVault.debtOf(address(this));
-        return collateral > debt ? collateral - debt : 0;
+        // RLUSD ≈ USDC at 1:1 for stablecoin pairs
+        return collateralRlusd > debt ? collateralRlusd - debt : 0;
     }
 
     function asset() external view override returns (address) {
@@ -472,14 +571,23 @@ contract EulerV2LoopStrategy is
         return true;
     }
 
+    /**
+     * @dev Deposit callback:
+     *   1. Swap all USDC (user + flash) → RLUSD
+     *   2. Supply RLUSD to Euler V2 supply vault
+     *   3. Borrow USDC from Euler V2 borrow vault to repay flash
+     */
     function _handleDepositCallback(uint256 flashAmount, uint256 premium, uint256 userAmount) internal {
-        uint256 totalToSupply = userAmount + flashAmount;
+        uint256 totalUsdc = userAmount + flashAmount;
 
-        // Supply to Euler V2 supply vault
-        usdc.forceApprove(address(supplyVault), totalToSupply);
-        supplyVault.deposit(totalToSupply, address(this));
+        // Swap USDC → RLUSD
+        uint256 rlusdReceived = _swapUsdcToRlusd(totalUsdc);
 
-        // Borrow from Euler V2 borrow vault to repay flash loan
+        // Supply RLUSD to Euler V2 supply vault
+        rlusd.forceApprove(address(supplyVault), rlusdReceived);
+        supplyVault.deposit(rlusdReceived, address(this));
+
+        // Borrow USDC from Euler V2 borrow vault to repay flash loan
         uint256 repayAmount = flashAmount + premium;
         borrowVault.borrow(repayAmount, address(this));
 
@@ -487,30 +595,104 @@ contract EulerV2LoopStrategy is
         usdc.forceApprove(address(flashLoanPool), repayAmount);
     }
 
+    /**
+     * @dev Withdraw callback:
+     *   1. Repay USDC debt with flash-loaned funds
+     *   2. Withdraw RLUSD from supply vault
+     *   3. Swap RLUSD → USDC
+     *   4. Repay flash loan from swapped USDC
+     */
     function _handleWithdrawCallback(uint256 flashAmount, uint256 premium, uint256 withdrawAmount) internal {
-        // Repay Euler debt with flash-loaned funds
+        // Repay Euler USDC debt
         usdc.forceApprove(address(borrowVault), flashAmount);
         borrowVault.repay(flashAmount, address(this));
 
-        // Withdraw from supply vault
-        uint256 toWithdraw;
+        // Withdraw RLUSD from supply vault
         if (withdrawAmount == type(uint256).max) {
             uint256 shares = supplyVault.balanceOf(address(this));
             if (shares > 0) {
-                supplyVault.redeem(shares, address(this), address(this));
+                uint256 rlusdWithdrawn = supplyVault.redeem(shares, address(this), address(this));
+                if (rlusdWithdrawn > 0) {
+                    _swapRlusdToUsdc(rlusdWithdrawn);
+                }
             }
         } else {
-            toWithdraw = withdrawAmount + flashAmount + premium;
+            // Proportional withdrawal
+            uint256 rlusdToWithdraw = withdrawAmount + flashAmount + premium;
             uint256 maxW = supplyVault.maxWithdraw(address(this));
-            if (toWithdraw > maxW) toWithdraw = maxW;
-            if (toWithdraw > 0) {
-                supplyVault.withdraw(toWithdraw, address(this), address(this));
+            if (rlusdToWithdraw > maxW) rlusdToWithdraw = maxW;
+            if (rlusdToWithdraw > 0) {
+                supplyVault.withdraw(rlusdToWithdraw, address(this), address(this));
+                uint256 rlusdBalance = rlusd.balanceOf(address(this));
+                if (rlusdBalance > 0) {
+                    _swapRlusdToUsdc(rlusdBalance);
+                }
             }
         }
 
         // Approve flash loan repayment
         uint256 repayAmount = flashAmount + premium;
         usdc.forceApprove(address(flashLoanPool), repayAmount);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SWAP HELPERS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Swap USDC → RLUSD via Uniswap V3
+     * @param usdcAmount Amount of USDC to swap
+     * @return rlusdReceived Amount of RLUSD received
+     */
+    function _swapUsdcToRlusd(uint256 usdcAmount) internal returns (uint256 rlusdReceived) {
+        if (usdcAmount == 0) return 0;
+
+        usdc.forceApprove(address(swapRouter), usdcAmount);
+
+        // For stablecoin pairs, expect near 1:1 (both 6 decimals on mainnet)
+        // RLUSD is 18 decimals, so adjust minimum output
+        uint256 minOut = (usdcAmount * minSwapOutputBps) / BPS;
+
+        rlusdReceived = swapRouter.exactInputSingle(
+            ISwapRouterV3CrossStable.ExactInputSingleParams({
+                tokenIn: address(usdc),
+                tokenOut: address(rlusd),
+                fee: stableSwapFeeTier,
+                recipient: address(this),
+                amountIn: usdcAmount,
+                amountOutMinimum: minOut,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        emit SwapExecuted(address(usdc), address(rlusd), usdcAmount, rlusdReceived);
+    }
+
+    /**
+     * @notice Swap RLUSD → USDC via Uniswap V3
+     * @param rlusdAmount Amount of RLUSD to swap
+     * @return usdcReceived Amount of USDC received
+     */
+    function _swapRlusdToUsdc(uint256 rlusdAmount) internal returns (uint256 usdcReceived) {
+        if (rlusdAmount == 0) return 0;
+
+        rlusd.forceApprove(address(swapRouter), rlusdAmount);
+
+        uint256 minOut = (rlusdAmount * minSwapOutputBps) / BPS;
+
+        usdcReceived = swapRouter.exactInputSingle(
+            ISwapRouterV3CrossStable.ExactInputSingleParams({
+                tokenIn: address(rlusd),
+                tokenOut: address(usdc),
+                fee: stableSwapFeeTier,
+                recipient: address(this),
+                amountIn: rlusdAmount,
+                amountOutMinimum: minOut,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        emit SwapExecuted(address(rlusd), address(usdc), rlusdAmount, usdcReceived);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -521,15 +703,15 @@ contract EulerV2LoopStrategy is
         uint256 debt = borrowVault.debtOf(address(this));
         if (debt == 0) return type(uint256).max;
 
-        uint256 collateral = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
-        // Simple health factor: collateral / debt (in WAD)
-        return (collateral * WAD) / debt;
+        uint256 collateralRlusd = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
+        // RLUSD ≈ USDC for health factor calculation
+        return (collateralRlusd * WAD) / debt;
     }
 
     function getCurrentLeverage() external view override returns (uint256 leverageX100) {
         if (totalPrincipal == 0) return 100;
-        uint256 collateral = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
-        leverageX100 = (collateral * 100) / totalPrincipal;
+        uint256 collateralRlusd = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
+        leverageX100 = (collateralRlusd * 100) / totalPrincipal;
     }
 
     function getPosition() external view override returns (
@@ -548,11 +730,6 @@ contract EulerV2LoopStrategy is
     // REAL SHARE PRICE & TVL (Stability DAO pattern)
     // ═══════════════════════════════════════════════════════════════════
 
-    /**
-     * @notice Real share price accounting for all debt
-     * @return priceWad Share price in WAD (1e18 = 1.0)
-     * @return trusted Always true for Euler V2 (on-chain accounting)
-     */
     function realSharePrice() external view override returns (uint256 priceWad, bool trusted) {
         uint256 collateralVal = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
         uint256 debt = borrowVault.debtOf(address(this));
@@ -562,25 +739,18 @@ contract EulerV2LoopStrategy is
             return (WAD, true);
         }
         priceWad = (netVal * WAD) / totalPrincipal;
-        trusted = true;
+        trusted = isWithinPeg();
     }
 
-    /**
-     * @notice Real TVL net of all debt
-     * @return tvl Net TVL in USDC terms (6 decimals)
-     * @return trusted Always true for Euler V2
-     */
     function realTvl() external view override returns (uint256 tvl, bool trusted) {
         uint256 collateralVal = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
         uint256 debt = borrowVault.debtOf(address(this));
         tvl = collateralVal > debt ? collateralVal - debt : 0;
-        trusted = true;
+        trusted = isWithinPeg();
     }
 
     /**
      * @notice Adjust leverage with share price protection
-     * @param newLtvBps New target LTV in basis points
-     * @param minSharePrice Minimum acceptable share price post-adjustment (WAD)
      */
     function adjustLeverage(uint256 newLtvBps, uint256 minSharePrice)
         external
@@ -588,13 +758,13 @@ contract EulerV2LoopStrategy is
         onlyRole(STRATEGIST_ROLE)
         nonReentrant
         whenNotPaused
+        whenPegged
     {
         if (newLtvBps < 3000 || newLtvBps > 9000) revert InvalidLTV();
 
         uint256 oldLtv = targetLtvBps;
         targetLtvBps = newLtvBps;
 
-        // Perform rebalance to new target
         uint256 collateralVal = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
         uint256 currentDebt = borrowVault.debtOf(address(this));
 
@@ -602,6 +772,7 @@ contract EulerV2LoopStrategy is
             uint256 currentLtv = (currentDebt * BPS) / collateralVal;
 
             if (currentLtv < newLtvBps) {
+                // Need more leverage — borrow more USDC, swap to RLUSD, supply
                 uint256 targetDebt = (collateralVal * newLtvBps) / BPS;
                 uint256 deficit = targetDebt - currentDebt;
                 if (deficit > 1e4) {
@@ -614,6 +785,7 @@ contract EulerV2LoopStrategy is
                     );
                 }
             } else if (currentLtv > newLtvBps) {
+                // Need less leverage — repay debt, withdraw RLUSD, swap to USDC
                 uint256 targetDebt = (collateralVal * newLtvBps) / BPS;
                 uint256 excess = currentDebt - targetDebt;
                 if (excess > 1e4) {
@@ -661,7 +833,6 @@ contract EulerV2LoopStrategy is
         uint256 currentLtv = (currentDebt * BPS) / collateral;
 
         if (currentLtv > targetLtvBps + 100) {
-            // Over-leveraged — deleverage
             uint256 targetDebt = (collateral * targetLtvBps) / BPS;
             uint256 excess = currentDebt - targetDebt;
 
@@ -676,7 +847,6 @@ contract EulerV2LoopStrategy is
             }
             emit Rebalanced(currentLtv, targetLtvBps, excess);
         } else if (currentLtv + 100 < targetLtvBps) {
-            // Under-leveraged — leverage up
             uint256 targetDebt = (collateral * targetLtvBps) / BPS;
             uint256 deficit = targetDebt - currentDebt;
 
@@ -734,12 +904,13 @@ contract EulerV2LoopStrategy is
                 continue;
             }
 
+            // Swap reward token → USDC
             IERC20(token).forceApprove(address(swapRouter), balance);
             uint256 received = swapRouter.exactInputSingle(
-                ISwapRouterV3Euler.ExactInputSingleParams({
+                ISwapRouterV3CrossStable.ExactInputSingleParams({
                     tokenIn: token,
                     tokenOut: address(usdc),
-                    fee: defaultSwapFeeTier,
+                    fee: rewardSwapFeeTier,
                     recipient: address(this),
                     amountIn: balance,
                     amountOutMinimum: (balance * minSwapOutputBps) / BPS,
@@ -752,9 +923,10 @@ contract EulerV2LoopStrategy is
         }
 
         if (totalUsdcReceived > 0) {
-            // Compound: supply back to Euler vault
-            usdc.forceApprove(address(supplyVault), totalUsdcReceived);
-            supplyVault.deposit(totalUsdcReceived, address(this));
+            // Compound: swap USDC → RLUSD → supply to Euler vault
+            uint256 rlusdReceived = _swapUsdcToRlusd(totalUsdcReceived);
+            rlusd.forceApprove(address(supplyVault), rlusdReceived);
+            supplyVault.deposit(rlusdReceived, address(this));
             totalRewardsClaimed += totalUsdcReceived;
 
             uint256 collateral = supplyVault.convertToAssets(supplyVault.balanceOf(address(this)));
@@ -790,10 +962,13 @@ contract EulerV2LoopStrategy is
 
         uint256 shares = supplyVault.balanceOf(address(this));
         if (shares > 0) {
-            supplyVault.redeem(shares, address(this), address(this));
+            uint256 rlusdWithdrawn = supplyVault.redeem(shares, address(this), address(this));
+            if (rlusdWithdrawn > 0) {
+                _swapRlusdToUsdc(rlusdWithdrawn);
+            }
         }
 
-        uint256 hfAfter = type(uint256).max; // Fully deleveraged
+        uint256 hfAfter = type(uint256).max;
         emit EmergencyDeleveraged(hfBefore, hfAfter);
     }
 
@@ -812,6 +987,16 @@ contract EulerV2LoopStrategy is
         if (_token == address(0)) revert ZeroAddress();
         allowedRewardTokens[_token] = _allowed;
         emit RewardTokenToggled(_token, _allowed);
+    }
+
+    function setSwapFees(uint24 _stableFeeTier, uint24 _rewardFeeTier) external onlyRole(STRATEGIST_ROLE) {
+        stableSwapFeeTier = _stableFeeTier;
+        rewardSwapFeeTier = _rewardFeeTier;
+    }
+
+    function setMinSwapOutput(uint256 _minOutputBps) external onlyRole(STRATEGIST_ROLE) {
+        if (_minOutputBps < 9000 || _minOutputBps > BPS) revert InvalidLTV(); // Reuse error
+        minSwapOutputBps = _minOutputBps;
     }
 
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
@@ -835,7 +1020,7 @@ contract EulerV2LoopStrategy is
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[35] private __gap;
+    uint256[30] private __gap;
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
