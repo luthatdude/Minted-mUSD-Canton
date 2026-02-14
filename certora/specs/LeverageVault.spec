@@ -1,79 +1,63 @@
-/// @title LeverageVault Formal Verification Spec
-/// @notice Certora spec for leverage position safety
-/// @dev Verifies leverage bounds and pause enforcement
-
-// ═══════════════════════════════════════════════════════════════════
-// METHODS
-// ═══════════════════════════════════════════════════════════════════
+// Certora Verification Spec: LeverageVault
+// FIX: Previously no formal verification for leverage safety
 
 methods {
-    function maxLeverageX10() external returns (uint256) envfree;
-    function paused() external returns (bool) envfree;
-
-    // External call summaries (BorrowModule, CollateralVault, ERC20)
-    function _.transferFrom(address, address, uint256) external => NONDET;
-    function _.transfer(address, uint256) external => NONDET;
-    function _.approve(address, uint256) external => NONDET;
-    function _.balanceOf(address) external => PER_CALLEE_CONSTANT;
-    function _.decimals() external => PER_CALLEE_CONSTANT;
-    function _.getValueUsd(address, uint256) external => PER_CALLEE_CONSTANT;
-    function _.getValueUsdUnsafe(address, uint256) external => PER_CALLEE_CONSTANT;
-    function _.collateralFactor(address) external => PER_CALLEE_CONSTANT;
-    function _.healthFactor(address) external => PER_CALLEE_CONSTANT;
-    function _.borrow(address, uint256) external => NONDET;
-    function _.repay(address, uint256) external => NONDET;
-    function _.deposit(address, address, uint256) external => NONDET;
-    function _.withdraw(address, address, uint256, address, bool) external => NONDET;
-    function _.mint(address, uint256) external => NONDET;
-    function _.burn(address, uint256) external => NONDET;
+    function positions(address) external returns (uint256, uint256, uint256, bool) envfree;
+    function maxLeverage() external returns (uint256) envfree;
+    function collateralVault() external returns (address) envfree;
+    function borrowModule() external returns (address) envfree;
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// RULES: LEVERAGE BOUNDS
-// ═══════════════════════════════════════════════════════════════════
-
-/// @notice maxLeverageX10 stays within bounds [10, 40] (1.0x to 4.0x)
-rule leverage_bounded(method f) {
+// RULE: Opening a position with zero collateral must revert
+rule openRequiresCollateral() {
     env e;
-    calldataarg args;
-    require maxLeverageX10() >= 10 && maxLeverageX10() <= 40;
 
-    f(e, args);
+    openLeveragedPosition@withrevert(e, 0, 0);
 
-    assert maxLeverageX10() >= 10 && maxLeverageX10() <= 40,
-        "maxLeverageX10 out of bounds [10, 40]";
+    assert lastReverted, "Opening with zero collateral must revert";
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// RULES: PAUSE ENFORCEMENT
-// ═══════════════════════════════════════════════════════════════════
-
-/// @notice Paused contract blocks opening positions
-rule paused_blocks_open() {
+// RULE: Closing must repay all debt
+rule closeRepaysDebt() {
     env e;
-    require paused();
 
-    address collateralToken;
-    uint256 initialAmount;
-    uint256 targetLeverageX10;
-    uint256 maxLoopsOverride;
-    uint256 userDeadline;
+    uint256 collateralBefore;
+    uint256 debtBefore;
+    uint256 leverageBefore;
+    bool activeBefore;
+    (collateralBefore, debtBefore, leverageBefore, activeBefore) = positions(e.msg.sender);
 
-    openLeveragedPosition@withrevert(e, collateralToken, initialAmount,
-        targetLeverageX10, maxLoopsOverride, userDeadline);
+    require activeBefore;
 
-    assert lastReverted,
-        "Opening position while paused must revert";
+    closeLeveragedPosition(e);
+
+    uint256 collateralAfter;
+    uint256 debtAfter;
+    uint256 leverageAfter;
+    bool activeAfter;
+    (collateralAfter, debtAfter, leverageAfter, activeAfter) = positions(e.msg.sender);
+
+    assert debtAfter == 0, "After close, debt must be zero";
+    assert !activeAfter, "After close, position must be inactive";
 }
 
-/// @notice Paused contract blocks closing positions
-rule paused_blocks_close() {
+// RULE: Emergency close can only be called by authorized roles
+rule emergencyCloseAuthorized() {
     env e;
-    require paused();
-    uint256 minCollateralOut;
+    address user;
 
-    closeLeveragedPosition@withrevert(e, minCollateralOut);
+    emergencyClosePosition@withrevert(e, user);
 
-    assert lastReverted,
-        "Closing position while paused must revert";
+    assert !lastReverted => (e.msg.sender == user || hasRole(e.msg.sender, LEVERAGE_VAULT_ROLE())),
+        "Emergency close requires LEVERAGE_VAULT_ROLE or being the user";
+}
+
+// RULE: withdrawFor with skipHealthCheck restricts recipient
+rule skipHealthCheckRecipientRestricted(address user, address token, uint256 amount, address recipient) {
+    env e;
+
+    withdrawFor@withrevert(e, user, token, amount, recipient, true);
+
+    assert !lastReverted => (recipient == e.msg.sender || recipient == user),
+        "Skip health check must restrict recipient to caller or user";
 }

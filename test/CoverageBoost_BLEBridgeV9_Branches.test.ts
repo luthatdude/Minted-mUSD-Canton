@@ -37,7 +37,8 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT
+      DAILY_CAP_LIMIT,
+      deployer.address  // _timelockController
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -52,6 +53,9 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
 
     // Grant TIMELOCK_ROLE to deployer for admin function tests
     await bridge.grantRole(await bridge.TIMELOCK_ROLE(), deployer.address);
+
+    // CRIT-01: Grant RELAYER_ROLE to deployer so processAttestation calls work
+    await bridge.grantRole(await bridge.RELAYER_ROLE(), deployer.address);
   });
 
   // ── Helpers ──────────────────────────────────────────────────
@@ -98,7 +102,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should revert INVALID_DAILY_LIMIT when _dailyCapIncreaseLimit is 0", async function () {
       const F = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0])
+        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0, deployer.address])
       ).to.be.revertedWithCustomError(F, "InvalidDailyLimit");
     });
   });
@@ -205,8 +209,19 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
 
   // ── 12. processAttestation: non-RELAYER caller ──────────────
 
-  describe("processAttestation — any caller", function () {
-    it("should allow any caller to process attestation (no RELAYER_ROLE required)", async function () {
+  describe("processAttestation — RELAYER_ROLE enforcement", function () {
+    it("should reject calls from non-RELAYER callers (CRIT-01)", async function () {
+      const now = BigInt(await time.latest());
+      const att = await createAttestation(1n, ethers.parseEther("11000000"), now);
+      const sigs = await createSortedSignatures(att, validators.slice(0, 3));
+      // 'user' does NOT have RELAYER_ROLE → must revert with AccessControl error
+      await expect(bridge.connect(user).processAttestation(att, sigs))
+        .to.be.revertedWithCustomError(bridge, "AccessControlUnauthorizedAccount");
+    });
+
+    it("should allow RELAYER_ROLE callers to process attestation", async function () {
+      // Grant RELAYER_ROLE to user for this test
+      await bridge.grantRole(await bridge.RELAYER_ROLE(), user.address);
       const now = BigInt(await time.latest());
       const att = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
@@ -317,6 +332,46 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       // Exhaust the 1M daily limit
       await submitAttestation(ethers.parseEther("12100000"), 1n, "win-exh");
       expect(await bridge.getRemainingDailyCapLimit()).to.equal(0n);
+    });
+  });
+
+  // ── LOW-04. MIN_ATTESTATION_GAP boundary tests ──────────────
+
+  describe("MIN_ATTESTATION_GAP boundary", function () {
+    it("should accept attestation at exactly MIN_ATTESTATION_GAP (60s)", async function () {
+      // First attestation
+      const now1 = BigInt(await time.latest());
+      const att1 = await createAttestation(1n, ethers.parseEther("11000000"), now1);
+      const sigs1 = await createSortedSignatures(att1, validators.slice(0, 3));
+      await bridge.processAttestation(att1, sigs1);
+
+      // Advance exactly 60 seconds
+      await time.increase(60);
+
+      const now2 = BigInt(await time.latest());
+      const att2 = await createAttestation(2n, ethers.parseEther("11000000"), now2);
+      const sigs2 = await createSortedSignatures(att2, validators.slice(0, 3));
+      // Exactly 60s gap should pass
+      await expect(bridge.processAttestation(att2, sigs2)).to.emit(bridge, "AttestationReceived");
+    });
+
+    it("should reject attestation at 59s gap (just under MIN_ATTESTATION_GAP)", async function () {
+      // First attestation
+      const now1 = BigInt(await time.latest());
+      const att1 = await createAttestation(1n, ethers.parseEther("11000000"), now1);
+      const sigs1 = await createSortedSignatures(att1, validators.slice(0, 3));
+      await bridge.processAttestation(att1, sigs1);
+
+      // lastAttestationTime is now att1.timestamp = now1
+      // We need att2.timestamp < now1 + 60, i.e. att2.timestamp = now1 + 59
+      // But att2.timestamp must also be <= block.timestamp (FutureTimestamp check)
+      // So advance time enough for the timestamp to be valid, but use now1+59 as att timestamp
+      await time.increase(59);
+
+      const att2 = await createAttestation(2n, ethers.parseEther("11000000"), now1 + 59n);
+      const sigs2 = await createSortedSignatures(att2, validators.slice(0, 3));
+      await expect(bridge.processAttestation(att2, sigs2))
+        .to.be.revertedWithCustomError(bridge, "AttestationTooClose");
     });
   });
 });

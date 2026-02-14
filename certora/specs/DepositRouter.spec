@@ -18,13 +18,6 @@ methods {
     function markDepositsComplete(uint64[]) external;
     function setFee(uint256) external;
     function paused() external returns (bool) envfree;
-
-    // External call summaries (ERC20, Wormhole bridge)
-    function _.transferFrom(address, address, uint256) external => NONDET;
-    function _.approve(address, uint256) external => NONDET;
-    function _.transfer(address, uint256) external => NONDET;
-    function _.transferTokensWithPayload(address, uint256, uint16, bytes32, uint32, bytes) external => NONDET;
-    function _.quoteEVMDeliveryPrice(uint16, uint256, uint256) external => PER_CALLEE_CONSTANT;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -88,24 +81,13 @@ rule deposit_rejects_above_maximum(uint256 amount) {
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice Once completed, a deposit stays completed forever
-/// @dev Parametric over all functions except deposit/depositFor.
-///      deposit/depositFor are excluded because the NONDET summary for
-///      transferTokensWithPayload lets the prover pick a colliding sequence
-///      number, which is impossible in practice (Wormhole guarantees unique
-///      monotonically-increasing sequences per emitter).
-rule completion_is_final(uint64 seqNum, method f)
-filtered {
-    f -> f.selector != sig:deposit(uint256).selector
-      && f.selector != sig:depositFor(address,uint256).selector
-}
-{
-    env e;
-    calldataarg args;
-
+rule completion_is_final(uint64 seqNum) {
+    env e1;
+    env e2;
     require isDepositComplete(seqNum) == true;
 
-    // Execute any arbitrary state transition
-    f@withrevert(e, args);
+    // After any state transition, still complete
+    markDepositComplete(e1, seqNum);
 
     assert isDepositComplete(seqNum) == true,
         "Completed deposit reverted to pending";

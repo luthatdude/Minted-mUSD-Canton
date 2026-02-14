@@ -5,9 +5,9 @@
 --
 -- Architecture:
 --   Users deposit Canton coin ONLY into this pool.
---   Eligibility and deposit cap determined by their existing sMUSD position:
---     maxCantonDeposit (in mUSD value) = sMUSD value × 0.25
---   This enforces an effective 80/20 ratio without holding mUSD in this pool.
+--   There is NO cap on Canton deposits. However, to qualify for boost rewards,
+--   the user must deposit CC worth at least 30% of their sMUSD value.
+--   This ensures meaningful Canton commitment without limiting upside.
 --
 --   The user earns BOTH yields simultaneously:
 --     1. sMUSD yield — from TreasuryV2 strategies (via CantonStakingService)
@@ -136,8 +136,8 @@ template BoostPoolDepositRecord
 --
 -- How it works:
 --   1. User must already hold CantonSMUSD (staked mUSD in the sMUSD pool)
---   2. Max Canton deposit = sMUSD value (shares × globalSharePrice) × 0.25
---      This enforces an effective 80/20 ratio by reference, not by holding mUSD
+--   2. No cap on Canton deposits. Minimum threshold: CC value ≥ 30% of sMUSD value
+--      This ensures meaningful Canton commitment without limiting deposits
 --   3. User deposits Canton → receives BoostPoolLP shares
 --   4. Validator rewards distributed per-epoch: 60% to LPs, 40% to protocol
 --   5. User withdraws → receives Canton (proportional to LP shares)
@@ -162,7 +162,7 @@ template CantonBoostPoolService
     entryFeeBps            : Bps        -- Entry fee (default 25 = 0.25%)
     exitFeeBps             : Bps        -- Exit fee (default 50 = 0.50%)
     lpRewardShareBps       : Bps        -- LP share of validator rewards (default 6000 = 60%)
-    cantonCapRatio         : Money      -- Max Canton value as ratio of sMUSD value (default 0.25 = 20/80)
+    cantonMinRatio         : Money      -- Min Canton value as ratio of sMUSD value (default 0.30 = 30%)
     cooldownSeconds        : Int        -- Minimum lock before withdrawal
     paused                 : Bool
     -- DAML-H-04: Mandatory compliance — all depositors must pass blacklist/freeze checks
@@ -184,7 +184,7 @@ template CantonBoostPoolService
         && entryFeeBps >= 0 && entryFeeBps <= 500
         && exitFeeBps >= 0 && exitFeeBps <= 500
         && lpRewardShareBps >= 0 && lpRewardShareBps <= 10000
-        && cantonCapRatio > 0.0 && cantonCapRatio <= 1.0
+        && cantonMinRatio > 0.0 && cantonMinRatio <= 1.0
 
     -- ──────────────────────────────────────────────
     --  DEPOSIT: Canton only, qualified by sMUSD stake
@@ -222,9 +222,9 @@ template CantonBoostPoolService
         -- needs to READ the sMUSD to verify ownership and calculate the deposit cap —
         -- it does not need to consume the token. The sMUSD remains untouched.
 
-        -- Calculate deposit cap from sMUSD value
+        -- Calculate minimum Canton threshold from sMUSD value
         let smusdValueMusd = smusd.shares * globalSharePrice
-        let maxCantonValueMusd = smusdValueMusd * cantonCapRatio
+        let minCantonValueMusd = smusdValueMusd * cantonMinRatio
         let cantonValueMusd = canton.amount * cantonPriceMusd
 
         existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
@@ -234,7 +234,9 @@ template CantonBoostPoolService
             rec <- fetch recCid
             return rec.cumulativeCantonValue
 
-        assertMsg "EXCEEDS_SMUSD_QUALIFIED_CAP" (previousDeposits + cantonValueMusd <= maxCantonValueMusd)
+        -- No cap on deposits. Enforce 30% minimum: cumulative CC value must meet threshold.
+        -- Users below threshold can still deposit, but boost rewards only activate once met.
+        assertMsg "BELOW_MINIMUM_CC_THRESHOLD" (previousDeposits + cantonValueMusd >= minCantonValueMusd)
 
         -- Update or create cumulative deposit record
         case existingRecordOpt of
@@ -470,10 +472,10 @@ template CantonBoostPoolService
           entryFeeBps = newEntryFeeBps
           exitFeeBps = newExitFeeBps
 
-    -- DAML-M-05: Cap ratio updates require governance co-signature (sensitive parameter)
-    choice BoostPool_UpdateCapRatio : ContractId CantonBoostPoolService
+    -- DAML-M-05: Min ratio updates require governance co-signature (sensitive parameter)
+    choice BoostPool_UpdateMinRatio : ContractId CantonBoostPoolService
       with
-        newCapRatio : Money
+        newMinRatio : Money
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do
@@ -481,8 +483,8 @@ template CantonBoostPoolService
         proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
-        assertMsg "CAP_RATIO_VALID" (newCapRatio > 0.0 && newCapRatio <= 1.0)
-        create this with cantonCapRatio = newCapRatio
+        assertMsg "MIN_RATIO_VALID" (newMinRatio > 0.0 && newMinRatio <= 1.0)
+        create this with cantonMinRatio = newMinRatio
 
     -- DAML-M-05: Observer updates check paused state
     choice BoostPool_UpdateObservers : ContractId CantonBoostPoolService
