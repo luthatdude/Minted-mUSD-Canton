@@ -24,7 +24,9 @@ metadata:
     app.kubernetes.io/component: log-storage
 data:
   loki.yaml: |
-    auth_enabled: false
+    # INFRA-H-03 FIX: Enable multi-tenant authentication.
+    # All clients must provide X-Scope-OrgID header (Promtail already sends tenant_id: minted).
+    auth_enabled: true
 
     server:
       http_listen_port: 3100
