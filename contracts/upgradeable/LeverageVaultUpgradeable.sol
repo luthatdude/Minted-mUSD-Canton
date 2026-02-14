@@ -183,6 +183,8 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  _grantRole(LEVERAGE_ADMIN_ROLE, _admin);
  _grantRole(PAUSER_ROLE, _admin);
  _grantRole(TIMELOCK_ROLE, _timelockController);
+ // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+ _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
  }
 
  // ============================================================
@@ -835,8 +837,9 @@ contract LeverageVaultUpgradeable is AccessControlUpgradeable, ReentrancyGuardUp
  _pause();
  }
 
- /// @notice Unpause leverage operations (requires admin for separation of duties)
- function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @notice Unpause leverage operations
+ /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+ function unpause() external onlyRole(TIMELOCK_ROLE) {
  _unpause();
  }
 

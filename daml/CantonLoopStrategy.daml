@@ -1,5 +1,8 @@
--- | CantonLoopStrategy (H-04)
--- Canton-side loop leverage strategy with mandatory compliance checks.
+-- | CantonLoopStrategy
+-- Canton-native loop leverage strategy with mandatory compliance checks.
+-- For the V3 bridge-integrated leverage loop, see Minted.Protocol.V3 (Vault.AdjustLeverage choice).
+-- This standalone module is the authoritative Canton-native loop strategy implementation
+-- with governance-controlled config, compliance gating, and unwind lifecycle.
 --
 -- Architecture:
 --   Mirrors the on-chain LeverageVault.sol loop strategy on Canton.
@@ -195,6 +198,8 @@ template CantonLoopStrategyService
         assertMsg "STRATEGY_PAUSED" (not paused)
         assertMsg "TOO_MANY_LOOPS" (requestedLoops > 0 && requestedLoops <= maxLoops)
         assertMsg "DEPOSIT_POSITIVE" (depositAmount > 0.0)
+        -- DAML-M-09: Enforce minimum position size to prevent dust positions
+        assertMsg "DEPOSIT_BELOW_MINIMUM" (depositAmount >= minBorrowPerLoop)
 
         exercise complianceRegistryCid ValidateMint
           with minter = user
@@ -245,10 +250,17 @@ template CantonLoopStrategyService
         assertMsg "NOT_POSITION_OWNER" (pos.user == user)
         assertMsg "POSITION_OPERATOR_MISMATCH" (pos.operator == operator)
 
+        let remainder = pos.totalDeposited - pos.totalBorrowed
+
+        -- DAML-M-09: Validate position is either fully closed or above minimum size.
+        -- Dust positions waste storage and can cause precision issues in fee calculations.
+        assertMsg "DUST_POSITION_REMAINDER" (remainder == 0.0 || remainder >= minBorrowPerLoop)
+
         archive positionCid
 
-        let remainder = pos.totalDeposited - pos.totalBorrowed
         let exitFee = remainder * intToNumeric exitFeeBps / 10000.0
+        -- DAML-M-02: Prevent negative exit fees (which would grant user a bonus)
+        assertMsg "EXIT_FEE_NON_NEGATIVE" (exitFee >= 0.0)
 
         create this with
           totalPositions = totalPositions - 1
@@ -398,6 +410,12 @@ template CantonLoopRequest
         case cfg.complianceRegistryCid of
           Some regCid -> exercise regCid ValidateMint with minter = user
           None -> pure ()
+        -- SECURITY FIX DAML-C-03: Validate USDC issuer matches operator before
+        -- archiving dual-signatory token to prevent runtime authorization failures.
+        usdc <- fetch initialUsdcCid
+        assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
+        assertMsg "USDC_OWNER_MUST_BE_USER" (usdc.owner == user)
+
         -- Archive the USDC (deposited into strategy)
         archive initialUsdcCid
         now <- getTime
@@ -462,11 +480,19 @@ template CantonUnwindRequest
         -- Validate minimum return floor (10% of original deposit)
         let minReturn = totalDeposited * 0.1
         assertMsg "RETURN_BELOW_MINIMUM" (usdcReturned >= minReturn)
-        -- Archive sMUSD positions
-        _ <- mapA archive smusdToArchive
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator on all
+        -- dual-signatory tokens before archiving to prevent runtime failures.
+        _ <- mapA (\smusdCid -> do
+          smusd <- fetch smusdCid
+          assertMsg "SMUSD_ISSUER_MUST_BE_OPERATOR" (smusd.issuer == operator)
+          archive smusdCid
+          ) smusdToArchive
         -- Burn mUSD if provided
         case musdToBurn of
-          Some musdCid -> archive musdCid
+          Some musdCid -> do
+            musd <- fetch musdCid
+            assertMsg "MUSD_ISSUER_MUST_BE_OPERATOR" (musd.issuer == operator)
+            archive musdCid
           None -> pure ()
         -- Archive the unwinding position
         archive positionCid

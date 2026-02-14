@@ -260,3 +260,53 @@ spec:
           annotations:
             summary: "Pod OOM-killed in musd-canton namespace"
             description: "Container {{ $labels.container }} was OOM-killed. Increase resource limits."
+---
+# INFRA-M-10: Incident Response Runbook reference ConfigMap.
+# This ConfigMap serves as a pointer to where incident runbooks should be maintained.
+# Runbooks should be stored in the team's documentation system (e.g., Confluence, Notion, or
+# a private Git repo) — NOT in the k8s manifests repo, to avoid exposing internal procedures.
+#
+# Each PrometheusRule alert above should have a runbook_url annotation linking to the
+# corresponding procedure. Add runbook_url annotations to alerts as runbooks are created.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-runbook-references
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: minted-monitoring
+    app.kubernetes.io/component: runbooks
+  annotations:
+    musd.io/runbook-location: "https://your-docs-platform.example.com/minted/runbooks"
+    musd.io/escalation-policy: "PagerDuty service: minted-musd-production"
+    musd.io/last-review-date: "YYYY-MM-DD — update after each review cycle"
+data:
+  # Map of alert name -> runbook URL. Update these as runbooks are authored.
+  # These are referenced by Prometheus alert annotations (runbook_url field).
+  runbook-index: |
+    # Minted Protocol - Incident Response Runbook Index
+    #
+    # Maintain runbooks in your team documentation platform.
+    # Each entry maps an alert name to its runbook URL.
+    #
+    # Format: AlertName: <URL>
+    #
+    # --- Critical Alerts (P1 - respond within 15 minutes) ---
+    # CantonParticipantDown: https://docs.example.com/runbooks/canton-participant-down
+    # PostgresDown: https://docs.example.com/runbooks/postgres-down
+    # BridgeRelayDown: https://docs.example.com/runbooks/bridge-relay-down
+    # BridgeValidationFailures: https://docs.example.com/runbooks/bridge-validation-failures
+    # PriceOracleCircuitBreakerOpen: https://docs.example.com/runbooks/price-oracle-circuit-breaker
+    # HTTP5xxSpike: https://docs.example.com/runbooks/http-5xx-spike
+    #
+    # --- Warning Alerts (P2 - respond within 1 hour) ---
+    # HighRateLimitHits: https://docs.example.com/runbooks/rate-limit-hits
+    # CantonHighLatency: https://docs.example.com/runbooks/canton-high-latency
+    # CantonDBConnectionPoolExhausted: https://docs.example.com/runbooks/db-pool-exhausted
+    # PostgresHighConnections: https://docs.example.com/runbooks/postgres-high-connections
+    # PostgresDiskUsageHigh: https://docs.example.com/runbooks/postgres-disk-usage
+    # PodRestartLoop: https://docs.example.com/runbooks/pod-restart-loop
+    #
+    # --- Review Cadence ---
+    # Runbooks must be reviewed quarterly and after every P1 incident.
+    # Assign a runbook owner for each critical alert.

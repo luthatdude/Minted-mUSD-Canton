@@ -1,4 +1,8 @@
 -- | CantonDirectMint
+-- Canton-native direct minting service with compliance, rate limiting, and USDCx support.
+-- For the V3 bridge-integrated minting pipeline, see Minted.Protocol.V3 (CantonDirectMint template).
+-- This standalone module is the authoritative Canton-native implementation.
+--
 -- Canton-side thin accounting layer for mUSD minting
 --
 -- Architecture:

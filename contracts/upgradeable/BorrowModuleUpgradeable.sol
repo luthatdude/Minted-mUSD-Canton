@@ -214,6 +214,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  _grantRole(DEFAULT_ADMIN_ROLE, _admin);
  _grantRole(BORROW_ADMIN_ROLE, _admin);
  _grantRole(TIMELOCK_ROLE, _timelockController);
+ // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+ _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
  }
 
  /// @notice UUPS upgrade authorization — only MintedTimelockController can upgrade (48h delay enforced by OZ)
@@ -1097,8 +1099,8 @@ contract BorrowModuleUpgradeable is AccessControlUpgradeable, ReentrancyGuardUpg
  }
 
  /// @notice Unpause borrowing and repayments
- /// Require DEFAULT_ADMIN_ROLE for separation of duties
- function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+ function unpause() external onlyRole(TIMELOCK_ROLE) {
  _unpause();
  }
 

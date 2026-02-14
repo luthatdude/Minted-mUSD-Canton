@@ -119,7 +119,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         uint256 _minSigs,
         address _musdToken,
         uint256 _collateralRatioBps,
-        uint256 _dailyCapIncreaseLimit
+        uint256 _dailyCapIncreaseLimit,
+        address _timelockController
     ) public initializer {
         __AccessControl_init();
         __UUPSUpgradeable_init();
@@ -131,9 +132,13 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         if (_musdToken == address(0)) revert InvalidMusdAddress();
         if (_collateralRatioBps < 10000) revert RatioBelow100Percent();
         if (_dailyCapIncreaseLimit == 0) revert InvalidDailyLimit();
+        if (_timelockController == address(0)) revert InvalidAddress();
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(EMERGENCY_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
         minSignatures = _minSigs;
         musdToken = IMUSD(_musdToken);
