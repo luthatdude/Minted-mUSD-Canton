@@ -526,14 +526,17 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 userTotal = pos.principal + pos.accruedInterest;
         if (totalBorrows > 0 && userTotal > 0) {
             if (address(interestRateModel) != address(0)) {
-                uint256 globalInterest = interestRateModel.calculateInterest(
-                    totalBorrows,
+                // AUDIT SOL-M-03: Calculate user interest directly instead of
+                // computing global interest and dividing proportionally.
+                // Old: globalInterest = calc(totalBorrows,...) then * userTotal / totalBorrows
+                // caused double truncation (÷ BPS*YEAR then ÷ totalBorrows).
+                // New: single division preserves precision.
+                interest = interestRateModel.calculateInterest(
+                    userTotal,
                     totalBorrows,
                     _getTotalSupply(),
                     elapsed
                 );
-                // User's proportional share of global interest
-                interest = (globalInterest * userTotal) / totalBorrows;
             } else {
                 // Fallback: use user's total debt (principal + accrued) as base
                 interest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);

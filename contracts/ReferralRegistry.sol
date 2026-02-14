@@ -91,6 +91,11 @@ contract ReferralRegistry is
     /// @notice Total referral links
     uint256 public totalLinks;
 
+    /// @dev AUDIT SOL-M-01: Storage gap for upgrade safety.
+    ///      Reserves 50 slots so future child contracts can add state
+    ///      without shifting storage layout of derived contracts.
+    uint256[50] private __gap;
+
     // ═══════════════════════════════════════════════════════════
     // Events
     // ═══════════════════════════════════════════════════════════

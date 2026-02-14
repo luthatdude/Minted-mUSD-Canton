@@ -346,7 +346,18 @@ class RelayService {
           await this.switchToFallbackProvider();
         }
       }
-      await this.sleep(this.config.pollIntervalMs);
+      // TS-M-01: Exponential backoff on consecutive failures
+      // Base delay on success, exponential (capped at 5 min) on failure
+      const backoffDelay = this.consecutiveFailures > 0
+        ? Math.min(
+            this.config.pollIntervalMs * Math.pow(2, this.consecutiveFailures),
+            300_000 // cap at 5 minutes
+          )
+        : this.config.pollIntervalMs;
+      if (this.consecutiveFailures > 0) {
+        console.warn(`[Relay] Backing off: next poll in ${(backoffDelay / 1000).toFixed(1)}s (attempt ${this.consecutiveFailures})`);
+      }
+      await this.sleep(backoffDelay);
     }
   }
 
