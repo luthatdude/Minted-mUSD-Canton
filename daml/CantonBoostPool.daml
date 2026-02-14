@@ -461,7 +461,7 @@ template CantonBoostPoolService
       controller operator
       do
         assertMsg "POOL_PAUSED" (not paused)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "ENTRY_FEE_VALID" (newEntryFeeBps >= 0 && newEntryFeeBps <= 500)
@@ -478,7 +478,7 @@ template CantonBoostPoolService
       controller operator
       do
         assertMsg "POOL_PAUSED" (not paused)
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonBoostPool")
         assertMsg "CAP_RATIO_VALID" (newCapRatio > 0.0 && newCapRatio <= 1.0)
