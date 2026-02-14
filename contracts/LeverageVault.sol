@@ -12,6 +12,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./TimelockGoverned.sol";
 import "./Errors.sol";
+import "./interfaces/ITWAPOracle.sol";
 
 /// @notice Uniswap V3 Swap Router interface
 interface ISwapRouter {
@@ -108,6 +109,20 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     mapping(address => bool) public leverageEnabled;
 
     // ============================================================
+    //                  TWAP ORACLE (GAP-2)
+    // ============================================================
+
+    /// @notice TWAP oracle for validating swap outputs against manipulation
+    ITWAPOracle public twapOracle;
+
+    /// @notice TWAP observation window in seconds (default 15 min)
+    uint32 public constant TWAP_DURATION = 900;
+
+    /// @notice Maximum acceptable deviation from TWAP (bps). Swaps deviating
+    ///         more than this from the TWAP price are rejected.
+    uint256 public constant MAX_TWAP_DEVIATION_BPS = 500; // 5%
+
+    // ============================================================
     //                  POSITION TRACKING
     // ============================================================
 
@@ -167,6 +182,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     );
 
     event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
+    event TwapOracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event TwapDeviationDetected(address indexed tokenIn, address indexed tokenOut, uint256 expected, uint256 actual);
 
     // ============================================================
     //                  CONSTRUCTOR
@@ -548,6 +565,18 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             collateralReceived = 0;
         }
 
+        // GAP-2: TWAP validation — reject if output deviates >5% from TWAP
+        if (collateralReceived > 0 && address(twapOracle) != address(0)) {
+            uint256 twapExpected = twapOracle.getTWAPQuote(
+                address(musd), collateralToken, poolFee, TWAP_DURATION, musdAmount
+            );
+            uint256 twapFloor = (twapExpected * (10000 - MAX_TWAP_DEVIATION_BPS)) / 10000;
+            if (collateralReceived < twapFloor) {
+                emit TwapDeviationDetected(address(musd), collateralToken, twapExpected, collateralReceived);
+                revert SlippageExceeded();
+            }
+        }
+
         return collateralReceived;
     }
 
@@ -587,6 +616,18 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         );
         
         if (musdReceived == 0) revert SwapReturnedZero();
+
+        // GAP-2: TWAP validation — reject if output deviates >5% from TWAP
+        if (address(twapOracle) != address(0)) {
+            uint256 twapExpected = twapOracle.getTWAPQuote(
+                collateralToken, address(musd), poolFee, TWAP_DURATION, collateralAmount
+            );
+            uint256 twapFloor = (twapExpected * (10000 - MAX_TWAP_DEVIATION_BPS)) / 10000;
+            if (musdReceived < twapFloor) {
+                emit TwapDeviationDetected(collateralToken, address(musd), twapExpected, musdReceived);
+                revert SlippageExceeded();
+            }
+        }
 
         return musdReceived;
     }
@@ -706,6 +747,14 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     function disableToken(address token) external onlyRole(LEVERAGE_ADMIN_ROLE) {
         leverageEnabled[token] = false;
         emit TokenDisabled(token);
+    }
+
+    /// @notice Set the TWAP oracle for swap output validation (GAP-2)
+    /// @dev Passing address(0) disables TWAP validation (backward compatible)
+    function setTwapOracle(address _twapOracle) external onlyTimelock {
+        address old = address(twapOracle);
+        twapOracle = ITWAPOracle(_twapOracle);
+        emit TwapOracleUpdated(old, _twapOracle);
     }
 
     /// @notice Emergency withdraw stuck tokens
