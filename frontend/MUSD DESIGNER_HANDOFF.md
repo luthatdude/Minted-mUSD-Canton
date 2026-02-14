@@ -866,11 +866,12 @@ Per-action breakdown by season (table or itemized list)
 | $25M | 71% | 28% | 21% |
 | $50M | 35% | 14% | 11% |
 
-**Maximize Your Points — 4 Tips:**
+**Maximize Your Points — 5 Tips:**
 1. **Get in early** — Season 1 multipliers are the highest
 2. **Use Canton** — every action earns the most points
 3. **Loop your sMUSD** — leverage multiplies your points on every layer
 4. **Deposit $CC in the Boost Pool** — 10× in Season 1, always the highest multiplier
+5. **Refer friends** — earn up to 3x bonus on all referred TVL (see Referral Program below)
 
 **Example Scenario (callout card):**
 > $10k capital, 4 loops, Season 1. Positions: $34.4k sMUSD collateral, $24.4k debt, $8.6k Canton Boost Pool.
@@ -1002,25 +1003,131 @@ Visually distinct section — warning styling, double-confirmation required (typ
 | Set sMUSD Price Bounds | Min + Max inputs |
 | Increment Round | Button |
 
-### Section 5: Strategy Management
+### Section 5: Treasury & Strategy Management (Largest Admin Section)
 
-| Action | Inputs |
-|--------|--------|
-| Rebalance Treasury | Button (show current allocations first) |
-| Set Reserve BPS | Number input |
-| Set Min Auto Allocate | Number input |
-| Remove Strategy | Address dropdown |
-| Morpho — Set Safety Buffer | Number input (bps) |
-| Morpho — Set Active | Toggle |
-| Pendle — Set Slippage | Number input (bps) |
-| Pendle — Set PT Discount | Number input (bps) |
-| Pendle — Set Rollover Threshold | Number input (seconds) |
-| Pendle — Roll to New Market | Button |
-| Pendle — Trigger Rollover | Button |
-| Pendle — Set Active | Toggle |
-| Pendle — Set Market Selector | Address input |
-| Whitelist Pendle Market | Address + category string |
-| Remove Pendle Market | Address dropdown |
+The Treasury tab is the most complex admin section, containing live yield intelligence, a named strategy catalog, and all deployment controls.
+
+#### Wireframe
+
+```
+┌─── Treasury Section ─────────────────────────────────────────────────────────┐
+│                                                                              │
+│  3 Overview StatCards:                                                       │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐            │
+│  │ Total Value      │  │ Reserve (Idle)   │  │ Reserve Target   │            │
+│  │ $12,450,000      │  │ $2,100,000       │  │ 15% (1500 bps)   │            │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘            │
+│                                                                              │
+│  ┌─── ⚠ Manual Deployment Notice ───────────────────────────────────────┐    │
+│  │  Amber banner: "Treasury does not auto-allocate. Use the forms below │    │
+│  │  to deploy idle reserves into strategies or withdraw funds."         │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─── 📡 Live Yield Scanner ────────────────────────────────────────────┐    │
+│  │  Real-time DeFi yield data from external markets                     │    │
+│  │  ┌───────────────────┬──────────┬──────────┬─────────────────┐       │    │
+│  │  │ Protocol          │ Pool     │ APY      │ TVL             │       │    │
+│  │  │ Fluid             │ T1 #146  │ 14.3%    │ $48M            │       │    │
+│  │  │ Pendle            │ Multi    │ 11.7%    │ $120M           │       │    │
+│  │  │ Morpho            │ Leveraged│ 11.5%    │ $85M            │       │    │
+│  │  │ Euler V2          │ Cross    │ 10.2%    │ $32M            │       │    │
+│  │  │ ...               │          │          │                 │       │    │
+│  │  └───────────────────┴──────────┴──────────┴─────────────────┘       │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─── 🤖 AI Yield Optimizer ───────────────────────────────────────────┐    │
+│  │  "DefiLlama-powered scoring engine"                                  │    │
+│  │                                                                      │    │
+│  │  Recommended Actions:                                                │    │
+│  │  ┌──────────────────────────────────────────────────────────┐        │    │
+│  │  │ 1. Deploy $500K → Fluid Stable Loop #146 (14.3% APY)   │        │    │
+│  │  │    Score: 92/100  Risk: Low   [Apply ▸]                 │        │    │
+│  │  │ 2. Deploy $300K → Pendle Multi-Pool (11.7% APY)         │        │    │
+│  │  │    Score: 87/100  Risk: Low-Med  [Apply ▸]              │        │    │
+│  │  │ 3. Withdraw $200K ← Compound V3 (5.1% APY, declining)  │        │    │
+│  │  │    Score: 45/100  Risk: Low  [Apply ▸]                  │        │    │
+│  │  └──────────────────────────────────────────────────────────┘        │    │
+│  │  [Apply] pre-fills the Deploy/Withdraw form below                    │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─── Active Strategies ────────────────────────────────────────────────┐    │
+│  │  On-chain registered strategies with live status:                    │    │
+│  │  ● Fluid Stable Loop    0xA1b2...  Target: 30%  Deployed: $3.7M     │    │
+│  │  ● Pendle Multi-Pool    0xC3d4...  Target: 25%  Deployed: $3.1M     │    │
+│  │  ● Morpho Leveraged     0xE5f6...  Target: 20%  Deployed: $2.5M     │    │
+│  │  ○ Euler V2 (inactive)  0xF7g8...  Target: 10%  Deployed: $0        │    │
+│  │  Green dot = active, gray dot = inactive                             │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─── Strategy Catalog (10 Named Strategies) ──────────────────────────┐    │
+│  │  Grid of cards — each shows name, APY range, and deployment status:  │    │
+│  │                                                                      │    │
+│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
+│  │  │ Fluid Stable    │ │ Pendle Multi-   │ │ Morpho Lev.     │         │    │
+│  │  │ Loop #146       │ │ Pool            │ │ Loop            │         │    │
+│  │  │ ~14.3% APY      │ │ ~11.7% APY      │ │ ~11.5% APY      │         │    │
+│  │  │ ● Deployed      │ │ ● Deployed      │ │ ● Deployed      │         │    │
+│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
+│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
+│  │  │ Euler V2 Cross  │ │ Aave V3 Loop    │ │ Compound V3     │         │    │
+│  │  │ Stable          │ │                 │ │ Loop            │         │    │
+│  │  │ ~8-12% APY      │ │ ~6-9% APY       │ │ ~5-8% APY       │         │    │
+│  │  │ ○ Not deployed  │ │ ○ Not deployed  │ │ ○ Not deployed  │         │    │
+│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
+│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
+│  │  │ Contango Perp   │ │ Euler V2 Loop   │ │ Sky sUSDS       │         │    │
+│  │  │ Loop            │ │                 │ │ Savings         │         │    │
+│  │  │ ~8-14% APY      │ │ ~7-10% APY      │ │ ~7.9% APY       │         │    │
+│  │  │ ○ Not deployed  │ │ ○ Not deployed  │ │ ○ Not deployed  │         │    │
+│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
+│  │  ┌─────────────────┐                                                 │    │
+│  │  │ MetaVault       │  Select from catalog or enter manual address    │    │
+│  │  │ Vault-of-Vaults │  to add a new strategy.                         │    │
+│  │  │ ~12.5% APY      │                                                 │    │
+│  │  │ ○ Not deployed  │                                                 │    │
+│  │  └─────────────────┘                                                 │    │
+│  └──────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Deploy to Strategy:                                                         │
+│    Strategy selector (dropdown from catalog or active list)                  │
+│    Amount input [MAX = idle reserve balance]                                 │
+│    [Deploy to Strategy]                                                      │
+│                                                                              │
+│  Withdraw from Strategy:                                                     │
+│    Strategy selector (dropdown from active strategies)                       │
+│    Amount input                                                              │
+│    [Withdraw from Strategy]                                                  │
+│                                                                              │
+│  Add Strategy:                                                               │
+│    Select from catalog or enter manual address                               │
+│    Target BPS / Min BPS / Max BPS inputs                                    │
+│    [Add Strategy]                                                            │
+│                                                                              │
+│  Remove Strategy:                                                            │
+│    Strategy selector → [Deactivate Strategy]                                 │
+│                                                                              │
+│  Set Reserve Ratio:    [____] bps   [Set Reserve BPS]                       │
+│                                                                              │
+│  Action Buttons:                                                             │
+│    [Rebalance All]  [Claim Fees]  [⚠ Emergency Withdraw All]                │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+| Sub-Section | Description |
+|-------------|-------------|
+| Overview Stats | 3 StatCards: Total Value, Reserve (idle USDC), Reserve Target (bps) |
+| Manual Deployment Notice | Amber warning: treasury doesn't auto-allocate |
+| Live Yield Scanner | Real-time DeFi market yield table (moved from StakePage). Shows protocol, pool, APY, TVL from external sources |
+| AI Yield Optimizer | DefiLlama-powered scoring engine that ranks strategies by risk-adjusted yield and recommends deploy/withdraw actions. "Apply" button pre-fills the deploy form. |
+| Active Strategies | List of on-chain registered strategies with color status dots, addresses, target %, deployed amounts |
+| Strategy Catalog | Grid of 10 named strategies: Fluid Stable Loop #146, Pendle Multi-Pool, Morpho Leveraged Loop, Euler V2 Cross-Stable, Aave V3 Loop, Compound V3 Loop, Contango Perp Loop, Euler V2 Loop, Sky sUSDS Savings, MetaVault Vault-of-Vaults |
+| Deploy to Strategy | Strategy selector + amount input + MAX button (fills idle reserve) |
+| Withdraw from Strategy | Strategy selector + amount input |
+| Add Strategy | Select from catalog or manual address, with Target/Min/Max BPS inputs |
+| Remove Strategy | Select active strategy → deactivate |
+| Set Reserve Ratio | BPS input |
+| Action Buttons | Rebalance All, Claim Fees, Emergency Withdraw All |
 
 ### Section 6: Bridge & Cross-Chain
 
