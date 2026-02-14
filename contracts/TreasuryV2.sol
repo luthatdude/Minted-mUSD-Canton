@@ -14,19 +14,18 @@ import "./Errors.sol";
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
  * @dev When USDC comes in, it's automatically split according to target allocations
  *
- * Default Allocation (v4 — Feb 2026):
+ * Default Allocation (v5 — Feb 2026):
  *   Pendle Multi-Pool:        30% (11.7% APY)
  *   Euler V2 RLUSD/USDC Loop: 10% (8-12% APY — cross-stable leverage)
  *   Morpho Loop:              20% (11.5% APY)
- *   Sky sUSDS:                15% (8% APY)
- *   Fluid Stable #146:        10% (14.3% APY — syrupUSDC/USDC)
- *   Fluid GHO #148:           10% (18.8% APY — syrupUSDC/GHO)
+ *   Fluid Stable #146:        17% (14.3% APY — syrupUSDC/USDC)
+ *   Fluid GHO #148:           18% (18.8% APY — syrupUSDC/GHO)
  *   USDC Reserve:              5% (0% APY)
  *   ────────────────────────────────────────
- *   Blended:                  ~12.2% gross APY
+ *   Blended:                  ~13.4% gross APY
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~7.3% net APY target)
+ *   smUSD Holders:      60% (~8.0% net APY target)
  *   Protocol:           40% (spread above 6%)
  */
 contract TreasuryV2 is
