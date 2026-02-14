@@ -167,7 +167,10 @@ export function useReferral(): ReferralState {
         try {
           const filter = contract.filters.CodeCreated(address);
           const events = await contract.queryFilter(filter, -100000);
-          const codes = events.map((e: ethers.EventLog) => e.args?.[2] as string).filter(Boolean);
+          const codes = events
+            .filter((e): e is ethers.EventLog => "args" in e)
+            .map((e) => e.args?.[2] as string)
+            .filter(Boolean);
           setMyCodes(codes);
         } catch {
           // Event querying may fail on some providers, use empty
