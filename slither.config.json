@@ -1,14 +1,13 @@
 {
+  "_comment_INFRA-M-08": "Each exclusion below is documented. Do NOT add new exclusions without security team approval.",
   "detectors_to_exclude": [
     "naming-convention",
     "pragma",
-    "solc-version",
-    "cache-array-length",
-    "cyclomatic-complexity",
-    "assembly",
-    "uninitialized-local",
-    "reentrancy-balance"
+    "solc-version"
   ],
+  "_reason_naming-convention": "Project uses custom naming conventions that differ from Solidity style guide (e.g., MUSD, SMUSD).",
+  "_reason_pragma": "OpenZeppelin v5 dependencies use different pragma versions than project contracts.",
+  "_reason_solc-version": "Pinned to 0.8.26 per project convention; OZ deps may differ.",
   "filter_paths": "node_modules,contracts/mocks",
   "exclude_optimization": true
 }

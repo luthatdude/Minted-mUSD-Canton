@@ -177,16 +177,17 @@ export async function createEthereumSigner(
     );
   }
 
-  // Fallback to raw key — warn in production
-  if (!config.privateKey) {
-    throw new Error("Either KMS_KEY_ID or private key must be configured");
-  }
-
+  // TS-M-02: In production, KMS is REQUIRED — raw private key signing is forbidden
   if (process.env.NODE_ENV === "production") {
-    console.warn(
-      "[SECURITY] WARNING: Using raw private key in production. " +
+    throw new Error(
+      "SECURITY: KMS key is required in production — raw private key signing is not allowed. " +
       "Set RELAYER_KMS_KEY_ID to use AWS KMS instead (H-07)."
     );
+  }
+
+  // Fallback to raw key — development/staging only
+  if (!config.privateKey) {
+    throw new Error("Either KMS_KEY_ID or private key must be configured");
   }
 
   const wallet = new ethers.Wallet(config.privateKey, provider);

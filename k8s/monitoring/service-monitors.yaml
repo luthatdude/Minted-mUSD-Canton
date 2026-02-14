@@ -1,6 +1,10 @@
 # Minted Protocol - ServiceMonitor Definitions
 # INFRA-H-03: Prometheus service discovery for all Canton namespace services.
 # Requires prometheus-operator CRDs (ServiceMonitor, PodMonitor).
+#
+# INFRA-M-05: Label selectors MUST match the actual Service labels.
+# Services use app.kubernetes.io/name labels (not bare "app:" labels).
+# Verify selectors match by running: kubectl get svc -n musd-canton --show-labels
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -12,10 +16,10 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label to match deployment labels
+      # INFRA-H-01/M-05: Use standard K8s label to match actual Service labels
       app.kubernetes.io/name: canton-participant
   endpoints:
-    - port: metrics
+    - port: ledger-api
       interval: 15s
       path: /metrics
       scheme: http
@@ -36,17 +40,21 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label
+      # INFRA-H-01/M-05: Use standard K8s label to match actual Service labels
       app.kubernetes.io/name: nginx-proxy
   endpoints:
-    - port: metrics
+    - port: https
       interval: 15s
       path: /nginx_status
-      scheme: http
+      scheme: https
+      tlsConfig:
+        insecureSkipVerify: true  # Self-signed internal cert for metrics scraping
   namespaceSelector:
     matchNames:
       - musd-canton
 ---
+# INFRA-M-06: Scrapes the postgres-exporter sidecar (port 9187) added to the PostgreSQL StatefulSet.
+# Provides pg_stat_activity, connection counts, replication lag, query duration, lock metrics, etc.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -58,9 +66,10 @@ metadata:
 spec:
   selector:
     matchLabels:
-      # INFRA-H-01 FIX: Use standard K8s label
-      app.kubernetes.io/name: canton-postgres
+      # INFRA-H-01/M-05: Use standard K8s label to match actual Service labels
+      app.kubernetes.io/name: postgres
   endpoints:
+    # INFRA-M-06: Targets the postgres-exporter sidecar's metrics port (9187)
     - port: metrics
       interval: 30s
       path: /metrics

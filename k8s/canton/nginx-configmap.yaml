@@ -243,6 +243,12 @@ data:
             # --------------------------------------------------------
 
             location /livez {
+                # INFRA-M-03: Restrict health probes to cluster-internal IPs only.
+                # Prevents external actors from probing internal health state.
+                allow 10.0.0.0/8;
+                allow 172.16.0.0/12;
+                allow 192.168.0.0/16;
+                deny all;
                 # INFRA-H-04: Rate limit health endpoints to prevent monitoring-based DoS
                 limit_req zone=api_read burst=5 nodelay;
                 proxy_pass http://json_api;
@@ -252,6 +258,12 @@ data:
             }
 
             location /readyz {
+                # INFRA-M-03: Restrict health probes to cluster-internal IPs only.
+                # Prevents external actors from probing internal health state.
+                allow 10.0.0.0/8;
+                allow 172.16.0.0/12;
+                allow 192.168.0.0/16;
+                deny all;
                 # INFRA-H-04: Rate limit health endpoints to prevent monitoring-based DoS
                 limit_req zone=api_read burst=5 nodelay;
                 proxy_pass http://json_api;
