@@ -122,7 +122,7 @@ template MUSDSupplyService
         borrowAmount : Money
         agreementHash : Text
         agreementUri : Text
-      controller operator
+      controller operator, borrower
       do
         assertMsg "Borrow amount must be positive." (borrowAmount > 0.0)
         assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + borrowAmount <= supplyCap)

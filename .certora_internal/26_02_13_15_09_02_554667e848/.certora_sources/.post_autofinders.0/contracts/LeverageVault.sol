@@ -1,0 +1,773 @@
+// SPDX-License-Identifier: BUSL-1.1
+// BLE Protocol - Leverage Vault
+// Automatic multi-loop leverage with Uniswap V3 integration
+
+pragma solidity 0.8.26;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./TimelockGoverned.sol";
+import "./Errors.sol";
+
+/// @notice Uniswap V3 Swap Router interface
+interface ISwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+}
+
+/// @notice Price oracle interface
+interface IPriceOracle {
+    function getValueUsd(address token, uint256 amount) external view returns (uint256);
+}
+
+/// @notice Collateral vault interface
+interface ICollateralVault {
+    function deposits(address user, address token) external view returns (uint256);
+    function getConfig(address token) external view returns (
+        bool enabled, uint256 collateralFactorBps, uint256 liquidationThresholdBps, uint256 liquidationPenaltyBps
+    );
+    function depositFor(address user, address token, uint256 amount) external;
+    function withdrawFor(address user, address token, uint256 amount, address recipient, bool skipHealthCheck) external;
+}
+
+/// @notice mUSD mint interface
+interface IMUSD {
+    function mint(address to, uint256 amount) external;
+    function burn(address from, uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+}
+
+/// @notice Borrow module interface
+interface IBorrowModule {
+    function borrowFor(address user, uint256 amount) external;
+    function repay(uint256 amount) external;
+    function repayFor(address user, uint256 amount) external;
+    function totalDebt(address user) external view returns (uint256);
+    function borrowCapacity(address user) external view returns (uint256);
+    function maxBorrow(address user) external view returns (uint256);
+}
+
+/// @title LeverageVault
+/// @notice Automatic multi-loop leverage with integrated Uniswap V3 swaps.
+///         Users can open leveraged positions in a single transaction.
+/// @dev Integrates with CollateralVault, BorrowModule, and Uniswap V3.
+contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
+    using SafeERC20 for IERC20;
+
+    bytes32 public constant LEVERAGE_ADMIN_ROLE = keccak256("LEVERAGE_ADMIN_ROLE");
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    // ============================================================
+    //                  IMMUTABLES
+    // ============================================================
+
+    ISwapRouter public immutable swapRouter;
+    ICollateralVault public immutable collateralVault;
+    IBorrowModule public immutable borrowModule;
+    IPriceOracle public immutable priceOracle;
+    IERC20 public immutable musd;
+
+    // ============================================================
+    //                  CONFIGURATION
+    // ============================================================
+
+    /// @notice Maximum number of leverage loops per transaction
+    uint256 public maxLoops;
+
+    /// @notice Minimum borrow amount per loop (prevents dust loops)
+    uint256 public minBorrowPerLoop;
+
+    /// @notice Default Uniswap pool fee tier (3000 = 0.3%)
+    uint24 public defaultPoolFee;
+
+    /// @notice Slippage tolerance in basis points (e.g., 100 = 1%)
+    uint256 public maxSlippageBps;
+
+    /// @notice Maximum allowed leverage × 10 (e.g., 30 = 3.0x max)
+    uint256 public maxLeverageX10;
+
+    /// @notice Per-token pool fee overrides
+    mapping(address => uint24) public tokenPoolFees;
+
+    /// @notice Whether a collateral token is enabled for leverage
+    mapping(address => bool) public leverageEnabled;
+
+    // ============================================================
+    //                  POSITION TRACKING
+    // ============================================================
+
+    struct LeveragePosition {
+        address collateralToken;
+        uint256 initialDeposit;      // User's initial collateral
+        uint256 totalCollateral;     // Total collateral after loops
+        uint256 totalDebt;           // Total mUSD debt
+        uint256 loopsExecuted;       // Number of loops completed
+        uint256 targetLeverageX10;   // Target leverage × 10 (e.g., 30 = 3.0x)
+        uint256 openedAt;            // Block timestamp when opened
+    }
+
+    /// @notice User leverage positions
+    mapping(address => LeveragePosition) public positions;
+
+    // ============================================================
+    //                  EVENTS
+    // ============================================================
+
+    event LeverageOpened(
+        address indexed user,
+        address indexed collateralToken,
+        uint256 initialDeposit,
+        uint256 totalCollateral,
+        uint256 totalDebt,
+        uint256 loopsExecuted,
+        uint256 effectiveLeverageX10
+    );
+
+    event LeverageClosed(
+        address indexed user,
+        address indexed collateralToken,
+        uint256 collateralReturned,
+        uint256 debtRepaid,
+        uint256 profitOrLoss
+    );
+
+    event LeverageIncreased(
+        address indexed user,
+        uint256 additionalCollateral,
+        uint256 additionalDebt,
+        uint256 newLoops
+    );
+
+    event ConfigUpdated(uint256 maxLoops, uint256 minBorrowPerLoop, uint24 defaultPoolFee, uint256 maxSlippageBps);
+    event MaxLeverageUpdated(uint256 oldMaxLeverageX10, uint256 newMaxLeverageX10);
+    event TokenEnabled(address indexed token, uint24 poolFee);
+    event TokenDisabled(address indexed token);
+
+    event LeverageClosedWithDirectRepay(
+        address indexed user,
+        address indexed collateralToken,
+        uint256 collateralReturned,
+        uint256 debtRepaid,
+        uint256 musdProvidedByUser
+    );
+
+    event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
+
+    // ============================================================
+    //                  CONSTRUCTOR
+    // ============================================================
+
+    constructor(
+        address _swapRouter,
+        address _collateralVault,
+        address _borrowModule,
+        address _priceOracle,
+        address _musd,
+        address _timelock
+    ) {
+        if (_swapRouter == address(0)) revert InvalidRouter();
+        if (_collateralVault == address(0)) revert InvalidVault();
+        if (_borrowModule == address(0)) revert InvalidBorrow();
+        if (_priceOracle == address(0)) revert InvalidOracle();
+        if (_musd == address(0)) revert InvalidMusd();
+
+        swapRouter = ISwapRouter(_swapRouter);
+        collateralVault = ICollateralVault(_collateralVault);
+        borrowModule = IBorrowModule(_borrowModule);
+        priceOracle = IPriceOracle(_priceOracle);
+        musd = IERC20(_musd);
+
+        // Default configuration
+        maxLoops = 10;
+        minBorrowPerLoop = 100e18;      // Min 100 mUSD per loop
+        defaultPoolFee = 3000;           // 0.3% Uniswap fee tier
+        maxSlippageBps = 100;            // 1% max slippage
+        maxLeverageX10 = 30;             // 3.0x max leverage by default
+
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(LEVERAGE_ADMIN_ROLE, msg.sender);
+        _grantRole(PAUSER_ROLE, msg.sender);
+
+        // S-H-03: Initialize timelock for config changes
+        _setTimelock(_timelock);
+    }
+
+    // ============================================================
+    //                  LEVERAGE OPERATIONS
+    // ============================================================
+
+    /// @notice Open a leveraged position with automatic looping
+    /// @param collateralToken The collateral token (e.g., WETH)
+    /// @param initialAmount Initial collateral deposit
+    /// @param targetLeverageX10 Target leverage × 10 (e.g., 30 = 3.0x, max based on LTV)
+    /// @param maxLoopsOverride Max loops for this position (0 = use default)
+    /// @return totalCollateral Total collateral after loops
+    /// @return totalDebt Total mUSD debt
+    /// @return loopsExecuted Number of loops completed
+    /// @param userDeadline User-supplied deadline for swaps (0 = use default 300s)
+    function openLeveragedPosition(
+        address collateralToken,
+        uint256 initialAmount,
+        uint256 targetLeverageX10,
+        uint256 maxLoopsOverride,
+        uint256 userDeadline
+    ) external nonReentrant whenNotPaused returns (
+        uint256 totalCollateral,
+        uint256 totalDebt,
+        uint256 loopsExecuted
+    ) {
+        if (!leverageEnabled[collateralToken]) revert TokenNotEnabled();
+        if (initialAmount == 0) revert InvalidAmount();
+        if (targetLeverageX10 < 10) revert LeverageTooLow();
+        if (positions[msg.sender].totalCollateral > 0) revert PositionExists();
+
+        // Get collateral config to validate target leverage
+        (bool enabled, uint256 collateralFactorBps, , ) = collateralVault.getConfig(collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00010001,0)}
+        if (!enabled) revert CollateralNotEnabled();
+
+        // Max leverage from LTV = 1 / (1 - LTV). E.g., 75% LTV = 4x max
+        uint256 ltvMaxLeverageX10 = (10000 * 10) / (10000 - collateralFactorBps);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000002,ltvMaxLeverageX10)}
+        // Use the lower of LTV-based max and configured max
+        uint256 effectiveMaxLeverage = ltvMaxLeverageX10 < maxLeverageX10 ? ltvMaxLeverageX10 : maxLeverageX10;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000003,effectiveMaxLeverage)}
+        if (targetLeverageX10 > effectiveMaxLeverage) revert LeverageExceedsMax();
+
+        // Transfer initial collateral from user
+        IERC20(collateralToken).safeTransferFrom(msg.sender, address(this), initialAmount);
+
+        // Deposit to collateral vault
+        IERC20(collateralToken).forceApprove(address(collateralVault), initialAmount);
+        collateralVault.depositFor(msg.sender, collateralToken, initialAmount);
+
+        // Execute leverage loops
+        uint256 loopLimit = maxLoopsOverride > 0 ? maxLoopsOverride : maxLoops;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000004,loopLimit)}
+        if (loopLimit > maxLoops) loopLimit = maxLoops;
+
+        (totalCollateral, totalDebt, loopsExecuted) = _executeLeverageLoops(
+            msg.sender,
+            collateralToken,
+            initialAmount,
+            targetLeverageX10,
+            loopLimit,
+            userDeadline
+        );assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0002002e,0)}
+
+        // Store position
+        positions[msg.sender] = LeveragePosition({
+            collateralToken: collateralToken,
+            initialDeposit: initialAmount,
+            totalCollateral: totalCollateral,
+            totalDebt: totalDebt,
+            loopsExecuted: loopsExecuted,
+            targetLeverageX10: targetLeverageX10,
+            openedAt: block.timestamp
+        });
+
+        uint256 effectiveLeverageX10 = (totalCollateral * 10) / initialAmount;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000005,effectiveLeverageX10)}
+
+        emit LeverageOpened(
+            msg.sender,
+            collateralToken,
+            initialAmount,
+            totalCollateral,
+            totalDebt,
+            loopsExecuted,
+            effectiveLeverageX10
+        );
+
+        return (totalCollateral, totalDebt, loopsExecuted);
+    }
+
+    /// @notice Close leveraged position - repay debt and withdraw collateral
+    /// @param minCollateralOut Minimum collateral to receive (slippage protection)
+    /// @return collateralReturned Amount of collateral returned to user
+    function closeLeveragedPosition(uint256 minCollateralOut) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
+        LeveragePosition storage pos = positions[msg.sender];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00010006,0)}
+        if (pos.totalCollateral == 0) revert NoPosition();
+
+        address collateralToken = pos.collateralToken;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000007,collateralToken)}
+        uint256 debtToRepay = borrowModule.totalDebt(msg.sender);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000008,debtToRepay)}
+        
+        // Get total collateral in vault
+        uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000009,totalCollateralInVault)}
+
+        if (debtToRepay > 0) {
+            // Calculate how much collateral to sell to cover debt
+            uint256 collateralToSell = _getCollateralForMusd(collateralToken, debtToRepay);
+
+            // Add slippage buffer
+            collateralToSell = (collateralToSell * (10000 + maxSlippageBps)) / 10000;
+            
+            // Cap at available collateral
+            if (collateralToSell > totalCollateralInVault) {
+                collateralToSell = totalCollateralInVault;
+            }
+
+            collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
+
+            // Swap collateral → mUSD
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
+            if (musdReceived < debtToRepay) revert InsufficientMusdFromSwap();
+
+            IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
+            borrowModule.repayFor(msg.sender, debtToRepay);
+
+            // Refund excess mUSD if any
+            uint256 excessMusd = musdReceived - debtToRepay;
+            if (excessMusd > 0) {
+                // If swap fails (returns 0), transfer the mUSD directly to user
+                // instead of leaving it trapped in the contract.
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, 0);
+                if (swappedCollateral == 0) {
+                    // Swap failed — return mUSD directly to user
+                    IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
+                }
+            }
+        }
+
+        uint256 remainingCollateral = collateralVault.deposits(msg.sender, collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000000a,remainingCollateral)}
+        if (remainingCollateral > 0) {
+            collateralVault.withdrawFor(msg.sender, collateralToken, remainingCollateral, msg.sender, true);
+        }
+        
+        // Also send any collateral held by this contract to user
+        uint256 heldCollateral = IERC20(collateralToken).balanceOf(address(this));assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000000b,heldCollateral)}
+        if (heldCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(msg.sender, heldCollateral);
+            remainingCollateral += heldCollateral;
+        }
+        
+        if (remainingCollateral < minCollateralOut) revert SlippageExceeded();
+
+        collateralReturned = remainingCollateral;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000002f,collateralReturned)}
+
+        // Calculate profit/loss
+        int256 profitOrLoss = int256(collateralReturned) - int256(pos.initialDeposit);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000000c,profitOrLoss)}
+
+        emit LeverageClosed(
+            msg.sender,
+            collateralToken,
+            collateralReturned,
+            debtToRepay,
+            profitOrLoss >= 0 ? uint256(profitOrLoss) : 0
+        );
+
+        // Clear position
+        delete positions[msg.sender];
+
+        return collateralReturned;
+    }
+
+    /// @dev Use this if closeLeveragedPosition() fails due to swap issues.
+    ///      User provides mUSD to repay debt, receives ALL collateral back.
+    ///      This completely eliminates swap failure risk.
+    ///      Second param reserved for deadline compatibility (unused, no swaps in this path).
+    /// @param musdAmount Amount of mUSD to provide for debt repayment
+    /// @return collateralReturned Amount of collateral returned to user
+    function closeLeveragedPositionWithMusd(uint256 musdAmount, uint256 /* userDeadline */) external nonReentrant whenNotPaused returns (uint256 collateralReturned) {
+        LeveragePosition storage pos = positions[msg.sender];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0001000d,0)}
+        if (pos.totalCollateral == 0) revert NoPosition();
+
+        address collateralToken = pos.collateralToken;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000000e,collateralToken)}
+        uint256 debtToRepay = borrowModule.totalDebt(msg.sender);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000000f,debtToRepay)}
+
+        // If there's debt, user must provide enough mUSD to cover it
+        if (debtToRepay > 0) {
+            if (musdAmount < debtToRepay) revert InsufficientMusdProvided();
+
+            // Pull mUSD from user
+            IERC20(address(musd)).safeTransferFrom(msg.sender, address(this), musdAmount);
+
+            IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
+            borrowModule.repayFor(msg.sender, debtToRepay);
+
+            // Refund excess mUSD if user provided more than needed
+            uint256 excessMusd = musdAmount - debtToRepay;
+            if (excessMusd > 0) {
+                IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);
+            }
+        }
+
+        // Withdraw ALL collateral from vault directly to user
+        uint256 totalCollateralInVault = collateralVault.deposits(msg.sender, collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000010,totalCollateralInVault)}
+        if (totalCollateralInVault > 0) {
+            collateralVault.withdrawFor(msg.sender, collateralToken, totalCollateralInVault, msg.sender, true);
+        }
+
+        // Also send any collateral held by this contract to user
+        uint256 heldCollateral = IERC20(collateralToken).balanceOf(address(this));assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000011,heldCollateral)}
+        if (heldCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(msg.sender, heldCollateral);
+        }
+
+        collateralReturned = totalCollateralInVault + heldCollateral;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000030,collateralReturned)}
+
+        emit LeverageClosedWithDirectRepay(
+            msg.sender,
+            collateralToken,
+            collateralReturned,
+            debtToRepay,
+            musdAmount
+        );
+
+        // Clear position
+        delete positions[msg.sender];
+
+        return collateralReturned;
+    }
+
+    // ============================================================
+    //                  INTERNAL LOOP LOGIC
+    // ============================================================
+
+    /// @notice Execute leverage loops
+    function _executeLeverageLoops(
+        address user,
+        address collateralToken,
+        uint256 currentCollateral,
+        uint256 targetLeverageX10,
+        uint256 loopLimit,
+        uint256 userDeadline
+    ) internal returns (uint256 totalCollateral, uint256 totalDebt, uint256 loopsExecuted) {assembly ("memory-safe") { mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00000000, 1037618708480) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00000001, 6) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00000005, 37449) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00006005, userDeadline) }
+        totalCollateral = currentCollateral;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000031,totalCollateral)}
+        totalDebt = 0;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000032,totalDebt)}
+        loopsExecuted = 0;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000033,loopsExecuted)}
+
+        for (uint256 i = 0; i < loopLimit; i++) {
+            // Check if we've reached target leverage
+            if ((totalCollateral * 10) / currentCollateral >= targetLeverageX10) break;
+
+            // Calculate remaining borrow capacity
+            uint256 borrowable = borrowModule.maxBorrow(user);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000036,borrowable)}
+            if (borrowable < minBorrowPerLoop) break;
+
+            // Cap borrow to reach target leverage
+            {
+                uint256 targetDebt = _calculateTargetDebt(currentCollateral, totalCollateral, targetLeverageX10, collateralToken);
+                uint256 toBorrow = targetDebt > totalDebt ? targetDebt - totalDebt : 0;
+                if (toBorrow > borrowable) toBorrow = borrowable;
+                if (toBorrow < minBorrowPerLoop) break;
+
+                // Borrow mUSD (minted to this contract for swapping)
+                borrowModule.borrowFor(user, toBorrow);
+                totalDebt += toBorrow;
+
+                uint256 collateralReceived = _swapMusdToCollateral(collateralToken, toBorrow, 0, userDeadline);
+                if (collateralReceived == 0) revert SwapFailedOrphanedDebt();
+
+                // Deposit new collateral
+                IERC20(collateralToken).forceApprove(address(collateralVault), collateralReceived);
+                collateralVault.depositFor(user, collateralToken, collateralReceived);
+                totalCollateral += collateralReceived;
+            }
+
+            loopsExecuted++;
+        }
+
+        return (totalCollateral, totalDebt, loopsExecuted);
+    }
+
+    /// @notice Calculate target debt for given leverage
+    function _calculateTargetDebt(
+        uint256 initialCollateral,
+        uint256 currentCollateral,
+        uint256 targetLeverageX10,
+        address collateralToken
+    ) internal view returns (uint256) {assembly ("memory-safe") { mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00010000, 1037618708481) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00010001, 4) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00010005, 585) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00016003, collateralToken) }
+        // Target total collateral = initial × leverage
+        uint256 targetCollateral = (initialCollateral * targetLeverageX10) / 10;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000012,targetCollateral)}
+        if (currentCollateral >= targetCollateral) return 0;
+
+        uint256 neededCollateral = targetCollateral - currentCollateral;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000013,neededCollateral)}
+
+        // Convert collateral need to mUSD
+        uint256 collateralValueUsd = priceOracle.getValueUsd(collateralToken, neededCollateral);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000014,collateralValueUsd)}
+        return collateralValueUsd;
+    }
+
+    // ============================================================
+    //                  SWAP FUNCTIONS
+    // ============================================================
+
+    /// @notice Swap mUSD to collateral via Uniswap V3
+    /// @param userMinOut User-supplied minimum output for sandwich protection (0 = oracle only)
+    /// @param userDeadline User-supplied deadline (0 = default 300s)
+    function _swapMusdToCollateral(address collateralToken, uint256 musdAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 collateralReceived) {assembly ("memory-safe") { mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00030000, 1037618708483) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00030001, 4) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00030005, 585) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00036003, userDeadline) }
+        // slither-disable-next-line incorrect-equality
+        if (musdAmount == 0) return 0;
+
+        // Use max(oracleMin, userMinOut) — oracle provides safety floor,
+        // user can set tighter slippage to protect against sandwich attacks
+        uint256 expectedOut = _getCollateralForMusd(collateralToken, musdAmount);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000015,expectedOut)}
+        uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000016,oracleMin)}
+        uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000017,minOut)}
+
+        // User-supplied deadline prevents miner timestamp manipulation
+        uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000018,deadline)}
+
+        IERC20(address(musd)).forceApprove(address(swapRouter), musdAmount);
+
+        // Get pool fee for this token
+        uint24 poolFee = tokenPoolFees[collateralToken];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000019,poolFee)}
+        if (poolFee == 0) poolFee = defaultPoolFee;
+
+        // Execute swap
+        try swapRouter.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(musd),
+                tokenOut: collateralToken,
+                fee: poolFee,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: musdAmount,
+                amountOutMinimum: minOut,
+                sqrtPriceLimitX96: 0
+            })
+        ) returns (uint256 amountOut) {
+            collateralReceived = amountOut;
+        } catch {
+            IERC20(address(musd)).forceApprove(address(swapRouter), 0);
+            collateralReceived = 0;
+        }
+
+        return collateralReceived;
+    }
+
+    /// @notice Swap collateral to mUSD via Uniswap V3
+    /// @param userMinOut User-supplied minimum output (0 = oracle only)
+    /// @param userDeadline User-supplied deadline (0 = default 300s)
+    function _swapCollateralToMusd(address collateralToken, uint256 collateralAmount, uint256 userMinOut, uint256 userDeadline) internal returns (uint256 musdReceived) {assembly ("memory-safe") { mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00040000, 1037618708484) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00040001, 4) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00040005, 585) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00046003, userDeadline) }
+        // slither-disable-next-line incorrect-equality
+        if (collateralAmount == 0) return 0;
+
+        // Use max(oracleMin, userMinOut) for sandwich protection
+        uint256 expectedOut = priceOracle.getValueUsd(collateralToken, collateralAmount);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001a,expectedOut)}
+        uint256 oracleMin = (expectedOut * (10000 - maxSlippageBps)) / 10000;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001b,oracleMin)}
+        uint256 minOut = userMinOut > oracleMin ? userMinOut : oracleMin;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001c,minOut)}
+
+        // User-supplied deadline
+        uint256 deadline = userDeadline > 0 ? userDeadline : block.timestamp + 300;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001d,deadline)}
+
+        // Approve router
+        IERC20(collateralToken).forceApprove(address(swapRouter), collateralAmount);
+
+        // Get pool fee
+        uint24 poolFee = tokenPoolFees[collateralToken];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001e,poolFee)}
+        if (poolFee == 0) poolFee = defaultPoolFee;
+
+        musdReceived = swapRouter.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: collateralToken,
+                tokenOut: address(musd),
+                fee: poolFee,
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: collateralAmount,
+                amountOutMinimum: minOut,
+                sqrtPriceLimitX96: 0
+            })
+        );assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000034,musdReceived)}
+        
+        if (musdReceived == 0) revert SwapReturnedZero();
+
+        return musdReceived;
+    }
+
+    /// @notice Get collateral amount for given mUSD amount (via oracle)
+    function _getCollateralForMusd(address collateralToken, uint256 musdAmount) internal view returns (uint256) {assembly ("memory-safe") { mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00020000, 1037618708482) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00020001, 2) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00020005, 9) mstore(0xffffff6e4604afefe123321beef1b01fffffffffffffffffffffffff00026001, musdAmount) }
+        // mUSD is 1:1 with USD, so musdAmount = USD value
+        // Get collateral price in USD
+        uint256 tokenDecimals = IERC20Metadata(collateralToken).decimals();assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000001f,tokenDecimals)}
+        uint256 oneUnit = 10 ** tokenDecimals;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000020,oneUnit)}
+        uint256 oneUnitValue = priceOracle.getValueUsd(collateralToken, oneUnit);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000021,oneUnitValue)}
+        if (oneUnitValue == 0) return 0;
+
+        return (musdAmount * oneUnit) / oneUnitValue;
+    }
+
+    // ============================================================
+    //                  VIEW FUNCTIONS
+    // ============================================================
+
+    /// @notice Get user's current position
+    function getPosition(address user) external view returns (LeveragePosition memory) {
+        return positions[user];
+    }
+
+    /// @param user The user's address
+    /// @return musdNeeded Amount of mUSD required to repay debt and close position
+    function getMusdNeededToClose(address user) external view returns (uint256 musdNeeded) {
+        return borrowModule.totalDebt(user);
+    }
+
+    /// @notice Calculate effective leverage for a position
+    function getEffectiveLeverage(address user) external view returns (uint256 leverageX10) {
+        LeveragePosition memory pos = positions[user];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00010022,0)}
+        // slither-disable-next-line incorrect-equality
+        if (pos.initialDeposit == 0) return 0;
+        return (pos.totalCollateral * 10) / pos.initialDeposit;
+    }
+
+    /// @notice Estimate loops needed for target leverage
+    function estimateLoops(
+        address collateralToken,
+        uint256 initialAmount,
+        uint256 targetLeverageX10
+    ) external view returns (uint256 estimatedLoops, uint256 estimatedDebt) {
+        (bool enabled, uint256 collateralFactorBps, , ) = collateralVault.getConfig(collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00010023,0)}
+        if (!enabled) return (0, 0);
+
+        uint256 ltv = collateralFactorBps;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000024,ltv)} // e.g., 7500 = 75%
+        uint256 currentCollateral = initialAmount;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000025,currentCollateral)}
+        uint256 debt = 0;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000026,debt)}
+
+        for (uint256 i = 0; i < maxLoops; i++) {
+            uint256 currentLeverageX10 = (currentCollateral * 10) / initialAmount;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000037,currentLeverageX10)}
+            if (currentLeverageX10 >= targetLeverageX10) break;
+
+            uint256 collateralValueUsd = priceOracle.getValueUsd(collateralToken, currentCollateral);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000038,collateralValueUsd)}
+            uint256 borrowable = (collateralValueUsd * ltv / 10000) - debt;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000039,borrowable)}
+            if (borrowable < minBorrowPerLoop) break;
+
+            // Estimate collateral from swap (simplified: assume 1:1 USD value)
+            uint256 newCollateral = _getCollateralForMusd(collateralToken, borrowable);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000003a,newCollateral)}
+            currentCollateral += newCollateral;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000003b,currentCollateral)}
+            debt += borrowable;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000003c,debt)}
+            estimatedLoops++;
+        }
+
+        estimatedDebt = debt;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000035,estimatedDebt)}
+        return (estimatedLoops, estimatedDebt);
+    }
+
+    // ============================================================
+    //                  ADMIN FUNCTIONS
+    // ============================================================
+
+    /// @notice Update leverage configuration
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
+    function setConfig(
+        uint256 _maxLoops,
+        uint256 _minBorrowPerLoop,
+        uint24 _defaultPoolFee,
+        uint256 _maxSlippageBps
+    ) external onlyTimelock {
+        if (_maxLoops == 0 || _maxLoops > 20) revert InvalidMaxLoops();
+        if (_maxSlippageBps > 500) revert SlippageTooHigh();
+
+        maxLoops = _maxLoops;
+        minBorrowPerLoop = _minBorrowPerLoop;
+        defaultPoolFee = _defaultPoolFee;
+        maxSlippageBps = _maxSlippageBps;
+
+        emit ConfigUpdated(_maxLoops, _minBorrowPerLoop, _defaultPoolFee, _maxSlippageBps);
+    }
+
+    /// @notice Set maximum allowed leverage (toggle between presets: 1.5x, 2x, 2.5x, 3x)
+    /// @param _maxLeverageX10 Max leverage × 10 (e.g., 15=1.5x, 20=2x, 25=2.5x, 30=3x)
+    /// @dev S-H-03: Gated by timelock — must be scheduled through MintedTimelockController
+    function setMaxLeverage(uint256 _maxLeverageX10) external onlyTimelock {
+        if (_maxLeverageX10 < 10 || _maxLeverageX10 > 40) revert InvalidMaxLeverage();
+        uint256 oldMax = maxLeverageX10;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000027,oldMax)}
+        maxLeverageX10 = _maxLeverageX10;
+        emit MaxLeverageUpdated(oldMax, _maxLeverageX10);
+    }
+
+    /// @notice Enable a collateral token for leverage
+    function enableToken(address token, uint24 poolFee) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+        if (token == address(0)) revert InvalidToken();
+        if (poolFee != 100 && poolFee != 500 && poolFee != 3000 && poolFee != 10000) revert InvalidFeeTier();
+
+        leverageEnabled[token] = true;
+        tokenPoolFees[token] = poolFee;
+
+        emit TokenEnabled(token, poolFee);
+    }
+
+    /// @notice Disable a collateral token
+    function disableToken(address token) external onlyRole(LEVERAGE_ADMIN_ROLE) {
+        leverageEnabled[token] = false;
+        emit TokenDisabled(token);
+    }
+
+    /// @notice Emergency withdraw stuck tokens
+    function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        IERC20(token).safeTransfer(msg.sender, amount);
+    }
+
+    /// @dev Only swap the collateral needed to cover debt (+ 10% buffer for slippage).
+    ///      Remaining collateral is returned to the user as-is to minimize swap losses.
+    /// @param user The user whose position to emergency-close
+    function emergencyClosePosition(address user) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        LeveragePosition storage pos = positions[user];assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00010028,0)}
+        if (pos.totalCollateral == 0) revert NoPosition();
+
+        address collateralToken = pos.collateralToken;assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff00000029,collateralToken)}
+        uint256 debtToRepay = borrowModule.totalDebt(user);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000002a,debtToRepay)}
+
+        // Step 1: Withdraw all collateral from vault to THIS contract (not user yet)
+        uint256 totalCollateralInVault = collateralVault.deposits(user, collateralToken);assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000002b,totalCollateralInVault)}
+        if (totalCollateralInVault > 0) {
+            collateralVault.withdrawFor(user, collateralToken, totalCollateralInVault, address(this), true);
+        }
+
+        // Step 2: Only swap the collateral needed to cover debt (+ buffer)
+        if (debtToRepay > 0 && totalCollateralInVault > 0) {
+            // Estimate collateral needed for debt using oracle, add 10% buffer for slippage
+            uint256 collateralNeeded = _getCollateralForMusd(collateralToken, debtToRepay);
+            collateralNeeded = (collateralNeeded * 11000) / 10000; // +10% buffer
+            // Cap at available collateral
+            uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
+
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, 0, 0);
+            if (musdReceived > 0) {
+                uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
+                IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
+                try borrowModule.repayFor(user, repayAmount) {} catch {
+                    emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+                }
+            }
+        }
+
+        // Step 3: AFTER debt repayment, return remaining assets to user
+        uint256 remainingCollateral = IERC20(collateralToken).balanceOf(address(this));assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000002c,remainingCollateral)}
+        if (remainingCollateral > 0) {
+            IERC20(collateralToken).safeTransfer(user, remainingCollateral);
+        }
+        uint256 remainingMusd = musd.balanceOf(address(this));assembly ("memory-safe"){mstore(0xffffff6e4604afefe123321beef1b02fffffffffffffffffffffffff0000002d,remainingMusd)}
+        if (remainingMusd > 0) {
+            IERC20(address(musd)).safeTransfer(user, remainingMusd);
+        }
+
+        emit LeverageClosed(user, collateralToken, remainingCollateral, debtToRepay, 0);
+        delete positions[user];
+    }
+
+    // ============================================================
+    //                  EMERGENCY CONTROLS
+    // ============================================================
+
+    /// @notice Pause all leverage operations
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Unpause leverage operations (requires admin for separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+        _unpause();
+    }
+}

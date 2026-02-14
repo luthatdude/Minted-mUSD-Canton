@@ -1,0 +1,148 @@
+[
+    {
+        "card_title": "general",
+        "content_type": "COMPLEX",
+        "content": [
+            {
+                "inner_title": "CLI Version",
+                "content_type": "FLAG",
+                "content": "8.8.0",
+                "doc_link": "",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "branch",
+                "content_type": "FLAG",
+                "content": "main",
+                "doc_link": "",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "dirty",
+                "content_type": "FLAG",
+                "content": "true",
+                "doc_link": "",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "origin",
+                "content_type": "FLAG",
+                "content": "https://github.com/luthatdude/Minted-mUSD-Canton.git",
+                "doc_link": "",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "revision",
+                "content_type": "FLAG",
+                "content": "3494b1a31048d59a07f4183658c4f79529809270",
+                "doc_link": "",
+                "tooltip": "",
+                "unsound": false
+            }
+        ]
+    },
+    {
+        "card_title": "files",
+        "content_type": "SIMPLE",
+        "content": [
+            {
+                "inner_title": "files",
+                "content_type": "SIMPLE",
+                "content": [
+                    "contracts/BorrowModule.sol"
+                ],
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#files",
+                "tooltip": "",
+                "unsound": false
+            }
+        ]
+    },
+    {
+        "card_title": "options",
+        "content_type": "COMPLEX",
+        "content": [
+            {
+                "inner_title": "verify",
+                "content_type": "FLAG",
+                "content": "BorrowModule:certora/specs/BorrowModule.spec",
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#verify",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "loop_iter",
+                "content_type": "FLAG",
+                "content": 3,
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#loop-iter",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "msg",
+                "content_type": "FLAG",
+                "content": "BorrowModule debt accounting, health factor, and interest invariants",
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#msg",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "optimistic_loop",
+                "content_type": "FLAG",
+                "content": "true",
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#optimistic-loop",
+                "tooltip": "",
+                "unsound": true
+            },
+            {
+                "inner_title": "rule_sanity",
+                "content_type": "FLAG",
+                "content": "basic",
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#rule-sanity",
+                "tooltip": "",
+                "unsound": false
+            }
+        ]
+    },
+    {
+        "card_title": "packages",
+        "content_type": "SIMPLE",
+        "content": [
+            {
+                "inner_title": "packages",
+                "content_type": "SIMPLE",
+                "content": [
+                    "@openzeppelin/contracts=node_modules/@openzeppelin/contracts"
+                ],
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#packages",
+                "tooltip": "",
+                "unsound": false
+            }
+        ]
+    },
+    {
+        "card_title": "solidity_compiler",
+        "content_type": "COMPLEX",
+        "content": [
+            {
+                "inner_title": "solc",
+                "content_type": "FLAG",
+                "content": "solc",
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#solc",
+                "tooltip": "",
+                "unsound": false
+            },
+            {
+                "inner_title": "solc_optimize",
+                "content_type": "FLAG",
+                "content": 200,
+                "doc_link": "https://docs.certora.com/en/latest/docs/prover/cli/options.html#solc-optimize",
+                "tooltip": "",
+                "unsound": false
+            }
+        ]
+    }
+]
