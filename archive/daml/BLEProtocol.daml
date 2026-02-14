@@ -1,5 +1,5 @@
 -- BLE Protocol - DEPRECATED (DO NOT USE)
--- Fixes: D-01 (TOCTOU), D-02 (Signature Uniqueness), D-03 (Timestamp Validation)
+-- Addresses: D-01 (TOCTOU), D-02 (Signature Uniqueness), D-03 (Timestamp Validation)
 --
 -- ╔══════════════════════════════════════════════════════════════════════════════╗
 -- ║  DEPRECATED: This module is superseded by BLEBridgeProtocol.daml.          ║
@@ -46,14 +46,14 @@ template InstitutionalEquityPosition
       with newValue: Money
       controller bank
       do
-        -- FIX 5C-M07: Validate positive value to prevent zero/negative equity positions
+        -- 5C-M07: Validate positive value to prevent zero/negative equity positions
         assertMsg "VALUE_MUST_BE_POSITIVE" (newValue > 0.0)
         now <- getTime
         create this with totalValue = newValue, lastUpdated = now
 
 
 -- 2. GLOBAL ATTESTATION PAYLOAD
--- FIX D-03: Added expiresAt for timestamp validation
+-- D-03: Added expiresAt for timestamp validation
 data AttestationPayload = AttestationPayload with
     attestationId: Text
     globalCantonAssets: Money
@@ -62,21 +62,21 @@ data AttestationPayload = AttestationPayload with
     isMint: Bool
     nonce: Int
     chainId: Int
-    expiresAt: Time        -- FIX D-03: Expiration timestamp
-    entropy: Text          -- FIX C-05: Unpredictable entropy from aggregator (hex-encoded)
+    expiresAt: Time        -- D-03: Expiration timestamp
+    entropy: Text          -- C-05: Unpredictable entropy from aggregator (hex-encoded)
   deriving (Eq, Show)
 
 
 -- 3. THE GLOBAL ATTESTATION REQUEST
--- FIX D-01: Changed to consuming choice with position locking
--- FIX D-02: Added signature tracking set
+-- D-01: Changed to consuming choice with position locking
+-- D-02: Added signature tracking set
 template AttestationRequest
   with
     aggregator: Party
     validatorGroup: [Party]
     payload: AttestationPayload
     positionCids: [ContractId InstitutionalEquityPosition]
-    collectedSignatures: Set.Set Party  -- FIX D-02: Track who has signed
+    collectedSignatures: Set.Set Party  -- D-02: Track who has signed
   where
     signatory aggregator
     observer validatorGroup
@@ -84,7 +84,7 @@ template AttestationRequest
     -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
     ensure False
 
-    -- FIX D-01: Consuming choice to prevent TOCTOU
+    -- D-01: Consuming choice to prevent TOCTOU
     -- Positions are locked when attestation begins
     choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
       with
@@ -92,14 +92,14 @@ template AttestationRequest
         ecdsaSignature: Text
       controller validator
       do
-        -- FIX D-02: Ensure validator hasn't already signed
+        -- D-02: Ensure validator hasn't already signed
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- FIX M-24: Basic signature format validation
+        -- M-24: Basic signature format validation
         assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature > 0)
         assertMsg "SIGNATURE_TOO_SHORT" (T.length ecdsaSignature >= 130)
 
-        -- FIX D-03: Check expiration
+        -- D-03: Check expiration
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
 
@@ -109,13 +109,13 @@ template AttestationRequest
 
         -- VERIFICATION: Enforce 110% Collateral Ratio
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
-        -- FIX D-H08: Use tolerance-based comparison for Numeric 18 (1 USD tolerance)
+        -- D-H08: Use tolerance-based comparison for Numeric 18 (1 USD tolerance)
         let valueDiff = if totalGlobalValue > payload.globalCantonAssets
                         then totalGlobalValue - payload.globalCantonAssets
                         else payload.globalCantonAssets - totalGlobalValue
         assertMsg "PAYLOAD_VALUE_MISMATCH" (valueDiff < 1.0)
 
-        -- FIX D-02: Update signature tracking
+        -- D-02: Update signature tracking
         let newSignatures = Set.insert validator collectedSignatures
 
         -- Archive and recreate with updated signatures
@@ -130,15 +130,15 @@ template AttestationRequest
 
         return (newRequest, sig)
 
-    -- FIX D-01: Choice to finalize and consume positions atomically
-    -- FIX C-12: requiredSignatures is now derived from validatorGroup, not caller-supplied
-    -- FIX H-17: Signature uniqueness enforced via dedup check
+    -- D-01: Choice to finalize and consume positions atomically
+    -- C-12: requiredSignatures is now derived from validatorGroup, not caller-supplied
+    -- H-17: Signature uniqueness enforced via dedup check
     choice FinalizeAttestation : [ContractId ValidatorSignature]
       with
         signatureCids: [ContractId ValidatorSignature]
       controller aggregator
       do
-        -- FIX DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
+        -- DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
         -- For 5 validators: ceil(3.33) = 4 required (80%)
         -- For 7 validators: ceil(4.67) = 5 required (71%)
         let n = length validatorGroup
@@ -146,7 +146,7 @@ template AttestationRequest
         -- Verify we have enough signatures
         assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
 
-        -- FIX D-03: Check expiration
+        -- D-03: Check expiration
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
 
@@ -154,13 +154,13 @@ template AttestationRequest
         sigs <- mapA fetch signatureCids
         let sigValidators = map (.validator) sigs
 
-        -- FIX H-17: Enforce signature uniqueness
+        -- H-17: Enforce signature uniqueness
         let uniqueValidators = Set.fromList sigValidators
         assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (Set.size uniqueValidators == length sigValidators)
 
         assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
 
-        -- FIX C-08: Consume and recreate positions to lock the collateral value
+        -- C-08: Consume and recreate positions to lock the collateral value
         -- This prevents the TOCTOU race condition
         positions <- mapA fetch positionCids
         let totalGlobalValue = sum [p.totalValue | p <- positions]
@@ -168,7 +168,7 @@ template AttestationRequest
         -- Final verification before attestation is considered valid
         assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
 
-        -- FIX D-M05: Archive signature contracts after finalization to prevent reuse
+        -- D-M05: Archive signature contracts after finalization to prevent reuse
         mapA archive signatureCids
 
         return signatureCids
@@ -200,4 +200,4 @@ createAttestationRequest aggregator validators payload positions = do
     validatorGroup = validators
     payload
     positionCids = positions
-    collectedSignatures = Set.empty  -- FIX D-02: Initialize empty set
+    collectedSignatures = Set.empty  -- D-02: Initialize empty set

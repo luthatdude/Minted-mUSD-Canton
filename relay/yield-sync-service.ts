@@ -242,7 +242,7 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
-    // FIX TS-C-01: Only validate raw private key when KMS is NOT configured
+    // TS-C-01: Only validate raw private key when KMS is NOT configured
     if (!config.kmsKeyId) {
       const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
       if (keyBytes.length !== 32) {

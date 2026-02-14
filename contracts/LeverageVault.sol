@@ -34,7 +34,7 @@ interface IPriceOracle {
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
 }
 
-/// @notice SOL-H-03 FIX: Uniswap V3 TWAP oracle for MEV/sandwich resistance
+/// @notice SOL-H-03: Uniswap V3 TWAP oracle for MEV/sandwich resistance
 /// @dev Optional — set to address(0) to disable TWAP cross-check
 interface ITWAPOracle {
     /// @notice Get time-weighted average price for a token pair
@@ -113,10 +113,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     /// @notice Maximum allowed leverage × 10 (e.g., 30 = 3.0x max)
     uint256 public maxLeverageX10;
 
-    /// @notice SOL-H-03 FIX: Optional TWAP oracle for post-swap validation
+    /// @notice SOL-H-03: Optional TWAP oracle for post-swap validation
     ITWAPOracle public twapOracle;
 
-    /// @notice SOL-H-03 FIX: TWAP observation period (default 30 minutes)
+    /// @notice SOL-H-03: TWAP observation period (default 30 minutes)
     uint32 public twapPeriod = 1800;
 
     error TWAPDeviationExceeded(uint256 received, uint256 twapMinimum);
@@ -220,7 +220,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         maxSlippageBps = 100;            // 1% max slippage
         maxLeverageX10 = 30;             // 3.0x max leverage by default
 
-        // SOL-H-03 FIX: TWAP oracle disabled by default (address(0)), set via admin
+        // SOL-H-03: TWAP oracle disabled by default (address(0)), set via admin
         twapOracle = ITWAPOracle(address(0));
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
@@ -568,7 +568,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             collateralReceived = 0;
         }
 
-        // SOL-H-03 FIX: Post-swap TWAP cross-check for MEV resistance
+        // SOL-H-03: Post-swap TWAP cross-check for MEV resistance
         if (collateralReceived > 0 && address(twapOracle) != address(0)) {
             uint256 twapExpected = twapOracle.consult(address(musd), musdAmount, collateralToken, twapPeriod);
             uint256 twapMin = (twapExpected * (10000 - maxSlippageBps)) / 10000;
@@ -615,7 +615,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         
         if (musdReceived == 0) revert SwapReturnedZero();
 
-        // SOL-H-03 FIX: Post-swap TWAP cross-check for MEV resistance
+        // SOL-H-03: Post-swap TWAP cross-check for MEV resistance
         if (address(twapOracle) != address(0)) {
             uint256 twapExpected = twapOracle.consult(collateralToken, collateralAmount, address(musd), twapPeriod);
             uint256 twapMin = (twapExpected * (10000 - maxSlippageBps)) / 10000;
@@ -725,7 +725,7 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         emit MaxLeverageUpdated(oldMax, _maxLeverageX10);
     }
 
-    /// @notice SOL-H-03 FIX: Set TWAP oracle and observation period
+    /// @notice SOL-H-03: Set TWAP oracle and observation period
     /// @dev Timelock-gated to prevent flash manipulation of TWAP config
     /// @param _twapOracle Address of TWAP oracle (address(0) disables TWAP checks)
     /// @param _twapPeriod TWAP observation window in seconds (min 300 = 5 min)

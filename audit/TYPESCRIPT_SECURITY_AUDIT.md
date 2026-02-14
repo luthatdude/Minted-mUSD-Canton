@@ -1,7 +1,7 @@
 # Minted mUSD Protocol — Comprehensive TypeScript Security Audit
 
 **Audit Date:** 2025-01-27  
-**Auditor:** Automated Security Review (Claude Opus 4.6)  
+**Auditor:** Minted Security Team  
 **Scope:** All TypeScript services — `relay/`, `bot/`, `points/`, `frontend/`, `scripts/`  
 **Version:** Commit at time of audit  
 

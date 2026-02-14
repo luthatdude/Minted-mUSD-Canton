@@ -3,7 +3,7 @@
 **Protocol**: Minted mUSD — Canton DAML Templates  
 **Audit Date**: 2026-02-13  
 **Scope**: All `.daml` files in `/daml/` (22 files, ~7,500 LOC)  
-**Auditor**: daml-auditor agent  
+**Auditor**: Minted Security Team — DAML/Canton  
 **SDK Version**: 2.10.3  
 
 ---

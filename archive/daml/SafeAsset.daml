@@ -19,7 +19,7 @@ template Asset
     -- modify the contract without the other's consent (or prior agreement).
     signatory issuer, owner
 
-    -- Security Fix: Prevent integer overflow/underflow or invalid logic
+    -- Security: Prevent integer overflow/underflow or invalid logic
     -- by strictly enforcing positive amounts.
     ensure amount > 0.0
 
@@ -29,7 +29,7 @@ template Asset
         splitAmount : Decimal
       controller owner
       do
-        -- Security Fix: Explicit assertions to prevent logic errors.
+        -- Security: Explicit assertions to prevent logic errors.
         assertMsg "Split amount must be positive" (splitAmount > 0.0)
         assertMsg "Split amount must be less than total" (splitAmount < amount)
 
@@ -45,7 +45,7 @@ template Asset
       do
         otherAsset <- fetch otherAssetCid
 
-        -- Security Fix: Validate the other asset is compatible (same issuer/owner).
+        -- Security: Validate the other asset is compatible (same issuer/owner).
         -- Daml's strong typing handles the template type, but we must check fields.
         assertMsg "Issuer must match" (otherAsset.issuer == issuer)
         assertMsg "Owner must match" (otherAsset.owner == owner)
@@ -56,7 +56,7 @@ template Asset
 
         create this with amount = amount + otherAsset.amount
 
-    -- Security Fix: Do not create an Asset for a new owner directly.
+    -- Security: Do not create an Asset for a new owner directly.
     -- This prevents "Air-dropping" spam or forcing liabilities onto a party.
     -- Instead, initiate a Proposal.
     choice ProposeTransfer : ContractId AssetTransferProposal

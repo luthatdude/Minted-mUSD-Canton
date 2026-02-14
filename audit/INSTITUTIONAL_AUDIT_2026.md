@@ -2,11 +2,10 @@
 ## Minted mUSD Canton Protocol — Full Re-Audit v2
 ### February 13, 2026
 
-**Auditors**: Minted Security Team (6-Agent Coordinated Review)  
+**Auditors**: Minted Security Team (Coordinated Review)  
 **Methodology**: Trail of Bits / Spearbit / Consensys Diligence hybrid framework  
 **Scope**: Every source file across all layers (~170+ files)  
 **Languages**: Solidity 0.8.26, DAML, TypeScript, YAML/K8s  
-**Agents Deployed**: solidity-auditor, daml-auditor, typescript-reviewer, infra-reviewer, testing-agent, gas-optimizer  
 **Prior Audit**: INSTITUTIONAL_AUDIT_2026_v1.md (same date, first pass)  
 **Delta**: 6 prior findings resolved/retracted; net new findings identified through deeper analysis
 
@@ -49,7 +48,7 @@
 
 ## SCORING BREAKDOWN
 
-| # | Category (Weight) | Score | Agent | Key Observations |
+| # | Category (Weight) | Score | Reviewer | Key Observations |
 |---|---|---|---|---|
 | 1 | **Smart Contract Security** (25%) | 9.0 / 10 | solidity-auditor | 0 criticals, 0 highs. All timelock setters unified under TIMELOCK_ROLE (SOL-H-01 resolved). `withdrawFor` recipient restriction applied to upgradeable variant (SOL-H-02 resolved). Strong RBAC, CEI, ReentrancyGuard throughout. Per-operation `forceApprove` across all strategies. Remaining: medium/low findings only. |
 | 2 | **Cross-Chain Bridge Security** (15%) | 8.6 / 10 | solidity-auditor | 8-layer replay protection. Deprecated V1 validator still in codebase (medium). V1 DAML templates archived. Attestation entropy + state hash + nonce + timestamp + rate limiting + age check + unpause timelock. |
@@ -57,7 +56,7 @@
 | 4 | **TypeScript Services** (10%) | 8.5 / 10 | typescript-reviewer | 0 highs. dotenv removed, `parseFloat` replaced with `Number()` + validation (TS-H-01 resolved). Hardcoded ETH price replaced with env var (TS-H-02 resolved). Event listener leak fixed (TS-H-03 resolved). TLS enforcement with watchdog, KMS-only prod signing, Docker secrets. Remaining: medium/low findings only. |
 | 5 | **Infrastructure & DevOps** (10%) | 8.8 / 10 | infra-reviewer | 0 criticals, 0 highs. PSS `restricted`, default-deny NetworkPolicies, SHA-pinned Actions, ESO integration. Canton digests verified real (CRIT-01 resolved). DAML SDK install pinned with SHA-256 verification (CRIT-02 resolved). SBOM + cosign signing added (INFRA-H-04 resolved). Remaining: medium/low findings only. |
 | 6 | **Operational Security** (10%) | 8.5 / 10 | infra-reviewer | 0 highs. Health endpoints, Prometheus alerting rules, graceful shutdown. ServiceMonitor labels fixed (INFRA-H-01 resolved). PDB changed to maxUnavailable (INFRA-H-03 resolved). Off-cluster S3/GCS backups added (INFRA-H-02 resolved). Remaining: NGINX exporter absence (INFRA-L-02). |
-| 7 | **Test Coverage** (10%) | 7.8 / 10 | testing-agent | 2,399 total tests (up from ~2,100). 1,770 Hardhat + 72 Certora rules + 27 Foundry fuzz/invariant + 421 DAML scenarios + 97 TypeScript tests. Zero frontend tests. SkySUSDSStrategy under-tested (13 tests). 10/21 contracts lack Certora specs. |
+| 7 | **Test Coverage** (10%) | 7.8 / 10 | Testing | 2,399 total tests (up from ~2,100). 1,770 Hardhat + 72 Certora rules + 27 Foundry fuzz/invariant + 421 DAML scenarios + 97 TypeScript tests. Zero frontend tests. SkySUSDSStrategy under-tested (13 tests). 10/21 contracts lack Certora specs. |
 | 8 | **Gas Efficiency** (10%) | 7.5 / 10 | gas-optimizer | ~~256 string requires~~ → custom errors across 17 contracts (GAS-05 ✅). ~~PriceOracle external self-call~~ → internal `_getPrice()` saves ~7,800 gas/tx (GAS-01 ✅). Per-tx `forceApprove` on immutable treasury. ~15,000 gas still saveable per borrow/repay cycle (GAS-02/03/04). |
 
 ### Weighted Composite Score
@@ -70,7 +69,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ## CRITICAL FINDINGS (2)
 
 ### CRIT-01: Placeholder Container Image Digests in Canton K8s Deployments ⚠️ PERSISTS FROM v1
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `k8s/canton/participant-deployment.yaml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: All Canton images pinned to `digitalasset/daml-sdk:2.9.3@sha256:8c2a681e348025d69d76932b1f6e7ddac4830355a7d3f8fa8774bb87e8150cc3`. CI guardrail step added to fail pipeline if any `MUST_REPLACE` placeholders remain in `k8s/`. Commit `46e4f16`.
@@ -79,7 +78,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Pull real images from Digital Asset registry, record SHA-256 digests. Add CI gate (`grep -r 'MUST_REPLACE' k8s/` → fail pipeline).
 
 ### CRIT-02: DAML SDK Installed via `curl | bash` Without Integrity Verification
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `.github/workflows/ci.yml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Installer is now downloaded to file with **mandatory** SHA-256 verification (`d3d5527e3d535df2c723d8d2b68d72d224b9e0c74554e38192e1435df5c5b92c`) hardcoded directly in CI. Build fails immediately on checksum mismatch — no optional fallback. Installer file is deleted on verification failure.
@@ -94,7 +93,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ### Solidity (2)
 
 #### SOL-H-01: Non-Upgradeable BorrowModule/LiquidationEngine Bypass Timelock for Critical Setters
-- **Agent**: solidity-auditor
+- **Reviewer**: Solidity
 - **Files**: `contracts/BorrowModule.sol`, `contracts/LiquidationEngine.sol`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Changed `setInterestRateModel()`, `setSMUSD()`, `setTreasury()` in BorrowModule from `BORROW_ADMIN_ROLE` to `TIMELOCK_ROLE`. Added `TIMELOCK_ROLE` constant to LiquidationEngine and changed `setCloseFactor()`, `setFullLiquidationThreshold()` from `ENGINE_ADMIN_ROLE` to `TIMELOCK_ROLE`. All Hardhat tests pass (37/37).
@@ -103,7 +102,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Confirm only upgradeable versions (with `TIMELOCK_ROLE` gating) are deployed to production. Add deployment checks that verify timelock wiring.
 
 #### SOL-H-02: `withdrawFor` Missing Recipient Restriction in Upgradeable CollateralVault
-- **Agent**: solidity-auditor
+- **Reviewer**: Solidity
 - **File**: `contracts/upgradeable/CollateralVaultUpgradeable.sol`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Both `CollateralVaultUpgradeable.sol` (line 222) and `CollateralVault.sol` (line 225) now enforce `require(recipient == msg.sender || recipient == user, "SKIP_HC_RECIPIENT_RESTRICTED")` when `skipHealthCheck` is true. Verified in Hardhat tests.
@@ -114,7 +113,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ### DAML (2)
 
 #### DAML-H-01: `USDCx_Transfer` Missing Compliance Check
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/CantonDirectMint.daml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: `USDCx_Transfer` now requires `complianceRegistryCid` parameter and exercises `ValidateTransfer` (sender + receiver) before creating proposal. `USDCxTransferProposal_Accept` also validates compliance at acceptance time for TOCTOU safety. `DirectMint_MintWithUSDCx` call site updated to pass compliance registry. All four transfer paths (mUSD, USDC, USDCx, CantonCoin) now enforce compliance.
@@ -123,7 +122,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Add mandatory `ComplianceRegistry.ValidateTransfer` exercise before executing the transfer.
 
 #### DAML-H-02: `ConsumeProof` Lacks Executor Authorization Check
-- **Agent**: daml-auditor
+- **Reviewer**: DAML/Canton
 - **File**: `daml/Governance.daml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Added `consumedBy : Party` parameter to `ConsumeProof` choice with assertion `consumedBy == operator || consumedBy == executedBy`. Updated all 11 callers in `CantonLending.daml` (7) and `CantonDirectMint.daml` (4) to pass `consumedBy = operator`.
@@ -134,7 +133,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ### TypeScript (3)
 
 #### TS-H-01: `parseFloat` / `Number()` Used for Financial Comparisons in Lending Keeper
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **File**: `relay/lending-keeper.ts`, `relay/yield-keeper.ts`, `bot/src/index.ts`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: All `parseFloat()` calls eliminated. Config values use `Number()` + strict validation (NaN rejection, range checks) wrapped in IIFEs. The `toFixed()` helper now parses strings directly to BigInt without any float64 intermediate — splits on `.`, handles integer and fractional parts as separate BigInt values. Ledger-facing calls (`fetchDebtPositions`, `fetchEscrowPositions`, mUSD balance checks) all use `Number()` with overflow warnings. `bot/src/index.ts` config also fixed.
@@ -143,7 +142,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Parse ledger strings directly as BigInt. Split on `.`, handle integer and fractional parts separately.
 
 #### TS-H-02: Hardcoded ETH Price Assumption in Yield Keeper
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **File**: `relay/yield-keeper.ts`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Replaced hardcoded `$2000` with `ETH_PRICE_USD` environment variable. Keeper now requires the variable to be set (or skips profitability check with warning). In production, this should be synced from the PriceOracle service.
@@ -152,7 +151,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Fetch live ETH price from PriceOracle or external feed (CoinGecko/Chainlink) before profitability checks.
 
 #### TS-H-03: Event Listeners Never Removed in Liquidation Bot
-- **Agent**: typescript-reviewer
+- **Reviewer**: TypeScript
 - **File**: `bot/src/index.ts`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Added `this.borrowModule.removeAllListeners()`, `this.collateralVault.removeAllListeners()`, `this.liquidationEngine.removeAllListeners()` in `stop()` method to prevent memory leaks and duplicate event processing on restart.
@@ -163,7 +162,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ### Infrastructure (4)
 
 #### INFRA-H-01: ServiceMonitor Label Selectors Do Not Match Deployment Labels ⚠️ PERSISTS FROM v1
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `k8s/monitoring/service-monitors.yaml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: All 3 ServiceMonitors and all 3 PodMonitors now use `app.kubernetes.io/name: <name>` selectors, matching the standard K8s labels used by all Canton deployments and NetworkPolicies. Prometheus service discovery will now correctly scrape all Canton services.
@@ -172,7 +171,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Update all ServiceMonitor `spec.selector.matchLabels` to use `app.kubernetes.io/name`. Add `metrics` port to Service definitions.
 
 #### INFRA-H-02: Backups Stored On-Cluster Only — No Off-Site Replication ⚠️ PERSISTS FROM v1
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `k8s/canton/postgres-backup-cronjob.yaml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Added S3/GCS upload step after pg_dump with KMS encryption (`--sse aws:kms`) and STANDARD_IA storage class. Backup bucket is configured via `backup-config` ConfigMap (`s3-bucket` or `gcs-bucket` keys). Logs warning if neither bucket is configured.
@@ -181,7 +180,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Add post-dump upload to S3/GCS with versioning. Implement cross-region replication. Test restore procedures.
 
 #### INFRA-H-03: PodDisruptionBudget `minAvailable: 1` on Single-Replica Workloads
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `k8s/canton/pod-disruption-budget.yaml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Changed both `canton-participant-pdb` and `postgres-pdb` from `minAvailable: 1` to `maxUnavailable: 1`. `kubectl drain` will now proceed normally during node maintenance.
@@ -190,7 +189,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 - **Recommendation**: Use `maxUnavailable: 1` for single-replica workloads, or document manual override procedure.
 
 #### INFRA-H-04: No SBOM Generation or Artifact Signing in CI/CD Pipeline
-- **Agent**: infra-reviewer
+- **Reviewer**: Infrastructure
 - **File**: `.github/workflows/ci.yml`
 - **Status**: ✅ **RESOLVED**
 - **Resolution**: Added `anchore/sbom-action` (syft) for SPDX SBOM generation, `actions/upload-artifact` for 90-day retention, and `sigstore/cosign-installer` with keyless OIDC signing on push to main. All actions are SHA-pinned.
@@ -201,25 +200,25 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 ### Test Coverage (4)
 
 #### TEST-H-01: No Certora Spec for CollateralVault ⚠️ PERSISTS FROM v1
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `certora/specs/` (missing `CollateralVault.spec`)
 - **Description**: CollateralVault holds ALL protocol collateral but has no formal verification spec. It is the highest-value target for invariant violations (total deposits ≥ sum of user deposits, no withdrawal exceeds balance, enabled tokens only).
 - **Recommendation**: Create `CollateralVault.spec` with deposit/withdraw/seize invariants.
 
 #### TEST-H-02: SkySUSDSStrategy Severely Under-Tested
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `test/SkySUSDSStrategy.test.ts`
 - **Description**: Only 13 tests for an active yield strategy managing real funds (~55% estimated coverage). Missing: PSM interaction edge cases, slippage scenarios, emergency withdrawal paths, multi-user deposit/withdraw.
 - **Recommendation**: Add comprehensive test suite matching PendleStrategyV2 depth (70+ tests + 174 CoverageBoost tests).
 
 #### TEST-H-03: Zero Frontend Tests ⚠️ PERSISTS FROM v1
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **File**: `frontend/` (no test files)
 - **Description**: React frontend has no unit, integration, or E2E tests. It handles wallet connections, transaction signing, financial data display, and Canton API interactions.
 - **Recommendation**: Add React Testing Library unit tests for critical components. Add Cypress/Playwright E2E for key user flows.
 
 #### TEST-H-04: 7 DAML Modules Lack Dedicated Test Scenarios
-- **Agent**: testing-agent
+- **Reviewer**: Testing
 - **Files**: `CantonCoinToken.daml`, `CantonDirectMint.daml`, `CantonSMUSD.daml`, `Compliance.daml`, `Governance.daml`, `InterestRateService.daml`, `Upgrade.daml`
 - **Description**: 7 of 13 active DAML modules have no dedicated test file. `Compliance.daml` and `Governance.daml` are particularly critical as they enforce authorization and governance replay prevention.
 - **Recommendation**: Create test scenarios for each untested module, prioritizing Compliance and Governance.
@@ -348,7 +347,7 @@ $$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.53
 
 ### Positive Security Patterns ✅
 
-| ID | Agent | Pattern |
+| ID | Reviewer | Pattern |
 |---|---|---|
 | SOL-I-01 | solidity | CEI pattern compliance confirmed across all contracts ✅ |
 | SOL-I-02 | solidity | Event coverage complete — all state changes emit events ✅ |
@@ -569,15 +568,15 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 
 ---
 
-## APPENDIX A: AGENT SCORING DETAIL
+## APPENDIX A: SCORING DETAIL
 
-| Agent | Areas Covered | Files Reviewed | Findings | Score Given |
+| Reviewer | Areas Covered | Files Reviewed | Findings | Score Given |
 |---|---|---|---|---|
 | **solidity-auditor** | Smart contracts, bridge, strategies, upgradeable | 28 contracts | 0C / 2H / 9M / 12L / 8I | 8.5 |
 | **daml-auditor** | DAML templates, Canton lifecycle, compliance | 19 DAML files | 0C / 2H / 9M / 8L / 7I | 8.3 |
 | **typescript-reviewer** | Relay, bot, points, frontend | 55+ TS files | 0C / 3H / 7M / 7L / 8I | 7.8 |
 | **infra-reviewer** | K8s, Docker, CI/CD, monitoring | 25+ YAML/Docker | 2C / 4H / 6M / 5L / 5I | 7.8 infra / 7.2 ops |
-| **testing-agent** | Test coverage, formal verification | 37+ test files | 0C / 4H / 2M / 0L / 0I | 7.8 |
+| **Testing** | Test coverage, formal verification | 37+ test files | 0C / 4H / 2M / 0L / 0I | 7.8 |
 | **gas-optimizer** | Gas efficiency on hot paths | 17 contracts | 14 optimizations (2 resolved: GAS-01, GAS-05) | 7.5 |
 
 ## APPENDIX B: TOTAL TEST COUNTS
@@ -595,7 +594,7 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 
 ---
 
-*Report generated by coordinated 6-agent review: solidity-auditor, daml-auditor, typescript-reviewer, infra-reviewer, testing-agent, gas-optimizer*  
+*Report generated by Minted Security Team*  
 *Methodology: Trail of Bits / Spearbit / Consensys Diligence hybrid framework*  
 *Prior version: INSTITUTIONAL_AUDIT_2026_v1.md*  
 *Date: February 13, 2026*

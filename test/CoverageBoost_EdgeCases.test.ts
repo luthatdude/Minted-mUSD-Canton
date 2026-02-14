@@ -83,7 +83,7 @@ describe("socializeBadDebt — Incomplete List Invariant", function () {
   it("badDebt should decrease by totalReduced, not socializeAmount, when list is incomplete", async function () {
     const { bm, admin, user1, user2 } = await loadFixture(deployBadDebtFixture);
 
-    // Verify the contract bytecode contains the fix
+    // Verify the contract bytecode contains the implementation
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
     expect(BorrowModule.bytecode.length).to.be.gt(100);
 

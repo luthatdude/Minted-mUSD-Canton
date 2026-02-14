@@ -61,7 +61,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     // Cooldown
     uint256 public minRequestAge;       // Minimum time before fulfillment (e.g., 1 hour)
 
-    // C-01 FIX: Queue DoS protection — prevents unbounded array growth and dust spam
+    // C-01: Queue DoS protection — prevents unbounded array growth and dust spam
     uint256 public constant MIN_REDEMPTION_USDC = 100e6;    // 100 USDC minimum redemption
     uint256 public constant MAX_QUEUE_SIZE = 10_000;         // Max active (unfulfilled, uncancelled) requests
     uint256 public constant MAX_PENDING_PER_USER = 10;       // Per-user active pending limit
@@ -106,11 +106,11 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         if (usdcAmount < minUsdcOut) revert SlippageExceeded();
         if (usdcAmount == 0) revert DustAmount();
 
-        // C-01 FIX: Minimum redemption prevents dust spam
+        // C-01: Minimum redemption prevents dust spam
         if (usdcAmount < MIN_REDEMPTION_USDC) revert BelowMinRedemption();
-        // C-01 FIX: Global queue cap prevents unbounded array growth
+        // C-01: Global queue cap prevents unbounded array growth
         if (activePendingCount >= MAX_QUEUE_SIZE) revert QueueSizeExceeded();
-        // C-01 FIX: Per-user limit prevents single-actor spam
+        // C-01: Per-user limit prevents single-actor spam
         if (userPendingCount[msg.sender] >= MAX_PENDING_PER_USER) revert UserQueueLimitExceeded();
 
         // Lock mUSD
@@ -129,7 +129,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         totalPendingMusd += musdAmount;
         totalPendingUsdc += usdcAmount;
 
-        // C-01 FIX: Track active pending counts
+        // C-01: Track active pending counts
         activePendingCount++;
         userPendingCount[msg.sender]++;
 
@@ -175,7 +175,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
             totalPendingMusd -= req.musdAmount;
             totalPendingUsdc -= req.usdcAmount;
 
-            // C-01 FIX: Decrement active counts on fulfillment
+            // C-01: Decrement active counts on fulfillment
             activePendingCount--;
             userPendingCount[req.user]--;
 
@@ -206,7 +206,7 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         totalPendingMusd -= req.musdAmount;
         totalPendingUsdc -= req.usdcAmount;
 
-        // C-01 FIX: Decrement active counts on cancellation
+        // C-01: Decrement active counts on cancellation
         activePendingCount--;
         userPendingCount[msg.sender]--;
 

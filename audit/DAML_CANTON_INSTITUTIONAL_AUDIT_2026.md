@@ -1,7 +1,7 @@
 # Minted mUSD — DAML/Canton Layer Institutional Security Audit
 
 **Date:** February 14, 2026  
-**Auditor:** Elite DAML/Canton Security Audit — Automated Deep Analysis  
+**Auditor:** DAML/Canton Security Audit — Deep Analysis  
 **Scope:** All DAML modules under `/daml/` (standalone Canton-native + V3 bridge-integrated)  
 **SDK Version:** 2.10.3  
 **Commit:** HEAD at time of audit  

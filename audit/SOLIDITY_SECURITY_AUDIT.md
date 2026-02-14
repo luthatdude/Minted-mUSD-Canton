@@ -1,6 +1,6 @@
 # Minted mUSD Protocol — Comprehensive Solidity Security Audit
 
-**Auditor Agent:** solidity-auditor  
+**Auditor:** Minted Security Team — Solidity  
 **Date:** 2026-02-13  
 **Scope:** All Solidity contracts in `/contracts/`  
 **Compiler:** Solidity 0.8.26  

@@ -219,7 +219,7 @@ contract CollateralVaultUpgradeable is
         bool skipHealthCheck
     ) external nonReentrant whenNotPaused onlyRole(LEVERAGE_VAULT_ROLE) {
         require(deposits[user][token] >= amount, "INSUFFICIENT_BALANCE");
-        // SOL-H-02 FIX: Restrict recipient when health check is skipped to prevent
+        // SOL-H-02: Restrict recipient when health check is skipped to prevent
         // LEVERAGE_VAULT_ROLE from draining collateral to arbitrary addresses
         if (skipHealthCheck) {
             require(recipient == msg.sender || recipient == user, "SKIP_HC_RECIPIENT_RESTRICTED");

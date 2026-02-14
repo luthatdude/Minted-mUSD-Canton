@@ -4,7 +4,7 @@
 **Scope:** Full-stack audit — Solidity (EVM) + DAML (Canton Network)  
 **Contracts Audited:** 20 Solidity contracts (~8,500 LoC) · 16 DAML modules + 1 unified V3 module (~9,750 LoC)  
 **Total Lines of Code:** ~18,250  
-**Auditors:** Automated multi-methodology analysis  
+**Auditors:** Multi-methodology analysis  
 **Classification:** CONFIDENTIAL — For Internal Use Only
 
 ---

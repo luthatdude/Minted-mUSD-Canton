@@ -42,7 +42,7 @@ const DEFAULT_CONFIG: KeeperConfig = {
   keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
-  // TS-H-01 FIX: Use Number() + validation instead of parseFloat
+  // TS-H-01: Use Number() + validation instead of parseFloat
   minProfitUsd: (() => {
     const v = Number(process.env.MIN_PROFIT_USD || "10");
     if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
@@ -242,7 +242,7 @@ class YieldKeeper {
       // TS-M-03: Use ethers.formatUnits for safe BigInt → decimal conversion
       const gasCostEth = parseFloat(ethers.formatUnits(gasCostWei, 18));
 
-      // TS-H-02 FIX: Use configurable ETH price from env/oracle instead of hardcoded $2000
+      // TS-H-02: Use configurable ETH price from env/oracle instead of hardcoded $2000
       // In production, this should be fetched from the price oracle service
       const ethPriceUsd = Number(process.env.ETH_PRICE_USD || "0");
       if (ethPriceUsd <= 0) {

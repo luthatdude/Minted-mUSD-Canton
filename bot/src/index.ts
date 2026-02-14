@@ -97,7 +97,7 @@ function loadConfig() {
     priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
     musd: process.env.MUSD_ADDRESS!,
     pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
-    // TS-H-01 FIX: Use Number() + validation instead of parseFloat
+    // TS-H-01: Use Number() + validation instead of parseFloat
     minProfitUsd: (() => {
       const v = Number(process.env.MIN_PROFIT_USD || "50");
       if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
@@ -348,7 +348,7 @@ class LiquidationBot {
   stop(): void {
     logger.info("Stopping bot...");
     this.isRunning = false;
-    // TS-H-03 FIX: Remove all event listeners to prevent memory leaks on restart
+    // TS-H-03: Remove all event listeners to prevent memory leaks on restart
     this.borrowModule.removeAllListeners();
     this.collateralVault.removeAllListeners();
     this.liquidationEngine.removeAllListeners();

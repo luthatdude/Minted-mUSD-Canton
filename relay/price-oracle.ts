@@ -327,7 +327,7 @@ export class PriceOracleService {
     }
 
     // INFRA-H-01 / INF-01: TLS by default for Canton ledger connection
-    // INF-01 FIX: Reject cleartext HTTP in production — matches relay-service.ts TLS pattern
+    // INF-01: Reject cleartext HTTP in production — matches relay-service.ts TLS pattern
     if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
       throw new Error(
         "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
