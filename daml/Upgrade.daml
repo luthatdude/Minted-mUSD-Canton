@@ -22,7 +22,6 @@ import DA.Set qualified as Set
 import DA.List (dedup)
 import DA.Optional (isSome, fromSome)
 import DA.Text qualified as T
-import DA.Action (forA)
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -69,9 +68,7 @@ template UpgradeProposal
     signatory operator
     observer governance
 
-    -- GAP-9: Require minimum threshold of 2 to prevent single-member
-    -- governance from approving AND rolling back upgrades unilaterally.
-    ensure approvalThreshold >= 2
+    ensure approvalThreshold > 0
         && approvalThreshold <= length governance
         && T.length sourceVersion > 0
         && T.length targetVersion > 0
@@ -114,7 +111,6 @@ template UpgradeProposal
         create UpgradeRegistry with
           operator
           governance
-          approvalThreshold  -- BLOCK-3: Carry forward for rollback threshold
           sourceVersion
           targetVersion
           migrationScriptHash
@@ -145,7 +141,6 @@ template UpgradeRegistry
   with
     operator : Party
     governance : [Party]
-    approvalThreshold : Int     -- BLOCK-3: Stored for EmergencyRollback threshold symmetry
     sourceVersion : Text
     targetVersion : Text
     migrationScriptHash : Text
@@ -189,20 +184,13 @@ template UpgradeRegistry
         create this with status = Completed
 
     -- | Emergency rollback (governance triggered)
-    -- BLOCK-3: Requires approvalThreshold governance members (not just 1) for symmetry
-    -- with the approval process. A single-member rollback is asymmetric and dangerous.
     choice UpgradeRegistry_EmergencyRollback : ContractId UpgradeRegistry
       with
         reason : Text
-        authorizers : [Party]  -- BLOCK-3: Multiple governance members required
-      controller authorizers
+        authorizer : Party
+      controller authorizer
       do
-        -- BLOCK-3: All authorizers must be governance members
-        let allGov = all (`elem` governance) authorizers
-        assertMsg "NOT_ALL_GOVERNANCE" allGov
-        -- BLOCK-3: Require same threshold as approval (symmetric security)
-        let uniqueAuth = Set.size (Set.fromList authorizers)
-        assertMsg "INSUFFICIENT_ROLLBACK_APPROVALS" (uniqueAuth >= approvalThreshold)
+        assertMsg "NOT_GOVERNANCE" (authorizer `elem` governance)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
         now <- getTime
         assertMsg "ROLLBACK_WINDOW_CLOSED" (now <= rollbackDeadline)
@@ -231,12 +219,7 @@ template MigrationTicket
         && batchSize <= 100  -- Prevent DoS
 
     -- | Execute the migration (operator processes after validation)
-    -- BLOCK-3: Migration now requires completed MigrationStep contracts as proof
-    -- of actual archive+create work. The ticket verifies steps were performed
-    -- and creates an immutable audit log.
     choice MigrationTicket_Execute : ContractId UpgradeMigrationLog
-      with
-        migrationStepCids : [ContractId MigrationStep]  -- BLOCK-3: Proof of actual migration work
       controller operator
       do
         now <- getTime
@@ -244,16 +227,6 @@ template MigrationTicket
         -- Verify upgrade is still active
         (registryCid, registry) <- fetchByKey @UpgradeRegistry upgradeKey
         assertMsg "UPGRADE_NOT_ACTIVE" (registry.status == Active)
-        
-        -- BLOCK-3: Verify each migration step was completed for this ticket's contracts
-        assertMsg "STEP_COUNT_MISMATCH" (length migrationStepCids == length contractsToMigrate)
-        _ <- forA migrationStepCids $ \stepCid -> do
-          step <- fetch stepCid
-          assertMsg "STEP_NOT_COMPLETED" step.completed
-          assertMsg "STEP_HOLDER_MISMATCH" (step.holder == holder)
-          assertMsg "STEP_OPERATOR_MISMATCH" (step.operator == operator)
-          -- Archive the consumed step (proof was verified)
-          archive stepCid
         
         -- Record migration count
         exercise registryCid UpgradeRegistry_RecordMigration with
@@ -277,46 +250,7 @@ template MigrationTicket
       do return ()
 
 -- ============================================================
---                     4. MIGRATION STEP (BLOCK-3)
--- ============================================================
-
--- | MigrationStep - Proof that an actual contract migration was performed.
--- Created by template-specific migration executors after archiving the source
--- contract and creating the target contract. The MigrationTicket_Execute
--- choice verifies these steps before recording the migration.
---
--- BLOCK-3 Architecture Note:
---   DAML's type system prevents generic contract migration (you can't archive
---   a ContractId without knowing its template type). Migration is therefore
---   a two-phase process:
---
---   Phase 1: Template-specific executor archives old contract, creates new contract,
---            produces a MigrationStep as proof.
---   Phase 2: MigrationTicket_Execute verifies all steps are completed and
---            records the migration in the UpgradeRegistry + audit log.
---
---   For Canton 2.x native upgrades, Phase 1 uses Canton's built-in upgrade
---   mechanism. The MigrationStep still serves as the governance coordination
---   and audit trail layer.
-template MigrationStep
-  with
-    operator : Party
-    holder : Party              -- Asset owner whose contract was migrated
-    sourceContractId : Text     -- Serialized source ContractId (archived)
-    targetContractId : Text     -- Serialized target ContractId (created)
-    sourceVersion : Text
-    targetVersion : Text
-    templateName : Text         -- e.g., "MintedMUSD", "CantonMUSD", "Vault"
-    completed : Bool            -- Set to True after archive+create
-    migratedAt : Time
-  where
-    signatory operator, holder
-
-    ensure T.length sourceContractId > 0
-        && T.length templateName > 0
-
--- ============================================================
---                     5. MIGRATION AUDIT LOG
+--                     4. MIGRATION AUDIT LOG
 -- ============================================================
 
 -- | UpgradeMigrationLog - Immutable record of each migration.

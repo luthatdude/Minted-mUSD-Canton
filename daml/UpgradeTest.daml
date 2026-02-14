@@ -1,4 +1,0 @@
-module UpgradeTest where
-
--- Placeholder for upgrade framework tests
--- Tests are implemented in NegativeTests.daml and CrossModuleIntegrationTest.daml

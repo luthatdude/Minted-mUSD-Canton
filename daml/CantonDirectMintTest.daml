@@ -1,4 +1,0 @@
-module CantonDirectMintTest where
-
--- Placeholder for Canton direct mint tests
--- Tests are implemented in CrossModuleIntegrationTest.daml and NegativeTests.daml
