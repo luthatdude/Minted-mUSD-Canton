@@ -4,6 +4,7 @@ import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { ADMIN_WALLET } from "@/lib/config";
 
 // Ethereum pages
 import { DashboardPage } from "./DashboardPage";
@@ -61,7 +62,11 @@ export default function Home() {
       case "bridge":
         return <BridgePage />;
       case "admin":
-        return <AdminPage />;
+        // Hard gate: only the designated wallet can render the admin page
+        if (wallet.address && wallet.address.toLowerCase() === ADMIN_WALLET) {
+          return <AdminPage />;
+        }
+        return <DashboardPage />;
       default:
         return <DashboardPage />;
     }
