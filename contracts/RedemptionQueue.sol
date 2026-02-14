@@ -61,6 +61,17 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     // Cooldown
     uint256 public minRequestAge;       // Minimum time before fulfillment (e.g., 1 hour)
 
+    // C-01 FIX: Queue DoS protection — prevents unbounded array growth and dust spam
+    uint256 public constant MIN_REDEMPTION_USDC = 100e6;    // 100 USDC minimum redemption
+    uint256 public constant MAX_QUEUE_SIZE = 10_000;         // Max active (unfulfilled, uncancelled) requests
+    uint256 public constant MAX_PENDING_PER_USER = 10;       // Per-user active pending limit
+    uint256 public activePendingCount;                       // Global active pending request counter
+    mapping(address => uint256) public userPendingCount;     // Per-user active pending counter
+
+    error QueueSizeExceeded();
+    error UserQueueLimitExceeded();
+    error BelowMinRedemption();
+
     event RedemptionQueued(uint256 indexed requestId, address indexed user, uint256 musdAmount, uint256 usdcAmount);
     event RedemptionFulfilled(uint256 indexed requestId, address indexed user, uint256 usdcAmount);
     event RedemptionCancelled(uint256 indexed requestId, address indexed user, uint256 musdAmount);
@@ -95,6 +106,13 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         if (usdcAmount < minUsdcOut) revert SlippageExceeded();
         if (usdcAmount == 0) revert DustAmount();
 
+        // C-01 FIX: Minimum redemption prevents dust spam
+        if (usdcAmount < MIN_REDEMPTION_USDC) revert BelowMinRedemption();
+        // C-01 FIX: Global queue cap prevents unbounded array growth
+        if (activePendingCount >= MAX_QUEUE_SIZE) revert QueueSizeExceeded();
+        // C-01 FIX: Per-user limit prevents single-actor spam
+        if (userPendingCount[msg.sender] >= MAX_PENDING_PER_USER) revert UserQueueLimitExceeded();
+
         // Lock mUSD
         musd.safeTransferFrom(msg.sender, address(this), musdAmount);
 
@@ -110,6 +128,10 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
 
         totalPendingMusd += musdAmount;
         totalPendingUsdc += usdcAmount;
+
+        // C-01 FIX: Track active pending counts
+        activePendingCount++;
+        userPendingCount[msg.sender]++;
 
         emit RedemptionQueued(requestId, msg.sender, musdAmount, usdcAmount);
     }
@@ -153,6 +175,10 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
             totalPendingMusd -= req.musdAmount;
             totalPendingUsdc -= req.usdcAmount;
 
+            // C-01 FIX: Decrement active counts on fulfillment
+            activePendingCount--;
+            userPendingCount[req.user]--;
+
             // Burn the locked mUSD to reduce totalSupply and maintain peg integrity.
             // Without this burn, redeemed mUSD stays locked forever, inflating totalSupply
             // and degrading the health ratio reported by BLEBridgeV9.getHealthRatio().
@@ -179,6 +205,10 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
         req.cancelled = true;
         totalPendingMusd -= req.musdAmount;
         totalPendingUsdc -= req.usdcAmount;
+
+        // C-01 FIX: Decrement active counts on cancellation
+        activePendingCount--;
+        userPendingCount[msg.sender]--;
 
         musd.safeTransfer(msg.sender, req.musdAmount);
 

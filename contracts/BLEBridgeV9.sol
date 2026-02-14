@@ -42,9 +42,6 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
-    /// @notice CRIT-01: Only addresses with RELAYER_ROLE can submit attestations,
-    ///   preventing gas-drain griefing attacks from arbitrary callers.
-    bytes32 public constant RELAYER_ROLE = keccak256("RELAYER_ROLE");
 
     IMUSD public musdToken;
 
@@ -65,10 +62,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     // unpauseRequestTime placed here to maintain clean storage layout ordering
     uint256 public unpauseRequestTime;
 
-    /// @dev Maximum attestation age — reject attestations older than this.
-    /// MED-02: Aligned with DAML's 1-hour TTL + 1-hour buffer. Previously 6 hours,
-    /// which left a 5-hour window where expired-on-Canton attestations were valid on Ethereum.
-    uint256 public constant MAX_ATTESTATION_AGE = 2 hours;
+    /// @dev Maximum attestation age — reject attestations older than this
+    uint256 public constant MAX_ATTESTATION_AGE = 6 hours;
     
     /// @dev Minimum gap between attestation timestamps to prevent same-block replay
     uint256 public constant MIN_ATTESTATION_GAP = 60; // 1 minute minimum between attestations
@@ -114,9 +109,6 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     event RateLimitReset(uint256 timestamp);
     event DailyCapIncreaseLimitUpdated(uint256 oldLimit, uint256 newLimit);
     event RateLimitedCapIncrease(uint256 requestedIncrease, uint256 allowedIncrease, uint256 remainingLimit);
-    /// @notice MED-01: Emitted when supply cap drops below current totalSupply,
-    ///   signaling potential undercollateralization for off-chain monitoring.
-    event UndercollateralizedAlert(uint256 newCap, uint256 currentSupply, uint256 attestedAssets);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -319,7 +311,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     function processAttestation(
         Attestation calldata att,
         bytes[] calldata signatures
-    ) external nonReentrant whenNotPaused onlyRole(RELAYER_ROLE) {
+    ) external nonReentrant whenNotPaused {
         if (signatures.length < minSignatures) revert InsufficientSignatures();
         if (att.nonce != currentNonce + 1) revert InvalidNonce();
         if (usedAttestationIds[att.id]) revert AttestationReused();
@@ -426,12 +418,6 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
             // Existing tokens remain but the cap correctly signals undercollateralization.
             musdToken.setSupplyCap(newCap);
             emit SupplyCapUpdated(oldCap, newCap, _attestedAssets);
-
-            // MED-01: Alert when supply cap drops below outstanding supply
-            uint256 currentSupply = musdToken.totalSupply();
-            if (newCap < currentSupply) {
-                emit UndercollateralizedAlert(newCap, currentSupply, _attestedAssets);
-            }
         }
     }
 
@@ -546,10 +532,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
-    // Storage gap for future upgrades
-    // 13 value-type state vars (musdToken..lastCantonStateHash) → 50 - 13 = 37
-    // Mappings (usedAttestationIds, verifiedStateHashes) don't consume gap slots.
-    // Constants (VALIDATOR_ROLE, EMERGENCY_ROLE, RELAYER_ROLE, TIMELOCK_ROLE,
-    //   MAX_ATTESTATION_AGE, MIN_ATTESTATION_GAP, UNPAUSE_DELAY) use no storage.
-    uint256[37] private __gap;
+    // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
+    // (Added: lastCantonStateHash, verifiedStateHashes)
+    uint256[35] private __gap;
 }
