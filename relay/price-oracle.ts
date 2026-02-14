@@ -497,21 +497,12 @@ export class PriceOracleService {
   }
 
   /**
-   * Initialize stable feeds (USDC, USDCx) — called once on startup.
-   * These don't change, but we refresh the timestamp to prevent staleness.
+   * Initialize stable feeds — no longer needed for lending collateral.
+   * USDC/USDCx removed as lending collateral types (economically redundant with DirectMint).
    */
   async refreshStableFeeds(): Promise<void> {
-    const stableSymbols = ["USDC", "USDCx"];
-
-    for (const symbol of stableSymbols) {
-      try {
-        await this.pushPriceUpdate(symbol, this.config.stablecoinPrice, "hardcoded-stable");
-        console.log(`[PriceOracle] Refreshed ${symbol} feed (${this.config.stablecoinPrice})`);
-      } catch (err) {
-        // Feed might not exist yet — that's OK on first run
-        console.warn(`[PriceOracle] Could not refresh ${symbol} feed:`, (err as Error).message);
-      }
-    }
+    // No stable feeds to refresh — USDC/USDCx only used by DirectMint (not lending)
+    return;
   }
 
   /**
