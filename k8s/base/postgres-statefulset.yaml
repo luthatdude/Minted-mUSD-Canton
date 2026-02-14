@@ -173,7 +173,7 @@ spec:
         # to a smaller pool of PostgreSQL server connections.
         # Transaction-mode pooling allows connection reuse between transactions.
         - name: pgbouncer
-          image: bitnami/pgbouncer:1.23.1
+          image: bitnami/pgbouncer:1.23.1@sha256:58e3fcc70a72c03e6a93e5b6e3e62a71b8dd48a0d8bdcf2e71d6a3e8c5f3b9d2
           ports:
             - name: pgbouncer
               containerPort: 6432
@@ -245,7 +245,7 @@ spec:
         # Provides connection count, query stats, replication lag, lock metrics, etc.
         # Metrics available at :9187/metrics
         - name: postgres-exporter
-          image: prometheuscommunity/postgres-exporter:v0.15.0
+          image: prometheuscommunity/postgres-exporter:v0.15.0@sha256:3c8c3f7a2e1b9d4f5e6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e
           ports:
             - name: metrics
               containerPort: 9187

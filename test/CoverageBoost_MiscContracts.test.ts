@@ -111,6 +111,9 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 10_000n * 10n ** 6n);
 
+      // Deploy to strategy so we can simulate loss
+      await treasury.deployToStrategy(await strategyA.getAddress(), 5_000n * 10n ** 6n);
+
       // Create a peak: small yield
       await usdc.mint(await strategyA.getAddress(), 50n * 10n ** 6n);
       await time.increase(3601);
@@ -136,6 +139,9 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 10_000n * 10n ** 6n);
 
+      // Deploy to strategy so we can simulate loss/recovery
+      await treasury.deployToStrategy(await strategyA.getAddress(), 5_000n * 10n ** 6n);
+
       // Create a peak
       await usdc.mint(await strategyA.getAddress(), 50n * 10n ** 6n);
       await time.increase(3601);
@@ -158,6 +164,9 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 100_000n * 10n ** 6n);
 
+      // Deploy to strategy
+      await treasury.deployToStrategy(await strategyA.getAddress(), 90_000n * 10n ** 6n);
+
       // Generate yield
       await usdc.mint(await strategyA.getAddress(), 500n * 10n ** 6n);
       await time.increase(3601);
@@ -178,10 +187,13 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 1_000n * 10n ** 6n);
 
+      // Deploy most to strategy so reserve is low
+      await treasury.deployToStrategy(await strategyA.getAddress(), 900n * 10n ** 6n);
+
       // Make strategy withdrawals fail
       await strategyA.setWithdrawShouldFail(true);
 
-      // Try to withdraw more than reserve
+      // Try to withdraw more than reserve (100 in reserve, 900 in failed strategy)
       await expect(
         treasury.connect(vault).withdrawToVault(900n * 10n ** 6n)
       ).to.be.revertedWithCustomError(treasury, "InsufficientLiquidity");
@@ -228,18 +240,21 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert legacy withdraw when insufficient reserves after strategy pull", async function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 1_000n * 10n ** 6n);
+      // Manually deploy most to strategy
+      await treasury.deployToStrategy(await strategyA.getAddress(), 900n * 10n ** 6n);
       await strategyA.setWithdrawShouldFail(true);
       await expect(
         treasury.connect(vault).withdraw(vault.address, 950n * 10n ** 6n)
       ).to.be.revertedWithCustomError(treasury, "InsufficientReserves");
     });
 
-    // --- _autoAllocate: totalTargetBps == 0 (no auto-allocate strategies) ---
-    it("should handle auto-allocate with no auto-allocate strategies", async function () {
+    // --- Deposits always stay in reserve (no auto-allocation) ---
+    it("should keep deposits in reserve regardless of autoAllocate flag", async function () {
       // Add strategy with autoAllocate=false
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 0, 10000, false);
       await treasury.connect(vault).deposit(vault.address, 10_000n * 10n ** 6n);
-      // All should remain in reserve since no auto-allocate
+      // All should remain in reserve
+      expect(await treasury.reserveBalance()).to.equal(10_000n * 10n ** 6n);
     });
 
     // --- _withdrawFromStrategies: totalStratValue == 0 ---
@@ -255,6 +270,9 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should emit StrategyWithdrawFailed when strategy withdraw fails", async function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 0, 10000, true);
       await treasury.connect(vault).deposit(vault.address, 10_000n * 10n ** 6n);
+
+      // Manually deploy to strategy first
+      await treasury.deployToStrategy(await strategyA.getAddress(), 8_000n * 10n ** 6n);
 
       await strategyA.setWithdrawShouldFail(true);
       // The withdraw will fail silently, emit event

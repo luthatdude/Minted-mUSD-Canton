@@ -158,6 +158,18 @@ spec:
             summary: "Validator signing rate limit triggered"
             description: "A validator node hit its per-hour signing limit (50/hr)."
 
+        # INFRA-M-03: Relay bridge delay > 10 minutes
+        - alert: BridgeRelayDelay
+          expr: |
+            time() - bridge_relay_last_successful_bridge_timestamp > 600
+          for: 5m
+          labels:
+            severity: warning
+            team: bridge
+          annotations:
+            summary: "Bridge relay delay exceeds 10 minutes"
+            description: "No successful bridge operation completed in the last 10 minutes. Possible relay stall, RPC endpoint failure, or chain congestion."
+
     # ──────────────────────────────────────────────────
     #  4. Price Oracle Alerts
     # ──────────────────────────────────────────────────
@@ -233,6 +245,19 @@ spec:
           annotations:
             summary: "PostgreSQL disk usage > 85%"
             description: "Disk filling up — schedule backup rotation or volume expansion."
+
+        # INFRA-M-03: PVC usage > 85% across all PersistentVolumeClaims
+        - alert: PVCUsageHigh
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="musd-canton"}
+              / kubelet_volume_stats_capacity_bytes{namespace="musd-canton"} > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} usage > 85%"
+            description: "PersistentVolumeClaim {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is above 85% capacity. Expand volume or clean up data."
 
     # ──────────────────────────────────────────────────
     #  6. Pod Security Alerts

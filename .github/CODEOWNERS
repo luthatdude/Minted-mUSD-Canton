@@ -1,0 +1,26 @@
+# AUDIT INFRA-H-03: CODEOWNERS — Require review approval for critical paths
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Solidity contracts — require security team review
+/contracts/                     @minted-protocol/security @minted-protocol/solidity-leads
+/certora/                       @minted-protocol/security
+
+# DAML/Canton — require protocol team review
+/daml/                          @minted-protocol/protocol-leads @minted-protocol/security
+
+# Bridge infrastructure — require security + infra review
+/relay/                         @minted-protocol/security @minted-protocol/infra
+/k8s/                           @minted-protocol/infra @minted-protocol/security
+
+# CI/CD and deployment
+/.github/                       @minted-protocol/infra @minted-protocol/security
+/scripts/                       @minted-protocol/infra
+
+# Bot (liquidation, oracle) — require ops review
+/bot/                           @minted-protocol/ops @minted-protocol/security
+
+# Frontend
+/frontend/                      @minted-protocol/frontend-leads
+
+# Test files — require relevant team review
+/test/                          @minted-protocol/solidity-leads
