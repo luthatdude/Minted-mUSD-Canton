@@ -776,7 +776,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         treasury.address,
         directMint.address,
         30, // 0.30%
-        admin.address
+        admin.address,
+        admin.address // timelockController
       );
 
       await usdc.mint(user1.address, 10_000_000n * 10n ** 6n);
@@ -789,28 +790,28 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero wormhole relayer", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero token bridge", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero directMint", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero admin", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
@@ -1261,16 +1262,16 @@ describe("CoverageBoost — Misc Contracts", function () {
       expect(await smusd.maxRedeem(user1.address)).to.equal(0);
     });
 
-    // --- maxDeposit: returns type(uint256).max (not overridden for pause) ---
-    it("should return type(uint256).max for maxDeposit even when paused", async function () {
+    // --- maxDeposit: returns 0 when paused (ERC-4626 spec compliance) ---
+    it("should return 0 for maxDeposit when paused", async function () {
       await smusd.connect(pauser).pause();
-      expect(await smusd.maxDeposit(user1.address)).to.equal(ethers.MaxUint256);
+      expect(await smusd.maxDeposit(user1.address)).to.equal(0);
     });
 
-    // --- maxMint: returns type(uint256).max (not overridden for pause) ---
-    it("should return type(uint256).max for maxMint even when paused", async function () {
+    // --- maxMint: returns 0 when paused (ERC-4626 spec compliance) ---
+    it("should return 0 for maxMint when paused", async function () {
       await smusd.connect(pauser).pause();
-      expect(await smusd.maxMint(user1.address)).to.equal(ethers.MaxUint256);
+      expect(await smusd.maxMint(user1.address)).to.equal(0);
     });
 
     // --- maxWithdraw/maxRedeem: returns 0 during cooldown ---

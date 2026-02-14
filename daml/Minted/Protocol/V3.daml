@@ -29,6 +29,7 @@ import DA.Text qualified as T
 import DA.Action (foldlA, when, void)
 import DA.Optional (fromOptional)
 import DA.Foldable hiding (elem, length, all, sum)
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -238,10 +239,13 @@ template MintedMUSD
     choice MUSD_Transfer : ContractId MUSDTransferProposal
       with
         newOwner : Party
+        complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-01: Compliance
       controller owner
       do
         assertMsg "TOKEN_BLACKLISTED" (not blacklisted)
         assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        -- DAML-CRIT-01: Validate sender is not blacklisted/frozen before transfer
+        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
         create MUSDTransferProposal with
           issuer
           sender = owner
@@ -251,6 +255,7 @@ template MintedMUSD
           agreementHash
           agreementUri
           observers
+          complianceRegistryCid
 
     -- | Split into two contracts
     choice MUSD_Split : (ContractId MintedMUSD, ContractId MintedMUSD)
@@ -910,6 +915,7 @@ template VaultManager
     operator : Party
     defaultConfig : VaultConfig
     allowedCollaterals : [Text]   -- Whitelisted collateral symbols
+    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-02: Mandatory compliance
     observers : [Party]
   where
     signatory operator
@@ -922,6 +928,8 @@ template VaultManager
         collateralSymbol : Text
       controller owner
       do
+        -- DAML-CRIT-02: Mandatory compliance — vault opener must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = owner
         assertMsg "COLLATERAL_NOT_ALLOWED" (collateralSymbol `elem` allowedCollaterals)
         now <- getTime
         create Vault with
@@ -999,6 +1007,7 @@ template LiquidationOrder
     status : OrderStatus
     claimedBy : Optional Party
     createdAt : Time
+    expiresAt : Time              -- DAML-H-05: Expiry to prevent permanent blocking
     observers : [Party]
   where
     signatory operator
@@ -1013,6 +1022,9 @@ template LiquidationOrder
         -- DAML-H-01: Only authorized keepers can claim orders
         assertMsg "NOT_AUTHORIZED_KEEPER" (keeper `elem` observers)
         assertMsg "ORDER_NOT_PENDING" (status == Pending)
+        -- DAML-H-05: Check expiry before allowing claim
+        now <- getTime
+        assertMsg "ORDER_EXPIRED" (now < expiresAt)
         create this with 
           status = Claimed
           claimedBy = Some keeper
@@ -1025,13 +1037,25 @@ template LiquidationOrder
       do
         assertMsg "ORDER_NOT_CLAIMED" (status == Claimed)
         assertMsg "NOT_CLAIMANT" (claimedBy == Some keeper)
+        -- DAML-H-05: Expired claimed orders can still be completed (grace period)
         create this with status = Executed
 
-    -- | Cancel the order
+    -- | Cancel the order (operator or if expired)
     choice CancelOrder : ContractId LiquidationOrder
       controller operator
       do
         create this with status = Cancelled
+
+    -- | DAML-H-05: Auto-release expired claimed orders back to pending
+    choice ReleaseExpiredClaim : ContractId LiquidationOrder
+      controller operator
+      do
+        now <- getTime
+        assertMsg "ORDER_NOT_CLAIMED" (status == Claimed)
+        assertMsg "ORDER_NOT_EXPIRED" (now >= expiresAt)
+        create this with
+          status = Pending
+          claimedBy = None
 
 -- ============================================================
 --                     8. CANTON DIRECT MINT
@@ -1063,6 +1087,7 @@ template CantonDirectMint
     mpaHash : Text
     mpaUri : Text
     validators : [Party]
+    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-01: Mandatory compliance
     observers : [Party]
   where
     signatory operator
@@ -1076,6 +1101,8 @@ template CantonDirectMint
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
+        -- DAML-CRIT-01: Mandatory compliance — minter must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
         
         deposit <- fetch depositCid
         assertMsg "DEPOSIT_OWNER_MISMATCH" (deposit.owner == user)
@@ -1145,6 +1172,8 @@ template CantonDirectMint
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not config.paused)
+        -- DAML-CRIT-01: Mandatory compliance — redeemer must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
         
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
@@ -1209,6 +1238,7 @@ template CantonSMUSD
     config : SmUSDConfig
     mpaHash : Text
     mpaUri : Text
+    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-01: Mandatory compliance
     observers : [Party]
   where
     signatory operator, governance
@@ -1234,6 +1264,8 @@ template CantonSMUSD
         musdCid : ContractId MintedMUSD
       controller user
       do
+        -- DAML-CRIT-01: Mandatory compliance — depositor must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
@@ -1271,6 +1303,8 @@ template CantonSMUSD
         ticketCid : ContractId CooldownTicket
       controller user
       do
+        -- DAML-CRIT-01: Mandatory compliance — withdrawer must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
         ticket <- fetch ticketCid
         assertMsg "OWNER_MISMATCH" (ticket.owner == user)
         

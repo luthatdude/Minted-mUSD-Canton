@@ -30,7 +30,7 @@ import CantonSMUSD (CantonSMUSD(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..))
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
 -- ============================================================
@@ -65,7 +65,7 @@ template BoostPoolLP
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        exercise complianceRegistryCid ValidateMint with minter = owner
+        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
         create BoostPoolLPTransferProposal with lp = this; newOwner; complianceRegistryCid
 
     choice BPLP_Split : (ContractId BoostPoolLP, ContractId BoostPoolLP)
@@ -92,6 +92,7 @@ template BoostPoolLPTransferProposal
     choice BPLPTransferProposal_Accept : ContractId BoostPoolLP
       controller newOwner
       do
+        -- Receiver compliance check (can receive assets)
         exercise complianceRegistryCid ValidateMint with minter = newOwner
         create lp with owner = newOwner
 
