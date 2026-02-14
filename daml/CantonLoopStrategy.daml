@@ -24,10 +24,11 @@ module CantonLoopStrategy where
 
 import DA.Time
 import DA.Action (when)
-import DA.Optional (isSome)
-import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), Money, Bps)
+import DA.Optional (isSome, fromSome)
+import CantonDirectMint (CantonUSDC(..), USDCx(..), CantonMUSD(..), Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonLending (CantonLendingService(..), EscrowedCollateral(..), CollateralType(..))
+import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), IsCompliant(..), ValidateMint(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
 import UserPrivacySettings (lookupUserObservers)
@@ -40,11 +41,19 @@ import UserPrivacySettings (lookupUserObservers)
 data LoopStrategy = SMUSDMaxiLoop
   deriving (Eq, Show)
 
+-- | Deposit asset type for the loop entry ramp
+data LoopDepositType
+  = LoopDeposit_USDC      -- CantonUSDC (stable, 1:1)
+  | LoopDeposit_USDCx     -- USDCx / xReserve bridged (stable, 1:1)
+  | LoopDeposit_CTN       -- CantonCoin (volatile, lower LTV)
+  deriving (Eq, Show)
+
 -- | Governance-controlled loop parameters
 data LoopConfig = LoopConfig with
     maxLoops           : Int    -- Maximum leverage loops (default 5)
     minHealthFactorBps : Bps    -- Minimum health factor x 10000 (default 11500 = 1.15)
-    targetLtvBps       : Bps    -- Target loan-to-value x 10000 (default 9000 = 90%)
+    targetLtvBps       : Bps    -- Target loan-to-value x 10000 for stables (default 9000 = 90%)
+    ctnTargetLtvBps    : Bps    -- Target LTV for CantonCoin deposits (default 6000 = 60%)
   deriving (Eq, Show)
 
 -- | Default loop configuration
@@ -53,6 +62,7 @@ defaultLoopConfig = LoopConfig with
   maxLoops = 5
   minHealthFactorBps = 11500
   targetLtvBps = 9000
+  ctnTargetLtvBps = 6000       -- 60% LTV for volatile CantonCoin
 
 -- | Strategy estimation result
 data StrategyEstimate = StrategyEstimate with
@@ -72,7 +82,8 @@ template CantonLoopPosition
     user               : Party
     strategy           : LoopStrategy
     config             : LoopConfig
-    totalDeposited     : Money              -- Original USDC deposit
+    depositType        : LoopDepositType    -- What asset was deposited
+    totalDeposited     : Money              -- Original deposit amount
     loopsCompleted     : Int                -- Loops executed so far
     totalStaked        : Money              -- Total sMUSD staked
     totalBorrowed      : Money              -- Total mUSD debt accumulated
@@ -111,9 +122,13 @@ template CantonLoopPosition
         assertMsg "MAX_LOOPS_REACHED" (loopsCompleted < requestedLoops)
         let newTotalStaked = totalStaked + musdStaked
         let newTotalBorrowed = totalBorrowed + musdBorrowed
-        -- Health factor check: (staked x targetLTV) / borrowed >= minHF
+        -- Health factor check: use appropriate LTV based on deposit type
+        -- CTN deposits use lower LTV (60%) due to volatility; stables use standard (90%)
         when (newTotalBorrowed > 0.0) do
-          let hf = (newTotalStaked * intToNumeric config.targetLtvBps / 10000.0) / newTotalBorrowed
+          let effectiveLtv = case depositType of
+                LoopDeposit_CTN -> config.ctnTargetLtvBps
+                _               -> config.targetLtvBps
+          let hf = (newTotalStaked * intToNumeric effectiveLtv / 10000.0) / newTotalBorrowed
           assertMsg "HEALTH_FACTOR_TOO_LOW" (hf >= intToNumeric config.minHealthFactorBps / 10000.0)
         now <- getTime
         create this with
@@ -137,6 +152,7 @@ template CantonLoopPosition
           operator
           user
           positionCid = unwindingPosCid
+          depositType
           totalBorrowed
           loopsCompleted
           totalDeposited
@@ -191,6 +207,7 @@ template CantonLoopStrategyService
       with
         user              : Party
         depositAmount     : Money
+        depositType       : LoopDepositType
         requestedLoops    : Int
         loopConfigCid     : ContractId CantonLoopStrategyConfig
       controller user
@@ -214,6 +231,7 @@ template CantonLoopStrategyService
           user
           strategy = SMUSDMaxiLoop
           config = defaultLoopConfig
+          depositType
           totalDeposited = netDeposit
           loopsCompleted = 0
           totalStaked = 0.0
@@ -356,6 +374,20 @@ template CantonLoopStrategyConfig
         archive governanceProofCid
         create this with config = config with targetLtvBps = newTargetLtvBps
 
+    choice LoopConfig_UpdateCtnTargetLtv : ContractId CantonLoopStrategyConfig
+      with
+        newCtnTargetLtvBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- fetch governanceProofCid
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_MODULE" (proof.targetModule == "CantonLoopStrategy")
+        -- CTN is volatile: cap LTV between 30% and 75%
+        assertMsg "CTN_LTV_OUT_OF_RANGE" (newCtnTargetLtvBps >= 3000 && newCtnTargetLtvBps <= 7500)
+        archive governanceProofCid
+        create this with config = config with ctnTargetLtvBps = newCtnTargetLtvBps
+
     choice LoopConfig_UpdateMinHealthFactor : ContractId CantonLoopStrategyConfig
       with
         newMinHealthFactorBps : Bps
@@ -386,13 +418,17 @@ template CantonLoopStrategyConfig
 -- ============================================================
 
 -- | Request to open a new leveraged loop position.
+-- Accepts USDC, USDCx, or CantonCoin as the deposit asset.
 template CantonLoopRequest
   with
     operator       : Party
     user           : Party
     strategy       : LoopStrategy
     config         : LoopConfig
-    initialUsdcCid : ContractId CantonUSDC
+    depositType    : LoopDepositType
+    initialUsdcCid : Optional (ContractId CantonUSDC)
+    initialUsdcxCid : Optional (ContractId USDCx)
+    initialCtnCid  : Optional (ContractId CantonCoin)
     initialAmount  : Money
     requestedLoops : Int
     requestedAt    : Time
@@ -401,7 +437,7 @@ template CantonLoopRequest
     signatory operator, user
     ensure initialAmount > 0.0 && requestedLoops >= 1
 
-    -- | Execute the loop request: compliance check, consume USDC, create position.
+    -- | Execute the loop request: compliance check, consume deposit asset, create position.
     choice LoopRequest_Execute : ContractId CantonLoopPosition
       controller operator
       do
@@ -410,20 +446,37 @@ template CantonLoopRequest
         case cfg.complianceRegistryCid of
           Some regCid -> exercise regCid ValidateMint with minter = user
           None -> pure ()
-        -- SECURITY FIX DAML-C-03: Validate USDC issuer matches operator before
-        -- archiving dual-signatory token to prevent runtime authorization failures.
-        usdc <- fetch initialUsdcCid
-        assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
-        assertMsg "USDC_OWNER_MUST_BE_USER" (usdc.owner == user)
 
-        -- Archive the USDC (deposited into strategy)
-        archive initialUsdcCid
+        -- SECURITY FIX DAML-C-03: Validate issuer matches operator before
+        -- archiving dual-signatory token to prevent runtime authorization failures.
+        -- Branch on deposit type to archive the correct token.
+        case depositType of
+          LoopDeposit_USDC -> do
+            let cid = fromSome initialUsdcCid
+            usdc <- fetch cid
+            assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
+            assertMsg "USDC_OWNER_MUST_BE_USER" (usdc.owner == user)
+            archive cid
+          LoopDeposit_USDCx -> do
+            let cid = fromSome initialUsdcxCid
+            usdcx <- fetch cid
+            assertMsg "USDCX_ISSUER_MUST_BE_OPERATOR" (usdcx.issuer == operator)
+            assertMsg "USDCX_OWNER_MUST_BE_USER" (usdcx.owner == user)
+            archive cid
+          LoopDeposit_CTN -> do
+            let cid = fromSome initialCtnCid
+            ctn <- fetch cid
+            assertMsg "CTN_ISSUER_MUST_BE_OPERATOR" (ctn.issuer == operator)
+            assertMsg "CTN_OWNER_MUST_BE_USER" (ctn.owner == user)
+            archive cid
+
         now <- getTime
         create CantonLoopPosition with
           operator
           user
           strategy
           config
+          depositType
           totalDeposited = initialAmount
           loopsCompleted = 0
           totalStaked = 0.0
@@ -437,7 +490,7 @@ template CantonLoopRequest
           lastUpdated = now
           privacyObservers = []
 
-    -- | Cancel the request (user keeps USDC).
+    -- | Cancel the request (user keeps their deposit token).
     choice LoopRequest_Cancel : ()
       controller user
       do pure ()
@@ -452,13 +505,16 @@ template CantonUnwindRequest
     operator       : Party
     user           : Party
     positionCid    : ContractId CantonLoopPosition
+    depositType    : LoopDepositType
     totalBorrowed  : Money
     loopsCompleted : Int
     totalDeposited : Money
   where
     signatory operator, user
 
-    -- | Execute the unwind: validate, archive sMUSD/mUSD, return USDC.
+    -- | Execute the unwind: validate, archive sMUSD/mUSD, return proceeds.
+    -- Proceeds are always returned as CantonUSDC regardless of original deposit
+    -- type, because the loop converts all deposits into mUSD → sMUSD internally.
     choice UnwindRequest_Execute : ContractId CantonUSDC
       with
         usdcReturned   : Money
@@ -537,12 +593,18 @@ calculateHealthFactor stakedValue thresholdBps debtValue
   | debtValue == 0.0 = 999.0
   | otherwise = (stakedValue * intToNumeric thresholdBps / 10000.0) / debtValue
 
+-- | Resolve the effective target LTV based on deposit type.
+effectiveTargetLtvBps : LoopConfig -> LoopDepositType -> Bps
+effectiveTargetLtvBps config LoopDeposit_CTN = config.ctnTargetLtvBps
+effectiveTargetLtvBps config _               = config.targetLtvBps
+
 -- | Estimate strategy outcomes for given parameters.
-estimateStrategy : LoopStrategy -> LoopConfig -> Money -> Int -> Money -> Money -> StrategyEstimate
-estimateStrategy _strategy config depositAmount numLoops stakingAPY borrowAPY =
-  let leverage = calculateLeverage (intToNumeric config.targetLtvBps / 10000.0) numLoops
+estimateStrategy : LoopStrategy -> LoopConfig -> LoopDepositType -> Money -> Int -> Money -> Money -> StrategyEstimate
+estimateStrategy _strategy config depositType depositAmount numLoops stakingAPY borrowAPY =
+  let ltvBps = effectiveTargetLtvBps config depositType
+      leverage = calculateLeverage (intToNumeric ltvBps / 10000.0) numLoops
       netAPY = calculateNetAPY stakingAPY borrowAPY leverage
       totalStaked = depositAmount * leverage
       totalBorrowedEst = totalStaked - depositAmount
-      healthFactor = calculateHealthFactor totalStaked config.targetLtvBps totalBorrowedEst
+      healthFactor = calculateHealthFactor totalStaked ltvBps totalBorrowedEst
   in StrategyEstimate with ..
