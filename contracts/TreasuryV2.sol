@@ -11,21 +11,22 @@ import "./TimelockGoverned.sol";
 import "./Errors.sol";
 /**
  * @title TreasuryV2
- * @notice Auto-allocating treasury that distributes deposits across strategies on mint
- * @dev When USDC comes in, it's automatically split according to target allocations
+ * @notice Treasury that holds USDC reserves and supports manual deployment to strategies
+ * @dev USDC from mints accumulates as idle reserves. The operator manually deploys
+ *      into the MetaVault (vault-of-vaults) via deployToStrategy() from the admin UI.
+ *      MetaVault then distributes across its sub-vaults (Pendle, Morpho, Fluid, Euler, etc.).
  *
- * Default Allocation (v6 — Feb 2026):
- *   Pendle Multi-Pool:        30% (11.7% APY)
- *   Euler V2 RLUSD/USDC Loop: 10% (8-12% APY — cross-stable leverage)
- *   Morpho Loop:              20% (11.5% APY)
- *   Fluid Stable #146:        35% (14.3% APY — syrupUSDC/USDC)
- *   USDC Reserve:              5% (0% APY)
- *   ────────────────────────────────────────
+ * Architecture (v7 — Feb 2026):
+ *   TreasuryV2 (idle USDC reserves)
+ *     └─► MetaVault (manual deploy via admin page)
+ *           ├─ Pendle Multi-Pool:        30% (11.7% APY)
+ *           ├─ Fluid Stable #146:        35% (14.3% APY)
+ *           ├─ Morpho Loop:              20% (11.5% APY)
+ *           └─ Euler V2 RLUSD/USDC:      10% (8-12% APY)
  *   Blended:                  ~12.5% gross APY
  *
- * Optional: MetaVault (vault-of-vaults) can be registered as a single
- *   strategy via addStrategy(). MetaVault implements IStrategy and
- *   further distributes USDC across its own sub-vault allocations.
+ * No auto-allocation — all deployments are manual via ALLOCATOR_ROLE.
+ * MetaVault implements IStrategy and is registered via addStrategy().
  *
  * Revenue Split:
  *   smUSD Holders:      60% (~7.5% net APY target)
