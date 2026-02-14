@@ -1,14 +1,14 @@
 # INSTITUTIONAL-GRADE SECURITY AUDIT REPORT
 ## Minted mUSD Canton Protocol — Full Re-Audit v2
-### February 14, 2026
+### February 13, 2026
 
 **Auditors**: Minted Security Team (6-Agent Coordinated Review)  
 **Methodology**: Trail of Bits / Spearbit / Consensys Diligence hybrid framework  
 **Scope**: Every source file across all layers (~170+ files)  
 **Languages**: Solidity 0.8.26, DAML, TypeScript, YAML/K8s  
 **Agents Deployed**: solidity-auditor, daml-auditor, typescript-reviewer, infra-reviewer, testing-agent, gas-optimizer  
-**Prior Audit**: INSTITUTIONAL_AUDIT_2026_v1.md (Feb 13, first pass)  
-**Delta**: v2→v3: 3 DAML blockers resolved (BLOCK-1 supply unification, BLOCK-2 compliance gating, BLOCK-3 upgrade framework). DirectMintV2 `setFeeRecipient` TIMELOCK_ROLE fix.
+**Prior Audit**: INSTITUTIONAL_AUDIT_2026_v1.md (same date, first pass)  
+**Delta**: 6 prior findings resolved/retracted; net new findings identified through deeper analysis
 
 ---
 
@@ -24,10 +24,9 @@
 | **Low** | 32 |
 | **Informational** | 24 |
 | **Gas Optimizations** | 14 |
-| **Composite Score** | **9.0 / 10.0** |
+| **Composite Score** | **8.5 / 10.0** |
 | **Critical/High Resolved** | **17 / 17 (100%)** |
-| **DAML Blockers Resolved** | **3 / 3 (BLOCK-1/2/3)** |
-| **Verdict** | **INSTITUTIONAL GRADE — Elite Tier** |
+| **Verdict** | **INSTITUTIONAL GRADE — Strong Tier** |
 
 ---
 
@@ -52,21 +51,19 @@
 
 | # | Category (Weight) | Score | Agent | Key Observations |
 |---|---|---|---|---|
-| 1 | **Smart Contract Security** (25%) | 9.0 / 10 | solidity-auditor | 0 criticals, 0 highs. All timelock setters unified under TIMELOCK_ROLE (SOL-H-01 resolved). `withdrawFor` recipient restriction applied to upgradeable variant (SOL-H-02 resolved). Strong RBAC, CEI, ReentrancyGuard throughout. Per-operation `forceApprove` across all strategies. `setFeeRecipient` fixed to TIMELOCK_ROLE (DirectMintV2). Remaining: medium/low findings only. |
-| 2 | **Cross-Chain Bridge Security** (15%) | 9.4 / 10 | solidity-auditor | 8-layer replay protection. V1 DAML templates archived. Attestation entropy + state hash + nonce + timestamp + rate limiting + age check + unpause timelock. Sequential nonces, sorted-signer dedup, min signatures ∈ [2,10]. Canton state hash verification. `migrateUsedAttestations` for cross-version replay prevention. |
-| 3 | **DAML/Canton Layer** (10%) | 9.0 / 10 | daml-auditor | **BLOCK-1 RESOLVED**: Supply unified — `CantonMint_Mint` routes through `MUSDSupplyService`, `Lending_WithdrawReserves` enforces module+global caps, `Unstake` cross-module coordination via `lookupByKey`. **BLOCK-2 RESOLVED**: 30+ choices now compliance-gated (transfers, swaps, leverage, liquidation, bridge, staking). **BLOCK-3 RESOLVED**: `MigrationStep` template, threshold rollback, verified migration execution. Dual-signatory model, BFT 67% attestation. |
-| 4 | **TypeScript Services** (10%) | 9.3 / 10 | typescript-reviewer | 0 highs. TLS enforcement with 5s watchdog timer on all services. KMS-only production signing. Docker secrets via `/run/secrets/` with file-mount pattern. Private key zeroed after read. Exponential backoff with RPC failover. Flashbots MEV protection. Per-tx approval pattern. JWT-scoped short-lived tokens. |
-| 5 | **Infrastructure & DevOps** (10%) | 9.6 / 10 | infra-reviewer | PSS `restricted` enforced (enforce+audit+warn). Default-deny NetworkPolicies with per-component egress rules. All 13 GitHub Actions SHA-pinned. SBOM generation + cosign image signing. ESO + AWS Secrets Manager integration. SHA-pinned init containers. Multi-stage Docker builds with read-only rootfs, non-root (UID 1001). |
-| 6 | **Operational Security** (10%) | 9.5 / 10 | infra-reviewer | 20+ PrometheusRules across 6 groups with runbook URLs. Incident runbook index ConfigMap with severity classification. PDB maxUnavailable, TopologySpreadConstraints for AZ distribution. Off-cluster S3/GCS backups. Graceful shutdown, health endpoints. Loki log aggregation. Bridge relay delay alert (<10min). |
-| 7 | **Test Coverage** (10%) | 8.0 / 10 | testing-agent | 2,399+ total tests. 1,770 Hardhat + 72 Certora rules + 27 Foundry fuzz/invariant + 421 DAML scenarios + 97 TypeScript tests. CrossModuleIntegrationTest covers 10 DAML flows. 70+ `submitMustFail` negative assertions. Zero frontend tests. 5 DAML test stubs need expansion. |
-| 8 | **Gas Efficiency** (10%) | 7.5 / 10 | gas-optimizer | Custom errors across 17 contracts (GAS-05 ✅). Internal `_getPrice()` saves ~7,800 gas/tx (GAS-01 ✅). Per-tx `forceApprove` on immutable treasury. ~15,000 gas still saveable per borrow/repay cycle (GAS-02/03/04). |
+| 1 | **Smart Contract Security** (25%) | 9.0 / 10 | solidity-auditor | 0 criticals, 0 highs. All timelock setters unified under TIMELOCK_ROLE (SOL-H-01 resolved). `withdrawFor` recipient restriction applied to upgradeable variant (SOL-H-02 resolved). Strong RBAC, CEI, ReentrancyGuard throughout. Per-operation `forceApprove` across all strategies. Remaining: medium/low findings only. |
+| 2 | **Cross-Chain Bridge Security** (15%) | 8.6 / 10 | solidity-auditor | 8-layer replay protection. Deprecated V1 validator still in codebase (medium). V1 DAML templates archived. Attestation entropy + state hash + nonce + timestamp + rate limiting + age check + unpause timelock. |
+| 3 | **DAML/Canton Layer** (10%) | 8.8 / 10 | daml-auditor | 0 highs. Compliance now mandatory everywhere (DAML-H-02 resolved). `USDCx_Transfer` compliance gap closed (DAML-H-01 resolved). `ConsumeProof` now has executor authorization check (DAML-H-02 resolved). Dual-signatory model, BFT 67% attestation strong. Remaining: medium/low findings only. |
+| 4 | **TypeScript Services** (10%) | 8.5 / 10 | typescript-reviewer | 0 highs. dotenv removed, `parseFloat` replaced with `Number()` + validation (TS-H-01 resolved). Hardcoded ETH price replaced with env var (TS-H-02 resolved). Event listener leak fixed (TS-H-03 resolved). TLS enforcement with watchdog, KMS-only prod signing, Docker secrets. Remaining: medium/low findings only. |
+| 5 | **Infrastructure & DevOps** (10%) | 8.8 / 10 | infra-reviewer | 0 criticals, 0 highs. PSS `restricted`, default-deny NetworkPolicies, SHA-pinned Actions, ESO integration. Canton digests verified real (CRIT-01 resolved). DAML SDK install pinned with SHA-256 verification (CRIT-02 resolved). SBOM + cosign signing added (INFRA-H-04 resolved). Remaining: medium/low findings only. |
+| 6 | **Operational Security** (10%) | 8.5 / 10 | infra-reviewer | 0 highs. Health endpoints, Prometheus alerting rules, graceful shutdown. ServiceMonitor labels fixed (INFRA-H-01 resolved). PDB changed to maxUnavailable (INFRA-H-03 resolved). Off-cluster S3/GCS backups added (INFRA-H-02 resolved). Remaining: NGINX exporter absence (INFRA-L-02). |
+| 7 | **Test Coverage** (10%) | 7.8 / 10 | testing-agent | 2,399 total tests (up from ~2,100). 1,770 Hardhat + 72 Certora rules + 27 Foundry fuzz/invariant + 421 DAML scenarios + 97 TypeScript tests. Zero frontend tests. SkySUSDSStrategy under-tested (13 tests). 10/21 contracts lack Certora specs. |
+| 8 | **Gas Efficiency** (10%) | 7.5 / 10 | gas-optimizer | ~~256 string requires~~ → custom errors across 17 contracts (GAS-05 ✅). ~~PriceOracle external self-call~~ → internal `_getPrice()` saves ~7,800 gas/tx (GAS-01 ✅). Per-tx `forceApprove` on immutable treasury. ~15,000 gas still saveable per borrow/repay cycle (GAS-02/03/04). |
 
 ### Weighted Composite Score
 
-$$\text{Score} = (9.0 \times 0.25) + (9.4 \times 0.15) + (9.0 \times 0.10) + (9.3 \times 0.10) + (9.6 \times 0.10) + (9.5 \times 0.10) + (8.0 \times 0.10) + (7.5 \times 0.10)$$
-$$= 2.250 + 1.410 + 0.900 + 0.930 + 0.960 + 0.950 + 0.800 + 0.750 = \mathbf{8.950 \approx 9.0/10}$$
-
-> **Score Progression:** 8.0/10 (v1) → 8.5/10 (v2) → **9.0/10 (v3, post DAML BLOCK-1/2/3 fixes)**
+$$\text{Score} = (9.0 \times 0.25) + (8.6 \times 0.15) + (8.8 \times 0.10) + (8.5 \times 0.10) + (8.8 \times 0.10) + (8.5 \times 0.10) + (7.8 \times 0.10) + (7.5 \times 0.10)$$
+$$= 2.250 + 1.290 + 0.880 + 0.850 + 0.880 + 0.850 + 0.780 + 0.750 = \mathbf{8.530 \approx 8.5/10}$$
 
 ---
 
@@ -576,11 +573,11 @@ The Minted mUSD Canton protocol demonstrates **production-grade security archite
 
 | Agent | Areas Covered | Files Reviewed | Findings | Score Given |
 |---|---|---|---|---|
-| **solidity-auditor** | Smart contracts, bridge, strategies, upgradeable | 28 contracts | 0C / 2H / 9M / 12L / 8I | 9.0 |
-| **daml-auditor** | DAML templates, Canton lifecycle, compliance, upgrade | 19 DAML files | 0C / 0H / 2M / 4L / 2I | 9.0 |
-| **typescript-reviewer** | Relay, bot, points, frontend | 55+ TS files | 0C / 0H / 2M / 1L / 0I | 9.3 |
-| **infra-reviewer** | K8s, Docker, CI/CD, monitoring | 25+ YAML/Docker | 0C / 0H / 1M / 1L / 2I | 9.6 infra / 9.5 ops |
-| **testing-agent** | Test coverage, formal verification | 37+ test files | 0C / 0H / 2M / 0L / 0I | 8.0 |
+| **solidity-auditor** | Smart contracts, bridge, strategies, upgradeable | 28 contracts | 0C / 2H / 9M / 12L / 8I | 8.5 |
+| **daml-auditor** | DAML templates, Canton lifecycle, compliance | 19 DAML files | 0C / 2H / 9M / 8L / 7I | 8.3 |
+| **typescript-reviewer** | Relay, bot, points, frontend | 55+ TS files | 0C / 3H / 7M / 7L / 8I | 7.8 |
+| **infra-reviewer** | K8s, Docker, CI/CD, monitoring | 25+ YAML/Docker | 2C / 4H / 6M / 5L / 5I | 7.8 infra / 7.2 ops |
+| **testing-agent** | Test coverage, formal verification | 37+ test files | 0C / 4H / 2M / 0L / 0I | 7.8 |
 | **gas-optimizer** | Gas efficiency on hot paths | 17 contracts | 14 optimizations (2 resolved: GAS-01, GAS-05) | 7.5 |
 
 ## APPENDIX B: TOTAL TEST COUNTS
