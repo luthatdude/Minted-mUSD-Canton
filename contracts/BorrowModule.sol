@@ -819,7 +819,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause borrowing and repayments
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 

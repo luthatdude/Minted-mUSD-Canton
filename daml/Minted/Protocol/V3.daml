@@ -305,6 +305,12 @@ template MintedMUSD
         -- DAML-H-04: Fetch trusted validators and operator from BridgeService
         bridgeSvc <- fetch bridgeServiceCid
 
+        -- BRIDGE-M-02: Check bridge is not paused before allowing outbound transfers.
+        -- Without this check, users could burn mUSD on Canton but the resulting
+        -- attestation would never be processed on Ethereum during a security incident,
+        -- causing permanent loss of funds.
+        assertMsg "BRIDGE_PAUSED" (not bridgeSvc.paused)
+
         -- BRIDGE-H-02: Assign nonce from BridgeService (monotonically increasing, no user control)
         (newBridgeSvcCid, assignedNonce) <- exercise bridgeServiceCid Bridge_AssignNonce
 
@@ -643,10 +649,19 @@ template Vault
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
-        
+
+        -- DAML-M-04: Accrue interest before reading current debt to prevent stale calculations
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        let currentAccruedInterest = accruedInterest + newInterest
+        let currentTotalDebt = principalDebt + currentAccruedInterest
+
         -- Add deposited collateral
         let newCollateral = collateralAmount + depositAmount
-        
+
         -- Get oracle price
         price <- exercise oracleCid Oracle_GetPrice with 
           requester = owner
@@ -685,16 +700,19 @@ template Vault
                     receiver = owner
                   return (col + colOut, debt + borrowable, newPoolCid, newSvcCid)
 
-        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (initialCol, principalDebt + borrowAmount, initialPoolCid, newSupplyServiceCid) [1..loops]
-        
+        -- DAML-M-04: Use currentTotalDebt (with accrued interest) as the starting debt for loops
+        (finalCol, finalDebt, _, finalSvcCid) <- foldlA loopFn (initialCol, currentTotalDebt + borrowAmount, initialPoolCid, newSupplyServiceCid) [1..loops]
+
         -- Health check
         let finalValue = finalCol * price
         assertMsg "UNHEALTHY_AFTER_ADJUST" (finalValue >= finalDebt * config.liquidationThreshold)
-        
-        now <- getTime
+
+        -- DAML-M-04: Store accrued interest separately and update lastInterestUpdate
+        let newPrincipalDebt = finalDebt - currentAccruedInterest
         vaultCid <- create this with
           collateralAmount = finalCol
-          principalDebt = finalDebt
+          principalDebt = newPrincipalDebt
+          accruedInterest = currentAccruedInterest
           lastInterestUpdate = now
         
         return (vaultCid, finalSvcCid)
@@ -1451,6 +1469,9 @@ template BridgeService
         assertMsg "BRIDGE_PAUSED" (not paused)
 
         attestation <- fetch attestationCid
+        -- DAML-M-01: Verify attestation aggregator matches bridge operator to prevent
+        -- a malicious aggregator from injecting fake attestations
+        assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
 
@@ -1577,6 +1598,11 @@ template AttestationRequest
       do
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- BRIDGE-M-03: Explicit upper bound on signature count. The UNAUTHORIZED_VALIDATOR
+        -- check implicitly limits this (only group members can sign, and ALREADY_SIGNED
+        -- prevents duplicates), but we make the bound explicit to prevent any theoretical
+        -- unbounded growth of ecdsaSignatures/collectedSignatures.
+        assertMsg "SIGNATURE_COUNT_EXCEEDS_VALIDATORS" (Set.size collectedSignatures < length validatorGroup)
         assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature >= 130)
 
         now <- getTime

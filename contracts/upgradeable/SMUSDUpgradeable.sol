@@ -121,6 +121,8 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
   _grantRole(DEFAULT_ADMIN_ROLE, _admin);
   _grantRole(PAUSER_ROLE, _admin);
   _grantRole(TIMELOCK_ROLE, _timelockController);
+  // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+  _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
   if (_treasury != address(0)) {
    treasury = _treasury;
@@ -511,9 +513,8 @@ contract SMUSDUpgradeable is ERC4626Upgradeable, AccessControlUpgradeable, Reent
  }
 
  /// @notice Unpause all deposits and withdrawals
- /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
- /// This ensures a compromised PAUSER cannot immediately re-enable operations
- function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+ /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+ function unpause() external onlyRole(TIMELOCK_ROLE) {
  _unpause();
  }
 

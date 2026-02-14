@@ -318,8 +318,8 @@ contract DirectMintV2 is AccessControl, ReentrancyGuard, Pausable {
         _pause();
     }
 
-    /// @notice Unpause requires admin, not pauser (separation of duties)
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Unpause requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 

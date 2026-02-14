@@ -181,6 +181,11 @@ spec:
             - name: tls-certs
               mountPath: /etc/canton/tls
               readOnly: true
+            # INFRA-M-01: Mount PostgreSQL CA certificate for sslmode=verify-full
+            - name: postgres-ca-cert
+              mountPath: /etc/canton/tls/postgres-ca.crt
+              subPath: ca.crt
+              readOnly: true
             - name: tmp
               mountPath: /tmp
             # INFRA-H-04: Mount DB credentials as files instead of env vars
@@ -297,6 +302,11 @@ spec:
         - name: jwt-secret-vol
           secret:
             secretName: json-api-credentials
+        # INFRA-M-01: PostgreSQL CA certificate for verify-full SSL mode
+        # Must contain ca.crt key with the PEM-encoded CA that signed the PostgreSQL server cert
+        - name: postgres-ca-cert
+          secret:
+            secretName: postgres-ca-cert
         # INFRA-H-04: DB credentials mounted as files (read from /run/secrets/)
         - name: db-credentials
           secret:

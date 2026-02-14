@@ -225,13 +225,13 @@ class YieldKeeper {
 
     console.log(`💰 Deploy opportunity: $${this.formatUsdc(deployable)} deployable`);
 
-    // 2. Check gas price
+    // 2. Check gas price (TS-M-03: use BigInt comparison to avoid precision loss)
     const feeData = await this.provider.getFeeData();
     const gasPrice = feeData.gasPrice || 0n;
-    const gasPriceGwei = Number(gasPrice) / 1e9;
+    const maxGasPriceWei = BigInt(this.config.maxGasPriceGwei) * 1_000_000_000n;
 
-    if (gasPriceGwei > this.config.maxGasPriceGwei) {
-      console.log(`⛽ Gas too high (${gasPriceGwei.toFixed(1)} gwei > ${this.config.maxGasPriceGwei}), skipping`);
+    if (gasPrice > maxGasPriceWei) {
+      console.log(`⛽ Gas too high (${ethers.formatUnits(gasPrice, "gwei")} gwei > ${this.config.maxGasPriceGwei}), skipping`);
       return;
     }
 
@@ -239,7 +239,8 @@ class YieldKeeper {
     try {
       const gasEstimate = await this.treasury.keeperTriggerAutoDeploy.estimateGas();
       const gasCostWei = gasEstimate * gasPrice;
-      const gasCostEth = Number(gasCostWei) / 1e18;
+      // TS-M-03: Use ethers.formatUnits for safe BigInt → decimal conversion
+      const gasCostEth = parseFloat(ethers.formatUnits(gasCostWei, 18));
 
       // TS-H-02 FIX: Use configurable ETH price from env/oracle instead of hardcoded $2000
       // In production, this should be fetched from the price oracle service
@@ -251,7 +252,8 @@ class YieldKeeper {
       const gasCostUsd = gasCostEth * ethPriceUsd;
 
       // Estimate daily yield on deployed amount (assume 10% APY)
-      const deployableUsd = Number(deployable) / 1e6;
+      // TS-M-04: Use ethers.formatUnits for safe BigInt → decimal conversion
+      const deployableUsd = parseFloat(ethers.formatUnits(deployable, 6));
       const dailyYieldUsd = (deployableUsd * 0.10) / 365;
 
       console.log(`   Gas cost: $${gasCostUsd.toFixed(2)} | Daily yield: $${dailyYieldUsd.toFixed(2)}`);
@@ -288,9 +290,10 @@ class YieldKeeper {
 
   /**
    * Format USDC amount for display (6 decimals → human readable)
+   * TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
    */
   private formatUsdc(amount: bigint): string {
-    return (Number(amount) / 1e6).toLocaleString(undefined, {
+    return parseFloat(ethers.formatUnits(amount, 6)).toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
@@ -299,11 +302,12 @@ class YieldKeeper {
   /**
    * Log metrics (placeholder for Prometheus/DataDog integration)
    */
+  // TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
   private logMetrics(event: string, amount: bigint): void {
     const metrics = {
       timestamp: new Date().toISOString(),
       event,
-      amountUsdc: Number(amount) / 1e6,
+      amountUsdc: ethers.formatUnits(amount, 6),
       keeper: this.walletAddress,
     };
     console.log("📈 METRICS:", JSON.stringify(metrics));
@@ -346,13 +350,14 @@ export async function getKeeperStatus(config: KeeperConfig): Promise<{
     treasury.shouldAutoDeploy(),
   ]);
 
+  // TS-M-04: Use ethers.formatUnits to avoid precision loss on large USDC amounts
   return {
     autoDeployEnabled: enabled,
     defaultStrategy: strategy,
-    threshold: (Number(threshold) / 1e6).toFixed(2),
-    deployable: (Number(deployable) / 1e6).toFixed(2),
-    availableReserves: (Number(reserves) / 1e6).toFixed(2),
-    deployedToStrategies: (Number(deployed) / 1e6).toFixed(2),
+    threshold: parseFloat(ethers.formatUnits(threshold, 6)).toFixed(2),
+    deployable: parseFloat(ethers.formatUnits(deployable, 6)).toFixed(2),
+    availableReserves: parseFloat(ethers.formatUnits(reserves, 6)).toFixed(2),
+    deployedToStrategies: parseFloat(ethers.formatUnits(deployed, 6)).toFixed(2),
     shouldDeploy,
   };
 }

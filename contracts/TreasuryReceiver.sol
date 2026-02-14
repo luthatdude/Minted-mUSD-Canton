@@ -276,19 +276,21 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      * @notice Authorize a DepositRouter on a source chain
      * @param chainId Wormhole chain ID
      * @param routerAddress Address of the DepositRouter (as bytes32)
-     * @dev Requires BRIDGE_ADMIN_ROLE
+     * @dev Requires timelock (48h governance delay) — router changes control which
+     *      cross-chain sources can trigger minting, so they must be timelocked.
      */
-    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyRole(BRIDGE_ADMIN_ROLE) {
+    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyTimelock {
         authorizedRouters[chainId] = routerAddress;
         emit RouterAuthorized(chainId, routerAddress);
     }
-    
+
     /**
      * @notice Revoke authorization for a source chain
      * @param chainId Wormhole chain ID
-     * @dev Requires BRIDGE_ADMIN_ROLE
+     * @dev Requires timelock (48h governance delay) — router changes control which
+     *      cross-chain sources can trigger minting, so they must be timelocked.
      */
-    function revokeRouter(uint16 chainId) external onlyRole(BRIDGE_ADMIN_ROLE) {
+    function revokeRouter(uint16 chainId) external onlyTimelock {
         delete authorizedRouters[chainId];
         emit RouterRevoked(chainId);
     }
@@ -337,8 +339,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
     }
 
     /// @notice Unpause operations
-    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev Requires timelock (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyTimelock {
         _unpause();
     }
 }
