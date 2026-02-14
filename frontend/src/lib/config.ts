@@ -38,6 +38,12 @@ export const CANTON_CONFIG = {
   // token: "" - Removed: Use /api/canton/token endpoint instead
 };
 
+// Admin wallet address for client-side UI gating.
+// On-chain role checks (DEFAULT_ADMIN_ROLE / TIMELOCK_ROLE) still protect every tx.
+export const ADMIN_WALLET: string = (
+  process.env.NEXT_PUBLIC_ADMIN_WALLET || ""
+).toLowerCase();
+
 export const USDC_DECIMALS = 6;
 export const MUSD_DECIMALS = 18;
 export const SCALING_FACTOR = 10n ** 12n; // USDC 6 → mUSD 18
