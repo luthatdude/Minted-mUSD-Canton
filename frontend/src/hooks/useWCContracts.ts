@@ -19,6 +19,7 @@ import { MORPHO_MARKET_REGISTRY_ABI } from "@/abis/MorphoMarketRegistry";
 import { YIELD_SCANNER_ABI } from "@/abis/YieldScanner";
 import { StrategyFactoryABI } from "@/abis/StrategyFactory";
 import { YieldVerifierABI } from "@/abis/YieldVerifier";
+import { META_VAULT_ABI } from "@/abis/MetaVault";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -39,6 +40,7 @@ const ABI_MAP: Record<string, readonly string[]> = {
   YieldScanner: YIELD_SCANNER_ABI,
   StrategyFactory: StrategyFactoryABI,
   YieldVerifier: YieldVerifierABI,
+  MetaVault: META_VAULT_ABI,
 };
 
 /**
@@ -86,6 +88,7 @@ export function useWCContracts() {
         yieldScanner: null,
         strategyFactory: null,
         yieldVerifier: null,
+        metaVault: null,
       };
     }
 
@@ -114,6 +117,7 @@ export function useWCContracts() {
       yieldScanner: createContract("YieldScanner"),
       strategyFactory: createContract("StrategyFactory"),
       yieldVerifier: createContract("YieldVerifier"),
+      metaVault: createContract("MetaVault"),
     };
   }, [signer, provider, isConnected]);
 }
