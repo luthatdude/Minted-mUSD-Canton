@@ -16,17 +16,26 @@ import "./Errors.sol";
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
  * @dev When USDC comes in, it's automatically split according to target allocations
  *
- * Default Allocation:
- *   Pendle Multi-Pool:  40% (11.7% APY)
- *   Morpho Loop:        30% (11.5% APY)
- *   Sky sUSDS:          20% (8% APY)
- *   USDC Reserve:       10% (0% APY)
- *   ────────────────────────────────────
- *   Blended:            ~10% gross APY
+ * Default Allocation (50/50 Strategy Split):
+ *
+ *   ── Existing Strategies (50%) ──────────────
+ *   Pendle Multi-Pool:  20% (11.7% APY)
+ *   Morpho Loop:        15% (11.5% APY)
+ *   Sky sUSDS:          15% (8% APY)
+ *
+ *   ── 3x Basis Trade (50%) ──────────────────
+ *   Basis Trading:      50% (~30% APY gross, 3x leveraged funding)
+ *
+ *   USDC Reserve:       10% (0% APY, deducted before split)
+ *   ─────────────────────────────────────────────
+ *   Blended:            ~18.5% gross APY
+ *     Existing leg:     (20%×11.7 + 15%×11.5 + 15%×8) / 50 = ~10.6%
+ *     Basis leg:        ~30% × 50/90 = ~16.7% contribution
+ *     Weighted:         ~18.5% gross on deployed capital
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~6% net APY target)
- *   Protocol:           40% (spread above 6%)
+ *   smUSD Holders:      60% (~11% net APY target)
+ *   Protocol:           40% (spread above target)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
