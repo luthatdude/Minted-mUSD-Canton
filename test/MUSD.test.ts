@@ -30,8 +30,6 @@ describe("MUSD", function () {
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.grantRole(await musd.COMPLIANCE_ROLE(), compliance.address);
     await musd.grantRole(await musd.EMERGENCY_ROLE(), emergency.address);
-    // AUDIT SOL-H-02: Grant TIMELOCK_ROLE to deployer for supply cap increase tests
-    await musd.grantRole(await musd.TIMELOCK_ROLE(), deployer.address);
 
     // Set local cap to 100% so effective cap = supplyCap for supply-cap tests
     await musd.setLocalCapBps(10000);

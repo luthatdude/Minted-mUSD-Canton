@@ -697,7 +697,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     const STRATEGIST_ROLE = ethers.keccak256(ethers.toUtf8Bytes("STRATEGIST_ROLE"));
     const ALLOCATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("ALLOCATOR_ROLE"));
 
-    it("should manually deploy deposits to strategies", async function () {
+    it("should auto-allocate deposits to strategies", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
@@ -710,13 +710,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
       await directMint.connect(user1).mint(amount);
-
-      // Funds stay in reserve after mint — manually deploy
-      const reserveBefore = await treasury.reserveBalance();
-      expect(reserveBefore).to.be.gt(0n);
-
-      const deployAmt = reserveBefore * 9n / 10n; // deploy 90%
-      await treasury.deployToStrategy(await mockStrategy.getAddress(), deployAmt);
 
       const stratValue = await mockStrategy.totalValue();
       expect(stratValue).to.be.gt(0n);
@@ -724,7 +717,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should keep reserve buffer in treasury", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
-      await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
       await timelockAddStrategy(
         treasury, admin,
@@ -735,9 +727,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
       await directMint.connect(user1).mint(amount);
-
-      // Manually deploy via rebalance to target allocations
-      await treasury.rebalance();
 
       const reserve = await treasury.reserveBalance();
       const total = await treasury.totalValue();
@@ -760,9 +749,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
       await directMint.connect(user1).mint(amount);
-
-      // Manually deploy to strategy
-      await treasury.deployToStrategy(await mockStrategy.getAddress(), await treasury.reserveBalance() * 9n / 10n);
 
       // Simulate yield: send extra USDC to mock strategy
       await usdc.mint(await mockStrategy.getAddress(), ethers.parseUnits("10000", USDC_DECIMALS));
@@ -790,9 +776,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
       await directMint.connect(user1).mint(amount);
 
-      // Manually deploy to first strategy before rebalance
-      await treasury.deployToStrategy(await mockStrategy.getAddress(), await treasury.reserveBalance() * 8n / 10n);
-
       await time.increase(3601);
       await treasury.rebalance();
 
@@ -808,17 +791,12 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should handle strategy removal with full withdrawal", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
-      await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
       await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 9000, 5000, 10000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
       await directMint.connect(user1).mint(amount);
-
-      // Manually deploy to strategy
-      const deployAmt = await treasury.reserveBalance() * 9n / 10n;
-      await treasury.deployToStrategy(await mockStrategy.getAddress(), deployAmt);
 
       const stratValBefore = await mockStrategy.totalValue();
       expect(stratValBefore).to.be.gt(0n);

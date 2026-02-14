@@ -40,8 +40,7 @@ describe("BLEBridgeV9", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT,
-      deployer.address  // _timelockController
+      DAILY_CAP_LIMIT
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -62,10 +61,6 @@ describe("BLEBridgeV9", function () {
     // Grant TIMELOCK_ROLE to deployer for admin function tests
     const TIMELOCK_ROLE = await bridge.TIMELOCK_ROLE();
     await bridge.grantRole(TIMELOCK_ROLE, deployer.address);
-
-    // CRIT-01: Grant RELAYER_ROLE to deployer so processAttestation calls work
-    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
-    await bridge.grantRole(RELAYER_ROLE, deployer.address);
   });
 
   // Helper to create sorted signatures
@@ -111,28 +106,28 @@ describe("BLEBridgeV9", function () {
     it("Should reject initialization with zero minSigs", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
+        upgrades.deployProxy(BridgeFactory, [0, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
       ).to.be.revertedWithCustomError(BridgeFactory, "MinSigsTooLow");  // Now requires >= 2
     });
 
     it("Should reject initialization with one minSig", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
+        upgrades.deployProxy(BridgeFactory, [1, await musd.getAddress(), COLLATERAL_RATIO, DAILY_CAP_LIMIT])
       ).to.be.revertedWithCustomError(BridgeFactory, "MinSigsTooLow");  // At least 2 required
     });
 
     it("Should reject initialization with zero MUSD address", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, ethers.ZeroAddress, COLLATERAL_RATIO, DAILY_CAP_LIMIT, deployer.address])
+        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, ethers.ZeroAddress, COLLATERAL_RATIO, DAILY_CAP_LIMIT])
       ).to.be.revertedWithCustomError(BridgeFactory, "InvalidMusdAddress");
     });
 
     it("Should reject initialization with ratio below 100%", async function () {
       const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, await musd.getAddress(), 9999, DAILY_CAP_LIMIT, deployer.address])
+        upgrades.deployProxy(BridgeFactory, [MIN_SIGNATURES, await musd.getAddress(), 9999, DAILY_CAP_LIMIT])
       ).to.be.revertedWithCustomError(BridgeFactory, "RatioBelow100Percent");
     });
   });
