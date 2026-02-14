@@ -207,6 +207,7 @@ class LiquidationBot {
   private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
+  private readonly MAX_BORROWERS = 10000;
   private supportedTokens: string[] = [];
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
@@ -214,6 +215,7 @@ class LiquidationBot {
   private isRunning = false;
   private liquidationCount = 0;
   private totalProfitUsd = 0;
+  private nonceMutex: Promise<void> = Promise.resolve();
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
@@ -283,6 +285,7 @@ class LiquidationBot {
     this.borrowModule.on("Borrowed", (user: string, amount: bigint, totalDebt: bigint) => {
       logger.info(`New borrower detected: ${user} - Debt: ${ethers.formatEther(totalDebt)} mUSD`);
       this.borrowers.add(user);
+      this.evictOldestBorrowers();
     });
     
     // Listen for deposits (potential new positions)
@@ -487,41 +490,48 @@ class LiquidationBot {
       let success = false;
       let txHash: string | undefined;
       
-      // Use Flashbots if enabled for MEV protection
-      if (this.mevExecutor && config.useFlashbots) {
-        logger.info("Executing via Flashbots (MEV protected)...");
-        const result = await this.mevExecutor.executeWithFallback(
-          this.liquidationEngine,
-          opp.borrower,
-          opp.collateralToken,
-          opp.debtToRepay,
-          true // useFlashbots
-        );
-        success = result.success;
-        txHash = result.txHash;
-        logger.info(`Execution method: ${result.method}`);
-      } else {
-        // Regular transaction (public mempool)
-        logger.info("Executing via regular transaction...");
-        const feeData = await this.provider.getFeeData();
-        const gasPrice = feeData.gasPrice || 0n;
-        const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
-        
-        const tx = await this.liquidationEngine.liquidate(
-          opp.borrower,
-          opp.collateralToken,
-          opp.debtToRepay,
-          {
-            gasLimit: 500000n,
-            gasPrice: bufferedGasPrice,
-          }
-        );
-        
-        logger.info(`Transaction submitted: ${tx.hash}`);
-        txHash = tx.hash;
-        
-        const receipt = await tx.wait();
-        success = receipt.status === 1;
+      // Nonce mutex: serialize tx submissions to prevent "nonce too low" errors
+      // when multiple liquidation paths could fire concurrently (e.g., event-driven)
+      const txResult = await this.withNonceLock(async () => {
+        // Use Flashbots if enabled for MEV protection
+        if (this.mevExecutor && config.useFlashbots) {
+          logger.info("Executing via Flashbots (MEV protected)...");
+          const result = await this.mevExecutor.executeWithFallback(
+            this.liquidationEngine,
+            opp.borrower,
+            opp.collateralToken,
+            opp.debtToRepay,
+            true // useFlashbots
+          );
+          return { success: result.success, txHash: result.txHash, method: result.method };
+        } else {
+          // Regular transaction (public mempool)
+          logger.info("Executing via regular transaction...");
+          const feeData = await this.provider.getFeeData();
+          const gasPrice = feeData.gasPrice || 0n;
+          const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
+          
+          const tx = await this.liquidationEngine.liquidate(
+            opp.borrower,
+            opp.collateralToken,
+            opp.debtToRepay,
+            {
+              gasLimit: 500000n,
+              gasPrice: bufferedGasPrice,
+            }
+          );
+          
+          logger.info(`Transaction submitted: ${tx.hash}`);
+          
+          const receipt = await tx.wait();
+          return { success: receipt.status === 1, txHash: tx.hash, method: "regular" };
+        }
+      });
+      
+      success = txResult.success;
+      txHash = txResult.txHash;
+      if (txResult.method) {
+        logger.info(`Execution method: ${txResult.method}`);
       }
       
       if (success) {
@@ -569,6 +579,7 @@ class LiquidationBot {
     }
     
     logger.info(`Historical scan complete: ${this.borrowers.size} total borrowers`);
+    this.evictOldestBorrowers();
   }
 
   getStats(): { liquidations: number; profitUsd: number; borrowersTracked: number } {
@@ -581,6 +592,42 @@ class LiquidationBot {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Evict oldest 10% of borrowers when the set exceeds MAX_BORROWERS.
+   * JS Sets maintain insertion order, so iterating gives oldest entries first.
+   * Matches the bounded-cache pattern used in relay-service.ts.
+   */
+  private evictOldestBorrowers(): void {
+    if (this.borrowers.size > this.MAX_BORROWERS) {
+      const toEvict = Math.floor(this.MAX_BORROWERS * 0.1);
+      let evicted = 0;
+      for (const key of this.borrowers) {
+        if (evicted >= toEvict) break;
+        this.borrowers.delete(key);
+        evicted++;
+      }
+      logger.info(`Evicted ${evicted} oldest borrowers (${this.borrowers.size} remaining)`);
+    }
+  }
+
+  /**
+   * Serialize access to nonce-sensitive operations. Prevents concurrent
+   * liquidation transactions from reading the same nonce, which would cause
+   * one tx to be rejected with "nonce too low".
+   */
+  private async withNonceLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const acquired = new Promise<void>((resolve) => { release = resolve; });
+    const prev = this.nonceMutex;
+    this.nonceMutex = acquired;
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
   }
 
   /**
