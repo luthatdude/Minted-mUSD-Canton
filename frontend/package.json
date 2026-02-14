@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@daml/ledger": "^2.10.3",
-    "@daml/types": "^2.10.3",
+    "@daml/types": "^3.4.11",
     "@fivenorth/loop-sdk": "^0.7.6",
     "@metamask/sdk": "^0.34.0",
     "@reown/appkit": "^1.6.0",
