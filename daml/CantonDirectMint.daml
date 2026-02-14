@@ -298,16 +298,9 @@ template CantonMUSDTransferProposal
     signatory musd.issuer, musd.owner
     observer newOwner
 
-    -- BLOCK-2: Re-validate compliance at acceptance time
     choice CantonMUSDTransferProposal_Accept : ContractId CantonMUSD
-      with
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller newOwner
-      do
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = musd.owner
-          receiver = newOwner
-        create musd with owner = newOwner
+      do create musd with owner = newOwner
 
     choice CantonMUSDTransferProposal_Reject : ContractId CantonMUSD
       controller newOwner
@@ -484,11 +477,9 @@ template CantonDirectMintService
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
     serviceName : Text           -- FIX D-M02: Unique service name for lookupByKey
-    -- GAP-4: Governance co-signatory for critical admin operations
-    governance : Party             -- Governance party for multi-sig admin choices
   where
     signatory operator
-    observer usdcIssuer, authorizedMinters, governance
+    observer usdcIssuer, authorizedMinters
 
     -- FIX D-M02: Contract key for cross-module supply cap coordination
     key (operator, serviceName) : (Party, Text)
@@ -720,11 +711,10 @@ template CantonDirectMintService
         assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
         create this with supplyCap = newCap, lastRateLimitReset = now
 
-    -- GAP-4: Governance co-signature required for pause state changes
     choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
-      controller operator, governance
+      controller operator
       do
         create this with paused = newPaused
 
@@ -751,11 +741,10 @@ template CantonDirectMintService
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonDirectMint")
         create this with complianceRegistryCid = newRegistryCid
 
-    -- GAP-4: Governance co-signature for treasury withdrawals
     choice DirectMint_WithdrawFees : ContractId CantonDirectMintService
       with
         governanceProofCid : ContractId GovernanceActionLog
-      controller operator, governance
+      controller operator
       do
         proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == TreasuryWithdrawal)

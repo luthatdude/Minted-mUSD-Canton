@@ -21,9 +21,9 @@
 module CantonSMUSD where
 
 import DA.Time
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money, CantonDirectMintService(..))
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -55,20 +55,19 @@ template CantonSMUSD
       do create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
-    -- BLOCK-2: Added compliance check
+    -- DAML-H-01a FIX: Compliance check — sender must not be blacklisted/frozen
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
+        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- BLOCK-2: Validate sender not frozen/blacklisted, receiver not blacklisted
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = owner
-          receiver = newOwner
+        -- DAML-H-01a FIX: Validate sender compliance before allowing transfer initiation
+        exercise complianceRegistryCid ValidateMint with minter = owner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
+          complianceRegistryCid
 
     choice SMUSD_Split : (ContractId CantonSMUSD, ContractId CantonSMUSD)
       with
@@ -98,19 +97,16 @@ template CantonSMUSDTransferProposal
   with
     smusd : CantonSMUSD
     newOwner : Party
+    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-H-01a FIX
   where
     signatory smusd.issuer, smusd.owner
     observer newOwner
 
-    -- BLOCK-2: Re-validate compliance at acceptance time
+    -- DAML-H-01a FIX: Recipient must pass compliance check on acceptance
     choice CantonSMUSDTransferProposal_Accept : ContractId CantonSMUSD
-      with
-        complianceRegistryCid : ContractId ComplianceRegistry  -- BLOCK-2: Required for compliance
       controller newOwner
       do
-        exercise complianceRegistryCid ValidateTransfer with
-          sender = smusd.owner
-          receiver = newOwner
+        exercise complianceRegistryCid ValidateMint with minter = newOwner
         create smusd with owner = newOwner
 
     choice CantonSMUSDTransferProposal_Reject : ContractId CantonSMUSD
@@ -150,9 +146,6 @@ template CantonStakingService
     -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
     mpaHash : Text
     mpaUri : Text
-    -- BLOCK-1: Cross-module supply coordination
-    directMintServiceName : Text  -- Key to look up CantonDirectMintService for combined supply check
-    globalMintCap : Money         -- Hard ceiling: staking + directMint combined
     observers : [Party]         -- Users who can exercise Stake/Unstake
   where
     signatory operator
@@ -239,16 +232,6 @@ template CantonStakingService
         -- Yield means unstake mints more than was staked, creating net new mUSD.
         assertMsg "UNSTAKE_EXCEEDS_MUSD_MINT_CAP" (currentUnstakeMinted + musdAmount <= musdMintCap)
 
-        -- BLOCK-1: Cross-module supply coordination.
-        -- Verify combined minting across DirectMint + Staking doesn't exceed global cap.
-        directMintOpt <- lookupByKey @CantonDirectMintService (operator, directMintServiceName)
-        case directMintOpt of
-          Some dmCid -> do
-            dm <- fetch dmCid
-            let combinedSupply = dm.currentSupply + currentUnstakeMinted + musdAmount
-            assertMsg "UNSTAKE_EXCEEDS_GLOBAL_MINT_CAP" (combinedSupply <= globalMintCap)
-          None -> assertMsg "UNSTAKE_EXCEEDS_GLOBAL_MINT_CAP" (currentUnstakeMinted + musdAmount <= globalMintCap)
-
         -- Burn smUSD shares
         archive smusdCid
 
@@ -327,10 +310,9 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Admin: Pause/unpause
-    -- GAP-4: Governance co-signature required for pause state changes
     choice Staking_SetPaused : ContractId CantonStakingService
       with
         newPaused : Bool
-      controller operator, governance
+      controller operator
       do
         create this with paused = newPaused
