@@ -21,6 +21,7 @@ export const CONTRACTS: Record<string, string> = {
   YieldScanner: process.env.NEXT_PUBLIC_YIELD_SCANNER_ADDRESS || "",
   StrategyFactory: process.env.NEXT_PUBLIC_STRATEGY_FACTORY_ADDRESS || "",
   YieldVerifier: process.env.NEXT_PUBLIC_YIELD_VERIFIER_ADDRESS || "",
+  MetaVault: process.env.NEXT_PUBLIC_META_VAULT_ADDRESS || "",
 };
 
 // Validate contract addresses at config time

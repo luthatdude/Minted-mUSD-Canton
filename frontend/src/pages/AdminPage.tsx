@@ -10,7 +10,7 @@ import { useWCContracts } from "@/hooks/useWCContracts";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 
-type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle" | "pendle" | "morpho" | "yield";
+type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle" | "pendle" | "morpho" | "metavault" | "yield";
 
 export function AdminPage() {
   const { address, isConnected } = useWalletConnect();
@@ -256,7 +256,13 @@ export function AdminPage() {
   const [yieldConfigAddr, setYieldConfigAddr] = useState("");
   const [yieldConfigProtocol, setYieldConfigProtocol] = useState("");
 
-  const { musd, directMint, treasury, bridge, borrow, oracle, pendleStrategy, pendleSelector, morphoStrategy, morphoRegistry, yieldScanner, strategyFactory, yieldVerifier } = contracts;
+  const { musd, directMint, treasury, bridge, borrow, oracle, pendleStrategy, pendleSelector, morphoStrategy, morphoRegistry, yieldScanner, strategyFactory, yieldVerifier, metaVault } = contracts;
+
+  // ── MetaVault state ──
+  const [mvVaults, setMvVaults] = useState<{strategy: string; targetBps: number; active: boolean; currentValue: number}[]>([]);
+  const [mvAddAddr, setMvAddAddr] = useState("");
+  const [mvAddTarget, setMvAddTarget] = useState("");
+  const [mvDeployAmounts, setMvDeployAmounts] = useState<Record<string, string>>({});
 
   // Current values display
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -475,6 +481,59 @@ export function AdminPage() {
     loadMorphoMarkets();
   }, [morphoRegistry, tx.success]);
 
+  // ── Load MetaVault data ──
+  useEffect(() => {
+    if (!metaVault) return;
+    async function loadMetaVault() {
+      try {
+        const allVaults = await metaVault!.getAllVaults();
+        const mapped = await Promise.all(allVaults.map(async (v: any) => {
+          let cv = 0;
+          try {
+            const iStrat = new ethers.Contract(v.strategy, [
+              "function totalValue() view returns (uint256)",
+            ], metaVault!.runner);
+            cv = Number(await iStrat.totalValue());
+          } catch {}
+          return {
+            strategy: v.strategy,
+            targetBps: Number(v.targetBps),
+            active: v.active,
+            currentValue: cv,
+          };
+        }));
+        setMvVaults(mapped);
+
+        const tv = await metaVault!.totalValue();
+        const sp = await metaVault!.sharePrice();
+        const ts = await metaVault!.totalShares();
+        const fees = await metaVault!.accruedFees();
+        const pfBps = await metaVault!.performanceFeeBps();
+        const hwm = await metaVault!.highWaterMark();
+        const autoAlloc = await metaVault!.autoAllocateEnabled();
+        const active = await metaVault!.strategyActive();
+        const rbThresh = await metaVault!.rebalanceThresholdBps();
+
+        setCurrentValues((prev) => ({
+          ...prev,
+          mvTotalValue: "$" + (Number(tv) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          mvSharePrice: (Number(sp) / 1e18).toFixed(6),
+          mvTotalShares: (Number(ts) / 1e18).toFixed(4),
+          mvAccruedFees: "$" + (Number(fees) / 1e6).toFixed(2),
+          mvPerfFee: (Number(pfBps) / 100).toFixed(1) + "%",
+          mvHWM: "$" + (Number(hwm) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          mvAutoAllocate: autoAlloc ? "true" : "false",
+          mvActive: active ? "true" : "false",
+          mvRebalanceThreshold: (Number(rbThresh) / 100).toFixed(1) + "%",
+          mvVaultCount: String(mapped.length),
+        }));
+      } catch (err) {
+        console.error("Failed to load MetaVault data:", err);
+      }
+    }
+    loadMetaVault();
+  }, [metaVault, tx.success]);
+
   if (!isConnected) {
     return <WalletConnector mode="ethereum" />;
   }
@@ -488,6 +547,7 @@ export function AdminPage() {
     { key: "oracle", label: "Oracle" },
     { key: "pendle", label: "Pendle PT" },
     { key: "morpho", label: "Morpho" },
+    { key: "metavault", label: "MetaVault" },
     { key: "yield", label: "⚡ Yield Scanner" },
   ];
 
@@ -1941,6 +2001,302 @@ export function AdminPage() {
                 Unpause (Timelock)
               </TxButton>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== MetaVault Section ===== */}
+      {section === "metavault" && (
+        <div className="space-y-4">
+          {/* Status Overview */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <StatCard label="Total Value" value={currentValues.mvTotalValue || "..."} subValue="USDC" />
+            <StatCard label="Share Price" value={currentValues.mvSharePrice || "1.000000"} subValue="USDC per share" />
+            <StatCard label="Sub-Vaults" value={currentValues.mvVaultCount || "0"} subValue={`of 10 max`} />
+            <StatCard label="Pending Fees" value={currentValues.mvAccruedFees || "$0.00"} subValue={`Fee: ${currentValues.mvPerfFee || "20%"}`} />
+            <StatCard
+              label="Status"
+              value={currentValues.mvActive === "true" ? "Active" : "Inactive"}
+              subValue={`Auto-alloc: ${currentValues.mvAutoAllocate === "true" ? "On" : "Off"}`}
+              color={currentValues.mvActive === "true" ? "green" : "red"}
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard label="High Water Mark" value={currentValues.mvHWM || "..."} subValue="USDC" />
+            <StatCard label="Total Shares" value={currentValues.mvTotalShares || "0"} />
+            <StatCard label="Rebalance Threshold" value={currentValues.mvRebalanceThreshold || "2.0%"} subValue="drift to trigger" />
+          </div>
+
+          {/* Sub-Vault Allocation Table */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Sub-Vault Allocations</h3>
+            <p className="mb-3 text-sm text-gray-400">
+              MetaVault distributes USDC across these sub-strategies. Register it as a single strategy in TreasuryV2 via <span className="font-mono text-brand-400">addStrategy(metaVault, targetBps, …)</span>.
+            </p>
+            {mvVaults.length === 0 ? (
+              <div className="py-6 text-center text-sm text-gray-500">
+                No sub-vaults registered. Add strategies below.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700 text-left text-xs text-gray-500 uppercase">
+                      <th className="pb-2 pr-4">Strategy</th>
+                      <th className="pb-2 pr-4 text-right">Deployed</th>
+                      <th className="pb-2 pr-4 text-right">Current %</th>
+                      <th className="pb-2 pr-4 text-right">Target %</th>
+                      <th className="pb-2 pr-4 text-center">Status</th>
+                      <th className="pb-2">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mvVaults.map((vault) => {
+                      const totalVal = mvVaults.reduce((s, v) => s + v.currentValue, 0);
+                      const currentPct = totalVal > 0 ? ((vault.currentValue / totalVal) * 100).toFixed(1) : "0.0";
+                      const targetPct = (vault.targetBps / 100).toFixed(1);
+                      return (
+                        <tr key={vault.strategy} className="border-b border-gray-800 hover:bg-gray-800/50 transition">
+                          <td className="py-3 pr-4">
+                            <span className="font-mono text-xs text-gray-300">
+                              {vault.strategy.slice(0, 6)}…{vault.strategy.slice(-4)}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4 text-right font-semibold text-gray-200">
+                            ${(vault.currentValue / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="py-3 pr-4 text-right text-gray-300">{currentPct}%</td>
+                          <td className="py-3 pr-4 text-right text-brand-400">{targetPct}%</td>
+                          <td className="py-3 pr-4 text-center">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                              vault.active ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"
+                            }`}>
+                              {vault.active ? "Active" : "Inactive"}
+                            </span>
+                          </td>
+                          <td className="py-3">
+                            <div className="flex gap-1">
+                              <TxButton
+                                onClick={() => tx.send(() => metaVault!.emergencyWithdrawFromVault(vault.strategy))}
+                                loading={tx.loading}
+                                variant="danger"
+                                className="!px-2 !py-1 !text-xs"
+                              >
+                                Pull
+                              </TxButton>
+                              <TxButton
+                                onClick={() => tx.send(() => metaVault!.removeVault(vault.strategy))}
+                                loading={tx.loading}
+                                variant="danger"
+                                className="!px-2 !py-1 !text-xs"
+                              >
+                                Remove
+                              </TxButton>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Allocation bar chart */}
+            {mvVaults.length > 0 && (
+              <div className="mt-4">
+                <div className="flex h-6 w-full overflow-hidden rounded-full">
+                  {mvVaults.map((v, i) => {
+                    const colors = ["bg-blue-500", "bg-emerald-500", "bg-purple-500", "bg-yellow-500", "bg-pink-500", "bg-cyan-500", "bg-orange-500"];
+                    return (
+                      <div
+                        key={v.strategy}
+                        className={`${colors[i % colors.length]} transition-all`}
+                        style={{ width: `${v.targetBps / 100}%` }}
+                        title={`${v.strategy.slice(0, 6)}…${v.strategy.slice(-4)}: ${(v.targetBps / 100).toFixed(1)}%`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                  {mvVaults.map((v, i) => {
+                    const colors = ["text-blue-400", "text-emerald-400", "text-purple-400", "text-yellow-400", "text-pink-400", "text-cyan-400", "text-orange-400"];
+                    return (
+                      <span key={v.strategy} className={colors[i % colors.length]}>
+                        ● {v.strategy.slice(0, 6)}…{v.strategy.slice(-4)} ({(v.targetBps / 100).toFixed(0)}%)
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Add Sub-Vault */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Add Sub-Vault</h3>
+            <p className="mb-3 text-sm text-gray-400">
+              Add an IStrategy-compatible contract as a sub-vault inside MetaVault. Total target allocation must not exceed 100%.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-2">
+                <label className="label">Strategy Address</label>
+                <input
+                  className="input"
+                  type="text"
+                  placeholder="0x... (IStrategy contract)"
+                  value={mvAddAddr}
+                  onChange={(e) => setMvAddAddr(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="label">Target %</label>
+                <input
+                  className="input"
+                  type="number"
+                  placeholder="25"
+                  min="1"
+                  max="100"
+                  value={mvAddTarget}
+                  onChange={(e) => setMvAddTarget(e.target.value)}
+                />
+              </div>
+            </div>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => {
+                const bps = BigInt(Math.round(parseFloat(mvAddTarget) * 100));
+                tx.send(() => metaVault!.addVault(mvAddAddr, bps));
+              }}
+              loading={tx.loading}
+              disabled={!mvAddAddr || !mvAddTarget}
+            >
+              Add Sub-Vault
+            </TxButton>
+          </div>
+
+          {/* Actions */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="card">
+              <h3 className="mb-3 font-semibold text-gray-300">Rebalance & Fees</h3>
+              <div className="grid gap-2">
+                <TxButton
+                  className="w-full"
+                  onClick={() => tx.send(() => metaVault!.rebalance())}
+                  loading={tx.loading}
+                >
+                  Rebalance Sub-Vaults
+                </TxButton>
+                <TxButton
+                  className="w-full"
+                  onClick={() => tx.send(() => metaVault!.collectFees())}
+                  loading={tx.loading}
+                  variant="secondary"
+                >
+                  Collect Fees ({currentValues.mvAccruedFees || "$0.00"})
+                </TxButton>
+              </div>
+            </div>
+            <div className="card">
+              <h3 className="mb-3 font-semibold text-gray-300">Emergency</h3>
+              <div className="grid gap-2">
+                <TxButton
+                  className="w-full"
+                  onClick={() => tx.send(() => metaVault!.emergencyWithdrawAll())}
+                  loading={tx.loading}
+                  variant="danger"
+                >
+                  Emergency Withdraw All
+                </TxButton>
+                <TxButton
+                  className="w-full"
+                  onClick={() => tx.send(() => metaVault!.pause())}
+                  loading={tx.loading}
+                  variant="danger"
+                >
+                  Pause MetaVault
+                </TxButton>
+                <TxButton
+                  className="w-full"
+                  onClick={() => tx.send(() => metaVault!.unpause())}
+                  loading={tx.loading}
+                  variant="secondary"
+                >
+                  Unpause (Timelock)
+                </TxButton>
+              </div>
+            </div>
+          </div>
+
+          {/* Toggle Controls */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Configuration</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-2 text-sm text-gray-400">
+                  IStrategy Active: <span className={currentValues.mvActive === "true" ? "text-green-400" : "text-red-400"}>{currentValues.mvActive === "true" ? "Yes" : "No"}</span>
+                </p>
+                <div className="grid gap-2 grid-cols-2">
+                  <TxButton
+                    onClick={() => tx.send(() => metaVault!.setStrategyActive(true))}
+                    loading={tx.loading}
+                    className={currentValues.mvActive === "true" ? "opacity-50" : ""}
+                  >
+                    Activate
+                  </TxButton>
+                  <TxButton
+                    onClick={() => tx.send(() => metaVault!.setStrategyActive(false))}
+                    loading={tx.loading}
+                    variant="secondary"
+                    className={currentValues.mvActive !== "true" ? "opacity-50" : ""}
+                  >
+                    Deactivate
+                  </TxButton>
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-sm text-gray-400">
+                  Auto-Allocate: <span className={currentValues.mvAutoAllocate === "true" ? "text-green-400" : "text-red-400"}>{currentValues.mvAutoAllocate === "true" ? "On" : "Off"}</span>
+                </p>
+                <div className="grid gap-2 grid-cols-2">
+                  <TxButton
+                    onClick={() => tx.send(() => metaVault!.setAutoAllocate(true))}
+                    loading={tx.loading}
+                    className={currentValues.mvAutoAllocate === "true" ? "opacity-50" : ""}
+                  >
+                    Enable
+                  </TxButton>
+                  <TxButton
+                    onClick={() => tx.send(() => metaVault!.setAutoAllocate(false))}
+                    loading={tx.loading}
+                    variant="secondary"
+                    className={currentValues.mvAutoAllocate !== "true" ? "opacity-50" : ""}
+                  >
+                    Disable
+                  </TxButton>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* How to register in TreasuryV2 */}
+          <div className="card border border-brand-500/30">
+            <h3 className="mb-2 font-semibold text-brand-400">📋 Register MetaVault in TreasuryV2</h3>
+            <p className="text-sm text-gray-400">
+              MetaVault implements <code className="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-300">IStrategy</code>. Go to the <strong>Treasury</strong> tab →
+              Add Strategy → paste the MetaVault address with your desired target allocation. TreasuryV2
+              will then auto-deploy USDC into MetaVault alongside Pendle, Morpho, Fluid, and Euler —
+              and MetaVault will further split it across its own sub-vaults.
+            </p>
+            {metaVault && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-xs text-gray-500">Address:</span>
+                <code className="rounded bg-gray-800 px-2 py-1 font-mono text-xs text-brand-400">
+                  {CONTRACTS.MetaVault || "Not configured"}
+                </code>
+              </div>
+            )}
           </div>
         </div>
       )}

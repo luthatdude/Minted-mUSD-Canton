@@ -23,6 +23,10 @@ import "./Errors.sol";
  *   ────────────────────────────────────────
  *   Blended:                  ~12.5% gross APY
  *
+ * Optional: MetaVault (vault-of-vaults) can be registered as a single
+ *   strategy via addStrategy(). MetaVault implements IStrategy and
+ *   further distributes USDC across its own sub-vault allocations.
+ *
  * Revenue Split:
  *   smUSD Holders:      60% (~7.5% net APY target)
  *   Protocol:           40% (spread above 6%)
