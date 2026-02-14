@@ -327,9 +327,10 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Admin: Pause/unpause
+    -- GAP-4: Governance co-signature required for pause state changes
     choice Staking_SetPaused : ContractId CantonStakingService
       with
         newPaused : Bool
-      controller operator
+      controller operator, governance
       do
         create this with paused = newPaused
