@@ -439,12 +439,12 @@ class LiquidationBot {
           const profitWei = seizeValueUsd - maxRepay;
           const profitUsd = Number(ethers.formatEther(profitWei));
           
-          // Estimate gas cost
+          // Estimate gas cost using live ETH/USD price from oracle
           const gasEstimate = 300000n; // Conservative estimate
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * 2500; // Assume ETH = $2500
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * await this.getEthPriceUsd();
           
           const netProfitUsd = profitUsd - gasCostUsd;
           
@@ -581,6 +581,41 @@ class LiquidationBot {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Fetch live ETH/USD price from Chainlink oracle on-chain.
+   * Falls back to CoinGecko API, then to a conservative default.
+   */
+  private async getEthPriceUsd(): Promise<number> {
+    try {
+      // Chainlink ETH/USD feed on Ethereum mainnet
+      const CHAINLINK_ETH_USD = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419";
+      const AGGREGATOR_ABI = [
+        "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+      ];
+      const feed = new ethers.Contract(CHAINLINK_ETH_USD, AGGREGATOR_ABI, this.provider);
+      const [, answer, , updatedAt] = await feed.latestRoundData();
+      const staleness = Math.floor(Date.now() / 1000) - Number(updatedAt);
+      if (staleness < 3600 && answer > 0n) {
+        return Number(answer) / 1e8; // Chainlink uses 8 decimals
+      }
+      logger.warn(`Chainlink ETH/USD stale (${staleness}s), falling back to API`);
+    } catch (e) {
+      logger.warn(`Chainlink ETH/USD read failed, falling back to API: ${e}`);
+    }
+    try {
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
+      const data = await res.json() as { ethereum?: { usd?: number } };
+      if (data.ethereum?.usd && data.ethereum.usd > 0) {
+        return data.ethereum.usd;
+      }
+    } catch (e) {
+      logger.warn(`CoinGecko ETH/USD fetch failed: ${e}`);
+    }
+    // Conservative fallback — logged so ops can investigate
+    logger.error("All ETH/USD price sources failed, using conservative fallback of $3000");
+    return 3000;
   }
 }
 

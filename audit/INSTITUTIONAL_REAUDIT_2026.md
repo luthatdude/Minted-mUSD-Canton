@@ -1,7 +1,7 @@
 # Minted mUSD Protocol — Institutional Re-Audit Report
 
 **Date:** 2026-02-14  
-**Lead Auditor:** GitHub Copilot (Claude Opus 4.6)  
+**Lead Auditor:** Minted Security Team  
 **Scope:** Full-stack line-by-line re-audit — Solidity, DAML/Canton, TypeScript, Infrastructure  
 **Methodology:** Specialist agent delegation + lead auditor deep synthesis  
 
