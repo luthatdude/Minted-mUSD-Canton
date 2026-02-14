@@ -69,7 +69,9 @@ template UpgradeProposal
     signatory operator
     observer governance
 
-    ensure approvalThreshold > 0
+    -- GAP-9: Require minimum threshold of 2 to prevent single-member
+    -- governance from approving AND rolling back upgrades unilaterally.
+    ensure approvalThreshold >= 2
         && approvalThreshold <= length governance
         && T.length sourceVersion > 0
         && T.length targetVersion > 0
