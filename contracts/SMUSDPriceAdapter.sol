@@ -34,6 +34,7 @@ interface IERC20Minimal {
 ///      which accounts for accrued interest from borrowers.
 contract SMUSDPriceAdapter is AccessControl {
     bytes32 public constant ADAPTER_ADMIN_ROLE = keccak256("ADAPTER_ADMIN_ROLE");
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     /// @notice The SMUSD ERC-4626 vault
     address public immutable smusd;
@@ -80,14 +81,19 @@ contract SMUSDPriceAdapter is AccessControl {
     error SMUSDZeroAddress();
     error VaultTotalSupplyTooLow(uint256 totalSupply, uint256 minRequired);
 
-    constructor(address _smusd, address _admin) {
+    constructor(address _smusd, address _admin, address _timelockController) {
         if (_smusd == address(0)) revert SMUSDZeroAddress();
+        require(_admin != address(0), "INVALID_ADMIN");
+        require(_timelockController != address(0), "INVALID_TIMELOCK");
 
         smusd = _smusd;
         _roundId = 1;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(ADAPTER_ADMIN_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     // ============================================================
@@ -229,10 +235,11 @@ contract SMUSDPriceAdapter is AccessControl {
     /// @notice Update share price bounds (governance-controlled)
     /// @param _minPrice Minimum valid price (8 decimals)
     /// @param _maxPrice Maximum valid price (8 decimals)
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — price bounds directly affect collateral valuation
     function setSharePriceBounds(
         uint256 _minPrice,
         uint256 _maxPrice
-    ) external onlyRole(ADAPTER_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (_minPrice == 0) revert MinZero();
         if (_maxPrice <= _minPrice) revert MaxLteMin();
         if (_maxPrice > 10e8) revert MaxTooHigh();
@@ -246,10 +253,11 @@ contract SMUSDPriceAdapter is AccessControl {
     /// @notice Update donation attack protection parameters
     /// @param _minTotalSupply Minimum totalSupply to trust vault price
     /// @param _maxPriceChangePerBlock Max price delta allowed per block (8 decimals)
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) — protection params affect price feed safety
     function setDonationProtection(
         uint256 _minTotalSupply,
         uint256 _maxPriceChangePerBlock
-    ) external onlyRole(ADAPTER_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (_minTotalSupply == 0) revert MinSupplyZero();
         if (_maxPriceChangePerBlock == 0) revert MaxChangeZero();
         if (_maxPriceChangePerBlock > 0.50e8) revert MaxChangeTooHigh();

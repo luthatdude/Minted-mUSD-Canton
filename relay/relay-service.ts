@@ -118,26 +118,39 @@ const DEFAULT_CONFIG: RelayConfig = {
 //                     DAML TYPES (generated)
 // ============================================================
 
-// These mirror your DAML templates
+// BRIDGE-M-07: These mirror the DAML AttestationPayload data type in Minted.Protocol.V3.
+// Fields must stay aligned with:
+//   - DAML: data AttestationPayload (10 fields: attestationId..cantonStateHash)
+//   - Solidity: BLEBridgeV9.Attestation struct (6 fields: id, cantonAssets, nonce, timestamp, entropy, cantonStateHash)
+// The Solidity struct is a derived subset — `id` is computed from (nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainId, address),
+// and `timestamp` is derived from `expiresAt - ATTESTATION_TTL_SECONDS`.
+// Fields not in the Solidity struct (attestationId, targetAddress, amount, isMint, chainId, expiresAt) are used
+// for relay-side logic and ID derivation but are not passed to the contract directly.
 interface AttestationPayload {
   attestationId: string;
-  globalCantonAssets: string;  // Numeric as string
+  globalCantonAssets: string;  // Numeric as string (DAML: Money = Numeric 18)
   targetAddress: string;
   amount: string;
   isMint: boolean;
   nonce: string;
   chainId: string;
-  expiresAt: string;  // ISO timestamp
-  entropy: string;    // Hex-encoded entropy from aggregator
-  cantonStateHash: string;  // Canton ledger state hash for on-chain verification
+  expiresAt: string;  // ISO timestamp (DAML: Time)
+  entropy: string;    // Hex-encoded entropy from aggregator (Solidity: bytes32)
+  cantonStateHash: string;  // Canton ledger state hash (Solidity: bytes32)
 }
 
+// BRIDGE-M-07: Mirrors DAML AttestationRequest template in Minted.Protocol.V3.
 interface AttestationRequest {
   aggregator: string;
   validatorGroup: string[];
   payload: AttestationPayload;
   positionCids: ContractId<unknown>[];
-  collectedSignatures: string[];  // Set as array
+  collectedSignatures: string[];  // Set as array (party identifiers)
+  // BRIDGE-C-01: ECDSA signatures stored alongside party set on DAML ledger.
+  // Each entry is [Party, hex-encoded ECDSA signature].
+  ecdsaSignatures: [string, string][];
+  requiredSignatures: number;     // BRIDGE-H-01: Threshold from BridgeService, matches Solidity minSignatures
+  direction: string;              // "CantonToEthereum" | "EthereumToCanton"
 }
 
 interface ValidatorSignature {
@@ -223,6 +236,15 @@ class RelayService {
   private processedAttestations: Set<string> = new Set();
   private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
+
+  // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
+  // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
+  // The Solidity contract expects a `timestamp` representing when the attestation was *created*.
+  // We derive the creation timestamp by subtracting this offset from the expiry time.
+  // This must match the attestation TTL configured in the BridgeService / aggregator.
+  private static readonly ATTESTATION_TTL_SECONDS = 3600; // 1 hour
+  // BRIDGE-M-05: Maximum allowed age/future drift for derived timestamps (24 hours)
+  private static readonly MAX_TIMESTAMP_DRIFT_SECONDS = 86400;
 
   // Fallback RPC providers for relay redundancy
   private fallbackProviders: ethers.JsonRpcProvider[] = [];
@@ -490,12 +512,16 @@ class RelayService {
         continue;
       }
 
-      // Check if we have enough signatures
-      const signatures = attestation.payload.collectedSignatures;
+      // BRIDGE-M-01: Check the count of actual ECDSA signatures, not the party set.
+      // collectedSignatures tracks which parties have signed (DAML Set), but
+      // ecdsaSignatures contains the actual cryptographic signatures needed for
+      // Ethereum verification. If ECDSA sigs are missing/invalid, the party set
+      // count would overstate the number of usable signatures.
+      const ecdsaSigs = attestation.payload.ecdsaSignatures;
       const minSigs = await this.bridgeContract.minSignatures();
 
-      if (signatures.length < Number(minSigs)) {
-        console.log(`[Relay] Attestation ${attestationId}: ${signatures.length}/${minSigs} signatures`);
+      if (ecdsaSigs.length < Number(minSigs)) {
+        console.log(`[Relay] Attestation ${attestationId}: ${ecdsaSigs.length}/${minSigs} ECDSA signatures`);
         continue;
       }
 
@@ -518,7 +544,7 @@ class RelayService {
 
       // Bridge it
       console.log(`[Relay] Bridging attestation ${attestationId}...`);
-      await this.bridgeAttestation(payload, validatorSigs);
+      await this.bridgeAttestation(payload, validatorSigs, attestation);
       processedThisCycle++;
     }
 
@@ -547,7 +573,8 @@ class RelayService {
    */
   private async bridgeAttestation(
     payload: AttestationPayload,
-    validatorSigs: ValidatorSignature[]
+    validatorSigs: ValidatorSignature[],
+    attestation: CreateEvent<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
@@ -579,9 +606,18 @@ class RelayService {
       if (isNaN(expiresAtMs) || expiresAtMs <= 0) {
         throw new Error(`Invalid expiresAt timestamp: ${payload.expiresAt}`);
       }
-      const timestampSec = Math.floor(expiresAtMs / 1000) - 3600;
+      // BRIDGE-M-05: Use named constant instead of magic number for expiry-to-timestamp derivation
+      const timestampSec = Math.floor(expiresAtMs / 1000) - RelayService.ATTESTATION_TTL_SECONDS;
       if (timestampSec <= 0) {
         throw new Error(`Computed timestamp is non-positive (${timestampSec}). expiresAt too early: ${payload.expiresAt}`);
+      }
+      // BRIDGE-M-05: Validate derived timestamp is within reasonable range (not more than 24h past or future)
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (Math.abs(timestampSec - nowSec) > RelayService.MAX_TIMESTAMP_DRIFT_SECONDS) {
+        throw new Error(
+          `BRIDGE-M-05: Derived timestamp ${timestampSec} is more than ${RelayService.MAX_TIMESTAMP_DRIFT_SECONDS}s ` +
+          `from current time ${nowSec}. expiresAt=${payload.expiresAt}. Possible clock skew or stale attestation.`
+        );
       }
       const chainId = expectedChainId;
       // ID derivation matches BLEBridgeV9.computeAttestationId()
@@ -640,6 +676,16 @@ class RelayService {
       );
 
       // Submit transaction
+      // BRIDGE-M-04: SECURITY NOTE — processAttestation() on BLEBridgeV9 is permissionless
+      // (any address can call it). This means anyone with valid signatures can submit.
+      // This is mitigated by:
+      //   1. The relay pre-verifies all ECDSA signatures via ecrecover before submitting
+      //   2. BLEBridgeV9 verifies signatures on-chain against VALIDATOR_ROLE holders
+      //   3. Attestation IDs are derived from nonce+entropy and checked for uniqueness
+      //   4. Pre-flight simulation catches front-running/replay attempts
+      // TODO(BRIDGE-M-04): Add access control (e.g., RELAYER_ROLE) to processAttestation
+      //   in the next BLEBridgeV9 Solidity upgrade to defense-in-depth against
+      //   griefing attacks where adversaries submit invalid signature sets to burn gas.
       console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
 
       const tx = await this.bridgeContract.processAttestation(
@@ -658,6 +704,24 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+
+        // SECURITY FIX BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
+        // the attestation request. Without this, stale attestation contracts remain on
+        // the Canton ledger, causing the relay to re-process them on every poll cycle
+        // (retry storms) and leaving DAML state inconsistent with Ethereum.
+        try {
+          await (this.ledger.exercise as any)(
+            "MintedProtocolV3:AttestationRequest",
+            attestation.contractId,
+            "Attestation_Complete",
+            {}
+          );
+          console.log(`[Relay] Attestation ${attestationId} marked complete on Canton`);
+        } catch (completeError: any) {
+          // Non-fatal: attestation is already bridged on Ethereum.
+          // The DAML contract will be cleaned up on next attempt or manually.
+          console.warn(`[Relay] Failed to complete attestation on Canton (non-fatal): ${completeError.message}`);
+        }
 
         // Trigger auto-deploy to yield strategies if configured
         if (this.config.triggerAutoDeploy && this.config.treasuryAddress) {
@@ -715,8 +779,8 @@ class RelayService {
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
-        // Use validated timestamp calculation consistent with bridgeAttestation
-        BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600)),
+        // BRIDGE-M-05: Use named constant consistent with bridgeAttestation derivation
+        BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - RelayService.ATTESTATION_TTL_SECONDS)),
         entropy,
         stateHash,
         chainId,
@@ -856,17 +920,18 @@ class RelayService {
       const [shouldDeploy, deployable] = await treasury.shouldAutoDeploy();
 
       if (!shouldDeploy) {
-        console.log(`[Relay] Auto-deploy: No deployment needed (deployable: ${Number(deployable) / 1e6} USDC)`);
+        // TS-M-04: Use ethers.formatUnits for safe BigInt → decimal formatting
+        console.log(`[Relay] Auto-deploy: No deployment needed (deployable: ${ethers.formatUnits(deployable, 6)} USDC)`);
         return;
       }
 
-      console.log(`[Relay] Auto-deploy: Triggering deployment of ${Number(deployable) / 1e6} USDC to yield strategy...`);
+      console.log(`[Relay] Auto-deploy: Triggering deployment of ${ethers.formatUnits(deployable, 6)} USDC to yield strategy...`);
 
       const tx = await treasury.keeperTriggerAutoDeploy();
       const receipt = await tx.wait(1);
 
       if (receipt.status === 1) {
-        console.log(`[Relay] Auto-deploy: Successfully deployed ${Number(deployable) / 1e6} USDC to yield strategy`);
+        console.log(`[Relay] Auto-deploy: Successfully deployed ${ethers.formatUnits(deployable, 6)} USDC to yield strategy`);
       } else {
         console.warn(`[Relay] Auto-deploy: Transaction reverted`);
       }
