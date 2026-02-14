@@ -105,6 +105,7 @@ setupTest = do
       complianceRegistryCid = complianceCid
       serviceName = "lending"
       observers = [user, liquidator]
+      governance = governor
 
   -- Create BurnRateLimiter for burn-path tests (repay, liquidation)
   submit operator do
@@ -161,8 +162,8 @@ testPriceFeedMovementCap = do
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
-  -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown (DAML-M-06)
+  passTime (minutes 31)
   -- Emergency update bypasses movement cap
   emergencyTime <- getTime
   govProof <- submit setup.operator do
@@ -265,7 +266,7 @@ testDepositFailsWhenPaused : Script ()
 testDepositFailsWhenPaused = do
   setup <- setupTest
   -- Pause the service
-  pausedServiceCid <- submit setup.operator do
+  pausedServiceCid <- submitMulti [setup.operator, setup.governor] [] do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
 
@@ -477,8 +478,8 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
-  -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown (DAML-M-06)
+  passTime (minutes 31)
   emergencyTime2 <- getTime
   govProof2 <- submit setup.operator do
     createCmd GovernanceActionLog with
@@ -827,13 +828,13 @@ testUpdateInterestRate = do
 testPauseUnpause : Script ()
 testPauseUnpause = do
   setup <- setupTest
-  pausedSvc <- submit setup.operator do
+  pausedSvc <- submitMulti [setup.operator, setup.governor] [] do
     exerciseCmd setup.serviceCid Lending_SetPaused with
       newPaused = True
   svc <- queryContractId setup.operator pausedSvc
   assertMsg "Service paused" ((fromSome svc).paused)
 
-  unpausedSvc <- submit setup.operator do
+  unpausedSvc <- submitMulti [setup.operator, setup.governor] [] do
     exerciseCmd pausedSvc Lending_SetPaused with
       newPaused = False
   svc2 <- queryContractId setup.operator unpausedSvc
@@ -864,6 +865,7 @@ testWithdrawReserves = do
       complianceRegistryCid = setup.complianceCid
       serviceName = "lending-reserves"
       observers = [setup.user]
+      governance = setup.governor
 
   govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "CantonLending" "withdraw-reserves"
   let withdrawChoice = Lending_WithdrawReserves with

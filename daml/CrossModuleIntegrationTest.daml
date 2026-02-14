@@ -182,6 +182,7 @@ testLendingFullCycleIntegration = do
       mpaUri = testMpaUri
       serviceName = "lending-test"
       observers = [user, liquidator]
+      governance = operator
 
   -- Step 1: Deposit 10000 CTN
   coinCid <- submitMulti [operator, user] [] do
@@ -417,6 +418,7 @@ testLiquidationFlow = do
       mpaUri = testMpaUri
       serviceName = "lending-liq"
       observers = [borrower, keeper]
+      governance = operator
 
   -- Deposit collateral + borrow near limit
   coinCid <- submitMulti [operator, borrower] [] do
@@ -439,7 +441,7 @@ testLiquidationFlow = do
       priceFeedCids = [ctnFeedCid]
 
   -- Crash price → position undercollateralized
-  passTime (minutes 6)
+  passTime (minutes 31)
   emergencyTime <- getTime
   govProof <- submit operator do
     createCmd GovernanceActionLog with
@@ -532,6 +534,7 @@ testHealthyPositionNotLiquidatable = do
       mpaUri = testMpaUri
       serviceName = "lending-healthy"
       observers = [borrower, keeper]
+      governance = operator
 
   coinCid <- submitMulti [operator, borrower] [] do
     createCmd CantonCoin with
@@ -664,6 +667,7 @@ testSupplyCapCoordination = do
       mpaUri = testMpaUri
       authorizedMinters = [user]
       serviceName = "default"  -- FIX D-M02: Key field for cross-module lookup
+      governance = operator
 
   -- Create Lending service pointing to the DirectMint service
   ctnFeedCid <- submit operator do
@@ -695,6 +699,7 @@ testSupplyCapCoordination = do
       mpaUri = testMpaUri
       serviceName = "lending-cap"
       observers = [user]
+      governance = operator
 
   -- Deposit collateral
   coinCid <- submitMulti [operator, user] [] do
