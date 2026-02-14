@@ -123,15 +123,13 @@ async function monitorPositions(borrowerAddresses: string[]) {
   }
   
   // Sort by health factor (lowest first)
-  positions.sort((a, b) => Number(a.healthFactor) - Number(b.healthFactor));
+  positions.sort((a, b) => parseFloat(a.healthFactor) - parseFloat(b.healthFactor));
   
   // Display positions
   for (const pos of positions) {
     const status = pos.isLiquidatable ? "🔴 LIQUIDATABLE" : "🟢 HEALTHY";
-    const hf = Number(pos.healthFactor);
-    if (isNaN(hf)) { console.error(`Invalid healthFactor for ${pos.address}: ${pos.healthFactor}`); continue; }
-    const hfColor = hf < 1.0 ? "\x1b[31m" : 
-                    hf < 1.2 ? "\x1b[33m" : "\x1b[32m";
+    const hfColor = parseFloat(pos.healthFactor) < 1.0 ? "\x1b[31m" : 
+                    parseFloat(pos.healthFactor) < 1.2 ? "\x1b[33m" : "\x1b[32m";
     
     console.log("-".repeat(80));
     console.log(`Address: ${pos.address}`);
@@ -140,8 +138,7 @@ async function monitorPositions(borrowerAddresses: string[]) {
     console.log(`Debt: ${pos.debt} mUSD`);
     console.log("Collateral:");
     for (const col of pos.collateral) {
-      const valUsd = Number(col.valueUsd);
-      console.log(`  - ${col.amount} ${col.symbol} ($${isNaN(valUsd) ? "?.??" : valUsd.toFixed(2)})`);
+      console.log(`  - ${col.amount} ${col.symbol} ($${parseFloat(col.valueUsd).toFixed(2)})`);
     }
   }
   

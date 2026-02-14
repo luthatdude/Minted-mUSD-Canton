@@ -71,9 +71,12 @@ export const DEFAULT_KEEPER_CONFIG: OracleKeeperConfig = {
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "30000", 10),
   maxStalenessSeconds: parseInt(process.env.KEEPER_MAX_STALENESS || "600", 10),
   maxDeviationBps: parseInt(process.env.KEEPER_MAX_DEVIATION_BPS || "500", 10),
+  // TS-H-03 FIX: Use CoinGecko Pro API when API key is available (higher rate limits)
   externalFeedUrl:
     process.env.EXTERNAL_FEED_URL ||
-    "https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd",
+    (process.env.COINGECKO_API_KEY
+      ? "https://pro-api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"
+      : "https://api.coingecko.com/api/v3/simple/price?ids={symbol}&vs_currencies=usd"),
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
 };
@@ -334,7 +337,15 @@ export class OracleKeeper {
       }
     }
     try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      // TS-H-03 FIX: Include API key header for authenticated CoinGecko access
+      const headers: Record<string, string> = {};
+      const apiKey = process.env.COINGECKO_API_KEY;
+      if (apiKey) {
+        headers[url.includes("pro-api.coingecko.com") ? "x-cg-pro-api-key" : "x-cg-demo-api-key"] = apiKey;
+      } else if (process.env.NODE_ENV === "production") {
+        logger.warn(`${symbol} — COINGECKO_API_KEY not set; external feed is rate-limited`);
+      }
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000), headers });
       if (!resp.ok) return null;
       const data = await resp.json();
 
