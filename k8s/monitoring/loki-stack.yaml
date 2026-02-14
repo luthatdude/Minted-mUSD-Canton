@@ -99,7 +99,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: loki
-          image: grafana/loki:3.3.2
+          image: grafana/loki:3.3.2@sha256:4bb8054e02f2c3dcb07aab78fc89ce1e1ace68e6b19a6dbcc97d6d7981e08d91
           args:
             - -config.file=/etc/loki/loki.yaml
           ports:
@@ -260,7 +260,7 @@ spec:
         runAsUser: 0  # Required to read container logs
       containers:
         - name: promtail
-          image: grafana/promtail:3.3.2
+          image: grafana/promtail:3.3.2@sha256:2f1a8874dfa0073d22493197b2e3a4e3ea6bca426e4f3a0bca09e80c0eb1dfe8
           args:
             - -config.file=/etc/promtail/promtail.yaml
           ports:

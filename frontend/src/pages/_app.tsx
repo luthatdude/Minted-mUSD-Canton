@@ -7,6 +7,7 @@ import { LoopWalletProvider } from "@/hooks/useLoopWallet";
 import { MultiChainDepositProvider } from "@/hooks/useMultiChainDeposit";
 import { SolanaWalletProvider } from "@/hooks/useSolanaWallet";
 import { PendingDepositProvider } from "@/hooks/usePendingDeposits";
+import { ErrorBoundary, WalletErrorBoundary } from "@/components/ErrorBoundary";
 
 // App configuration
 const LOOP_APP_NAME = "Minted Protocol";
@@ -14,20 +15,24 @@ const LOOP_NETWORK = (process.env.NEXT_PUBLIC_CANTON_NETWORK as 'devnet' | 'test
 
 export default function App({ Component, pageProps }: AppProps) {
   return (
-    <WalletConnectProvider autoConnect={true}>
-      <MetaMaskProvider>
-        <UnifiedWalletProvider>
-          <SolanaWalletProvider>
-            <MultiChainDepositProvider>
-              <PendingDepositProvider>
-                <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
-                  <Component {...pageProps} />
-                </LoopWalletProvider>
-              </PendingDepositProvider>
-            </MultiChainDepositProvider>
-          </SolanaWalletProvider>
-        </UnifiedWalletProvider>
-      </MetaMaskProvider>
-    </WalletConnectProvider>
+    <ErrorBoundary scope="Root">
+      <WalletErrorBoundary>
+        <WalletConnectProvider autoConnect={true}>
+          <MetaMaskProvider>
+            <UnifiedWalletProvider>
+              <SolanaWalletProvider>
+                <MultiChainDepositProvider>
+                  <PendingDepositProvider>
+                    <LoopWalletProvider appName={LOOP_APP_NAME} network={LOOP_NETWORK}>
+                      <Component {...pageProps} />
+                    </LoopWalletProvider>
+                  </PendingDepositProvider>
+                </MultiChainDepositProvider>
+              </SolanaWalletProvider>
+            </UnifiedWalletProvider>
+          </MetaMaskProvider>
+        </WalletConnectProvider>
+      </WalletErrorBoundary>
+    </ErrorBoundary>
   );
 }

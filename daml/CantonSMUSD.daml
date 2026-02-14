@@ -23,7 +23,7 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -62,8 +62,8 @@ template CantonSMUSD
         complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- DAML-H-01a: Validate sender compliance before allowing transfer initiation
-        exercise complianceRegistryCid ValidateMint with minter = owner
+        -- DAML-H-01a: Validate sender compliance (transfer, not mint)
+        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
@@ -106,6 +106,7 @@ template CantonSMUSDTransferProposal
     choice CantonSMUSDTransferProposal_Accept : ContractId CantonSMUSD
       controller newOwner
       do
+        -- Receiver compliance check (can receive assets)
         exercise complianceRegistryCid ValidateMint with minter = newOwner
         create smusd with owner = newOwner
 
