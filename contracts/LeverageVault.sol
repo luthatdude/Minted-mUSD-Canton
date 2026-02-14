@@ -319,8 +319,10 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
 
             collateralVault.withdrawFor(msg.sender, collateralToken, collateralToSell, address(this), true);
 
-            // Swap collateral → mUSD
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, 0, 0);
+            // AUDIT SOL-H-03: Use protocol slippage protection for collateral→mUSD swap.
+            // Previously passed (0, 0) allowing sandwich attacks on position close.
+            uint256 minMusdOut = (debtToRepay * (10000 - maxSlippageBps)) / 10000;
+            uint256 musdReceived = _swapCollateralToMusd(collateralToken, collateralToSell, minMusdOut, 0);
             if (musdReceived < debtToRepay) revert InsufficientMusdFromSwap();
 
             IERC20(address(musd)).forceApprove(address(borrowModule), debtToRepay);
@@ -329,9 +331,11 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             // Refund excess mUSD if any
             uint256 excessMusd = musdReceived - debtToRepay;
             if (excessMusd > 0) {
-                // If swap fails (returns 0), transfer the mUSD directly to user
-                // instead of leaving it trapped in the contract.
-                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, 0, 0);
+                // AUDIT SOL-H-03: Apply slippage protection to excess mUSD→collateral swap.
+                // Previously passed (0, 0), allowing MEV extraction on the refund swap.
+                uint256 minExcessCollateral = _getCollateralForMusd(collateralToken, excessMusd);
+                minExcessCollateral = (minExcessCollateral * (10000 - maxSlippageBps)) / 10000;
+                uint256 swappedCollateral = _swapMusdToCollateral(collateralToken, excessMusd, minExcessCollateral, 0);
                 if (swappedCollateral == 0) {
                     // Swap failed — return mUSD directly to user
                     IERC20(address(musd)).safeTransfer(msg.sender, excessMusd);

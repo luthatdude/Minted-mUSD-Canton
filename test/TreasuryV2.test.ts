@@ -1,6 +1,6 @@
 /**
  * TreasuryV2 Integration Tests
- * Tests auto-allocation, strategy management, fee accrual, rebalancing,
+ * Tests manual deployment, strategy management, fee accrual, rebalancing,
  * and emergency operations.
  */
 
@@ -182,10 +182,10 @@ describe("TreasuryV2", function () {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // AUTO-ALLOCATION
+  // AUTO-ALLOCATION → MANUAL DEPLOYMENT
   // ═══════════════════════════════════════════════════════════════════════
 
-  describe("Auto-Allocation", function () {
+  describe("Manual Deployment", function () {
     beforeEach(async function () {
       // Setup: 40% stratA, 30% stratB, 20% stratC, 10% reserve
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
@@ -193,66 +193,84 @@ describe("TreasuryV2", function () {
       await timelockAddStrategy(treasury, admin, await strategyC.getAddress(), 2000, 500, 3000, true);
     });
 
-    it("Should auto-allocate deposit across strategies", async function () {
-      const depositAmount = 100_000n * ONE_USDC; // 100K USDC
+    it("Should keep all deposits in reserve (no auto-allocation)", async function () {
+      const depositAmount = 100_000n * ONE_USDC;
 
-      // Mint USDC to vault and approve treasury
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
-
-      // Deposit using legacy interface
       await treasury.connect(vault).deposit(vault.address, depositAmount);
 
-      // 10% reserve = 10K, 40% of 90K = 40K, 30% of 90K = 30K, 20% of 90K = 20K
-      // (approximately — rounding may differ slightly)
+      // Everything should be in reserve
       const reserveBal = await usdc.balanceOf(await treasury.getAddress());
-      const stratABal = await usdc.balanceOf(await strategyA.getAddress());
-      const stratBBal = await usdc.balanceOf(await strategyB.getAddress());
-      const stratCBal = await usdc.balanceOf(await strategyC.getAddress());
+      expect(reserveBal).to.equal(depositAmount);
 
-      // Reserve should have ~10K
-      expect(reserveBal).to.be.closeTo(10_000n * ONE_USDC, 100n * ONE_USDC);
-      // Strategy A should have ~40K
-      expect(stratABal).to.be.closeTo(40_000n * ONE_USDC, 100n * ONE_USDC);
-      // Strategy B should have ~30K (gets remainder, may be slightly more)
-      expect(stratBBal).to.be.closeTo(30_000n * ONE_USDC, 1000n * ONE_USDC);
-      // Strategy C should have ~20K
-      expect(stratCBal).to.be.closeTo(20_000n * ONE_USDC, 1000n * ONE_USDC);
-
-      // Total should still be 100K
-      const total = reserveBal + stratABal + stratBBal + stratCBal;
-      expect(total).to.equal(depositAmount);
+      // Strategies should have 0
+      expect(await usdc.balanceOf(await strategyA.getAddress())).to.equal(0);
+      expect(await usdc.balanceOf(await strategyB.getAddress())).to.equal(0);
+      expect(await usdc.balanceOf(await strategyC.getAddress())).to.equal(0);
     });
 
-    it("Should keep small deposits in reserve", async function () {
-      const smallDeposit = 500n * ONE_USDC; // Below 1000 USDC minimum
+    it("Should manually deploy to a specific strategy", async function () {
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
 
-      await usdc.mint(vault.address, smallDeposit);
-      await usdc.connect(vault).approve(await treasury.getAddress(), smallDeposit);
+      // Manually deploy 40K to strategy A
+      const deployAmt = 40_000n * ONE_USDC;
+      await treasury.deployToStrategy(await strategyA.getAddress(), deployAmt);
 
-      await treasury.connect(vault).deposit(vault.address, smallDeposit);
-
-      // All should be in reserve
-      const reserveBal = await usdc.balanceOf(await treasury.getAddress());
-      expect(reserveBal).to.equal(smallDeposit);
+      expect(await usdc.balanceOf(await strategyA.getAddress())).to.equal(deployAmt);
+      expect(await usdc.balanceOf(await treasury.getAddress())).to.equal(60_000n * ONE_USDC);
+      expect(await treasury.totalValue()).to.equal(depositAmount);
     });
 
-    it("Should handle strategy deposit failure gracefully", async function () {
-      await strategyA.setDepositShouldFail(true);
+    it("Should manually withdraw from a specific strategy", async function () {
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
 
+      // Deploy then withdraw
+      await treasury.deployToStrategy(await strategyA.getAddress(), 50_000n * ONE_USDC);
+      await treasury.withdrawFromStrategy(await strategyA.getAddress(), 20_000n * ONE_USDC);
+
+      expect(await usdc.balanceOf(await strategyA.getAddress())).to.equal(30_000n * ONE_USDC);
+      expect(await usdc.balanceOf(await treasury.getAddress())).to.equal(70_000n * ONE_USDC);
+    });
+
+    it("Should revert deployToStrategy with insufficient reserve", async function () {
       const depositAmount = 10_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
-
-      // Should not revert — failed strategy portion stays in reserve
       await treasury.connect(vault).deposit(vault.address, depositAmount);
 
-      // Strategy A should have 0
-      const stratABal = await usdc.balanceOf(await strategyA.getAddress());
-      expect(stratABal).to.equal(0);
+      await expect(
+        treasury.deployToStrategy(await strategyA.getAddress(), 20_000n * ONE_USDC)
+      ).to.be.revertedWithCustomError(treasury, "InsufficientReserves");
+    });
 
-      // Total value should still be full deposit
-      expect(await treasury.totalValue()).to.equal(depositAmount);
+    it("Should revert deployToStrategy for unknown strategy", async function () {
+      await expect(
+        treasury.deployToStrategy(user.address, 1000n * ONE_USDC)
+      ).to.be.revertedWithCustomError(treasury, "StrategyNotFound");
+    });
+
+    it("Should revert deployToStrategy from non-allocator", async function () {
+      await expect(
+        treasury.connect(user).deployToStrategy(await strategyA.getAddress(), 1000n * ONE_USDC)
+      ).to.be.reverted;
+    });
+
+    it("Should emit ManualDeploy event", async function () {
+      const depositAmount = 10_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      await expect(
+        treasury.deployToStrategy(await strategyA.getAddress(), 5_000n * ONE_USDC)
+      ).to.emit(treasury, "ManualDeploy");
     });
   });
 
@@ -265,15 +283,20 @@ describe("TreasuryV2", function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4000, 2000, 5000, true);
       await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 3000, 1000, 4000, true);
 
-      // Deposit 100K
+      // Deposit 100K (stays in reserve)
       const depositAmount = 100_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy to strategies so withdrawal tests can pull from them
+      await treasury.deployToStrategy(await strategyA.getAddress(), 40_000n * ONE_USDC);
+      await treasury.deployToStrategy(await strategyB.getAddress(), 30_000n * ONE_USDC);
+      // 30K remains in reserve
     });
 
     it("Should withdraw from reserve when sufficient", async function () {
-      // Reserve has ~10K, withdraw 5K
+      // Reserve has 30K, withdraw 5K
       const withdrawAmount = 5_000n * ONE_USDC;
       await treasury.connect(vault).withdraw(user.address, withdrawAmount);
 
@@ -281,7 +304,7 @@ describe("TreasuryV2", function () {
     });
 
     it("Should withdraw from strategies when reserve insufficient", async function () {
-      // Reserve has ~10K, withdraw 50K → must pull from strategies
+      // Reserve has 30K, withdraw 50K → must pull from strategies
       const withdrawAmount = 50_000n * ONE_USDC;
       await treasury.connect(vault).withdraw(user.address, withdrawAmount);
 
@@ -306,7 +329,7 @@ describe("TreasuryV2", function () {
       await timelockAddStrategy(treasury, admin, await strategyB.getAddress(), 4500, 2000, 6000, true);
     });
 
-    it("Should depositFromVault with auto-allocation", async function () {
+    it("Should depositFromVault keeping funds in reserve", async function () {
       const amount = 50_000n * ONE_USDC;
       await usdc.mint(vault.address, amount);
       await usdc.connect(vault).approve(await treasury.getAddress(), amount);
@@ -322,6 +345,10 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, amount);
       await usdc.connect(vault).approve(await treasury.getAddress(), amount);
       await treasury.connect(vault).depositFromVault(amount);
+
+      // Manually deploy so we test pulling from strategies
+      await treasury.deployToStrategy(await strategyA.getAddress(), 20_000n * ONE_USDC);
+      await treasury.deployToStrategy(await strategyB.getAddress(), 20_000n * ONE_USDC);
 
       // Withdraw most of it
       const withdrawAmount = 40_000n * ONE_USDC;
@@ -350,11 +377,14 @@ describe("TreasuryV2", function () {
     it("Should accrue fees on yield", async function () {
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
 
-      // Deposit 100K
+      // Deposit 100K (stays in reserve)
       const depositAmount = 100_000n * ONE_USDC;
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy 90K to strategy A
+      await treasury.deployToStrategy(await strategyA.getAddress(), 90_000n * ONE_USDC);
 
       // Simulate yield: mint 10K USDC to strategy A
       const yieldAmount = 10_000n * ONE_USDC;
@@ -376,6 +406,9 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy to strategy
+      await treasury.deployToStrategy(await strategyA.getAddress(), 90_000n * ONE_USDC);
 
       // Simulate yield
       await usdc.mint(await strategyA.getAddress(), 10_000n * ONE_USDC);
@@ -408,6 +441,10 @@ describe("TreasuryV2", function () {
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
 
+      // Manually deploy 45K to each strategy, keep 10K reserve
+      await treasury.deployToStrategy(await strategyA.getAddress(), 45_000n * ONE_USDC);
+      await treasury.deployToStrategy(await strategyB.getAddress(), 45_000n * ONE_USDC);
+
       // Simulate: A has double what it should (big yield)
       await usdc.mint(await strategyA.getAddress(), 50_000n * ONE_USDC);
 
@@ -439,6 +476,10 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy to strategies
+      await treasury.deployToStrategy(await strategyA.getAddress(), 45_000n * ONE_USDC);
+      await treasury.deployToStrategy(await strategyB.getAddress(), 45_000n * ONE_USDC);
 
       // Emergency withdraw
       await treasury.connect(guardian).emergencyWithdrawAll();
@@ -542,6 +583,9 @@ describe("TreasuryV2", function () {
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
 
+      // Deploy to strategy so yield simulation works
+      await treasury.deployToStrategy(await strategyA.getAddress(), 90_000n * ONE_USDC);
+
       // Simulate yield
       await usdc.mint(await strategyA.getAddress(), 10_000n * ONE_USDC);
 
@@ -560,6 +604,10 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Deploy to strategies so currentBps are non-zero
+      await treasury.deployToStrategy(await strategyA.getAddress(), 45_000n * ONE_USDC);
+      await treasury.deployToStrategy(await strategyB.getAddress(), 45_000n * ONE_USDC);
 
       const [addrs, currentBps, targetBps] = await treasury.getCurrentAllocations();
       expect(addrs.length).to.equal(2);
@@ -591,6 +639,9 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy to strategy A
+      await treasury.deployToStrategy(await strategyA.getAddress(), 45_000n * ONE_USDC);
 
       // Verify strategyA received funds
       const stratAValue = await strategyA.totalValue();
@@ -630,6 +681,9 @@ describe("TreasuryV2", function () {
       await usdc.mint(vault.address, depositAmount);
       await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
       await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Manually deploy to strategy
+      await treasury.deployToStrategy(await strategyA.getAddress(), 25_000n * ONE_USDC);
 
       // Make strategy withdraw fail
       await strategyA.setWithdrawShouldFail(true);

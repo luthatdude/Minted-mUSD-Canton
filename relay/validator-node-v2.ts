@@ -439,8 +439,18 @@ class ValidatorNode {
             console.warn("[Validator] heartbeat write failed", heartbeatError);
           }
         }
-      } catch (error) {
-        console.error("[Validator] Poll error:", error);
+      } catch (error: any) {
+        // TS-M-02: Structured error logging with operation context
+        console.error(JSON.stringify({
+          level: "error",
+          service: "validator-node-v2",
+          operation: "pollForAttestations",
+          party: this.config.validatorParty,
+          activeKey: this.activeKmsKeyId ? "***" + this.activeKmsKeyId.slice(-8) : "none",
+          timestamp: new Date().toISOString(),
+          error: error.message || String(error),
+          stack: error.stack,
+        }));
       }
       await this.sleep(this.config.pollIntervalMs);
     }
@@ -645,6 +655,17 @@ class ValidatorNode {
       };
 
     } catch (error: any) {
+      // TS-M-02: Structured error logging for Canton API failures
+      console.error(JSON.stringify({
+        level: "error",
+        service: "validator-node-v2",
+        operation: "verifyAgainstCanton",
+        attestationId: payload.attestationId,
+        cantonApiUrl: this.config.cantonAssetApiUrl,
+        timestamp: new Date().toISOString(),
+        error: error.message || String(error),
+        code: error.code,
+      }));
       return {
         valid: false,
         reason: `Canton API error: ${error.message}`,
@@ -697,7 +718,19 @@ class ValidatorNode {
       }
 
     } catch (error: any) {
-      console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
+      // TS-M-02: Structured error logging with attestation context
+      console.error(JSON.stringify({
+        level: "error",
+        service: "validator-node-v2",
+        operation: "signAttestation",
+        attestationId,
+        contractId: String(contractId),
+        party: this.config.validatorParty,
+        activeKey: this.activeKmsKeyId ? "***" + this.activeKmsKeyId.slice(-8) : "none",
+        timestamp: new Date().toISOString(),
+        error: error.message || String(error),
+        code: error.code,
+      }));
 
       // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED") ||

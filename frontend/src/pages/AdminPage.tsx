@@ -12,6 +12,128 @@ import WalletConnector from "@/components/WalletConnector";
 
 type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// STRATEGY CATALOG — all deployable yield strategies
+// Addresses are populated from env vars; empty string = not yet deployed
+// ═══════════════════════════════════════════════════════════════════════════
+interface StrategyInfo {
+  name: string;
+  shortName: string;
+  address: string;
+  targetBps: number;
+  apy: string;
+  description: string;
+  color: string;
+}
+
+const KNOWN_STRATEGIES: StrategyInfo[] = [
+  {
+    name: "Fluid Stable Loop #146",
+    shortName: "Fluid #146",
+    address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
+    targetBps: 3500,
+    apy: "~14.3%",
+    description: "syrupUSDC/USDC VaultT1 — leveraged stable loop via Fluid Protocol",
+    color: "#06b6d4", // cyan
+  },
+  {
+    name: "Pendle Multi-Pool",
+    shortName: "Pendle",
+    address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
+    targetBps: 3000,
+    apy: "~11.7%",
+    description: "PT markets with auto-rollover and manual multi-pool allocation",
+    color: "#8b5cf6", // violet
+  },
+  {
+    name: "Morpho Leveraged Loop",
+    shortName: "Morpho",
+    address: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
+    targetBps: 2000,
+    apy: "~11.5%",
+    description: "3.3x leveraged USDC lending on Morpho Blue (70% LTV, 5 loops max)",
+    color: "#3b82f6", // blue
+  },
+  {
+    name: "Euler V2 RLUSD/USDC Cross-Stable",
+    shortName: "Euler xStable",
+    address: process.env.NEXT_PUBLIC_EULER_CROSS_STRATEGY_ADDRESS || "",
+    targetBps: 1000,
+    apy: "~8-12%",
+    description: "Cross-stable leverage with depeg circuit breaker (RLUSD/USDC)",
+    color: "#10b981", // emerald
+  },
+  {
+    name: "Aave V3 Loop",
+    shortName: "Aave V3",
+    address: process.env.NEXT_PUBLIC_AAVE_STRATEGY_ADDRESS || "",
+    targetBps: 0,
+    apy: "~6-9%",
+    description: "Leveraged supply/borrow loop on Aave V3",
+    color: "#a855f7", // purple
+  },
+  {
+    name: "Compound V3 Loop",
+    shortName: "Compound",
+    address: process.env.NEXT_PUBLIC_COMPOUND_STRATEGY_ADDRESS || "",
+    targetBps: 0,
+    apy: "~5-8%",
+    description: "Leveraged supply/borrow loop on Compound V3",
+    color: "#22c55e", // green
+  },
+  {
+    name: "Contango Perp Loop",
+    shortName: "Contango",
+    address: process.env.NEXT_PUBLIC_CONTANGO_STRATEGY_ADDRESS || "",
+    targetBps: 0,
+    apy: "~8-14%",
+    description: "Perp-based yield loop with flash loan leverage via Contango",
+    color: "#f59e0b", // amber
+  },
+  {
+    name: "Euler V2 Loop",
+    shortName: "Euler V2",
+    address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
+    targetBps: 0,
+    apy: "~7-10%",
+    description: "Leveraged lending loop on Euler V2",
+    color: "#14b8a6", // teal
+  },
+  {
+    name: "Sky sUSDS Savings",
+    shortName: "Sky sUSDS",
+    address: process.env.NEXT_PUBLIC_SKY_STRATEGY_ADDRESS || "",
+    targetBps: 0,
+    apy: "~7.9%",
+    description: "USDC → PSM → sUSDS savings vault (zero-slippage, no leverage)",
+    color: "#f97316", // orange
+  },
+  {
+    name: "MetaVault (Vault-of-Vaults)",
+    shortName: "MetaVault",
+    address: process.env.NEXT_PUBLIC_METAVAULT_ADDRESS || "",
+    targetBps: 0,
+    apy: "~12.5%",
+    description: "Composable vault aggregating multiple sub-strategies with auto-rebalance",
+    color: "#ec4899", // pink
+  },
+];
+
+/** Look up a human-readable name for a strategy address */
+function strategyName(addr: string): string {
+  const found = KNOWN_STRATEGIES.find(
+    (s) => s.address && s.address.toLowerCase() === addr.toLowerCase()
+  );
+  return found ? found.shortName : `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+function strategyColor(addr: string): string {
+  const found = KNOWN_STRATEGIES.find(
+    (s) => s.address && s.address.toLowerCase() === addr.toLowerCase()
+  );
+  return found?.color || "#6b7280";
+}
+
 export function AdminPage() {
   const { address, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
@@ -73,6 +195,11 @@ export function AdminPage() {
   const [minBps, setMinBps] = useState("");
   const [maxBps, setMaxBps] = useState("");
   const [reserveBps, setReserveBps] = useState("");
+  const [deployStratAddr, setDeployStratAddr] = useState("");
+  const [deployAmount, setDeployAmount] = useState("");
+  const [withdrawStratAddr, setWithdrawStratAddr] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [strategyList, setStrategyList] = useState<{strategy: string; targetBps: bigint; active: boolean; value?: string}[]>([]);
 
   // Bridge Admin
   const [bridgeMinSigs, setBridgeMinSigs] = useState("");
@@ -111,6 +238,23 @@ export function AdminPage() {
           // Use TreasuryV2 functions instead of stale V1 calls
           vals.maxDeploy = formatBps(await treasury.reserveBps());
           vals.totalBacking = formatUSD(await treasury.totalValue(), 6);
+          vals.reserveBalance = formatUSD(await treasury.reserveBalance(), 6);
+          // Load strategies for the deploy/withdraw dropdowns
+          try {
+            const strats = await treasury.getAllStrategies();
+            const stratItems = [];
+            for (let i = 0; i < strats.length; i++) {
+              const s = strats[i];
+              if (s.active) {
+                stratItems.push({
+                  strategy: s.strategy,
+                  targetBps: s.targetBps,
+                  active: s.active,
+                });
+              }
+            }
+            setStrategyList(stratItems);
+          } catch {}
         }
         if (bridge) {
           vals.bridgeMinSigs = (await bridge.minSignatures()).toString();
@@ -309,42 +453,297 @@ export function AdminPage() {
       {/* ===== Treasury Section ===== */}
       {section === "treasury" && (
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
+          {/* ── Overview Stats ── */}
+          <div className="grid gap-4 sm:grid-cols-3">
             <StatCard label="Total Value" value={currentValues.totalBacking || "..."} />
-            <StatCard label="Reserve (bps)" value={currentValues.maxDeploy || "..."} />
+            <StatCard label="Reserve (idle USDC)" value={currentValues.reserveBalance || "..."} color="green" />
+            <StatCard label="Reserve Target (bps)" value={currentValues.maxDeploy || "..."} />
           </div>
+
+          <div className="rounded-lg border border-amber-700/50 bg-amber-900/10 p-3 text-xs text-amber-400">
+            <strong>Manual Deployment:</strong> All deposits sit idle in the reserve until you explicitly deploy them below.
+            No funds are auto-allocated.
+          </div>
+
+          {/* ── Active Strategies (on-chain registered) ── */}
           <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Add Strategy</h3>
-            <div>
-              <label className="label">Strategy Address</label>
-              <input className="input" type="text" placeholder="0x..." value={strategyAddr} onChange={(e) => setStrategyAddr(e.target.value)} />
+            <h3 className="mb-3 font-semibold text-gray-300">
+              Active Strategies
+              <span className="ml-2 rounded bg-gray-700 px-2 py-0.5 text-xs text-gray-400">
+                {strategyList.length} registered
+              </span>
+            </h3>
+            {strategyList.length === 0 ? (
+              <p className="text-sm text-gray-500">No strategies registered on-chain yet. Use "Add Strategy" below.</p>
+            ) : (
+              <div className="space-y-2">
+                {strategyList.map((s, i) => {
+                  const name = strategyName(s.strategy);
+                  const color = strategyColor(s.strategy);
+                  return (
+                    <div key={i} className="flex items-center justify-between rounded-lg bg-gray-800/50 px-4 py-3 text-sm">
+                      <div className="flex items-center gap-3">
+                        <div className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
+                        <div>
+                          <span className="font-medium text-white">{name}</span>
+                          <span className="ml-2 font-mono text-xs text-gray-500">
+                            {s.strategy.slice(0, 6)}…{s.strategy.slice(-4)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        {s.value && (
+                          <span className="text-gray-400 text-xs">{s.value} USDC</span>
+                        )}
+                        <span className="rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
+                          Target: {Number(s.targetBps) / 100}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── Strategy Catalog (all known strategies) ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Strategy Catalog</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              All available yield strategies. Strategies with addresses configured can be added to Treasury.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {KNOWN_STRATEGIES.map((ks, i) => {
+                const isRegistered = strategyList.some(
+                  (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
+                );
+                return (
+                  <div
+                    key={i}
+                    className={`rounded-lg border px-3 py-2 text-xs ${
+                      isRegistered
+                        ? "border-green-700/50 bg-green-900/10"
+                        : ks.address
+                        ? "border-gray-700 bg-gray-800/30"
+                        : "border-gray-800 bg-gray-900/20 opacity-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ks.color }} />
+                      <span className="font-medium text-white">{ks.shortName}</span>
+                      {ks.targetBps > 0 && (
+                        <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
+                          {ks.targetBps / 100}%
+                        </span>
+                      )}
+                      {isRegistered && (
+                        <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ACTIVE</span>
+                      )}
+                      {!ks.address && (
+                        <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-500">NO ADDR</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-gray-500">{ks.description}</p>
+                    {ks.address && (
+                      <p className="mt-0.5 font-mono text-[10px] text-gray-600">{ks.address}</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          </div>
+
+          {/* ── Manual Deploy to Strategy ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Deploy to Strategy</h3>
+            <p className="mb-3 text-xs text-gray-500">Manually deploy idle USDC from reserve into a registered strategy.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="label">Target (bps)</label>
-                <input className="input" type="number" placeholder="5000" value={targetBps} onChange={(e) => setTargetBps(e.target.value)} />
+                <label className="label">Strategy</label>
+                <select className="input" value={deployStratAddr} onChange={(e) => setDeployStratAddr(e.target.value)}>
+                  <option value="">Select strategy…</option>
+                  {strategyList.map((s, i) => (
+                    <option key={i} value={s.strategy}>
+                      {strategyName(s.strategy)} — {Number(s.targetBps) / 100}%
+                    </option>
+                  ))}
+                </select>
+                {deployStratAddr && (
+                  <p className="mt-1 font-mono text-[10px] text-gray-500">{deployStratAddr}</p>
+                )}
               </div>
               <div>
-                <label className="label">Min (bps)</label>
-                <input className="input" type="number" placeholder="4000" value={minBps} onChange={(e) => setMinBps(e.target.value)} />
-              </div>
-              <div>
-                <label className="label">Max (bps)</label>
-                <input className="input" type="number" placeholder="6000" value={maxBps} onChange={(e) => setMaxBps(e.target.value)} />
+                <label className="label">Amount (USDC)</label>
+                <input className="input" type="number" placeholder="10000" value={deployAmount} onChange={(e) => setDeployAmount(e.target.value)} />
+                {currentValues.reserveBalance && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[10px] text-brand-400 hover:underline"
+                    onClick={() => {
+                      const raw = currentValues.reserveBalance?.replace(/[^0-9.]/g, "") || "0";
+                      setDeployAmount(raw);
+                    }}
+                  >
+                    MAX: {currentValues.reserveBalance}
+                  </button>
+                )}
               </div>
             </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), true))}
+              onClick={() => tx.send(() => treasury!.deployToStrategy(deployStratAddr, ethers.parseUnits(deployAmount, USDC_DECIMALS)))}
+              loading={tx.loading}
+              disabled={!deployStratAddr || !deployAmount}
+            >
+              Deploy to Strategy
+            </TxButton>
+          </div>
+
+          {/* ── Manual Withdraw from Strategy ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Withdraw from Strategy</h3>
+            <p className="mb-3 text-xs text-gray-500">Pull USDC back from a strategy into the reserve.</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Strategy</label>
+                <select className="input" value={withdrawStratAddr} onChange={(e) => setWithdrawStratAddr(e.target.value)}>
+                  <option value="">Select strategy…</option>
+                  {strategyList.map((s, i) => (
+                    <option key={i} value={s.strategy}>
+                      {strategyName(s.strategy)} — {Number(s.targetBps) / 100}%
+                    </option>
+                  ))}
+                </select>
+                {withdrawStratAddr && (
+                  <p className="mt-1 font-mono text-[10px] text-gray-500">{withdrawStratAddr}</p>
+                )}
+              </div>
+              <div>
+                <label className="label">Amount (USDC)</label>
+                <input className="input" type="number" placeholder="10000" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)} />
+              </div>
+            </div>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => tx.send(() => treasury!.withdrawFromStrategy(withdrawStratAddr, ethers.parseUnits(withdrawAmount, USDC_DECIMALS)))}
+              loading={tx.loading}
+              disabled={!withdrawStratAddr || !withdrawAmount}
+              variant="secondary"
+            >
+              Withdraw from Strategy
+            </TxButton>
+          </div>
+
+          {/* ── Add Strategy (from catalog or manual address) ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Add Strategy to Treasury</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              Register a strategy on-chain. Pick from the catalog or enter a custom address.
+            </p>
+            <div>
+              <label className="label">Strategy</label>
+              <select
+                className="input"
+                value={strategyAddr}
+                onChange={(e) => {
+                  setStrategyAddr(e.target.value);
+                  // Pre-fill target bps from catalog
+                  const found = KNOWN_STRATEGIES.find(
+                    (ks) => ks.address && ks.address.toLowerCase() === e.target.value.toLowerCase()
+                  );
+                  if (found && found.targetBps > 0) {
+                    setTargetBps(String(found.targetBps));
+                    setMinBps(String(Math.max(0, found.targetBps - 1000)));
+                    setMaxBps(String(Math.min(10000, found.targetBps + 1000)));
+                  }
+                }}
+              >
+                <option value="">Select from catalog…</option>
+                {KNOWN_STRATEGIES.filter((ks) => ks.address).map((ks, i) => {
+                  const already = strategyList.some(
+                    (s) => s.strategy.toLowerCase() === ks.address.toLowerCase()
+                  );
+                  return (
+                    <option key={i} value={ks.address} disabled={already}>
+                      {ks.name} {already ? "(already active)" : `— ${ks.apy}`}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            <div className="mt-2">
+              <label className="label">Or enter address manually</label>
+              <input
+                className="input"
+                type="text"
+                placeholder="0x..."
+                value={strategyAddr}
+                onChange={(e) => setStrategyAddr(e.target.value)}
+              />
+            </div>
+            {strategyAddr && (
+              <p className="mt-1 text-xs text-gray-400">
+                {KNOWN_STRATEGIES.find(
+                  (ks) => ks.address && ks.address.toLowerCase() === strategyAddr.toLowerCase()
+                )?.description || "Custom strategy (not in catalog)"}
+              </p>
+            )}
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">Target (bps)</label>
+                <input className="input" type="number" placeholder="3500" value={targetBps} onChange={(e) => setTargetBps(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Min (bps)</label>
+                <input className="input" type="number" placeholder="2500" value={minBps} onChange={(e) => setMinBps(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Max (bps)</label>
+                <input className="input" type="number" placeholder="4500" value={maxBps} onChange={(e) => setMaxBps(e.target.value)} />
+              </div>
+            </div>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), false))}
               loading={tx.loading}
               disabled={!strategyAddr || !targetBps || !minBps || !maxBps}
             >
               Add Strategy
             </TxButton>
           </div>
+
+          {/* ── Remove Strategy ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Remove Strategy</h3>
+            <p className="mb-3 text-xs text-gray-500">Deactivate a strategy. Funds will be withdrawn first.</p>
+            <select
+              className="input"
+              value={strategyAddr}
+              onChange={(e) => setStrategyAddr(e.target.value)}
+            >
+              <option value="">Select strategy to remove…</option>
+              {strategyList.map((s, i) => (
+                <option key={i} value={s.strategy}>
+                  {strategyName(s.strategy)} — {s.strategy.slice(0, 10)}…
+                </option>
+              ))}
+            </select>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => tx.send(() => treasury!.removeStrategy(strategyAddr))}
+              loading={tx.loading}
+              disabled={!strategyAddr}
+              variant="danger"
+            >
+              Remove Strategy
+            </TxButton>
+          </div>
+
+          {/* ── Reserve & Rebalance ── */}
           <div className="card">
             <h3 className="mb-3 font-semibold text-gray-300">Reserve Ratio (bps)</h3>
-            <input className="input" type="number" placeholder="1000" value={reserveBps} onChange={(e) => setReserveBps(e.target.value)} />
+            <p className="mb-2 text-xs text-gray-500">Current: {currentValues.maxDeploy || "..."}</p>
+            <input className="input" type="number" placeholder="500" value={reserveBps} onChange={(e) => setReserveBps(e.target.value)} />
             <TxButton
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.setReserveBps(BigInt(reserveBps)))}
@@ -354,13 +753,26 @@ export function AdminPage() {
               Set Reserve
             </TxButton>
           </div>
-          <div className="card">
+          <div className="grid gap-4 sm:grid-cols-3">
             <TxButton
-              className="w-full"
               onClick={() => tx.send(() => treasury!.rebalance())}
               loading={tx.loading}
             >
-              Rebalance All Strategies
+              Rebalance All
+            </TxButton>
+            <TxButton
+              onClick={() => tx.send(() => treasury!.claimFees())}
+              loading={tx.loading}
+              variant="secondary"
+            >
+              Claim Fees
+            </TxButton>
+            <TxButton
+              onClick={() => tx.send(() => treasury!.emergencyWithdrawAll())}
+              loading={tx.loading}
+              variant="danger"
+            >
+              Emergency Withdraw All
             </TxButton>
           </div>
         </div>

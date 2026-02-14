@@ -156,9 +156,12 @@ const BORROW_RATES: Record<string, number> = (() => {
 })();
 
 const SCAN_CHAINS = (process.env.SCANNER_CHAINS || "Ethereum,Arbitrum,Base").split(",");
-const MIN_TVL = parseFloat(process.env.SCANNER_MIN_TVL || "1000000");
-const MIN_APY = parseFloat(process.env.SCANNER_MIN_APY || "3");
-const DEFAULT_LTV = parseFloat(process.env.SCANNER_DEFAULT_LTV || "0.50");
+const MIN_TVL = Number(process.env.SCANNER_MIN_TVL || "1000000");
+if (isNaN(MIN_TVL)) throw new Error(`Invalid SCANNER_MIN_TVL: ${process.env.SCANNER_MIN_TVL}`);
+const MIN_APY = Number(process.env.SCANNER_MIN_APY || "3");
+if (isNaN(MIN_APY)) throw new Error(`Invalid SCANNER_MIN_APY: ${process.env.SCANNER_MIN_APY}`);
+const DEFAULT_LTV = Number(process.env.SCANNER_DEFAULT_LTV || "0.50");
+if (isNaN(DEFAULT_LTV)) throw new Error(`Invalid SCANNER_DEFAULT_LTV: ${process.env.SCANNER_DEFAULT_LTV}`);
 const MAX_LOOPS = parseInt(process.env.SCANNER_MAX_LOOPS || "5", 10);
 const MAX_RESULTS = parseInt(process.env.SCANNER_MAX_RESULTS || "15", 10);
 
@@ -408,7 +411,8 @@ const server = http.createServer((req, res) => {
   // Loop opportunities
   if (pathname === "/api/yields/loops") {
     const limit = parseInt(url.searchParams.get("limit") || String(MAX_RESULTS), 10);
-    const minApy = parseFloat(url.searchParams.get("minApy") || "0");
+    const minApy = Number(url.searchParams.get("minApy") || "0");
+    if (isNaN(minApy)) { sendJSON(res, { error: "Invalid minApy parameter" }, 400); return; }
     let loops = latestResult.loops;
     if (minApy > 0) {
       loops = loops.filter((l) => l.netApy >= minApy);
