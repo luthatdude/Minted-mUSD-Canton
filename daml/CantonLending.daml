@@ -188,7 +188,7 @@ template CantonPriceFeed
       controller operator
       do
         -- DAML-M-06: Consume governance proof to prevent replay
-        proof <- exercise governanceProofCid ConsumeProof
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
         assertMsg "WRONG_ACTION_TYPE" (proof.actionType == EmergencyPause)
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "PRICE_MUST_BE_POSITIVE" (newPriceUsd > 0.0)
