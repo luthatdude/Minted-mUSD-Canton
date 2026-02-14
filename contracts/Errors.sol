@@ -221,6 +221,10 @@ error MinSupplyZero();
 error MaxChangeZero();
 error MaxChangeTooHigh();
 
+// ─── Global Pause ───────────────────────────────────────────────────────
+error AlreadyPaused();
+error GloballyPaused();
+
 // ─── Miscellaneous ──────────────────────────────────────────────────────
 error InvalidCloseFactor();
 error NoBadDebt();
