@@ -591,23 +591,14 @@ class LiquidationBot {
 async function main() {
   const bot = new LiquidationBot();
   
-  // TS-M-03: Graceful shutdown on SIGINT and SIGTERM
-  let shuttingDown = false;
-  const gracefulShutdown = (signal: string) => {
-    if (shuttingDown) return; // Prevent double-shutdown
-    shuttingDown = true;
-    logger.info(`Received ${signal}, shutting down gracefully...`);
+  // Handle graceful shutdown
+  process.on("SIGINT", () => {
+    logger.info("Received SIGINT, shutting down...");
     bot.stop();
     const stats = bot.getStats();
     logger.info(`Final stats: ${stats.liquidations} liquidations, $${stats.profitUsd.toFixed(2)} profit`);
-    // Allow event loop to drain (e.g., pending provider.destroy(), log flushes)
-    setTimeout(() => {
-      logger.info("Shutdown complete");
-      process.exit(0);
-    }, 2000);
-  };
-  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+    process.exit(0);
+  });
   
   await bot.initialize();
   
