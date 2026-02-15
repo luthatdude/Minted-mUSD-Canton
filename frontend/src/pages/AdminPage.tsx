@@ -42,7 +42,7 @@ const VAULT_LABELS: Record<VaultAssignment, { label: string; badge: string; desc
   vault2: {
     label: "Vault #2 — Primary Yield",
     badge: "bg-pink-800/60 text-pink-300",
-    desc: "High-yield core strategies (Fluid, Pendle, Morpho, Euler V2)",
+    desc: "High-yield core strategies (Fluid, Pendle, Euler V2)",
   },
 };
 
@@ -103,7 +103,7 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     name: "Fluid Stable Loop #146",
     shortName: "Fluid #146",
     address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
-    targetBps: 3500,
+    targetBps: 4500,
     apy: "~14.3%",
     description: "syrupUSDC/USDC VaultT1 — leveraged stable loop via Fluid Protocol",
     color: "#06b6d4", // cyan
@@ -113,27 +113,17 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     name: "Pendle Multi-Pool",
     shortName: "Pendle",
     address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
-    targetBps: 3000,
+    targetBps: 3500,
     apy: "~11.7%",
     description: "PT markets with auto-rollover and manual multi-pool allocation",
     color: "#8b5cf6", // violet
     vault: "vault2",
   },
   {
-    name: "Morpho Leveraged Loop",
-    shortName: "Morpho",
-    address: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
-    targetBps: 2000,
-    apy: "~11.5%",
-    description: "3.3x leveraged USDC lending on Morpho Blue (70% LTV, 5 loops max)",
-    color: "#3b82f6", // blue
-    vault: "vault2",
-  },
-  {
     name: "Euler V2 Loop",
     shortName: "Euler V2",
     address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
-    targetBps: 0,
+    targetBps: 2000,
     apy: "~7-10%",
     description: "Leveraged lending loop on Euler V2",
     color: "#14b8a6", // teal
@@ -160,7 +150,6 @@ function strategyColor(addr: string): string {
 const STRATEGY_KEY_MAP: Record<string, string> = {
   "Fluid #146": "fluid",
   "Pendle": "pendle",
-  "Morpho": "morpho",
   "Euler xStable": "eulerCross",
   "Aave V3": "aave",
   "Compound": "compound",
