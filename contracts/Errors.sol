@@ -221,6 +221,16 @@ error MinSupplyZero();
 error MaxChangeZero();
 error MaxChangeTooHigh();
 
+// ─── Global Pause ───────────────────────────────────────────────────────
+error AlreadyPaused();
+error GloballyPaused();
+
+// ─── ETH Pool ───────────────────────────────────────────────────────────
+error ETHTransferFailed();
+error SharePriceChangeTooLarge();
+error MultiplierTooLow();
+error MultiplierTooHigh();
+
 // ─── Miscellaneous ──────────────────────────────────────────────────────
 error InvalidCloseFactor();
 error NoBadDebt();
@@ -234,6 +244,3 @@ error InsufficientLiquidity();
 error InvalidBuffer();
 error MaxBorrowRateTooHigh();
 error MinSupplyRateTooHigh();
-
-// ─── Global Pause ────────────────────────────────────────────────────────
-error AlreadyPaused();
