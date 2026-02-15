@@ -21,7 +21,6 @@ import "./Errors.sol";
  *   PendleStrategyV2        — Pendle PT yield (multi-pool via PendleMarketSelector)
  *   MorphoLoopStrategy      — Morpho leverage looping
  *   SkySUSDSStrategy        — Sky sUSDS stable yield
- *   YieldBasisStrategy      — YB BTC/ETH leveraged LP lending
  *   AaveV3LoopStrategy      — Aave V3 leverage looping
  *   CompoundV3LoopStrategy  — Compound V3 leverage looping
  *   EulerV2LoopStrategy     — Euler V2 leverage looping

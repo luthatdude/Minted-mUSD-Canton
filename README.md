@@ -115,10 +115,6 @@ All components deployed via Kubernetes manifests in `k8s/` with:
 | `LiquidationEngine` | CDP | Liquidation with close factor and collateral seizure |
 | `PriceOracle` | Oracle | Chainlink-compatible feeds with staleness checks |
 | `PendleMarketSelector` | Yield | Market selection for TreasuryV2 yield strategies |
-| `YieldBasisStrategy` | Yield | Lends USDC into Yield Basis BTC/ETH pools for leveraged LP yield |
-| `YBStakingVault` | Staking | UUPS ERC-4626 vault for BTC/ETH YB yield — users stake mUSD, earn YB pool yield |
-| `MintedYBPool` | Yield | Minted-owned YB pool — Uni V3 concentrated liquidity with share-based lender accounting |
-| `MintedYBRouter` | Yield | Registry/router for MintedYBPool instances — pool discovery by base/quote pair |
 | `DepositRouter` | Bridge | L2 USDC deposit routing via Wormhole |
 | `LeverageVault` | CDP | Flash-loan-based leveraged vault positions |
 | `MetaVault` | Aggregator | Multi-vault aggregation and routing |
@@ -127,8 +123,6 @@ All components deployed via Kubernetes manifests in `k8s/` with:
 | `RedemptionQueue` | Minting | Queued redemption processing |
 | `MintedTimelockController` | Governance | Timelocked admin operations |
 | `MockERC20` / `MockAggregatorV3` / `MockStrategy` | Testing | Mock contracts for Hardhat tests |
-| `MockYieldBasisPool` | Testing | Mock Yield Basis pool for strategy/vault testing |
-| `MockUniswapV3Pool` / `MockNonfungiblePositionManager` / `MockSwapRouter` | Testing | Mock Uni V3 for MintedYBPool testing |
 
 ### BLEBridgeV9 Rate Limiting
 
@@ -184,14 +178,6 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 | `StakingService` | `MintedProtocolV2Fixed.daml` | Stake mUSD → StakedMUSD with interest accrual. Unstake tracks supply cap via IssuerRole. |
 | `CantonStakingService` | `CantonSMUSD.daml` | Canton yield vault. Share-price model (totalAssets/totalShares). Yield synced from ETH. |
 | `CantonSMUSD` | `CantonSMUSD.daml` | Individual smUSD share position. |
-
-### Strategy-Dedicated sMUSD (Canton)
-
-| Template | File | Description |
-|----------|------|-------------|
-| `CantonStrategySMUSD` | `CantonYBStaking.daml` | Strategy-dedicated sMUSD position (sMUSD-BTC or sMUSD-ETH). Isolated yield per strategy. |
-| `CantonYBStakingService` | `CantonYBStaking.daml` | Per-strategy staking service. Auto-stake mUSD → sMUSD-BTC/ETH. Yield sync, compliance. |
-| `CantonYBStakingSetup` | `CantonYBStaking.daml` | Factory for creating BTC and ETH staking services. |
 
 ### Vaults (CDP)
 
@@ -255,7 +241,6 @@ Next.js 15 / TypeScript / Tailwind CSS with dual-chain toggle in `frontend/`.
 | Dashboard | mUSD supply, treasury balance, vault stats, bridge health | Asset counts, service status, vault count |
 | Mint/Redeem | USDC ↔ mUSD via DirectMint contract | CantonDirectMint exercise via Daml JSON API |
 | Stake | smUSD ERC-4626 deposit/redeem with cooldown | CantonSMUSD deposit/withdraw |
-| YB Stake | ybBTC/ybETH vault deposit/redeem — Yield Basis pool yield | CantonYBStaking stake/unstake |
 | Borrow | Collateral deposit, borrow/repay, health factor | Vault CDP with oracle price feeds |
 | Liquidations | Check liquidatability, estimate seizure, execute | Browse vaults by health ratio |
 | Bridge | BLEBridgeV9 attestation events and health | Lock/attest/claim workflow |
