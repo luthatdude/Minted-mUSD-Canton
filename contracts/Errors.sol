@@ -226,6 +226,12 @@ error MaxChangeTooHigh();
 error AlreadyPaused();
 error GloballyPaused();
 
+// ─── ETH Pool ───────────────────────────────────────────────────────────
+error ETHTransferFailed();
+error SharePriceChangeTooLarge();
+error MultiplierTooLow();
+error MultiplierTooHigh();
+
 // ─── Miscellaneous ──────────────────────────────────────────────────────
 error InvalidCloseFactor();
 error NoBadDebt();
