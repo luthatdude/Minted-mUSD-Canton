@@ -221,8 +221,10 @@ contract PendleStrategyV2 is
     /// @notice Basis points denominator
     uint256 public constant BPS = 10000;
 
-    /// @notice Default rollover threshold (7 days before expiry)
-    uint256 public constant DEFAULT_ROLLOVER_THRESHOLD = 7 days;
+    /// @notice Default rollover threshold (21 days before expiry)
+    /// @dev Increased from 7 to 21 days — rolling closer to maturity
+    ///      reduces slippage because PT trades nearer par as expiry approaches.
+    uint256 public constant DEFAULT_ROLLOVER_THRESHOLD = 21 days;
 
     // ═══════════════════════════════════════════════════════════════════════
     // ROLES
@@ -380,7 +382,7 @@ contract PendleStrategyV2 is
 
         // Default settings
         rolloverThreshold = DEFAULT_ROLLOVER_THRESHOLD;
-        slippageBps = 50; // 0.5% default slippage
+        slippageBps = 30; // 0.3% default — reduced from 0.5% to cut rollover drag
         ptDiscountRateBps = 1000; // 10% default, configurable
         active = true;
 

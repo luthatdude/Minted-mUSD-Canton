@@ -189,8 +189,7 @@ flowchart TD
     
     V2 --> S6[Fluid Loop #146]
     V2 --> S7[Pendle PT Markets]
-    V2 --> S8[Morpho Blue Loop]
-    V2 --> S9[Euler V2 Loop]
+    V2 --> S8[Euler V2 Loop]
     
     S1 --> Y[Yield Generated]
     S2 --> Y
@@ -200,7 +199,6 @@ flowchart TD
     S6 --> Y
     S7 --> Y
     S8 --> Y
-    S9 --> Y
     
     Y --> J[Treasury records return]
     J --> K[smUSD share price increases]
