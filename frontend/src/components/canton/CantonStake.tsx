@@ -14,7 +14,8 @@ import WalletConnector from "@/components/WalletConnector";
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
   StakingService: `${PACKAGE_ID}:MintedProtocolV2Fixed:StakingService`,
-  VaultService: `${PACKAGE_ID}:MintedProtocolV2Fixed:VaultService`,
+  YBStakingService: `${PACKAGE_ID}:CantonYBStaking:CantonYBStakingService`,
+  StrategySMUSD: `${PACKAGE_ID}:CantonYBStaking:CantonStrategySMUSD`,
   MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
 };
 
@@ -42,7 +43,7 @@ const POOLS: PoolConfig[] = [
     name: "BTC Pool",
     asset: "Bitcoin",
     symbol: "BTC",
-    description: "Earn leveraged BTC yield via Curve Twocrypto LP with 2x constant-leverage AMM.",
+    description: "Mint mUSD → auto-stake → receive sMUSD-BTC. Dedicated yield from 2x leveraged BTC/USDC LP.",
     baseApy: 8.4,
     boostApy: 12.6,
     tvl: 0,
@@ -56,7 +57,7 @@ const POOLS: PoolConfig[] = [
     name: "ETH Pool",
     asset: "Ethereum",
     symbol: "ETH",
-    description: "Earn leveraged ETH yield via Curve Twocrypto LP with 2x constant-leverage AMM.",
+    description: "Mint mUSD → auto-stake → receive sMUSD-ETH. Dedicated yield from 2x leveraged ETH/USDC LP.",
     baseApy: 6.2,
     boostApy: 9.8,
     tvl: 0,
@@ -68,14 +69,14 @@ const POOLS: PoolConfig[] = [
 ];
 
 // ── Step Definitions ─────────────────────────────────────────────
-type FlowStep = "idle" | "approve" | "mint" | "bridge" | "deposit" | "done";
+type FlowStep = "idle" | "approve" | "mint" | "bridge" | "stake" | "done";
 
 const STEP_META: Record<FlowStep, { label: string; num: number }> = {
   idle:    { label: "Enter Amount", num: 0 },
   approve: { label: "Approve USDC", num: 1 },
   mint:    { label: "Mint mUSD",    num: 2 },
   bridge:  { label: "Bridge",       num: 3 },
-  deposit: { label: "Deposit",      num: 4 },
+  stake:   { label: "Auto-Stake",   num: 4 },
   done:    { label: "Complete",     num: 5 },
 };
 
@@ -137,17 +138,18 @@ export function CantonStake() {
   const loadCantonContracts = useCallback(async () => {
     if (!loopWallet.isConnected) return;
     try {
-      const [svc, musd, vaults] = await Promise.all([
-        loopWallet.queryContracts(templates.StakingService).catch(() => []),
+      const [svc, musd, strategyPositions] = await Promise.all([
+        loopWallet.queryContracts(templates.YBStakingService).catch(() => []),
         loopWallet.queryContracts(templates.MUSD).catch(() => []),
-        loopWallet.queryContracts(templates.VaultService).catch(() => []),
+        loopWallet.queryContracts(templates.StrategySMUSD).catch(() => []),
       ]);
       setServices(svc);
       setMusdContracts(musd);
       const pos: Record<PoolId, number> = { btcPool: 0, ethPool: 0 };
-      vaults.forEach((v) => {
-        const pool = v.payload?.poolId as PoolId;
-        if (pool && pos[pool] !== undefined) pos[pool] += parseFloat(v.payload?.shares || "0");
+      strategyPositions.forEach((v) => {
+        const strategy = v.payload?.strategy as string;
+        const poolId = strategy === "BTC" ? "btcPool" : strategy === "ETH" ? "ethPool" : null;
+        if (poolId && pos[poolId] !== undefined) pos[poolId] += parseFloat(v.payload?.shares || "0");
       });
       setPositions(pos);
     } catch (err) { console.error("Failed to load Canton contracts:", err); }
@@ -225,14 +227,17 @@ export function CantonStake() {
       }
       await new Promise((r) => setTimeout(r, 2000)); // attestation propagation
 
-      // Step 4: Deposit to Vault on Canton
-      setFlowStep("deposit");
+      // Step 4: Auto-stake mUSD → sMUSD-BTC or sMUSD-ETH on Canton
+      setFlowStep("stake");
       if (loopWallet.isConnected && services.length > 0) {
         const musdCid = musdContracts[0]?.contractId;
         if (musdCid) {
+          const strategy = selectedPool === "btcPool" ? "BTC" : "ETH";
+          const service = services.find((s) => s.payload?.poolType === strategy) || services[0];
+          // Exercise YB_Stake: burns mUSD, issues strategy-dedicated sMUSD
           await loopWallet.exerciseChoice(
-            templates.VaultService, services[0].contractId,
-            "DepositToPool", { poolId: selectedPool, amount, musdCid }
+            templates.YBStakingService, service.contractId,
+            "YB_Stake", { user: loopWallet.partyId, musdCid }
           );
         }
       }
@@ -247,19 +252,27 @@ export function CantonStake() {
 
   // ── Withdraw from Vault ──────────────────────────────────────
   async function handleWithdraw() {
-    if (!amount || parseFloat(amount) <= 0 || !selectedPool) return;
+    if (!selectedPool) return;
     setLoading(true); setFlowError(null);
     try {
       if (loopWallet.isConnected && services.length > 0) {
+        // Find the user's sMUSD position for this strategy
+        const allPositions = await loopWallet.queryContracts(templates.StrategySMUSD).catch(() => []);
+        const strategy = selectedPool === "btcPool" ? "BTC" : "ETH";
+        const position = allPositions.find((p) => p.payload?.strategy === strategy);
+        if (!position) throw new Error(`No sMUSD-${strategy} position found`);
+
+        const service = services.find((s) => s.payload?.poolType === strategy) || services[0];
+        // Exercise YB_Unstake: burns sMUSD-BTC/ETH → returns mUSD with yield
         await loopWallet.exerciseChoice(
-          templates.VaultService, services[0].contractId,
-          "WithdrawFromPool", { poolId: selectedPool, shares: amount }
+          templates.YBStakingService, service.contractId,
+          "YB_Unstake", { user: loopWallet.partyId, positionCid: position.contractId }
         );
       }
       setAmount("");
       await loadCantonContracts();
     } catch (err: any) {
-      setFlowError(err.reason || err.message || "Withdraw failed");
+      setFlowError(err.reason || err.message || "Unstake failed");
     } finally { setLoading(false); }
   }
 
@@ -302,8 +315,8 @@ export function CantonStake() {
             </span>
           </div>
           <p className="text-gray-400 max-w-xl">
-            Deposit USDC to mint mUSD, bridge to Canton, and earn leveraged yield on BTC &amp; ETH
-            through constant-leverage AMM pools.
+            Mint mUSD from USDC, bridge to Canton, and auto-stake into strategy-dedicated
+            sMUSD pools. Each pool&apos;s yield is isolated — sMUSD-BTC and sMUSD-ETH earn independently.
           </p>
         </div>
         {prices.updatedAt && (
@@ -370,9 +383,9 @@ export function CantonStake() {
             null,
             { icon: "🌉", label: "Bridge", sub: "Canton Network" },
             null,
-            { icon: "📈", label: "Vault", sub: "2x leveraged LP" },
+            { icon: "�", label: "Auto-Stake", sub: "sMUSD-BTC / ETH" },
             null,
-            { icon: "💰", label: "Earn Yield", sub: "BTC / ETH exposure" },
+            { icon: "💰", label: "Earn Yield", sub: "Strategy-dedicated" },
           ].map((step, i) =>
             step === null ? (
               <svg key={`arrow-${i}`} className="hidden h-4 w-8 text-gray-600 sm:block" fill="none" viewBox="0 0 32 16">
@@ -483,8 +496,8 @@ export function CantonStake() {
                 <p className="text-lg font-bold text-yellow-400">{pool.boostApy}%</p>
               </div>
               <div className="bg-surface-800/80 p-3 text-center">
-                <p className="text-[10px] uppercase tracking-wide text-gray-500">Your Position</p>
-                <p className="text-lg font-bold text-white">{pool.position > 0 ? `$${pool.position.toFixed(2)}` : "—"}</p>
+                <p className="text-[10px] uppercase tracking-wide text-gray-500">sMUSD-{pool.symbol}</p>
+                <p className="text-lg font-bold text-white">{pool.position > 0 ? pool.position.toFixed(4) : "—"}</p>
               </div>
             </div>
 
@@ -530,8 +543,8 @@ export function CantonStake() {
               </h3>
               <p className="text-sm text-white/70">
                 {action === "deposit"
-                  ? "Enter USDC amount → auto mints mUSD → bridges to Canton → deposits to vault"
-                  : "Withdraw your position from the yield pool"}
+                  ? `Enter USDC amount → mint mUSD → bridge to Canton → auto-stake → receive sMUSD-${selectedPoolData?.symbol}`
+                  : `Unstake your sMUSD-${selectedPoolData?.symbol} position to receive mUSD`}
               </p>
             </div>
           </div>
@@ -540,7 +553,7 @@ export function CantonStake() {
             {/* Progress Steps (deposit only) */}
             {action === "deposit" && flowStep !== "idle" && (
               <div className="flex items-center justify-between rounded-xl bg-surface-900/50 p-4">
-                {(["approve", "mint", "bridge", "deposit", "done"] as FlowStep[]).map((step, i) => {
+                {(["approve", "mint", "bridge", "stake", "done"] as FlowStep[]).map((step, i) => {
                   const meta = STEP_META[step];
                   const currentIdx = STEP_META[flowStep].num;
                   const isActive = meta.num === currentIdx;
@@ -571,7 +584,7 @@ export function CantonStake() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-sm font-medium text-gray-400">
-                    {action === "deposit" ? "USDC Amount" : "Shares to Withdraw"}
+                    {action === "deposit" ? "USDC Amount" : `sMUSD-${selectedPoolData?.symbol} to Unstake`}
                   </label>
                   <span className="text-xs text-gray-500">
                     Balance: {action === "deposit" ? formatToken(usdcBal, 6) : positions[selectedPool].toFixed(4)}
@@ -629,10 +642,18 @@ export function CantonStake() {
                   <span className="text-gray-300">Ethereum → Canton (~15s)</span>
                 </div>
                 <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">You Receive</span>
+                  <span className="text-white font-medium">sMUSD-{selectedPoolData.symbol} (strategy-dedicated)</span>
+                </div>
+                <div className="flex justify-between text-sm">
                   <span className="text-gray-400">Yield Strategy</span>
                   <span className={selectedPoolData.accentColor}>
                     {selectedPoolData.leverageDisplay} Leveraged {selectedPoolData.symbol} LP
                   </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Yield Isolation</span>
+                  <span className="text-yellow-400 font-medium">Dedicated — NOT pooled with other strategies</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-400">Est. APY</span>
@@ -649,10 +670,10 @@ export function CantonStake() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <h3 className="text-lg font-semibold text-white">Deposit Complete!</h3>
+                <h3 className="text-lg font-semibold text-white">Auto-Stake Complete!</h3>
                 <p className="text-sm text-gray-400 text-center max-w-sm">
-                  Your USDC has been minted to mUSD, bridged to Canton, and deposited into the{" "}
-                  {selectedPoolData.name} vault. You&apos;re now earning leveraged {selectedPoolData.symbol} yield.
+                  Your USDC has been minted to mUSD, bridged to Canton, and auto-staked into
+                  sMUSD-{selectedPoolData.symbol}. You&apos;re now earning dedicated {selectedPoolData.symbol} strategy yield.
                 </p>
                 {flowTxHash && (
                   <a href={`https://etherscan.io/tx/${flowTxHash}`} target="_blank" rel="noopener noreferrer"
@@ -692,10 +713,10 @@ export function CantonStake() {
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
-                    Deposit USDC → {selectedPoolData.name}
+                    Mint &amp; Stake → sMUSD-{selectedPoolData.symbol}
                   </span>
                 ) : (
-                  <span>Withdraw from {selectedPoolData.name}</span>
+                  <span>Unstake sMUSD-{selectedPoolData.symbol} → mUSD</span>
                 )}
               </button>
             )}
@@ -716,7 +737,7 @@ export function CantonStake() {
       {/* ── Your Positions Summary ────────────────────────────── */}
       {(positions.btcPool > 0 || positions.ethPool > 0) && (
         <div className="rounded-2xl border border-white/10 bg-surface-800/50 p-6">
-          <h2 className="mb-4 text-lg font-semibold text-white">Your Positions</h2>
+          <h2 className="mb-4 text-lg font-semibold text-white">Your Strategy Positions</h2>
           <div className="space-y-3">
             {poolsWithPrices.filter((p) => p.position > 0).map((pool) => (
               <div key={pool.id} className="flex items-center justify-between rounded-xl bg-surface-900/40 p-4">
@@ -725,13 +746,13 @@ export function CantonStake() {
                     <span className="text-sm font-bold text-white">{pool.symbol === "BTC" ? "₿" : "Ξ"}</span>
                   </div>
                   <div>
-                    <p className="font-medium text-white">{pool.name}</p>
-                    <p className="text-xs text-gray-500">{pool.leverageDisplay} leverage · {pool.baseApy}% APY</p>
+                    <p className="font-medium text-white">sMUSD-{pool.symbol}</p>
+                    <p className="text-xs text-gray-500">{pool.name} · {pool.leverageDisplay} leverage · {pool.baseApy}% APY</p>
                   </div>
                 </div>
                 <div className="text-right">
                   <p className="font-semibold text-white">${pool.position.toFixed(2)}</p>
-                  <p className="text-xs text-emerald-400">Earning yield</p>
+                  <p className="text-xs text-emerald-400">sMUSD-{pool.symbol} · Earning yield</p>
                 </div>
               </div>
             ))}
@@ -741,22 +762,22 @@ export function CantonStake() {
 
       {/* ── How It Works ───────────────────────────────────────── */}
       <div className="rounded-2xl border border-white/5 bg-surface-800/30 p-6">
-        <h2 className="mb-4 text-lg font-semibold text-white">How BTC &amp; ETH Pools Work</h2>
+        <h2 className="mb-4 text-lg font-semibold text-white">How Strategy-Dedicated sMUSD Works</h2>
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-xl bg-surface-900/40 p-4 border border-white/5">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/20 text-orange-400 font-bold text-sm mb-3">1</div>
-            <h3 className="font-medium text-white mb-1">Constant Leverage AMM</h3>
+            <h3 className="font-medium text-white mb-1">Strategy-Dedicated sMUSD</h3>
             <p className="text-xs text-gray-400">
-              Your mUSD is paired with borrowed stablecoins in a 2x leveraged Curve LP position,
-              amplifying trading fee revenue while maintaining predictable exposure.
+              Your mUSD is auto-staked into sMUSD-BTC or sMUSD-ETH. Each variant is isolated —
+              your yield comes exclusively from that strategy&apos;s 2x leveraged Curve LP.
             </p>
           </div>
           <div className="rounded-xl bg-surface-900/40 p-4 border border-white/5">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 font-bold text-sm mb-3">2</div>
-            <h3 className="font-medium text-white mb-1">Automated Rebalancing</h3>
+            <h3 className="font-medium text-white mb-1">Isolated Yield Pools</h3>
             <p className="text-xs text-gray-400">
-              The AMM automatically maintains 2x leverage through the invariant formula.
-              No manual rebalancing needed — the constant leverage is built into the math.
+              sMUSD-BTC and sMUSD-ETH are NOT pooled with each other or general sMUSD.
+              Each pool has its own share price, yield rate, and deposit cap.
             </p>
           </div>
           <div className="rounded-xl bg-surface-900/40 p-4 border border-white/5">

@@ -185,12 +185,12 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 | `CantonStakingService` | `CantonSMUSD.daml` | Canton yield vault. Share-price model (totalAssets/totalShares). Yield synced from ETH. |
 | `CantonSMUSD` | `CantonSMUSD.daml` | Individual smUSD share position. |
 
-### Yield Basis Staking (Canton)
+### Strategy-Dedicated sMUSD (Canton)
 
 | Template | File | Description |
 |----------|------|-------------|
-| `CantonYBPosition` | `CantonYBStaking.daml` | Individual BTC or ETH YB staking position (shares). |
-| `CantonYBStakingService` | `CantonYBStaking.daml` | Per-pool staking service (BTC/ETH). Stake/unstake, yield sync, compliance. |
+| `CantonStrategySMUSD` | `CantonYBStaking.daml` | Strategy-dedicated sMUSD position (sMUSD-BTC or sMUSD-ETH). Isolated yield per strategy. |
+| `CantonYBStakingService` | `CantonYBStaking.daml` | Per-strategy staking service. Auto-stake mUSD → sMUSD-BTC/ETH. Yield sync, compliance. |
 | `CantonYBStakingSetup` | `CantonYBStaking.daml` | Factory for creating BTC and ETH staking services. |
 
 ### Vaults (CDP)

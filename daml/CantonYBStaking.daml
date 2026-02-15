@@ -1,20 +1,23 @@
 -- | CantonYBStaking
--- Canton-side Yield Basis staking vaults for BTC and ETH.
+-- Canton-side strategy-dedicated sMUSD vaults for BTC and ETH.
 --
--- Users stake mUSD and earn yield from Yield Basis BTC/USDC or ETH/USDC pools.
--- Share price is synced from Ethereum YBStakingVault contracts.
+-- These pools are CANTON-ONLY. Users interact entirely through DAML contracts.
+-- Each pool issues a DEDICATED sMUSD variant (sMUSD-BTC or sMUSD-ETH) that is
+-- isolated from the general sMUSD pool — yields from each strategy are allocated
+-- exclusively to that pool's stakers.
 --
--- Architecture:
---   1. User deposits CantonMUSD → receives CantonYBPosition (shares)
---   2. USDC backing flows to Ethereum Treasury → YieldBasisStrategy → YB Pool
---   3. Yield Basis pool earns interest from leveraged LP borrowers
---   4. Yield synced to Canton via SyncYBSharePrice choice
---   5. User unstakes shares at current price → receives more mUSD
+-- User Flow:
+--   1. User mints mUSD (via CantonDirectMint or Ethereum bridge)
+--   2. mUSD is auto-staked → user receives CantonStrategySMUSD (sMUSD-BTC or sMUSD-ETH)
+--   3. USDC backing is bridged to Ethereum → TreasuryV2 → YieldBasisStrategy → YB Pool
+--   4. YB Pool earns yield from 2x leveraged Curve LP (BTC/USDC or ETH/USDC)
+--   5. Yield synced to Canton via YB_SyncSharePrice → strategy share price increases
+--   6. User unstakes sMUSD-BTC/ETH at current price → receives more mUSD than deposited
 --
--- Users have 3 staking options:
---   smUSD  → Diversified yield (~6% APY) via CantonStakingService
---   ybBTC  → BTC market-making yield via CantonYBStakingService (BTC pool)
---   ybETH  → ETH market-making yield via CantonYBStakingService (ETH pool)
+-- Key Design Principle:
+--   sMUSD-BTC is NOT pooled with sMUSD-ETH or general sMUSD.
+--   Each strategy pool has its own share price, its own yield, its own deposit cap.
+--   This is a strategy-dedicated sMUSD, not a generic yield token.
 
 module CantonYBStaking where
 
@@ -25,18 +28,20 @@ import UserPrivacySettings (lookupUserObservers)
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
---                     SECTION 1: YB STAKED POSITION
+--              SECTION 1: STRATEGY-DEDICATED sMUSD
 -- ============================================================
 
--- | Individual Yield Basis staked position.
--- Represents a user's share in either the BTC or ETH YB staking vault.
--- Amount is in "shares" — redeemable for mUSD at current YB share price.
-template CantonYBPosition
+-- | Strategy-dedicated sMUSD position.
+-- Represents a user's staked mUSD in a SPECIFIC yield strategy (BTC or ETH).
+-- This is a distinct sMUSD variant — NOT pooled with the general sMUSD or other strategies.
+-- Amount is in "shares" — redeemable for mUSD at the strategy's current share price.
+-- Yields from the BTC strategy accrue ONLY to sMUSD-BTC holders (and likewise for ETH).
+template CantonStrategySMUSD
   with
     issuer : Party
     owner : Party
-    shares : Money          -- Number of YB vault shares
-    poolType : Text         -- "BTC" or "ETH"
+    shares : Money          -- Number of strategy-specific sMUSD shares
+    strategy : Text         -- "BTC" or "ETH" — identifies the dedicated strategy
     entrySharePrice : Money -- Share price when staked (for P&L tracking)
     stakedAt : Time         -- Timestamp for cooldown enforcement
     privacyObservers : [Party]
@@ -45,22 +50,22 @@ template CantonYBPosition
     observer privacyObservers
 
     ensure shares > 0.0
-        && (poolType == "BTC" || poolType == "ETH")
+        && (strategy == "BTC" || strategy == "ETH")
 
     agreement
-      implode [ owner, " holds ", show shares, " ybm", poolType
-              , " shares at entry price ", show entrySharePrice
+      implode [ show owner, " holds ", show shares, " sMUSD-", strategy
+              , " at entry price ", show entrySharePrice
               , " issued by ", show issuer ]
 
     -- | Update observers from user privacy settings
-    choice YBPosition_UpdateObservers : ContractId CantonYBPosition
+    choice StrategySMUSD_UpdateObservers : ContractId CantonStrategySMUSD
       with
         newObservers : [Party]
       controller owner
       do create this with privacyObservers = newObservers
 
     -- | Split position into two
-    choice YBPosition_Split : (ContractId CantonYBPosition, ContractId CantonYBPosition)
+    choice StrategySMUSD_Split : (ContractId CantonStrategySMUSD, ContractId CantonStrategySMUSD)
       with
         splitShares : Money
       controller owner
@@ -71,26 +76,28 @@ template CantonYBPosition
         c2 <- create this with shares = shares - splitShares
         return (c1, c2)
 
-    -- | Merge two positions of the same pool type
-    choice YBPosition_Merge : ContractId CantonYBPosition
+    -- | Merge two positions of the same strategy
+    choice StrategySMUSD_Merge : ContractId CantonStrategySMUSD
       with
-        otherCid : ContractId CantonYBPosition
+        otherCid : ContractId CantonStrategySMUSD
       controller owner
       do
         other <- fetch otherCid
         assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
         assertMsg "OWNER_MISMATCH" (other.owner == owner)
-        assertMsg "POOL_TYPE_MISMATCH" (other.poolType == poolType)
+        assertMsg "STRATEGY_MISMATCH" (other.strategy == strategy)
         archive otherCid
         create this with shares = shares + other.shares
 
 -- ============================================================
---                     SECTION 2: YB STAKING SERVICE
+--        SECTION 2: STRATEGY-DEDICATED STAKING SERVICE
 -- ============================================================
 
--- | Canton Yield Basis staking service.
--- One instance per pool type (BTC or ETH).
--- Manages deposits, withdrawals, and yield sync for a specific YB pool.
+-- | Canton strategy-dedicated staking service.
+-- One instance per strategy (BTC or ETH). Each service is isolated:
+-- its own share price, yield, deposit cap, and sMUSD variant.
+-- User mints mUSD → auto-staked here → receives sMUSD-BTC or sMUSD-ETH.
+-- USDC backing is bridged to Ethereum for deployment into the YB strategy.
 template CantonYBStakingService
   with
     operator : Party
@@ -141,8 +148,11 @@ template CantonYBStakingService
       controller operator
       do return (poolType, sharePrice, currentAPY, currentUtilization)
 
-    -- | Stake: deposit mUSD → receive ybBTC/ybETH shares
-    choice YB_Stake : (ContractId CantonYBStakingService, ContractId CantonYBPosition)
+    -- | Auto-stake: mUSD → strategy-dedicated sMUSD (sMUSD-BTC or sMUSD-ETH)
+    -- The mUSD is burned on Canton; its USDC backing is deployed to the
+    -- Ethereum YB strategy via TreasuryV2 → YieldBasisStrategy → MintedLT.
+    -- Yields from THIS strategy accrue ONLY to holders of THIS sMUSD variant.
+    choice YB_Stake : (ContractId CantonYBStakingService, ContractId CantonStrategySMUSD)
       with
         user : Party
         musdCid : ContractId CantonMUSD
@@ -165,17 +175,17 @@ template CantonYBStakingService
         -- Calculate shares at current share price
         let newShares = musd.amount / sharePrice
 
-        -- Burn the mUSD (backing USDC stays in Treasury → YB pool)
+        -- Burn the mUSD (backing USDC is bridged to Ethereum → YB strategy)
         exercise musdCid CantonMUSD_Burn
 
-        -- Issue YB position
+        -- Issue strategy-dedicated sMUSD (sMUSD-BTC or sMUSD-ETH)
         now <- getTime
         userObs <- lookupUserObservers operator user
-        positionCid <- create CantonYBPosition with
+        positionCid <- create CantonStrategySMUSD with
           issuer = operator
           owner = user
           shares = newShares
-          poolType = poolType
+          strategy = poolType
           entrySharePrice = sharePrice
           stakedAt = now
           privacyObservers = userObs
@@ -187,12 +197,13 @@ template CantonYBStakingService
 
         return (serviceCid, positionCid)
 
-    -- | Unstake: redeem ybBTC/ybETH shares → receive mUSD at current price
-    -- Yield accrual means user receives MORE mUSD than deposited
+    -- | Unstake: redeem sMUSD-BTC/ETH → receive mUSD at current strategy share price
+    -- Yield accrual means user receives MORE mUSD than originally deposited.
+    -- The yield came exclusively from THIS strategy — not pooled with other strategies.
     choice YB_Unstake : (ContractId CantonYBStakingService, ContractId CantonMUSD)
       with
         user : Party
-        positionCid : ContractId CantonYBPosition
+        positionCid : ContractId CantonStrategySMUSD
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
@@ -203,24 +214,24 @@ template CantonYBStakingService
         position <- fetch positionCid
         assertMsg "ISSUER_MISMATCH" (position.issuer == operator)
         assertMsg "OWNER_MISMATCH" (position.owner == user)
-        assertMsg "POOL_TYPE_MISMATCH" (position.poolType == poolType)
+        assertMsg "STRATEGY_MISMATCH" (position.strategy == poolType)
 
         -- Cooldown enforcement
         now <- getTime
         let cooldownEnd = addRelTime position.stakedAt (seconds (toInteger cooldownSeconds))
         assertMsg "COOLDOWN_ACTIVE" (now >= cooldownEnd)
 
-        -- Calculate mUSD to mint at current share price
+        -- Calculate mUSD to mint at current strategy share price
         let musdAmount = position.shares * sharePrice
 
         -- Supply cap check
         let newMinted = currentUnstakeMinted + musdAmount
         assertMsg "MINT_CAP_EXCEEDED" (newMinted <= musdMintCap)
 
-        -- Archive the YB position
+        -- Archive the strategy-dedicated sMUSD
         archive positionCid
 
-        -- Mint mUSD to user
+        -- Mint mUSD to user (includes accumulated yield from this strategy)
         userObs <- lookupUserObservers operator user
         musdCid <- create CantonMUSD with
           issuer = operator
