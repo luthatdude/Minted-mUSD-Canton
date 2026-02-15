@@ -3,6 +3,7 @@ pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "../interfaces/IFluidVault.sol";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //                     MOCK FLUID VAULT T1  (Normal / Normal)
@@ -174,6 +175,70 @@ contract MockFluidVaultT2 {
 
     function VAULT_ID() external pure returns (uint256) { return 74; }
 
+    /// @notice Fluid T2 operatePerfect: operates on DEX shares directly
+    function operatePerfect(
+        uint256 nftId_,
+        int256 perfectColShares_,
+        int256 colToken0MinMax_,
+        int256 colToken1MinMax_,
+        int256 newDebt_,
+        address to_
+    ) external payable returns (uint256 nftId, int256[] memory r) {
+        if (to_ == address(0)) to_ = msg.sender;
+
+        if (nftId_ == 0) {
+            nftId = nextNftId++;
+            positionOwner[nftId] = msg.sender;
+        } else {
+            nftId = nftId_;
+        }
+
+        r = new int256[](2);
+
+        if (perfectColShares_ > 0) {
+            // Deposit: take tokens based on MinMax hints (simplified: treat as amounts)
+            uint256 t0 = colToken0MinMax_ > 0 ? uint256(colToken0MinMax_) : 0;
+            uint256 t1 = colToken1MinMax_ > 0 ? uint256(colToken1MinMax_) : 0;
+            if (t0 > 0) {
+                colToken0.safeTransferFrom(msg.sender, address(this), t0);
+                collateral0[nftId] += t0;
+            }
+            if (t1 > 0) {
+                colToken1.safeTransferFrom(msg.sender, address(this), t1);
+                collateral1[nftId] += t1;
+            }
+            r[0] = int256(t0);
+            r[1] = int256(t1);
+        } else if (perfectColShares_ < 0) {
+            // Withdraw: return tokens (simplified: proportional from both sides)
+            uint256 t0 = colToken0MinMax_ < 0 ? uint256(-colToken0MinMax_) : 0;
+            uint256 t1 = colToken1MinMax_ < 0 ? uint256(-colToken1MinMax_) : 0;
+            if (t0 > collateral0[nftId]) t0 = collateral0[nftId];
+            if (t1 > collateral1[nftId]) t1 = collateral1[nftId];
+            if (t0 > 0) {
+                collateral0[nftId] -= t0;
+                colToken0.safeTransfer(to_, t0);
+            }
+            if (t1 > 0) {
+                collateral1[nftId] -= t1;
+                colToken1.safeTransfer(to_, t1);
+            }
+            r[0] = -int256(t0);
+            r[1] = -int256(t1);
+        }
+
+        // Debt (same as operate)
+        if (newDebt_ > 0) {
+            debt[nftId] += uint256(newDebt_);
+            debtToken.safeTransfer(to_, uint256(newDebt_));
+        } else if (newDebt_ < 0) {
+            uint256 amt = uint256(-newDebt_);
+            if (amt > debt[nftId]) amt = debt[nftId];
+            debtToken.safeTransferFrom(msg.sender, address(this), amt);
+            debt[nftId] -= amt;
+        }
+    }
+
     function seedLiquidity(address token, uint256 amount) external {
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
     }
@@ -337,4 +402,133 @@ contract MockFluidVaultFactory {
     }
 
     function approve(address, uint256) external {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//                     MOCK FLUID VAULT RESOLVER
+// ═══════════════════════════════════════════════════════════════════════════
+// Returns position data by reading from the mock vaults directly.
+// Supports T1, T2, and T4 vault types.
+
+contract MockFluidVaultResolver is IFluidVaultResolver {
+    // nftId → vault address
+    mapping(uint256 => address) public nftVault;
+    // nftId → vault type (1/2/4)
+    mapping(uint256 => uint8) public nftVaultType;
+
+    /// @notice Register a position for resolver lookups
+    function registerPosition(uint256 nftId, address vault, uint8 vaultType) external {
+        nftVault[nftId] = vault;
+        nftVaultType[nftId] = vaultType;
+    }
+
+    function vaultByNftId(uint256 nftId_) external view override returns (address vault_) {
+        return nftVault[nftId_];
+    }
+
+    function positionByNftId(uint256 nftId_) external view override returns (
+        UserPosition memory userPosition_,
+        VaultEntireData memory vaultData_
+    ) {
+        address vault = nftVault[nftId_];
+        uint8 vType = nftVaultType[nftId_];
+
+        userPosition_.nftId = nftId_;
+
+        if (vType == 1) {
+            // T1: normal col / normal debt
+            (uint256 col, uint256 dbt) = MockFluidVaultT1(vault).getPosition(nftId_);
+            userPosition_.supply = col;
+            userPosition_.borrow = dbt;
+            vaultData_.isSmartCol = false;
+            vaultData_.isSmartDebt = false;
+        } else if (vType == 2) {
+            // T2: smart col / normal debt
+            (uint256 col0, uint256 col1, uint256 dbt) = MockFluidVaultT2(vault).getPosition(nftId_);
+            userPosition_.supply = col0 + col1; // In production this would be DEX shares
+            userPosition_.borrow = dbt;
+            vaultData_.isSmartCol = true;
+            vaultData_.isSmartDebt = false;
+        } else if (vType == 4) {
+            // T4: smart col / smart debt
+            (uint256 col0, uint256 col1, uint256 dbt0, uint256 dbt1) =
+                MockFluidVaultT4(vault).getPosition(nftId_);
+            userPosition_.supply = col0 + col1; // DEX shares in production
+            userPosition_.borrow = dbt0 + dbt1; // DEX shares in production
+            vaultData_.isSmartCol = true;
+            vaultData_.isSmartDebt = true;
+        }
+
+        vaultData_.vault = vault;
+    }
+
+    // Stub implementations for interface compliance
+    function positionsByUser(address) external pure override returns (
+        UserPosition[] memory, VaultEntireData[] memory
+    ) {
+        revert("not implemented in mock");
+    }
+
+    function positionsNftIdOfUser(address) external pure override returns (uint256[] memory) {
+        revert("not implemented in mock");
+    }
+
+    function getVaultEntireData(address) external pure override returns (VaultEntireData memory) {
+        revert("not implemented in mock");
+    }
+
+    function getVaultType(address) external pure override returns (uint256) {
+        revert("not implemented in mock");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//                     MOCK FLUID DEX RESOLVER
+// ═══════════════════════════════════════════════════════════════════════════
+// Returns mock DEX state with configurable share → token ratios.
+// In production, these values come from the live DEX pool reserves.
+
+contract MockFluidDexResolver is IFluidDexResolver {
+    // Per-dex configurable share ratios (1e18 based)
+    mapping(address => DexState) private _states;
+
+    /// @notice Set the token-per-share ratios for a DEX pool
+    function setShareRatios(
+        address dex,
+        uint256 token0PerSupply,
+        uint256 token1PerSupply,
+        uint256 token0PerBorrow,
+        uint256 token1PerBorrow
+    ) external {
+        DexState storage s = _states[dex];
+        s.token0PerSupplyShare = token0PerSupply;
+        s.token1PerSupplyShare = token1PerSupply;
+        s.token0PerBorrowShare = token0PerBorrow;
+        s.token1PerBorrowShare = token1PerBorrow;
+        s.totalSupplyShares = 1e24;
+        s.totalBorrowShares = 1e24;
+    }
+
+    function getDexState(address dex_) external view override returns (DexState memory state_) {
+        return _states[dex_];
+    }
+
+    function getDexEntireData(address dex_) external view override returns (DexEntireData memory data_) {
+        data_.dex = dex_;
+        data_.dexState = _states[dex_];
+    }
+
+    function getDexPricesAndExchangePrices(address)
+        external pure override returns (IFluidDexT1.PricesAndExchangePrice memory)
+    {
+        revert("not implemented in mock");
+    }
+
+    function getDexTokens(address) external pure override returns (address, address) {
+        revert("not implemented in mock");
+    }
+
+    function getAllDexAddresses() external pure override returns (address[] memory) {
+        revert("not implemented in mock");
+    }
 }
