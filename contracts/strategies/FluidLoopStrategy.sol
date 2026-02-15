@@ -13,6 +13,11 @@ import "../interfaces/IMerklDistributor.sol";
 import "../TimelockGoverned.sol";
 import "../Errors.sol";
 
+// Resolver imports (same file, separate interfaces)
+// IFluidVaultResolver — reads position data (collateral/debt) for any NFT
+// IFluidDexResolver — resolves DEX shares → underlying token amounts
+// IFluidDexT1 — core DEX interface for smart collateral deposits
+
 // ═══════════════════════════════════════════════════════════════════════════
 //                  AAVE V3 FLASH LOAN (for leverage building)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -183,6 +188,22 @@ contract FluidLoopStrategy is
     mapping(address => bool) public allowedRewardTokens;
 
     // ═══════════════════════════════════════════════════════════════════
+    // RESOLVER STATE (V2 — live position reads + DEX integration)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// @notice Fluid VaultResolver — reads live position data (collateral/debt)
+    IFluidVaultResolver public vaultResolver;
+
+    /// @notice Fluid DexResolver — resolves DEX LP shares → underlying tokens
+    IFluidDexResolver public dexResolver;
+
+    /// @notice DEX protocol address for smart collateral (T2/T4 supply side)
+    address public dexPool;
+
+    /// @notice Whether DEX smart collateral is enabled (T2/T4 only)
+    bool public dexEnabled;
+
+    // ═══════════════════════════════════════════════════════════════════
     // ERRORS
     // ═══════════════════════════════════════════════════════════════════
 
@@ -204,6 +225,9 @@ contract FluidLoopStrategy is
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
     event SwapExecuted(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
+    event DexCollateralDeposited(uint256 token0Amount, uint256 token1Amount);
+    event DexCollateralWithdrawn(uint256 sharesBurned);
+    event DexPoolUpdated(address indexed dexPool, bool enabled);
 
     // ═══════════════════════════════════════════════════════════════════
     // INITIALIZER
@@ -221,6 +245,9 @@ contract FluidLoopStrategy is
         address flashLoanPool;    // AAVE V3 pool
         address merklDistributor; // Merkl distributor
         address swapRouter;       // Uniswap V3 router
+        address vaultResolver;    // Fluid VaultResolver (position reads)
+        address dexResolver;      // Fluid DexResolver (share resolution)
+        address dexPool;          // Fluid DEX pool for smart collateral (0 = disabled)
         address treasury;
         address admin;
         address timelock;
@@ -249,6 +276,18 @@ contract FluidLoopStrategy is
         flashLoanPool = IAavePoolForFluid(p.flashLoanPool);
         merklDistributor = IMerklDistributor(p.merklDistributor);
         swapRouter = ISwapRouterFluid(p.swapRouter);
+
+        // Resolvers (can be address(0) for test/mock deployments)
+        if (p.vaultResolver != address(0)) {
+            vaultResolver = IFluidVaultResolver(p.vaultResolver);
+        }
+        if (p.dexResolver != address(0)) {
+            dexResolver = IFluidDexResolver(p.dexResolver);
+        }
+        if (p.dexPool != address(0)) {
+            dexPool = p.dexPool;
+            dexEnabled = true;
+        }
 
         // Defaults based on vault mode
         if (p.mode == MODE_STABLE) {
@@ -841,24 +880,19 @@ contract FluidLoopStrategy is
 
     /// @dev Get total collateral value in input asset terms
     function _getCollateralValue() internal view returns (uint256) {
-        if (positionNftId == 0) return 0;
-
-        // For mocks, we use a simplified view
-        // In production, this would read from Fluid's VaultResolver
-        // or the vault's position data directly
-        return _readCollateralFromVault();
+        (uint256 col, ) = _readPosition();
+        return col;
     }
 
     /// @dev Get total debt value in input asset terms
     function _getDebtValue() internal view returns (uint256) {
-        if (positionNftId == 0) return 0;
-        return _readDebtFromVault();
+        (, uint256 debt) = _readPosition();
+        return debt;
     }
 
-    /// @dev Net position value (collateral - debt)
+    /// @dev Net position value (collateral - debt) — single resolver call
     function _getPositionValue() internal view returns (uint256) {
-        uint256 col = _getCollateralValue();
-        uint256 debt = _getDebtValue();
+        (uint256 col, uint256 debt) = _readPosition();
         return col > debt ? col - debt : 0;
     }
 
@@ -869,17 +903,186 @@ contract FluidLoopStrategy is
         return (col * 100) / totalPrincipal;
     }
 
-    /// @dev Read collateral from vault storage (simplified for mock compatibility)
-    function _readCollateralFromVault() internal view virtual returns (uint256) {
-        // Overridden by mock or production resolver integration
-        // Returns collateral value in input asset decimals
-        return 0;
+    /// @dev Read position (collateral + debt) from VaultResolver in a single external call.
+    ///      For T1: supply/borrow are raw token amounts.
+    ///      For T2/T4 (smart collateral/debt): supply/borrow are DEX shares,
+    ///      resolved to token amounts via _resolveDexSupplyShares / _resolveDexBorrowShares.
+    ///      Virtual so test harness can override with mock vault reads.
+    function _readPosition() internal view virtual returns (uint256 col, uint256 debt) {
+        if (positionNftId == 0 || address(vaultResolver) == address(0)) return (0, 0);
+
+        // Single resolver call for both collateral and debt
+        (IFluidVaultResolver.UserPosition memory pos,
+         IFluidVaultResolver.VaultEntireData memory data) =
+            vaultResolver.positionByNftId(positionNftId);
+
+        // Collateral: T1 = raw amounts, T2/T4 = DEX supply shares
+        col = data.isSmartCol
+            ? _resolveDexSupplyShares(pos.supply)
+            : pos.supply;
+
+        // Debt: T1/T2 = raw amounts, T4 = DEX borrow shares
+        debt = data.isSmartDebt
+            ? _resolveDexBorrowShares(pos.borrow)
+            : pos.borrow;
     }
 
-    /// @dev Read debt from vault storage
-    function _readDebtFromVault() internal view virtual returns (uint256) {
-        // Overridden by mock or production resolver integration
-        return 0;
+    /// @dev Convert DEX supply shares → total underlying token value.
+    ///      Uses DexResolver.getDexState() which returns token amounts per 1e18 shares.
+    ///      Returns sum of token0 + token1 values (assumes correlated pair, e.g. ETH/wstETH).
+    function _resolveDexSupplyShares(uint256 shares) internal view returns (uint256) {
+        if (shares == 0 || address(dexResolver) == address(0) || dexPool == address(0)) return 0;
+
+        IFluidDexResolver.DexState memory state = _cachedDexState();
+
+        uint256 token0Value = (shares * state.token0PerSupplyShare) / WAD;
+        uint256 token1Value = (shares * state.token1PerSupplyShare) / WAD;
+
+        return token0Value + token1Value;
+    }
+
+    /// @dev Convert DEX borrow shares → total underlying token value
+    function _resolveDexBorrowShares(uint256 shares) internal view returns (uint256) {
+        if (shares == 0 || address(dexResolver) == address(0) || dexPool == address(0)) return 0;
+
+        IFluidDexResolver.DexState memory state = _cachedDexState();
+
+        uint256 token0Value = (shares * state.token0PerBorrowShare) / WAD;
+        uint256 token1Value = (shares * state.token1PerBorrowShare) / WAD;
+
+        return token0Value + token1Value;
+    }
+
+    /// @dev Read DEX state via staticcall to the DexResolver.
+    ///      Fluid's DexResolver.getDexState() is non-view on mainnet (updates internal caches),
+    ///      but the read is idempotent and safe via staticcall for view contexts.
+    function _cachedDexState() internal view virtual returns (IFluidDexResolver.DexState memory state) {
+        if (address(dexResolver) != address(0) && dexPool != address(0)) {
+            (bool ok, bytes memory data) = address(dexResolver).staticcall(
+                abi.encodeWithSelector(IFluidDexResolver.getDexState.selector, dexPool)
+            );
+            if (ok && data.length > 0) {
+                return abi.decode(data, (IFluidDexResolver.DexState));
+            }
+        }
+        // Fallback: zeroed struct (test mode without resolver)
+        return state;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // DEX SMART COLLATERAL — earn DEX trading fees on top of lending
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// @notice Deposit both tokens into the DEX pool as smart collateral LP.
+    ///         This makes vault collateral also act as DEX LP, earning trading fees.
+    ///         Only applicable for T2/T4 vaults where supply side is a Fluid DEX.
+    /// @dev    Yield-enhancement operation — does NOT increase totalPrincipal.
+    ///         Tokens must already be held by the strategy (from rewards, etc.).
+    /// @param token0Amount Amount of token0 to deposit into DEX LP
+    /// @param token1Amount Amount of token1 to deposit into DEX LP
+    /// @param minShares Minimum DEX shares to receive (slippage protection)
+    function depositDexCollateral(
+        uint256 token0Amount,
+        uint256 token1Amount,
+        int256 minShares
+    )
+        external
+        onlyRole(STRATEGIST_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
+        if (!dexEnabled) revert NotActive();
+        if (vaultMode == MODE_STABLE) revert InvalidVaultMode();
+        if (token0Amount == 0 && token1Amount == 0) revert ZeroAmount();
+
+        // Approve tokens to the Fluid vault (which routes through DEX)
+        // Handle case where supplyToken == supplyToken1 (same token for both sides)
+        if (address(supplyToken) == address(supplyToken1)) {
+            IERC20(supplyToken).forceApprove(fluidVault, token0Amount + token1Amount);
+        } else {
+            if (token0Amount > 0) {
+                IERC20(supplyToken).forceApprove(fluidVault, token0Amount);
+            }
+            if (token1Amount > 0) {
+                IERC20(supplyToken1).forceApprove(fluidVault, token1Amount);
+            }
+        }
+
+        if (vaultMode == MODE_LRT) {
+            // T2: smart collateral + normal debt
+            (uint256 nftId,,) = IFluidVaultT2(fluidVault).operate(
+                positionNftId,
+                int256(token0Amount),
+                int256(token1Amount),
+                minShares,
+                0, // no debt change
+                address(this)
+            );
+            if (positionNftId == 0) {
+                positionNftId = nftId;
+                emit PositionCreated(nftId, vaultMode);
+            }
+        } else {
+            // T4: smart collateral + smart debt
+            (uint256 nftId,,) = IFluidVaultT4(fluidVault).operate(
+                positionNftId,
+                int256(token0Amount),
+                int256(token1Amount),
+                minShares,
+                0, 0, 0, // no debt change
+                address(this)
+            );
+            if (positionNftId == 0) {
+                positionNftId = nftId;
+                emit PositionCreated(nftId, vaultMode);
+            }
+        }
+
+        emit DexCollateralDeposited(token0Amount, token1Amount);
+    }
+
+    /// @notice Withdraw DEX LP collateral back to individual tokens.
+    /// @dev    Withdrawn tokens remain in the strategy for redeployment via
+    ///         depositDexCollateral or recoverToken. This avoids unnecessary
+    ///         transfers and allows the strategist to rebalance DEX positions.
+    /// @param sharesToBurn DEX shares to redeem
+    /// @param minToken0 Minimum token0 to receive (slippage protection)
+    /// @param minToken1 Minimum token1 to receive (slippage protection)
+    function withdrawDexCollateral(
+        uint256 sharesToBurn,
+        uint256 minToken0,
+        uint256 minToken1
+    )
+        external
+        onlyRole(STRATEGIST_ROLE)
+        nonReentrant
+        whenNotPaused
+    {
+        if (!dexEnabled) revert NotActive();
+        if (vaultMode == MODE_STABLE) revert InvalidVaultMode();
+        if (sharesToBurn == 0) revert ZeroAmount();
+
+        if (vaultMode == MODE_LRT) {
+            IFluidVaultT2(fluidVault).operatePerfect(
+                positionNftId,
+                -int256(sharesToBurn),
+                -int256(minToken0),
+                -int256(minToken1),
+                0, // no debt change
+                address(this)
+            );
+        } else {
+            IFluidVaultT4(fluidVault).operatePerfect(
+                positionNftId,
+                -int256(sharesToBurn),
+                -int256(minToken0),
+                -int256(minToken1),
+                0, 0, 0, // no debt change
+                address(this)
+            );
+        }
+
+        emit DexCollateralWithdrawn(sharesToBurn);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -926,11 +1129,34 @@ contract FluidLoopStrategy is
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
+    /// @notice Set the Fluid VaultResolver address (for live position reads)
+    function setVaultResolver(address _resolver) external onlyTimelock {
+        if (_resolver == address(0)) revert ZeroAddress();
+        vaultResolver = IFluidVaultResolver(_resolver);
+    }
+
+    /// @notice Set the Fluid DexResolver address (for DEX share resolution)
+    function setDexResolver(address _resolver) external onlyTimelock {
+        if (_resolver == address(0)) revert ZeroAddress();
+        dexResolver = IFluidDexResolver(_resolver);
+    }
+
+    /// @notice Enable/disable DEX smart collateral and set the DEX pool address.
+    /// @dev    IMPORTANT: _dexPool must match the vault's supply-side DEX pool.
+    ///         On mainnet, verify via IFluidVaultCommon(fluidVault).constantsView().supply.
+    ///         A mismatched dexPool will cause incorrect share → token resolution,
+    ///         silently breaking all position valuation for T2/T4 vaults.
+    function setDexPool(address _dexPool, bool _enabled) external onlyTimelock {
+        dexPool = _dexPool;
+        dexEnabled = _enabled;
+        emit DexPoolUpdated(_dexPool, _enabled);
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[30] private __gap;
+    uint256[26] private __gap;  // reduced from 30 → 26 (4 new storage vars above)
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
