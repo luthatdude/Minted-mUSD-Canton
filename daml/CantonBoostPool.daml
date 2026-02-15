@@ -30,7 +30,7 @@ import CantonSMUSD (CantonSMUSD(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..))
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
 -- ============================================================
@@ -58,15 +58,10 @@ template BoostPoolLP
       controller owner
       do create this with privacyObservers = newObservers
 
-    -- DAML-H-01b: Compliance check — sender must not be blacklisted/frozen
     choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
-      with
-        newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry
+      with newOwner : Party
       controller owner
-      do
-        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
-        create BoostPoolLPTransferProposal with lp = this; newOwner; complianceRegistryCid
+      do create BoostPoolLPTransferProposal with lp = this; newOwner
 
     choice BPLP_Split : (ContractId BoostPoolLP, ContractId BoostPoolLP)
       with splitShares : Money
@@ -83,18 +78,13 @@ template BoostPoolLPTransferProposal
   with
     lp       : BoostPoolLP
     newOwner : Party
-    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-H-01b
   where
     signatory lp.issuer, lp.owner
     observer newOwner
 
-    -- DAML-H-01b: Recipient must pass compliance check on acceptance
     choice BPLPTransferProposal_Accept : ContractId BoostPoolLP
       controller newOwner
-      do
-        -- Receiver compliance check (can receive assets)
-        exercise complianceRegistryCid ValidateMint with minter = newOwner
-        create lp with owner = newOwner
+      do create lp with owner = newOwner
 
     choice BPLPTransferProposal_Reject : ContractId BoostPoolLP
       controller newOwner
@@ -221,12 +211,12 @@ template CantonBoostPoolService
         assertMsg "SMUSD_OWNER_MISMATCH" (smusd.owner == user)
         assertMsg "SMUSD_ISSUER_MISMATCH" (smusd.issuer == operator)
 
-        -- D-M04: Prevent sMUSD collateral escape — user cannot qualify for
+        -- FIX D-M04: Prevent sMUSD collateral escape — user cannot qualify for
         -- BoostPool with sMUSD that is already escrowed as lending collateral
         smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
         assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
 
-        -- DAML-H-06: Removed archive+recreate pattern. Previously the
+        -- SECURITY FIX DAML-H-06: Removed archive+recreate pattern. Previously the
         -- sMUSD was archived and recreated with a new ContractId, breaking any external
         -- references (e.g., from lending escrow or other contracts). The BoostPool only
         -- needs to READ the sMUSD to verify ownership and calculate the deposit cap —
@@ -432,7 +422,7 @@ template CantonBoostPoolService
 
         return (newService, cantonCid)
 
-    -- | Operator withdraws accumulated protocol fees (entry + exit fees from C-B3).
+    -- | Operator withdraws accumulated protocol fees (entry + exit fees from C-B3 fix).
     choice WithdrawProtocolFees : (ContractId CantonBoostPoolService, ContractId CantonCoin)
       with
         withdrawAmount : Money

@@ -2,7 +2,11 @@
 name: daml-auditor
 description: DAML and Canton Network auditor for the Minted mUSD protocol
 tools:
-  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'figma/*', 'agent', 'pylance-mcp-server/*', 'ms-azuretools.vscode-containers/containerToolsConfig', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-python.python/installPythonPackage', 'ms-python.python/configurePythonEnvironment', 'todo']
+  - read
+  - edit
+  - grep
+  - glob
+  - bash
 ---
 
 # DAML Auditor Agent

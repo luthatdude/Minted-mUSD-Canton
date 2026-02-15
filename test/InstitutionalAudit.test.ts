@@ -36,12 +36,6 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
 
     const ORACLE_ADMIN_ROLE = await oracle.ORACLE_ADMIN_ROLE();
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
-    // SOL-H-04: setFeed, removeFeed, setMaxDeviation, setCircuitBreakerEnabled now require TIMELOCK_ROLE
-    const TIMELOCK_ROLE = await oracle.TIMELOCK_ROLE();
-    await oracle.grantRole(TIMELOCK_ROLE, admin.address);
-    // SOL-H-04: resetLastKnownPrice now requires KEEPER_ROLE
-    const KEEPER_ROLE = await oracle.KEEPER_ROLE();
-    await oracle.grantRole(KEEPER_ROLE, admin.address);
 
     const WETH = "0x0000000000000000000000000000000000000001";
     await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18, 0);
@@ -403,8 +397,6 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
-    // SOL-H-04: grant TIMELOCK_ROLE for setFeed
-    await priceOracle.grantRole(await priceOracle.TIMELOCK_ROLE(), owner.address);
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
@@ -1459,8 +1451,6 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
-    // SOL-H-04: grant TIMELOCK_ROLE for setFeed
-    await priceOracle.grantRole(await priceOracle.TIMELOCK_ROLE(), deployer.address);
 
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n);
@@ -1675,7 +1665,7 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
     const bridge = await upgrades.deployProxy(
       BLEBridgeV9,
-      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000"), deployer.address],
+      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000")],
       { kind: 'uups' }
     );
     await bridge.waitForDeployment();

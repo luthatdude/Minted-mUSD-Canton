@@ -230,7 +230,7 @@ template IssuerRole
 -- | User-initiated mint request.
 -- Separation of duties: the user requests minting, the issuer approves
 -- after verifying collateral or off-ledger conditions.
--- 5C-C01: ApproveMint now requires IssuerRole to enforce supply cap.
+-- FIX 5C-C01: ApproveMint now requires IssuerRole to enforce supply cap.
 template MintRequest
   with
     issuer : Party
@@ -272,7 +272,7 @@ template MintRequest
 -- | Issuer-initiated mint proposal (airdrop-safe).
 -- The issuer proposes minting to a user, but the user must explicitly
 -- accept because they become a signatory on the resulting MUSD contract.
--- 5C-C02: AcceptMint now requires IssuerRole to enforce supply cap.
+-- FIX 5C-C02: AcceptMint now requires IssuerRole to enforce supply cap.
 template MintProposal
   with
     issuer : Party

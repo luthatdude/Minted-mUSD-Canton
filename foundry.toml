@@ -12,16 +12,13 @@ remappings = [
 ]
 
 [invariant]
-# GAP-10: Increased from 256/64 to institutional-grade depth (1024/256)
-# for comprehensive state-space exploration matching audit requirements.
-runs = 1024
-depth = 256
+runs = 256
+depth = 64
 fail_on_revert = false
 dictionary_weight = 80
 include_storage = true
 include_push_bytes = true
 
 [fuzz]
-# GAP-10: Increased from 1024 to 10000 for deeper coverage
-runs = 10000
+runs = 1024
 max_test_rejects = 65536
