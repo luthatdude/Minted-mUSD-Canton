@@ -9,6 +9,7 @@ import { useWCContracts } from "@/hooks/useWCContracts";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
 import WalletConnector from "@/components/WalletConnector";
+import { MintPage } from "./MintPage";
 
 interface DashboardData {
   musdSupply: bigint;
@@ -55,13 +56,17 @@ interface PortfolioData {
   }[];
 }
 
-export function DashboardPage() {
+interface DashboardPageProps {
+  onNavigate?: (page: string) => void;
+}
+
+export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const { address, signer, isConnected, ensName, chain } = useWalletConnect();
   const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'portfolio' | 'protocol'>('portfolio');
+  const [activeTab, setActiveTab] = useState<'mint' | 'portfolio' | 'protocol'>('mint');
 
   // Load protocol data
   useEffect(() => {
@@ -267,6 +272,16 @@ export function DashboardPage() {
         />
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setActiveTab('mint')}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === 'mint' 
+                ? 'bg-brand-500 text-white' 
+                : 'bg-slate-800 text-gray-400 hover:text-white'
+            }`}
+          >
+            Mint & Redeem
+          </button>
+          <button
             onClick={() => setActiveTab('portfolio')}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               activeTab === 'portfolio' 
@@ -288,6 +303,10 @@ export function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {activeTab === 'mint' && (
+        <MintPage />
+      )}
 
       {activeTab === 'portfolio' && portfolio && (
         <>
@@ -495,24 +514,28 @@ export function DashboardPage() {
                 description="Convert USDC to mUSD"
                 icon="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 color="blue"
+                onClick={() => setActiveTab('mint')}
               />
               <ActionCard 
                 title="Stake mUSD"
                 description="Earn yield with smUSD"
                 icon="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
                 color="green"
+                onClick={() => onNavigate?.('stake')}
               />
               <ActionCard 
                 title="Borrow mUSD"
                 description="Use collateral to borrow"
                 icon="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
                 color="purple"
+                onClick={() => onNavigate?.('borrow')}
               />
               <ActionCard 
                 title="Bridge to Canton"
                 description="Cross-chain transfer"
                 icon="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
                 color="yellow"
+                onClick={() => onNavigate?.('bridge')}
               />
             </div>
           </Section>
@@ -664,11 +687,12 @@ export function DashboardPage() {
 }
 
 // Quick Action Card Component
-function ActionCard({ title, description, icon, color }: { 
+function ActionCard({ title, description, icon, color, onClick }: { 
   title: string; 
   description: string; 
   icon: string; 
   color: 'blue' | 'green' | 'purple' | 'yellow';
+  onClick?: () => void;
 }) {
   const colorClasses = {
     blue: 'bg-blue-500/10 border-blue-500/20 hover:border-blue-500/40 text-blue-400',
@@ -678,7 +702,7 @@ function ActionCard({ title, description, icon, color }: {
   };
 
   return (
-    <button className={`rounded-xl border p-4 text-left transition-all ${colorClasses[color]}`}>
+    <button onClick={onClick} className={`rounded-xl border p-4 text-left transition-all ${colorClasses[color]}`}>
       <div className="mb-3">
         <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />

@@ -275,7 +275,7 @@ contract YieldBasisStrategy is
 
         // Withdraw from LT: burn shares → receive crypto asset
         uint256 assetBalBefore = assetToken.balanceOf(address(this));
-        uint256 assetsReceived = ltToken.withdraw(sharesToRedeem, address(this), address(this));
+        uint256 assetsReceived = ltToken.withdraw(sharesToRedeem, 0, address(this));
         uint256 assetBalAfter = assetToken.balanceOf(address(this));
         assetsReceived = assetBalAfter - assetBalBefore;
 
@@ -307,7 +307,7 @@ contract YieldBasisStrategy is
 
         // Try normal withdraw first
         uint256 assetBalBefore = assetToken.balanceOf(address(this));
-        try ltToken.withdraw(ltShares, address(this), address(this)) returns (uint256) {
+        try ltToken.withdraw(ltShares, 0, address(this)) returns (uint256) {
             // Normal withdraw succeeded
         } catch {
             // Fallback to emergency withdraw if normal fails (e.g., AMM killed)
@@ -411,7 +411,7 @@ contract YieldBasisStrategy is
         // Withdraw everything from current LT
         uint256 ltShares = ltToken.balanceOf(address(this));
         if (ltShares > 0) {
-            try ltToken.withdraw(ltShares, address(this), address(this)) {} catch {
+            try ltToken.withdraw(ltShares, 0, address(this)) {} catch {
                 ltToken.emergencyWithdraw(ltShares, address(this), address(this));
             }
         }
