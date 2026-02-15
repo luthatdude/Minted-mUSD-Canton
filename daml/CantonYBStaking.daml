@@ -1,0 +1,358 @@
+-- | CantonYBStaking
+-- Canton-side Yield Basis staking vaults for BTC and ETH.
+--
+-- Users stake mUSD and earn yield from Yield Basis BTC/USDC or ETH/USDC pools.
+-- Share price is synced from Ethereum YBStakingVault contracts.
+--
+-- Architecture:
+--   1. User deposits CantonMUSD → receives CantonYBPosition (shares)
+--   2. USDC backing flows to Ethereum Treasury → YieldBasisStrategy → YB Pool
+--   3. Yield Basis pool earns interest from leveraged LP borrowers
+--   4. Yield synced to Canton via SyncYBSharePrice choice
+--   5. User unstakes shares at current price → receives more mUSD
+--
+-- Users have 3 staking options:
+--   smUSD  → Diversified yield (~6% APY) via CantonStakingService
+--   ybBTC  → BTC market-making yield via CantonYBStakingService (BTC pool)
+--   ybETH  → ETH market-making yield via CantonYBStakingService (ETH pool)
+
+module CantonYBStaking where
+
+import DA.Time
+import DA.Text (implode)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
+import UserPrivacySettings (lookupUserObservers)
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+
+-- ============================================================
+--                     SECTION 1: YB STAKED POSITION
+-- ============================================================
+
+-- | Individual Yield Basis staked position.
+-- Represents a user's share in either the BTC or ETH YB staking vault.
+-- Amount is in "shares" — redeemable for mUSD at current YB share price.
+template CantonYBPosition
+  with
+    issuer : Party
+    owner : Party
+    shares : Money          -- Number of YB vault shares
+    poolType : Text         -- "BTC" or "ETH"
+    entrySharePrice : Money -- Share price when staked (for P&L tracking)
+    stakedAt : Time         -- Timestamp for cooldown enforcement
+    privacyObservers : [Party]
+  where
+    signatory issuer, owner
+    observer privacyObservers
+
+    ensure shares > 0.0
+        && (poolType == "BTC" || poolType == "ETH")
+
+    agreement
+      implode [ owner, " holds ", show shares, " ybm", poolType
+              , " shares at entry price ", show entrySharePrice
+              , " issued by ", show issuer ]
+
+    -- | Update observers from user privacy settings
+    choice YBPosition_UpdateObservers : ContractId CantonYBPosition
+      with
+        newObservers : [Party]
+      controller owner
+      do create this with privacyObservers = newObservers
+
+    -- | Split position into two
+    choice YBPosition_Split : (ContractId CantonYBPosition, ContractId CantonYBPosition)
+      with
+        splitShares : Money
+      controller owner
+      do
+        assertMsg "SPLIT_SHARES_POSITIVE" (splitShares > 0.0)
+        assertMsg "SPLIT_SHARES_LESS_THAN_TOTAL" (splitShares < shares)
+        c1 <- create this with shares = splitShares
+        c2 <- create this with shares = shares - splitShares
+        return (c1, c2)
+
+    -- | Merge two positions of the same pool type
+    choice YBPosition_Merge : ContractId CantonYBPosition
+      with
+        otherCid : ContractId CantonYBPosition
+      controller owner
+      do
+        other <- fetch otherCid
+        assertMsg "ISSUER_MISMATCH" (other.issuer == issuer)
+        assertMsg "OWNER_MISMATCH" (other.owner == owner)
+        assertMsg "POOL_TYPE_MISMATCH" (other.poolType == poolType)
+        archive otherCid
+        create this with shares = shares + other.shares
+
+-- ============================================================
+--                     SECTION 2: YB STAKING SERVICE
+-- ============================================================
+
+-- | Canton Yield Basis staking service.
+-- One instance per pool type (BTC or ETH).
+-- Manages deposits, withdrawals, and yield sync for a specific YB pool.
+template CantonYBStakingService
+  with
+    operator : Party
+    governance : Party              -- Co-signer for critical operations
+    poolType : Text                 -- "BTC" or "ETH"
+    totalShares : Money             -- Total YB shares on Canton for this pool
+    -- Yield sync from Ethereum YBStakingVault
+    sharePrice : Money              -- Current share price synced from Ethereum
+    lastSyncEpoch : Int             -- Sequential epoch for ordering
+    -- Pool metrics (synced from Ethereum for display)
+    currentAPY : Money              -- Current lending APY from YB pool (for UI)
+    currentUtilization : Money      -- Pool utilization (for UI)
+    -- Limits
+    cooldownSeconds : Int           -- Minimum stake duration before unstake (24h)
+    minDeposit : Money              -- Minimum mUSD deposit
+    maxTotalDeposits : Money        -- Deposit cap for this pool
+    currentTotalDeposited : Money   -- Running total of mUSD deposited
+    -- Supply tracking
+    musdMintCap : Money             -- Max mUSD mintable through unstake
+    currentUnstakeMinted : Money    -- Running total of mUSD minted via unstake
+    -- State
+    paused : Bool
+    -- Compliance
+    complianceRegistryCid : ContractId ComplianceRegistry
+    -- MPA propagation
+    mpaHash : Text
+    mpaUri : Text
+    -- Observers (users who can stake/unstake)
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure totalShares >= 0.0
+        && sharePrice > 0.0
+        && musdMintCap > 0.0
+        && currentUnstakeMinted >= 0.0
+        && currentTotalDeposited >= 0.0
+        && (poolType == "BTC" || poolType == "ETH")
+
+    -- | Get current share price
+    nonconsuming choice YB_GetSharePrice : Money
+      controller operator
+      do return sharePrice
+
+    -- | Get pool info for UI display
+    nonconsuming choice YB_GetPoolInfo : (Text, Money, Money, Money)
+      controller operator
+      do return (poolType, sharePrice, currentAPY, currentUtilization)
+
+    -- | Stake: deposit mUSD → receive ybBTC/ybETH shares
+    choice YB_Stake : (ContractId CantonYBStakingService, ContractId CantonYBPosition)
+      with
+        user : Party
+        musdCid : ContractId CantonMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check
+        exercise complianceRegistryCid ValidateMint with minter = user
+
+        musd <- fetch musdCid
+        assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
+        assertMsg "OWNER_MISMATCH" (musd.owner == user)
+        assertMsg "BELOW_MIN_DEPOSIT" (musd.amount >= minDeposit)
+
+        -- Check deposit cap
+        let newTotal = currentTotalDeposited + musd.amount
+        assertMsg "DEPOSIT_CAP_EXCEEDED" (newTotal <= maxTotalDeposits)
+
+        -- Calculate shares at current share price
+        let newShares = musd.amount / sharePrice
+
+        -- Burn the mUSD (backing USDC stays in Treasury → YB pool)
+        exercise musdCid CantonMUSD_Burn
+
+        -- Issue YB position
+        now <- getTime
+        userObs <- lookupUserObservers operator user
+        positionCid <- create CantonYBPosition with
+          issuer = operator
+          owner = user
+          shares = newShares
+          poolType = poolType
+          entrySharePrice = sharePrice
+          stakedAt = now
+          privacyObservers = userObs
+
+        -- Update service state
+        serviceCid <- create this with
+          totalShares = totalShares + newShares
+          currentTotalDeposited = newTotal
+
+        return (serviceCid, positionCid)
+
+    -- | Unstake: redeem ybBTC/ybETH shares → receive mUSD at current price
+    -- Yield accrual means user receives MORE mUSD than deposited
+    choice YB_Unstake : (ContractId CantonYBStakingService, ContractId CantonMUSD)
+      with
+        user : Party
+        positionCid : ContractId CantonYBPosition
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- Compliance check
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
+
+        position <- fetch positionCid
+        assertMsg "ISSUER_MISMATCH" (position.issuer == operator)
+        assertMsg "OWNER_MISMATCH" (position.owner == user)
+        assertMsg "POOL_TYPE_MISMATCH" (position.poolType == poolType)
+
+        -- Cooldown enforcement
+        now <- getTime
+        let cooldownEnd = addRelTime position.stakedAt (seconds (toInteger cooldownSeconds))
+        assertMsg "COOLDOWN_ACTIVE" (now >= cooldownEnd)
+
+        -- Calculate mUSD to mint at current share price
+        let musdAmount = position.shares * sharePrice
+
+        -- Supply cap check
+        let newMinted = currentUnstakeMinted + musdAmount
+        assertMsg "MINT_CAP_EXCEEDED" (newMinted <= musdMintCap)
+
+        -- Archive the YB position
+        archive positionCid
+
+        -- Mint mUSD to user
+        userObs <- lookupUserObservers operator user
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = musdAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          privacyObservers = userObs
+
+        -- Update service state
+        serviceCid <- create this with
+          totalShares = totalShares - position.shares
+          currentUnstakeMinted = newMinted
+          currentTotalDeposited = currentTotalDeposited - (position.shares * position.entrySharePrice)
+
+        return (serviceCid, musdCid)
+
+    -- | Sync share price from Ethereum YBStakingVault
+    -- Called by bridge relay when YB yield is distributed
+    choice YB_SyncSharePrice : ContractId CantonYBStakingService
+      with
+        newSharePrice : Money
+        newAPY : Money
+        newUtilization : Money
+        epoch : Int
+      controller operator
+      do
+        assertMsg "EPOCH_NOT_SEQUENTIAL" (epoch > lastSyncEpoch)
+
+        -- Rate limit: share price can change max 5% per sync
+        let maxIncrease = sharePrice * 1.05
+        let maxDecrease = sharePrice * 0.95
+        assertMsg "PRICE_INCREASE_TOO_LARGE" (newSharePrice <= maxIncrease)
+        assertMsg "PRICE_DECREASE_TOO_LARGE" (newSharePrice >= maxDecrease)
+
+        create this with
+          sharePrice = newSharePrice
+          currentAPY = newAPY
+          currentUtilization = newUtilization
+          lastSyncEpoch = epoch
+
+    -- | Admin: update deposit cap
+    choice YB_UpdateMaxDeposits : ContractId CantonYBStakingService
+      with
+        newMax : Money
+      controller governance
+      do
+        assertMsg "MAX_DEPOSITS_POSITIVE" (newMax > 0.0)
+        create this with maxTotalDeposits = newMax
+
+    -- | Admin: pause/unpause
+    choice YB_SetPaused : ContractId CantonYBStakingService
+      with
+        newPaused : Bool
+      controller governance
+      do create this with paused = newPaused
+
+    -- | Admin: update mint cap
+    choice YB_UpdateMintCap : ContractId CantonYBStakingService
+      with
+        newCap : Money
+      controller governance
+      do
+        assertMsg "MINT_CAP_POSITIVE" (newCap > 0.0)
+        create this with musdMintCap = newCap
+
+-- ============================================================
+--                     SECTION 3: SETUP HELPER
+-- ============================================================
+
+-- | Factory template for creating YB staking services.
+-- Creates both BTC and ETH services in one transaction.
+template CantonYBStakingSetup
+  with
+    operator : Party
+    governance : Party
+  where
+    signatory operator
+
+    choice YB_CreateServices : (ContractId CantonYBStakingService, ContractId CantonYBStakingService)
+      with
+        complianceRegistryCid : ContractId ComplianceRegistry
+        mpaHash : Text
+        mpaUri : Text
+        maxBtcDeposits : Money
+        maxEthDeposits : Money
+        mintCap : Money
+        initialObservers : [Party]
+      controller operator
+      do
+        -- Create BTC staking service
+        btcServiceCid <- create CantonYBStakingService with
+          operator
+          governance
+          poolType = "BTC"
+          totalShares = 0.0
+          sharePrice = 1.0
+          lastSyncEpoch = 0
+          currentAPY = 0.0
+          currentUtilization = 0.0
+          cooldownSeconds = 86400  -- 24 hours
+          minDeposit = 10.0        -- 10 mUSD minimum
+          maxTotalDeposits = maxBtcDeposits
+          currentTotalDeposited = 0.0
+          musdMintCap = mintCap
+          currentUnstakeMinted = 0.0
+          paused = False
+          complianceRegistryCid
+          mpaHash
+          mpaUri
+          observers = initialObservers
+
+        -- Create ETH staking service
+        ethServiceCid <- create CantonYBStakingService with
+          operator
+          governance
+          poolType = "ETH"
+          totalShares = 0.0
+          sharePrice = 1.0
+          lastSyncEpoch = 0
+          currentAPY = 0.0
+          currentUtilization = 0.0
+          cooldownSeconds = 86400
+          minDeposit = 10.0
+          maxTotalDeposits = maxEthDeposits
+          currentTotalDeposited = 0.0
+          musdMintCap = mintCap
+          currentUnstakeMinted = 0.0
+          paused = False
+          complianceRegistryCid
+          mpaHash
+          mpaUri
+          observers = initialObservers
+
+        return (btcServiceCid, ethServiceCid)

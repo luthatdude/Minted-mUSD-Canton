@@ -12,7 +12,7 @@ import WalletConnector from "@/components/WalletConnector";
 import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
 import { YieldScanner } from "@/components/YieldScanner";
 
-type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle" | "globalpause";
+type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STRATEGY CATALOG — all deployable yield strategies
@@ -238,16 +238,7 @@ export function AdminPage() {
   const [oracleStale, setOracleStale] = useState("3600");
   const [oracleDecimals, setOracleDecimals] = useState("18");
 
-  // GlobalPauseRegistry Admin
-  const [gpIsPaused, setGpIsPaused] = useState(false);
-  const [gpLastPaused, setGpLastPaused] = useState<string>("");
-  const [gpLastUnpaused, setGpLastUnpaused] = useState<string>("");
-
-  // Bridge unpause timelock state
-  const [bridgeUnpauseRequested, setBridgeUnpauseRequested] = useState(false);
-  const [bridgeUnpauseExecAfter, setBridgeUnpauseExecAfter] = useState<number>(0);
-
-  const { musd, directMint, treasury, bridge, borrow, oracle, globalPause } = contracts;
+  const { musd, directMint, treasury, bridge, borrow, oracle } = contracts;
 
   // Current values display
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -290,38 +281,16 @@ export function AdminPage() {
           vals.bridgeMinSigs = (await bridge.minSignatures()).toString();
           vals.bridgeRatio = formatBps(await bridge.collateralRatioBps());
           vals.bridgePaused = (await bridge.paused()).toString();
-          // Load unpause timelock state
-          try {
-            const reqTime = Number(await bridge.unpauseRequestTime());
-            if (reqTime > 0) {
-              const delay = Number(await bridge.UNPAUSE_DELAY());
-              setBridgeUnpauseRequested(true);
-              setBridgeUnpauseExecAfter(reqTime + delay);
-            } else {
-              setBridgeUnpauseRequested(false);
-              setBridgeUnpauseExecAfter(0);
-            }
-          } catch { setBridgeUnpauseRequested(false); }
         }
         if (borrow) {
           vals.interestRate = formatBps(await borrow.interestRateBps());
           vals.minDebt = formatUSD(await borrow.minDebt());
         }
-        // GlobalPauseRegistry
-        if (globalPause) {
-          try {
-            setGpIsPaused(await globalPause.isGloballyPaused());
-            const lp = Number(await globalPause.lastPausedAt());
-            const lu = Number(await globalPause.lastUnpausedAt());
-            setGpLastPaused(lp > 0 ? new Date(lp * 1000).toLocaleString() : "Never");
-            setGpLastUnpaused(lu > 0 ? new Date(lu * 1000).toLocaleString() : "Never");
-          } catch {}
-        }
       } catch {}
       setCurrentValues(vals);
     }
     loadCurrentValues();
-  }, [musd, directMint, treasury, bridge, borrow, globalPause, address, tx.success]);
+  }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
 
   if (!isConnected) {
     return <WalletConnector mode="ethereum" />;
@@ -334,7 +303,6 @@ export function AdminPage() {
     { key: "bridge", label: "Bridge" },
     { key: "borrow", label: "Borrow" },
     { key: "oracle", label: "Oracle" },
-    { key: "globalpause", label: "🛑 Global Pause" },
   ];
 
   return (
@@ -389,10 +357,7 @@ export function AdminPage() {
             <div className="mt-2 flex gap-2">
               <TxButton
                 className="flex-1"
-                onClick={() => {
-                  if (!confirm(`Blacklist address ${blacklistAddr}?\n\nThis will freeze all mUSD transfers for this address.`)) return;
-                  tx.send(() => musd!.setBlacklist(blacklistAddr, true));
-                }}
+                onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, true))}
                 loading={tx.loading}
                 disabled={!blacklistAddr}
                 variant="danger"
@@ -496,14 +461,7 @@ export function AdminPage() {
             <TxButton onClick={() => tx.send(() => directMint!.withdrawFees())} loading={tx.loading}>
               Withdraw Fees
             </TxButton>
-            <TxButton
-              onClick={() => {
-                if (!confirm("Pause DirectMint?\n\nThis will halt all minting and redeeming.")) return;
-                tx.send(() => directMint!.pause());
-              }}
-              loading={tx.loading}
-              variant="danger"
-            >
+            <TxButton onClick={() => tx.send(() => directMint!.pause())} loading={tx.loading} variant="danger">
               Pause
             </TxButton>
             <TxButton onClick={() => tx.send(() => directMint!.unpause())} loading={tx.loading} variant="secondary">
@@ -826,10 +784,7 @@ export function AdminPage() {
             </select>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => {
-                if (!confirm(`Remove strategy ${strategyName(strategyAddr)}?\n\nFunds will be withdrawn from the strategy first.`)) return;
-                tx.send(() => treasury!.removeStrategy(strategyAddr));
-              }}
+              onClick={() => tx.send(() => treasury!.removeStrategy(strategyAddr))}
               loading={tx.loading}
               disabled={!strategyAddr}
               variant="danger"
@@ -867,10 +822,7 @@ export function AdminPage() {
               Claim Fees
             </TxButton>
             <TxButton
-              onClick={() => {
-                if (!confirm("⚠️ EMERGENCY: Withdraw ALL funds from ALL strategies back to reserve?\n\nThis will exit every position immediately. Proceed?")) return;
-                tx.send(() => treasury!.emergencyWithdrawAll());
-              }}
+              onClick={() => tx.send(() => treasury!.emergencyWithdrawAll())}
               loading={tx.loading}
               variant="danger"
             >
@@ -919,10 +871,7 @@ export function AdminPage() {
             </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => {
-                if (!confirm("⚠️ EMERGENCY: Reduce bridge supply cap?\n\nThis is a destructive emergency action. Proceed?")) return;
-                tx.send(() => bridge!.emergencyReduceCap(ethers.parseUnits(emergencyCap, MUSD_DECIMALS), emergencyReason));
-              }}
+              onClick={() => tx.send(() => bridge!.emergencyReduceCap(ethers.parseUnits(emergencyCap, MUSD_DECIMALS), emergencyReason))}
               loading={tx.loading}
               disabled={!emergencyCap || !emergencyReason}
               variant="danger"
@@ -931,63 +880,12 @@ export function AdminPage() {
             </TxButton>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <TxButton
-              onClick={() => {
-                if (!confirm("⚠️ Pause the bridge?\n\nThis will halt all bridge operations and cancel any pending unpause request.")) return;
-                tx.send(() => bridge!.pause());
-              }}
-              loading={tx.loading}
-              variant="danger"
-            >
+            <TxButton onClick={() => tx.send(() => bridge!.pause())} loading={tx.loading} variant="danger">
               Pause Bridge
             </TxButton>
-          </div>
-
-          {/* ── Bridge Unpause Timelock (2-step) ── */}
-          <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Unpause Bridge (24h Timelock)</h3>
-            <p className="mb-3 text-xs text-gray-500">
-              Unpausing requires a 2-step process: <strong>Request Unpause</strong> → wait 24 hours → <strong>Execute Unpause</strong>.
-              Re-pausing cancels any pending request.
-            </p>
-            {bridgeUnpauseRequested ? (
-              <div className="space-y-3">
-                <div className="rounded-lg border border-amber-700/50 bg-amber-900/10 p-3 text-sm">
-                  <p className="font-medium text-amber-400">⏳ Unpause Requested</p>
-                  <p className="mt-1 text-xs text-amber-300/70">
-                    Executable after: {new Date(bridgeUnpauseExecAfter * 1000).toLocaleString()}
-                  </p>
-                  {Date.now() / 1000 >= bridgeUnpauseExecAfter ? (
-                    <p className="mt-1 text-xs text-green-400">✅ Timelock elapsed — ready to execute</p>
-                  ) : (
-                    <p className="mt-1 text-xs text-gray-400">
-                      Time remaining: ~{Math.ceil((bridgeUnpauseExecAfter - Date.now() / 1000) / 3600)}h
-                    </p>
-                  )}
-                </div>
-                <TxButton
-                  className="w-full"
-                  onClick={() => tx.send(() => bridge!.executeUnpause())}
-                  loading={tx.loading}
-                  disabled={Date.now() / 1000 < bridgeUnpauseExecAfter}
-                  variant="secondary"
-                >
-                  Execute Unpause
-                </TxButton>
-              </div>
-            ) : (
-              <TxButton
-                className="w-full"
-                onClick={() => {
-                  if (!confirm("Request bridge unpause?\n\nYou will need to wait 24 hours, then call Execute Unpause.")) return;
-                  tx.send(() => bridge!.requestUnpause());
-                }}
-                loading={tx.loading}
-                variant="secondary"
-              >
-                Request Unpause (starts 24h timer)
-              </TxButton>
-            )}
+            <TxButton onClick={() => tx.send(() => bridge!.unpause())} loading={tx.loading} variant="secondary">
+              Unpause Bridge
+            </TxButton>
           </div>
         </div>
       )}
@@ -1061,61 +959,6 @@ export function AdminPage() {
             >
               Set Feed
             </TxButton>
-          </div>
-        </div>
-      )}
-
-      {/* ===== Global Pause Section ===== */}
-      {section === "globalpause" && (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-red-800/50 bg-red-900/10 p-4 text-sm text-red-400">
-            <strong>⚠️ Protocol-Wide Emergency Control</strong>
-            <p className="mt-1 text-xs text-red-300/70">
-              Global Pause halts <em>all</em> protocol operations across every contract that checks GlobalPauseRegistry.
-              Use only in genuine emergencies (exploit detection, oracle failure, critical vulnerability).
-            </p>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <StatCard
-              label="Global Status"
-              value={gpIsPaused ? "🔴 PAUSED" : "🟢 ACTIVE"}
-              color={gpIsPaused ? "red" : "green"}
-            />
-            <StatCard label="Last Paused" value={gpLastPaused || "..."} />
-            <StatCard label="Last Unpaused" value={gpLastUnpaused || "..."} />
-          </div>
-
-          <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Pause / Unpause Protocol</h3>
-            <p className="mb-3 text-xs text-gray-500">
-              <strong>Pause</strong> requires <code className="text-xs bg-gray-800 px-1 rounded">GUARDIAN_ROLE</code>.{" "}
-              <strong>Unpause</strong> requires <code className="text-xs bg-gray-800 px-1 rounded">DEFAULT_ADMIN_ROLE</code>.
-            </p>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <TxButton
-                onClick={() => {
-                  if (!confirm("🚨 GLOBAL PAUSE — This will halt ALL protocol operations!\n\nAre you absolutely sure?")) return;
-                  tx.send(() => globalPause!.pauseGlobal());
-                }}
-                loading={tx.loading}
-                disabled={gpIsPaused || !globalPause}
-                variant="danger"
-              >
-                🛑 Pause Entire Protocol
-              </TxButton>
-              <TxButton
-                onClick={() => {
-                  if (!confirm("Unpause the protocol?\n\nAll operations will resume.")) return;
-                  tx.send(() => globalPause!.unpauseGlobal());
-                }}
-                loading={tx.loading}
-                disabled={!gpIsPaused || !globalPause}
-                variant="secondary"
-              >
-                ✅ Unpause Protocol
-              </TxButton>
-            </div>
           </div>
         </div>
       )}

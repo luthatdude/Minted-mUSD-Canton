@@ -2,8 +2,13 @@
 name: auditor
 description: Lead auditor that orchestrates the agent team for comprehensive protocol reviews
 tools:
-  ['*']
-handoffs:
+  - read
+  - edit
+  - grep
+  - glob
+  - bash
+  - todo
+delegates:
   - solidity-auditor
   - daml-auditor
   - typescript-reviewer

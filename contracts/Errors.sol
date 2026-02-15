@@ -140,7 +140,6 @@ error InsufficientMusdBalance();
 error SwapFailedOrphanedDebt();
 error SwapReturnedZero();
 error MaxTwentyPct();
-error InvalidTwapPeriod();  // SOL-H-03: Invalid TWAP configuration
 
 // ─── Bridge / Attestation ───────────────────────────────────────────────
 error MinSigsTooLow();
@@ -221,10 +220,6 @@ error MaxTooHigh();
 error MinSupplyZero();
 error MaxChangeZero();
 error MaxChangeTooHigh();
-
-// ─── Global Pause ───────────────────────────────────────────────────────
-error AlreadyPaused();
-error GloballyPaused();
 
 // ─── Miscellaneous ──────────────────────────────────────────────────────
 error InvalidCloseFactor();

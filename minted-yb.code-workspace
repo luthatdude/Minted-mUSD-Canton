@@ -1,0 +1,14 @@
+{
+  "folders": [
+    {
+      "path": "."
+    },
+    {
+      "path": "../Minted-test"
+    },
+    {
+      "path": "../yb-core"
+    }
+  ],
+  "settings": {}
+}

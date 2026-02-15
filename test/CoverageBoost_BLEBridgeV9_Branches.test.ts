@@ -37,8 +37,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT,
-      deployer.address  // _timelockController
+      DAILY_CAP_LIMIT
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 
@@ -99,7 +98,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     it("should revert INVALID_DAILY_LIMIT when _dailyCapIncreaseLimit is 0", async function () {
       const F = await ethers.getContractFactory("BLEBridgeV9");
       await expect(
-        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0, deployer.address])
+        upgrades.deployProxy(F, [MIN_SIGNATURES, await musd.getAddress(), COLLATERAL_RATIO, 0])
       ).to.be.revertedWithCustomError(F, "InvalidDailyLimit");
     });
   });

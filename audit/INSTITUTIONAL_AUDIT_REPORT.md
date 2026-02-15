@@ -1,7 +1,7 @@
 # Minted mUSD Protocol — Institutional Security Audit Report
 
 **Date:** 2026-02-14
-**Auditors:** Minted Security Team (Solidity, DAML, TypeScript, Infrastructure, Cross-Chain Bridge)
+**Auditors:** 5-agent team (Solidity, DAML, TypeScript, Infrastructure, Cross-Chain Bridge)
 **Scope:** Full codebase — 26 Solidity contracts, 18 DAML modules, 28 TypeScript files, K8s/CI/CD infra, end-to-end bridge flows
 **Purpose:** Pre-handoff institutional-grade assessment for formal audit engagement
 
