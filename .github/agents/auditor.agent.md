@@ -2,12 +2,7 @@
 name: auditor
 description: Lead auditor that orchestrates the agent team for comprehensive protocol reviews
 tools:
-  - read
-  - edit
-  - grep
-  - glob
-  - bash
-  - todo
+  ['vscode', 'execute', 'read', 'edit', 'search', 'web', 'agent', 'todo']
 delegates:
   - solidity-auditor
   - daml-auditor

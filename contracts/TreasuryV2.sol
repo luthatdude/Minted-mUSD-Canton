@@ -14,26 +14,28 @@ import "./Errors.sol";
 /**
  * @title TreasuryV2
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
- * @dev When USDC comes in, it's automatically split according to target allocations
+ * @dev When USDC comes in, it's automatically split according to target allocations.
+ *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
  *
- * Default Allocation:
- *   Pendle Multi-Pool:  30% (11.7% APY)
- *   Morpho Loop:        20% (11.5% APY)
- *   Sky sUSDS:          15% (8% APY)
- *   Yield Basis BTC:    10% (variable, ~8-12% APY)
- *   Yield Basis ETH:    10% (variable, ~8-12% APY)
- *   USDC Reserve:       15% (0% APY)
- *   ────────────────────────────────────
- *   Blended:            ~9.5% gross APY
+ * Available Strategies (contracts/strategies/):
+ *   PendleStrategyV2        — Pendle PT yield (multi-pool via PendleMarketSelector)
+ *   MorphoLoopStrategy      — Morpho leverage looping
+ *   SkySUSDSStrategy        — Sky sUSDS stable yield
+ *   YieldBasisStrategy      — YB BTC/ETH leveraged LP lending
+ *   AaveV3LoopStrategy      — Aave V3 leverage looping
+ *   CompoundV3LoopStrategy  — Compound V3 leverage looping
+ *   EulerV2LoopStrategy     — Euler V2 leverage looping
+ *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping
+ *   FluidLoopStrategy       — Fluid leverage looping
+ *   ContangoLoopStrategy    — Contango leverage looping
+ *   MetaVault               — Vault-of-vaults aggregating up to 4 sub-strategies
+ *
+ * Allocations are configured per-deployment via addStrategy(targetBps, minBps, maxBps).
+ * Reserve buffer (reserveBps) is held as idle USDC for instant redemptions.
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~5.7% net APY target)
- *   Protocol:           40% (spread above target)
- *
- * Yield Basis Integration:
- *   YieldBasisStrategy (BTC) → Lends USDC into YB BTC/USDC pool
- *   YieldBasisStrategy (ETH) → Lends USDC into YB ETH/USDC pool
- *   Yield from leveraged LP borrowers flows to Treasury → smUSD / ybBTC / ybETH
+ *   smUSD Holders:      60% (net APY depends on strategy mix)
+ *   Protocol:           40% (performance fee on yield)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
