@@ -234,3 +234,6 @@ error InsufficientLiquidity();
 error InvalidBuffer();
 error MaxBorrowRateTooHigh();
 error MinSupplyRateTooHigh();
+
+// ─── Global Pause ────────────────────────────────────────────────────────
+error AlreadyPaused();
