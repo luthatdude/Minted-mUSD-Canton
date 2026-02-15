@@ -228,59 +228,6 @@ Subtitle: "Mint mUSD, track your portfolio, and monitor protocol health"
 
 > "Mint mUSD 1:1 against selected collateral, validated in real time by attestations on the Canton Network, then stake to begin earning."
 
-### Referral Widget (below Explainer Card)
-
-A compact, always-visible card that lets users generate referral links and apply referral codes directly from the mint page. Ethena-style: every friend you refer who adds TVL earns you boosted point multipliers.
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  🔗 Referral Program                                [2.0x BOOST]│
-│  "Earn boosted points for every friend who adds TVL"            │
-│                                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │
-│  │ Referees │  │Ref'd TVL │  │Bonus Pts │                       │
-│  │    12    │  │  $142K   │  │  8,430   │                       │
-│  └──────────┘  └──────────┘  └──────────┘                       │
-│                                                                  │
-│  Next tier: 2.5x at $500K   [$142K / $500K]                    │
-│  [████████░░░░░░░░░░░░░░░░░░] 28%                              │
-│                                                                  │
-│  Your Referral Links         [+ Generate Code (2/5)]            │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  MNTD-HK8T4V                  [Copy Link]  │                │
-│  │  MNTD-9WN2JP                  [Copy Link]  │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Have a referral code?                                           │
-│  [ MNTD-XXXXXX        ] [ Apply ]                               │
-│                                                                  │
-│  ▸ Multiplier Tiers                                              │
-│    ┌─────────────────────────────────┐                           │
-│    │ Referred TVL │ Multiplier       │                           │
-│    │ ≥ $1M        │ 3.0x             │                           │
-│    │ ≥ $500K      │ 2.5x             │                           │
-│    │ ≥ $100K      │ 2.0x  ← CURRENT  │                           │
-│    │ ≥ $10K       │ 1.5x             │                           │
-│    │ Base         │ 1.0x             │                           │
-│    └─────────────────────────────────┘                           │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-**Elements:**
-- **Header:** Icon (people group), title "Referral Program", multiplier badge (e.g. "2.0x BOOST") in amber/orange
-- **Quick Stats Row:** 3 mini stat cards — Referees count, Referred TVL (formatted), Bonus Points earned
-- **Tier Progress Bar:** Shows progress toward next multiplier tier with label and percentage
-- **Referral Links:** List of user's generated codes (up to 5) with "Copy Link" buttons that copy the full URL (`?ref=MNTD-XXXXXX`) to clipboard. Shows "Copied!" confirmation with checkmark
-- **Generate Code Button:** Creates a new on-chain referral code. Disabled when at 5/5 limit
-- **Apply Code Input:** For users who received a code — validates and links on-chain. Shows success/error feedback
-- **Referred Status:** If user was referred, shows green banner: "You were referred — your referrer earns bonus points from your TVL!"
-- **Multiplier Tiers:** Expandable accordion showing the tier table. Highlights current tier
-
-**Color Palette:**
-- Amber/orange gradient for referral-specific elements (badges, progress bar, tier highlights)
-- Emerald green for "referred" confirmation states
-- Brand blue for copy/action buttons
-
 ### Canton Variant Differences
 - Collateral dropdown replaced by a DAML contract selector
 - Stat cards show Canton-native contract counts and totals
@@ -664,22 +611,17 @@ Each step gets a numbered circle indicator.
 
 ---
 
-## Page 5 — Points & Referrals (`/points`)
+## Page 5 — Points (`/points`)
 
-**Purpose:** Gamification, incentive, and viral growth layer. Users track their points earnings, manage their referral network, see global leaderboards, and use a calculator to project their airdrop value. The referral system (Ethena-style shards) rewards users with TVL-based point multipliers for every friend they bring.
+**Purpose:** Gamification and incentive layer. Users track their points earnings, see the leaderboard, and use a calculator to project their airdrop value. Points convert to $MINT tokens at TGE.
 
-**Header subtitle:** "Earn points by minting, staking, borrowing, and referring friends. Referred TVL unlocks boosted multipliers."
+**Header subtitle:** "Earn points for using the protocol. Points convert to $MINT token airdrop."
 **Badge:** Current season name
 
 ### Wireframe
 
 ```
-PageHeader: "Points & Referrals" · badge: season name
-Subtitle: "Earn points by minting, staking, borrowing, and referring friends.
-           Referred TVL unlocks boosted multipliers."
-
-4 Top-Level StatCards:
-  • Total Points (blue) · Rank · Referrals (green, live count) · Referral Boost (yellow, glow, e.g. "2.0x")
+PageHeader: "Points Program" · badge: season name
 
 Season Progress Bar (card):
   ┌───────────────────────────────────────────────────┐
@@ -689,111 +631,43 @@ Season Progress Bar (card):
   │  ● Season 1 (active) · ○ Season 2 · ○ Season 3   │
   └───────────────────────────────────────────────────┘
 
-Tab Nav: [Overview] [My Referrals] [Leaderboard] [Calculator]
+Tab Nav: [Overview] [Leaderboard] [Calculator]
 
 OVERVIEW TAB:
-  Points Breakdown (card): per-action breakdown by season + referral bonus line
-    Actions list with emoji + rate:
-      💵 mUSD Holding — 1x / $ / day
-      🔒 smUSD Staking — 3x / $ / day
-      🏦 Borrowing — 2x / $ / day
-      💎 LP Positions — 5x / $ / day
-      🌉 Canton Bridge — 1.5x multiplier
-      🤝 Referral Bonus — Up to 3x on referred TVL
+  Your Points (4 StatCards):
+    • Total Points · Global Rank · Current Season · Seasons Active
+
+  Points Breakdown (card): per-action breakdown by season
 
   How It Works (card):
     "Your Points = USD Value × Multiplier × Hours"
 
-  3 Seasons Multiplier Table
+  3 Seasons Multiplier Table:
+    ┌──────────────┬──────────┬───────┬──────────┬────────┐
+    │ Season       │ Boost    │ sMUSD │ Collat.  │ Borrow │
+    │ 1 — Genesis  │ 10× 🔥   │ 4×    │ 3×       │ 2×     │
+    │ 2 — Growth   │ 6×       │ 2.5×  │ 2×       │ 1.5×   │
+    │ 3 — Maturity │ 4×       │ 1.5×  │ 1×       │ 1×     │
+    └──────────────┴──────────┴───────┴──────────┴────────┘
 
   What Earns Points (2-col grid):
-    Canton (higher) vs Ethereum
+    Canton (higher multipliers): Stake mUSD, Deposit sMUSD/CTN, Borrow, Boost Pool
+    Ethereum: Hold sMUSD, Deposit ETH/WBTC/sMUSD, Borrow, Leverage Vault
 
-  Points APY by TVL (table)
+  Points APY by TVL (table):
+    ┌──────────┬───────────────┬──────────────┬───────────────┐
+    │ TVL      │ Boost Pool 🔥 │ sMUSD (CTN)  │ sMUSD (ETH)   │
+    │ $5M      │ 354%          │ 142%         │ 106%          │
+    │ $10M     │ 177%          │ 71%          │ 53%           │
+    │ $25M     │ 71%           │ 28%          │ 21%           │
+    │ $50M     │ 35%           │ 14%          │ 11%           │
+    └──────────┴───────────────┴──────────────┴───────────────┘
 
-  Maximize Your Points (5 tips — adds "Refer friends"):
-    ① Get in early ② Use Canton ③ Loop your sMUSD
-    ④ Deposit $CC in Boost Pool ⑤ Refer friends for up to 3x bonus
-
-  Referral Widget (compact, same as Dashboard version)
-
-MY REFERRALS TAB:
-  ┌──────────────────────────────────────────────────────────────┐
-  │  4 StatCards (horizontal):                                   │
-  │  • Your Referees (blue, people icon)                         │
-  │  • Referred TVL (green, dollar icon)                         │
-  │  • Bonus Points (yellow, star icon)                          │
-  │  • Multiplier (purple, glow variant, lightning icon)         │
-  │                                                              │
-  │  Multiplier Progress (card):                                 │
-  │  ┌────────────────────────────────────────────────┐          │
-  │  │  "Multiplier Progress"           [Next: 2.5x] │          │
-  │  │  [███████████░░░░░░░░░░░░░░░░░░░] 28%          │          │
-  │  │  gradient bar: amber → orange → red            │          │
-  │  │  Base — $10K — $100K — $500K — $1M             │          │
-  │  │                                                │          │
-  │  │  Tier Breakdown Table:                         │          │
-  │  │  ┌──────┬──────────┬────────────┬──────────┐   │          │
-  │  │  │ Tier │ Min TVL  │ Multiplier │ Status   │   │          │
-  │  │  │ 4    │ ≥ $1M    │ 3.0x       │ Locked   │   │          │
-  │  │  │ 3    │ ≥ $500K  │ 2.5x       │ Locked   │   │          │
-  │  │  │ 2    │ ≥ $100K  │ 2.0x       │ ● CURRENT│   │          │
-  │  │  │ 1    │ ≥ $10K   │ 1.5x       │ ✓ Done   │   │          │
-  │  │  └──────┴──────────┴────────────┴──────────┘   │          │
-  │  │  Active tier row: amber bg, glowing dot        │          │
-  │  │  Unlocked rows: emerald check                  │          │
-  │  │  Locked rows: gray text                        │          │
-  │  └────────────────────────────────────────────────┘          │
-  │                                                              │
-  │  Your Referees (list card):                                  │
-  │  ┌────────────────────────────────────────────────┐          │
-  │  │  "Your Referees (12)"                          │          │
-  │  │  ┌──────────────────────────────────────┐      │          │
-  │  │  │ [1] 0xA1b2...3c4d       Etherscan ↗ │      │          │
-  │  │  │ [2] 0xE5f6...7g8h       Etherscan ↗ │      │          │
-  │  │  │ ...                                  │      │          │
-  │  │  └──────────────────────────────────────┘      │          │
-  │  │  Each row: numbered circle (gradient),          │          │
-  │  │  truncated address (mono), Etherscan link       │          │
-  │  └────────────────────────────────────────────────┘          │
-  │                                                              │
-  │  Your Referral Chain (if referred):                          │
-  │  ┌────────────────────────────────────────────────┐          │
-  │  │  ↑ Referred by 0xB2c3...4d5e                   │          │
-  │  │  They earn 10% bonus on your points             │          │
-  │  └────────────────────────────────────────────────┘          │
-  │                                                              │
-  │  Footer: Protocol Referrers: 847 · Total Links: 2,431       │
-  └──────────────────────────────────────────────────────────────┘
+  Maximize Your Points (4 tips):
+    ① Get in early  ② Use Canton  ③ Loop your sMUSD  ④ Deposit $CC in Boost Pool
 
 LEADERBOARD TAB:
-  ┌──────────────────────────────────────────────────────────────┐
-  │  Header: "Referral Leaderboard" + Time range pills           │
-  │  [All Time] [30D] [7D]                                       │
-  │                                                              │
-  │  Your Position (sticky amber banner):                        │
-  │  ┌────────────────────────────────────────────────┐          │
-  │  │  #14 · Your Position                           │          │
-  │  │  12 referees · $142K TVL        2.0x | 8,430   │          │
-  │  └────────────────────────────────────────────────┘          │
-  │                                                              │
-  │  Top 50 Table:                                               │
-  │  ┌──────┬──────────────┬─────────┬──────────┬──────┬───────┐ │
-  │  │ Rank │ Referrer     │Referees │Ref'd TVL │Mult. │Bonus  │ │
-  │  │ 🥇 1 │ 0xD4e5...6f  │   47    │ $2.1M    │ 3.0x │ 42.1K │ │
-  │  │ 🥈 2 │ 0xA1b2...3c  │   38    │ $1.8M    │ 3.0x │ 38.7K │ │
-  │  │ 🥉 3 │ 0xC3d4...5e  │   31    │ $920K    │ 2.5x │ 24.3K │ │
-  │  │  4   │ 0xE5f6...7g  │   28    │ $640K    │ 2.5x │ 19.8K │ │
-  │  │  ... │              │         │          │      │       │ │
-  │  │  14  │ 0xYOU  [YOU] │   12    │ $142K    │ 2.0x │ 8,430 │ │
-  │  │  ... │              │         │          │      │       │ │
-  │  └──────┴──────────────┴─────────┴──────────┴──────┴───────┘ │
-  │                                                              │
-  │  Top 3: medal gradient circles (gold/silver/bronze)          │
-  │  User's own row: amber background + [YOU] badge              │
-  │  Multiplier column: amber pill badges                        │
-  │  Bonus points column: emerald text                           │
-  └──────────────────────────────────────────────────────────────┘
+  Top 25 table: Rank · Address · Points (highlights user's own row)
 
 CALCULATOR TAB:
   Implied APY (3 StatCards): APY · Token Price · Total Airdrop Value
@@ -866,12 +740,11 @@ Per-action breakdown by season (table or itemized list)
 | $25M | 71% | 28% | 21% |
 | $50M | 35% | 14% | 11% |
 
-**Maximize Your Points — 5 Tips:**
+**Maximize Your Points — 4 Tips:**
 1. **Get in early** — Season 1 multipliers are the highest
 2. **Use Canton** — every action earns the most points
 3. **Loop your sMUSD** — leverage multiplies your points on every layer
 4. **Deposit $CC in the Boost Pool** — 10× in Season 1, always the highest multiplier
-5. **Refer friends** — earn up to 3x bonus on all referred TVL (see Referral Program below)
 
 **Example Scenario (callout card):**
 > $10k capital, 4 loops, Season 1. Positions: $34.4k sMUSD collateral, $24.4k debt, $8.6k Canton Boost Pool.
@@ -1003,131 +876,25 @@ Visually distinct section — warning styling, double-confirmation required (typ
 | Set sMUSD Price Bounds | Min + Max inputs |
 | Increment Round | Button |
 
-### Section 5: Treasury & Strategy Management (Largest Admin Section)
+### Section 5: Strategy Management
 
-The Treasury tab is the most complex admin section, containing live yield intelligence, a named strategy catalog, and all deployment controls.
-
-#### Wireframe
-
-```
-┌─── Treasury Section ─────────────────────────────────────────────────────────┐
-│                                                                              │
-│  3 Overview StatCards:                                                       │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐            │
-│  │ Total Value      │  │ Reserve (Idle)   │  │ Reserve Target   │            │
-│  │ $12,450,000      │  │ $2,100,000       │  │ 15% (1500 bps)   │            │
-│  └──────────────────┘  └──────────────────┘  └──────────────────┘            │
-│                                                                              │
-│  ┌─── ⚠ Manual Deployment Notice ───────────────────────────────────────┐    │
-│  │  Amber banner: "Treasury does not auto-allocate. Use the forms below │    │
-│  │  to deploy idle reserves into strategies or withdraw funds."         │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─── 📡 Live Yield Scanner ────────────────────────────────────────────┐    │
-│  │  Real-time DeFi yield data from external markets                     │    │
-│  │  ┌───────────────────┬──────────┬──────────┬─────────────────┐       │    │
-│  │  │ Protocol          │ Pool     │ APY      │ TVL             │       │    │
-│  │  │ Fluid             │ T1 #146  │ 14.3%    │ $48M            │       │    │
-│  │  │ Pendle            │ Multi    │ 11.7%    │ $120M           │       │    │
-│  │  │ Morpho            │ Leveraged│ 11.5%    │ $85M            │       │    │
-│  │  │ Euler V2          │ Cross    │ 10.2%    │ $32M            │       │    │
-│  │  │ ...               │          │          │                 │       │    │
-│  │  └───────────────────┴──────────┴──────────┴─────────────────┘       │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─── 🤖 AI Yield Optimizer ───────────────────────────────────────────┐    │
-│  │  "DefiLlama-powered scoring engine"                                  │    │
-│  │                                                                      │    │
-│  │  Recommended Actions:                                                │    │
-│  │  ┌──────────────────────────────────────────────────────────┐        │    │
-│  │  │ 1. Deploy $500K → Fluid Stable Loop #146 (14.3% APY)   │        │    │
-│  │  │    Score: 92/100  Risk: Low   [Apply ▸]                 │        │    │
-│  │  │ 2. Deploy $300K → Pendle Multi-Pool (11.7% APY)         │        │    │
-│  │  │    Score: 87/100  Risk: Low-Med  [Apply ▸]              │        │    │
-│  │  │ 3. Withdraw $200K ← Compound V3 (5.1% APY, declining)  │        │    │
-│  │  │    Score: 45/100  Risk: Low  [Apply ▸]                  │        │    │
-│  │  └──────────────────────────────────────────────────────────┘        │    │
-│  │  [Apply] pre-fills the Deploy/Withdraw form below                    │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─── Active Strategies ────────────────────────────────────────────────┐    │
-│  │  On-chain registered strategies with live status:                    │    │
-│  │  ● Fluid Stable Loop    0xA1b2...  Target: 30%  Deployed: $3.7M     │    │
-│  │  ● Pendle Multi-Pool    0xC3d4...  Target: 25%  Deployed: $3.1M     │    │
-│  │  ● Morpho Leveraged     0xE5f6...  Target: 20%  Deployed: $2.5M     │    │
-│  │  ○ Euler V2 (inactive)  0xF7g8...  Target: 10%  Deployed: $0        │    │
-│  │  Green dot = active, gray dot = inactive                             │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  ┌─── Strategy Catalog (10 Named Strategies) ──────────────────────────┐    │
-│  │  Grid of cards — each shows name, APY range, and deployment status:  │    │
-│  │                                                                      │    │
-│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
-│  │  │ Fluid Stable    │ │ Pendle Multi-   │ │ Morpho Lev.     │         │    │
-│  │  │ Loop #146       │ │ Pool            │ │ Loop            │         │    │
-│  │  │ ~14.3% APY      │ │ ~11.7% APY      │ │ ~11.5% APY      │         │    │
-│  │  │ ● Deployed      │ │ ● Deployed      │ │ ● Deployed      │         │    │
-│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
-│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
-│  │  │ Euler V2 Cross  │ │ Aave V3 Loop    │ │ Compound V3     │         │    │
-│  │  │ Stable          │ │                 │ │ Loop            │         │    │
-│  │  │ ~8-12% APY      │ │ ~6-9% APY       │ │ ~5-8% APY       │         │    │
-│  │  │ ○ Not deployed  │ │ ○ Not deployed  │ │ ○ Not deployed  │         │    │
-│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
-│  │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │    │
-│  │  │ Contango Perp   │ │ Euler V2 Loop   │ │ Sky sUSDS       │         │    │
-│  │  │ Loop            │ │                 │ │ Savings         │         │    │
-│  │  │ ~8-14% APY      │ │ ~7-10% APY      │ │ ~7.9% APY       │         │    │
-│  │  │ ○ Not deployed  │ │ ○ Not deployed  │ │ ○ Not deployed  │         │    │
-│  │  └─────────────────┘ └─────────────────┘ └─────────────────┘         │    │
-│  │  ┌─────────────────┐                                                 │    │
-│  │  │ MetaVault       │  Select from catalog or enter manual address    │    │
-│  │  │ Vault-of-Vaults │  to add a new strategy.                         │    │
-│  │  │ ~12.5% APY      │                                                 │    │
-│  │  │ ○ Not deployed  │                                                 │    │
-│  │  └─────────────────┘                                                 │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-│                                                                              │
-│  Deploy to Strategy:                                                         │
-│    Strategy selector (dropdown from catalog or active list)                  │
-│    Amount input [MAX = idle reserve balance]                                 │
-│    [Deploy to Strategy]                                                      │
-│                                                                              │
-│  Withdraw from Strategy:                                                     │
-│    Strategy selector (dropdown from active strategies)                       │
-│    Amount input                                                              │
-│    [Withdraw from Strategy]                                                  │
-│                                                                              │
-│  Add Strategy:                                                               │
-│    Select from catalog or enter manual address                               │
-│    Target BPS / Min BPS / Max BPS inputs                                    │
-│    [Add Strategy]                                                            │
-│                                                                              │
-│  Remove Strategy:                                                            │
-│    Strategy selector → [Deactivate Strategy]                                 │
-│                                                                              │
-│  Set Reserve Ratio:    [____] bps   [Set Reserve BPS]                       │
-│                                                                              │
-│  Action Buttons:                                                             │
-│    [Rebalance All]  [Claim Fees]  [⚠ Emergency Withdraw All]                │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-| Sub-Section | Description |
-|-------------|-------------|
-| Overview Stats | 3 StatCards: Total Value, Reserve (idle USDC), Reserve Target (bps) |
-| Manual Deployment Notice | Amber warning: treasury doesn't auto-allocate |
-| Live Yield Scanner | Real-time DeFi market yield table (moved from StakePage). Shows protocol, pool, APY, TVL from external sources |
-| AI Yield Optimizer | DefiLlama-powered scoring engine that ranks strategies by risk-adjusted yield and recommends deploy/withdraw actions. "Apply" button pre-fills the deploy form. |
-| Active Strategies | List of on-chain registered strategies with color status dots, addresses, target %, deployed amounts |
-| Strategy Catalog | Grid of 10 named strategies: Fluid Stable Loop #146, Pendle Multi-Pool, Morpho Leveraged Loop, Euler V2 Cross-Stable, Aave V3 Loop, Compound V3 Loop, Contango Perp Loop, Euler V2 Loop, Sky sUSDS Savings, MetaVault Vault-of-Vaults |
-| Deploy to Strategy | Strategy selector + amount input + MAX button (fills idle reserve) |
-| Withdraw from Strategy | Strategy selector + amount input |
-| Add Strategy | Select from catalog or manual address, with Target/Min/Max BPS inputs |
-| Remove Strategy | Select active strategy → deactivate |
-| Set Reserve Ratio | BPS input |
-| Action Buttons | Rebalance All, Claim Fees, Emergency Withdraw All |
+| Action | Inputs |
+|--------|--------|
+| Rebalance Treasury | Button (show current allocations first) |
+| Set Reserve BPS | Number input |
+| Set Min Auto Allocate | Number input |
+| Remove Strategy | Address dropdown |
+| Morpho — Set Safety Buffer | Number input (bps) |
+| Morpho — Set Active | Toggle |
+| Pendle — Set Slippage | Number input (bps) |
+| Pendle — Set PT Discount | Number input (bps) |
+| Pendle — Set Rollover Threshold | Number input (seconds) |
+| Pendle — Roll to New Market | Button |
+| Pendle — Trigger Rollover | Button |
+| Pendle — Set Active | Toggle |
+| Pendle — Set Market Selector | Address input |
+| Whitelist Pendle Market | Address + category string |
+| Remove Pendle Market | Address dropdown |
 
 ### Section 6: Bridge & Cross-Chain
 
@@ -1231,15 +998,7 @@ Layout (shown when appLaunched=true)
 │   │   ├── Supply Growth Chart
 │   │   ├── Recent Activity Table
 │   │   ├── 3 Protocol Health StatCards
-│   │   ├── HowItWorks Explainer Card
-│   │   └── ReferralWidget (compact referral card)
-│   │       ├── Header (icon, title, multiplier badge)
-│   │       ├── Quick Stats Row (Referees, Referred TVL, Bonus Pts)
-│   │       ├── Tier Progress Bar
-│   │       ├── Referral Code List (up to 5) + Generate Button
-│   │       ├── Apply Code Input + Button
-│   │       ├── Referred Status Banner (conditional)
-│   │       └── Multiplier Tiers Accordion
+│   │   └── HowItWorks Explainer Card
 │   │
 │   ├── StakePage
 │   │   ├── 2 StatCards (Total Staked, Current APY)
@@ -1292,32 +1051,19 @@ Layout (shown when appLaunched=true)
 │   │   └── BLE Explainer Card
 │   │
 │   ├── PointsPage
-│   │   ├── PageHeader ("Points & Referrals")
-│   │   ├── Top StatCards × 4 (Total Points, Rank, Referrals, Referral Boost)
+│   │   ├── PageHeader
 │   │   ├── Season Progress Bar
-│   │   ├── Tab Nav (Overview / My Referrals / Leaderboard / Calculator)
+│   │   ├── Tab Nav (Overview / Leaderboard / Calculator)
 │   │   ├── Overview Tab
-│   │   │   ├── Points Breakdown (per-action, incl. referral bonus line)
+│   │   │   ├── Your Points (StatCard × 4)
+│   │   │   ├── Points Breakdown (per-action)
 │   │   │   ├── How It Works (formula card)
 │   │   │   ├── 3 Seasons Multiplier Table
 │   │   │   ├── What Earns Points (Canton vs Ethereum)
 │   │   │   ├── Points APY by TVL Table
-│   │   │   ├── Maximize Your Points (5 tips, incl. refer friends)
-│   │   │   ├── Airdrop Info Card
-│   │   │   └── ReferralWidget (compact, same as Dashboard)
-│   │   ├── My Referrals Tab (NEW — ReferralTracker)
-│   │   │   ├── StatCard × 4 (Referees, Referred TVL, Bonus Pts, Multiplier)
-│   │   │   ├── Multiplier Progress Card
-│   │   │   │   ├── Gradient Progress Bar (amber→orange→red)
-│   │   │   │   ├── Tier Markers (Base→$10K→$100K→$500K→$1M)
-│   │   │   │   └── Tier Breakdown Table (status: Current/Unlocked/Locked)
-│   │   │   ├── Referee List (numbered, addresses, Etherscan links)
-│   │   │   ├── Referral Chain Card (conditional, if user was referred)
-│   │   │   └── Global Stats Footer
-│   │   ├── Leaderboard Tab (UPDATED — ReferralLeaderboard)
-│   │   │   ├── Header + Time Range Filter (All Time / 30D / 7D)
-│   │   │   ├── Your Position Banner (amber gradient, sticky)
-│   │   │   └── Top 50 Table (medals, address, referees, TVL, mult, pts)
+│   │   │   ├── Maximize Your Points (4 tips)
+│   │   │   └── Airdrop Info Card
+│   │   ├── Leaderboard Tab (top-25 table)
 │   │   └── Calculator Tab
 │   │       ├── Implied APY (StatCard × 3)
 │   │       ├── Scenarios Table
@@ -1349,7 +1095,7 @@ frontend/src/
 │   ├── BorrowPage.tsx       — Collateral deposit, borrow, repay, withdraw + leverage looping
 │   ├── BridgePage.tsx       — Canton attestation monitoring
 │   ├── AdminPage.tsx        — Protocol admin panel
-│   └── PointsPage.tsx       — Points program, referral system, leaderboard, APY calculator
+│   └── PointsPage.tsx       — Points program, seasons, leaderboard, APY calculator
 │
 ├── components/
 │   ├── LandingPage.tsx      — Pre-app gate: THREE.js scene, headline, stats, Enter App
@@ -1359,9 +1105,6 @@ frontend/src/
 │   ├── StatCard.tsx         — Metric card (icon, trend, sub, variant)
 │   ├── PageHeader.tsx       — Title + subtitle + badge
 │   ├── TxButton.tsx         — Transaction button with loading state
-│   ├── ReferralWidget.tsx   — Compact referral card (codes, apply, stats, tiers) — used on Dashboard + Points
-│   ├── ReferralTracker.tsx  — Full referral tracker (stats, tier progress, referee list, chain)
-│   ├── ReferralLeaderboard.tsx — Top 50 referrers table with medals + time filters
 │   └── canton/              — Canton-chain page equivalents
 │       ├── CantonDashboardMint.tsx
 │       ├── CantonStake.tsx
@@ -1374,8 +1117,7 @@ frontend/src/
 │   ├── useWCContracts.ts    — Contract instances via WalletConnect signer
 │   ├── useTx.ts             — Tx send with simulation, loading/error/success
 │   ├── useChain.ts          — Chain state (ethereum / canton toggle)
-│   ├── useCanton.ts         — Canton/DAML integration
-│   └── useReferral.ts       — ReferralRegistry contract reads/writes, code gen, link, dashboard state
+│   └── useCanton.ts         — Canton/DAML integration
 │
 ├── lib/
 │   ├── config.ts            — Contract addresses, decimals, validation

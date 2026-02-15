@@ -22,44 +22,24 @@ export async function refreshFeeds(...feeds: any[]) {
   }
 }
 
-/**
- * Ensure the caller has TIMELOCK_ROLE on the given contract.
- * After SOL-H-04 many admin setters (PriceOracle, BLEBridgeV9, etc.)
- * are gated by TIMELOCK_ROLE instead of DEFAULT_ADMIN_ROLE / ORACLE_ADMIN_ROLE.
- * The deployer still holds DEFAULT_ADMIN_ROLE which is the admin of TIMELOCK_ROLE,
- * so they can self-grant.
- */
-export async function ensureTimelockRole(contract: any, caller: HardhatEthersSigner) {
-  const TIMELOCK_ROLE = await contract.TIMELOCK_ROLE();
-  const has = await contract.hasRole(TIMELOCK_ROLE, caller.address);
-  if (!has) {
-    // caller must have DEFAULT_ADMIN_ROLE (the default admin of all roles)
-    await contract.connect(caller).grantRole(TIMELOCK_ROLE, caller.address);
-  }
-}
-
 // ─── PriceOracle ─────────────────────────────────────────────
 
 export async function timelockSetFeed(
   oracle: any, admin: HardhatEthersSigner,
   token: string, feed: string, stalePeriod: number, tokenDecimals: number
 ) {
-  await ensureTimelockRole(oracle, admin);
   await oracle.connect(admin).setFeed(token, feed, stalePeriod, tokenDecimals, 0);
 }
 
 export async function timelockRemoveFeed(oracle: any, admin: HardhatEthersSigner, token: string) {
-  await ensureTimelockRole(oracle, admin);
   await oracle.connect(admin).removeFeed(token);
 }
 
 export async function timelockSetMaxDeviation(oracle: any, admin: HardhatEthersSigner, bps: number) {
-  await ensureTimelockRole(oracle, admin);
   await oracle.connect(admin).setMaxDeviation(bps);
 }
 
 export async function timelockSetCircuitBreakerEnabled(oracle: any, admin: HardhatEthersSigner, enabled: boolean) {
-  await ensureTimelockRole(oracle, admin);
   await oracle.connect(admin).setCircuitBreakerEnabled(enabled);
 }
 

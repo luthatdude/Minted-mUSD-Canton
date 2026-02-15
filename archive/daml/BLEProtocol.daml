@@ -46,7 +46,7 @@ template InstitutionalEquityPosition
       with newValue: Money
       controller bank
       do
-        -- 5C-M07: Validate positive value to prevent zero/negative equity positions
+        -- FIX 5C-M07: Validate positive value to prevent zero/negative equity positions
         assertMsg "VALUE_MUST_BE_POSITIVE" (newValue > 0.0)
         now <- getTime
         create this with totalValue = newValue, lastUpdated = now

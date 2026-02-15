@@ -212,7 +212,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
       const user1WethAfter = await weth.balanceOf(user1.address);
 
       // User1 should NOT receive the extra 5 WETH that was sent to the contract
-      // The SOL-003 snapshots balances before/after to only return user1's portion
+      // The SOL-003 fix snapshots balances before/after to only return user1's portion
       const user1Received = user1WethAfter - user1WethBefore;
 
       // User2's position should still be intact

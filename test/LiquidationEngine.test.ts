@@ -31,8 +31,6 @@ describe("LiquidationEngine", function () {
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // 8 decimals, $2000
 
-    // SOL-H-04: grant TIMELOCK_ROLE for setFeed
-    await priceOracle.grantRole(await priceOracle.TIMELOCK_ROLE(), owner.address);
     // Configure oracle feed (token, feed, stalePeriod, tokenDecimals)
     await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 

@@ -109,12 +109,8 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
     // Grant roles
     const MARKET_ADMIN_ROLE = await selector.MARKET_ADMIN_ROLE();
     const PARAMS_ADMIN_ROLE = await selector.PARAMS_ADMIN_ROLE();
-    const TIMELOCK_ROLE = await selector.TIMELOCK_ROLE();
     await selector.connect(admin).grantRole(MARKET_ADMIN_ROLE, marketAdmin.address);
     await selector.connect(admin).grantRole(PARAMS_ADMIN_ROLE, paramsAdmin.address);
-    // whitelistMarket/removeMarket/setParams now require TIMELOCK_ROLE (SOL-H-04)
-    await selector.connect(admin).grantRole(TIMELOCK_ROLE, marketAdmin.address);
-    await selector.connect(admin).grantRole(TIMELOCK_ROLE, paramsAdmin.address);
 
     return {
       selector,
@@ -865,17 +861,17 @@ describe("PendleMarketSelector — Full Coverage Boost", function () {
       expect(marketRole).to.not.equal(paramsRole);
     });
 
-    it("user without TIMELOCK_ROLE cannot whitelist markets", async function () {
-      const { selector, user1, marketA } = await loadFixture(deployFullFixture);
+    it("paramsAdmin cannot whitelist markets", async function () {
+      const { selector, paramsAdmin, marketA } = await loadFixture(deployFullFixture);
       await expect(
-        selector.connect(user1).whitelistMarket(await marketA.getAddress(), "USD")
+        selector.connect(paramsAdmin).whitelistMarket(await marketA.getAddress(), "USD")
       ).to.be.reverted;
     });
 
-    it("user without TIMELOCK_ROLE cannot setParams", async function () {
-      const { selector, user1 } = await loadFixture(deployFullFixture);
+    it("marketAdmin cannot setParams", async function () {
+      const { selector, marketAdmin } = await loadFixture(deployFullFixture);
       await expect(
-        selector.connect(user1).setParams(86400, 0, 0, 5000, 5000)
+        selector.connect(marketAdmin).setParams(86400, 0, 0, 5000, 5000)
       ).to.be.reverted;
     });
   });

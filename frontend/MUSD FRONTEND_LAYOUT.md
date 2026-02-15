@@ -428,83 +428,21 @@ CALCULATOR TAB:
 ### 6. Admin Page (`/admin`)  — max-w-4xl
 
 ```
-Role Indicator (top bar):
-  Shows which roles the connected wallet holds (DEFAULT_ADMIN, TIMELOCK, PAUSER, etc.)
-  Actions the wallet can’t execute are greyed out.
-
 Tab bar: [mUSD] [DirectMint] [Treasury] [Bridge] [Borrow] [Oracle]
 
 Each section shows:
-  • Current on-chain values (read from contracts, polled every 15s)
+  • Current on-chain values (read from contracts)
   • Input fields to update parameters
-  • TxButton to submit transactions with confirmation modal
-  • Success/Error feedback with decoded revert reasons
+  • TxButton to submit transactions
+  • Success/Error feedback
 
 Sections:
-  mUSD:
-    Supply cap, blacklist address
-
-  DirectMint:
-    3 StatCards: Mint Fee, Redeem Fee, Accumulated Fees
-    Set Mint/Redeem Fees (bps), Set Limits (min/max mint/redeem)
-    Set Fee Recipient, Withdraw Fees, Pause/Unpause
-
-  Treasury (largest section):
-    3 StatCards: Total Value, Reserve (Idle USDC), Reserve Target (bps)
-
-    ⚠ Manual Deployment Notice (amber banner):
-      "Treasury does not auto-allocate. Use the forms below
-      to deploy idle reserves into strategies or withdraw funds."
-
-    📡 Live Yield Scanner:
-      Real-time DeFi market yield data from external sources
-      Table: Protocol │ Pool │ APY │ TVL
-      (moved from StakePage to AdminPage)
-
-    🤖 AI Yield Optimizer:
-      DefiLlama-powered scoring engine
-      Ranks strategies by risk-adjusted yield
-      Recommended actions with Score/Risk/Apply button
-      [Apply] pre-fills the Deploy form below
-
-    Active Strategies:
-      On-chain registered strategies with color status dots
-      Shows: Name, Address, Target %, Deployed amount
-      Green = active, Gray = inactive
-
-    Strategy Catalog (10 Named Strategies, grid layout):
-      ┌────────────────────────┬────────────┬────────────────┐
-      │ Strategy               │ APY Range  │ Status         │
-      │ Fluid Stable Loop #146 │ ~14.3%     │ ● Deployed     │
-      │ Pendle Multi-Pool      │ ~11.7%     │ ● Deployed     │
-      │ Morpho Leveraged Loop  │ ~11.5%     │ ● Deployed     │
-      │ Euler V2 Cross-Stable  │ ~8-12%     │ ○ Not deployed │
-      │ Aave V3 Loop           │ ~6-9%      │ ○ Not deployed │
-      │ Compound V3 Loop       │ ~5-8%      │ ○ Not deployed │
-      │ Contango Perp Loop     │ ~8-14%     │ ○ Not deployed │
-      │ Euler V2 Loop          │ ~7-10%     │ ○ Not deployed │
-      │ Sky sUSDS Savings      │ ~7.9%      │ ○ Not deployed │
-      │ MetaVault Vault-of-Vaults │ ~12.5% │ ○ Not deployed │
-      └────────────────────────┴────────────┴────────────────┘
-
-    Deploy to Strategy: selector + amount [MAX = idle reserve]
-    Withdraw from Strategy: selector + amount
-    Add Strategy: catalog select or manual address + Target/Min/Max BPS
-    Remove Strategy: select → deactivate
-    Set Reserve Ratio: BPS input
-    Action Buttons: [Rebalance All] [Claim Fees] [⚠ Emergency Withdraw All]
-
-  Bridge:
-    3 StatCards: Attested Assets, Supply Cap, Health Ratio
-    Set Min Signatures, Collateral Ratio (bps)
-    Emergency Cap Reduction (with reason), Pause/Unpause
-
-  Borrow:
-    2 StatCards: Interest Rate, Total Borrows
-    Set Interest Rate (bps APR), Set Min Debt
-
-  Oracle:
-    Set Price Feed (token, Chainlink feed, stale period, decimals)
+  mUSD:       Supply cap, blacklist address
+  DirectMint: Mint/redeem fees, fee recipient, min/max amounts, pause, collect fees
+  Treasury:   Add/remove strategy, deploy/withdraw funds, max deployment BPS
+  Bridge:     Min signatures, collateral ratio, emergency cap, pause
+  Borrow:     Interest rate, min debt
+  Oracle:     Set price feed (token, feed address, stale threshold, decimals)
 ```
 
 ---
@@ -521,36 +459,33 @@ LandingPage (pre-app gate, shown when appLaunched=false)
 Layout (shown when appLaunched=true)
 ├── Navbar
 │   ├── Logo (Minted Protocol)
-│   ├── NavItems × 5 (Mint, Stake, Borrow & Lend, Bridge, Points)
+│   ├── NavItems × 7 (desktop)
 │   ├── ChainToggle (ETH ⟷ Canton)
 │   ├── Wallet Button / Connect Button
 │   └── Mobile Menu (hamburger → slide-down)
 │
 ├── Main Content (page router via useState)
-│   ├── DashboardMintPage
+│   ├── DashboardPage
+│   │   ├── PageHeader
+│   │   ├── Tab Toggle (Portfolio / Protocol)
+│   │   ├── StatCard × 4
+│   │   ├── Net Worth Card (gradient-border)
+│   │   └── Position / Metrics grids
+│   │
+│   ├── MintPage
 │   │   ├── PageHeader
 │   │   ├── StatCard × 4
-│   │   ├── Mint/Redeem Widget (card-gradient-border)
-│   │   │   ├── Tab Toggle (Mint / Redeem)
-│   │   │   ├── CollateralSelector
+│   │   ├── Balance Cards × 2
+│   │   ├── Action Card (mint/redeem tabs)
+│   │   │   ├── ChainSelector (cross-chain)
 │   │   │   ├── AmountInput + MAX + TokenBadge
 │   │   │   ├── Arrow Separator
 │   │   │   ├── OutputPreview
-│   │   │   ├── FeeInfo
+│   │   │   ├── ExchangeInfo
 │   │   │   ├── TxButton
 │   │   │   └── AlertStatus
-│   │   ├── Supply Growth Chart
-│   │   ├── Recent Activity Table
-│   │   ├── 3 Protocol Health StatCards
 │   │   ├── HowItWorks Explainer Card
-│   │   └── ReferralWidget (compact referral card)
-│   │       ├── Header (icon, title, multiplier badge)
-│   │       ├── Quick Stats Row (Referees, Referred TVL, Bonus Pts)
-│   │       ├── Tier Progress Bar
-│   │       ├── Referral Code List (up to 5) + Generate Button
-│   │       ├── Apply Code Input + Button
-│   │       ├── Referred Status Banner (conditional)
-│   │       └── Multiplier Tiers Accordion
+│   │   └── Info Cards (Remaining Mintable + Available for Redemption)
 │   │
 │   ├── StakePage
 │   │   ├── 2 StatCards (Total Staked, Current APY)
@@ -568,11 +503,11 @@ Layout (shown when appLaunched=true)
 │   │
 │   │   Canton variant adds:
 │   │   ├── 3rd StatCard (Minted Points Earned)
-│   │   └── Canton Coin Boost Pool Widget
-│   │       ├── Explainer text
-│   │       ├── 3 StatCards (Boost APY, Validator Rewards, Points 10×)
-│   │       ├── Stake/Unstake tabs (Coming Soon)
-│   │       └── Amount Input (disabled)
+│   │   ├── Canton Coin Boost Pool Widget
+│   │   │   ├── Explainer text
+│   │   │   ├── 3 StatCards (Boost APY, Validator Rewards, Points 10×)
+│   │   │   ├── Stake/Unstake tabs (Coming Soon)
+│   │   │   └── Amount Input (disabled)
 │   │
 │   ├── BorrowPage
 │   │   ├── Collateral Reference Table (ETH/WBTC/smUSD with LTV/Liq data)
@@ -609,47 +544,27 @@ Layout (shown when appLaunched=true)
 │   │   └── BLE Explainer Card
 │   │
 │   ├── PointsPage
-│   │   ├── PageHeader ("Points & Referrals")
-│   │   ├── Top StatCards × 4 (Total Points, Rank, Referrals, Referral Boost)
+│   │   ├── PageHeader
 │   │   ├── Season Progress Bar
-│   │   ├── Tab Nav (Overview / My Referrals / Leaderboard)
+│   │   ├── Tab Nav (Overview / Leaderboard / Calculator)
 │   │   ├── Overview Tab
-│   │   │   ├── Points Breakdown (per-action, incl. referral bonus line)
+│   │   │   ├── Your Points (StatCard × 4)
+│   │   │   ├── Points Breakdown (per-action)
 │   │   │   ├── How It Works (formula card)
 │   │   │   ├── 3 Seasons Multiplier Table
 │   │   │   ├── What Earns Points (Canton vs Ethereum)
 │   │   │   ├── Points APY by TVL Table
-│   │   │   ├── Maximize Your Points (5 tips, incl. refer friends)
-│   │   │   ├── Airdrop Info Card
-│   │   │   └── ReferralWidget (compact, same as Dashboard)
-│   │   ├── My Referrals Tab (ReferralTracker)
-│   │   │   ├── StatCard × 4 (Referees, Referred TVL, Bonus Pts, Multiplier)
-│   │   │   ├── Multiplier Progress Card
-│   │   │   │   ├── Gradient Progress Bar (amber→orange→red)
-│   │   │   │   ├── Tier Markers (Base→$10K→$100K→$500K→$1M)
-│   │   │   │   └── Tier Breakdown Table (status: Current/Unlocked/Locked)
-│   │   │   ├── Referee List (numbered, addresses, Etherscan links)
-│   │   │   ├── Referral Chain Card (conditional, if user was referred)
-│   │   │   └── Global Stats Footer
-│   │   └── Leaderboard Tab (ReferralLeaderboard)
-│   │       ├── Header + Time Range Filter (All Time / 30D / 7D)
-│   │       ├── Your Position Banner (amber gradient, sticky)
-│   │       └── Top 50 Table (medals, address, referees, TVL, mult, pts)
+│   │   │   ├── Maximize Your Points (4 tips)
+│   │   │   └── Airdrop Info Card
+│   │   ├── Leaderboard Tab (top-25 table)
+│   │   └── Calculator Tab
+│   │       ├── Implied APY (StatCard × 3)
+│   │       ├── Scenarios Table
+│   │       └── Multiplier Schedule
 │   │
 │   └── AdminPage
-│       ├── Role Indicator (top bar — shows wallet roles)
-│       ├── Section Tab Bar (6 tabs: mUSD, DirectMint, Treasury, Bridge, Borrow, Oracle)
-│       └── Treasury Section (largest)
-│           ├── 3 Overview StatCards (Total Value, Reserve, Reserve Target)
-│           ├── Manual Deployment Notice (amber banner)
-│           ├── YieldScanner (live DeFi market yield data, moved from StakePage)
-│           ├── AIYieldOptimizer (DefiLlama scoring, recommended actions)
-│           ├── Active Strategies List (color status dots, addresses, targets)
-│           ├── Strategy Catalog (10 named strategies, grid cards)
-│           ├── Deploy to Strategy (selector + amount + MAX)
-│           ├── Withdraw from Strategy (selector + amount)
-│           ├── Add/Remove Strategy forms
-│           └── Action Buttons (Rebalance, Claim Fees, Emergency Withdraw)
+│       ├── Section Tab Bar (6 tabs)
+│       └── Section Forms (inputs + TxButtons)
 │
 └── Footer
     ├── Status indicator (green dot)
@@ -690,32 +605,27 @@ frontend/src/
 │   ├── index.tsx            — SPA router (useState page switch)
 │   ├── _app.tsx             — Next.js app wrapper
 │   ├── _document.tsx        — HTML document
-│   ├── DashboardMintPage.tsx— Protocol + portfolio dashboard + Mint widget + Referral
+│   ├── DashboardPage.tsx    — Protocol + portfolio dashboard
+│   ├── MintPage.tsx         — USDC ↔ mUSD mint/redeem
 │   ├── StakePage.tsx        — mUSD ↔ smUSD stake/unstake
 │   ├── BorrowPage.tsx       — Collateral deposit, borrow, repay, withdraw + leverage looping
 │   ├── BridgePage.tsx       — Canton attestation monitoring
-│   ├── AdminPage.tsx        — Protocol admin panel (Strategy Catalog, AI Optimizer, YieldScanner)
-│   ├── PointsPage.tsx       — Points program, referral system (3 tabs: Overview/My Referrals/Leaderboard)
+│   ├── AdminPage.tsx        — Protocol admin panel
+│   ├── PointsPage.tsx       — Points program, seasons, leaderboard, APY calculator
 │   ├── LeveragePage.tsx     — (standalone leverage, code now merged into BorrowPage)
 │   └── LiquidationsPage.tsx — (unused, not in nav)
 │
 ├── components/
 │   ├── LandingPage.tsx      — Pre-app gate: THREE.js scene, headline, stats, Enter App
 │   ├── Layout.tsx           — Shell: bg, navbar, main, footer
-│   ├── Navbar.tsx           — Top nav with 5 items + wallet + chain toggle
+│   ├── Navbar.tsx           — Top nav with 7 items + wallet + chain toggle
 │   ├── ChainToggle.tsx      — ETH ⟷ Canton pill switch
 │   ├── StatCard.tsx         — Metric card (color, icon, trend, sub, variant)
 │   ├── PageHeader.tsx       — Title + subtitle + badge
 │   ├── TxButton.tsx         — Transaction button with loading state
-│   ├── ReferralWidget.tsx   — Compact referral card (codes, apply, stats, tiers) — used on Dashboard + Points Overview
-│   ├── ReferralTracker.tsx  — Full referral tracker (stats, tier progress, referee list, chain) — Points "My Referrals" tab
-│   ├── ReferralLeaderboard.tsx — Top 50 referrers table with medals, time filters — Points "Leaderboard" tab
-│   ├── LeverageSlider.tsx   — Drag slider for 2x–5x leverage selection
-│   ├── WalletConnector.tsx  — Wallet connection UI
-│   ├── PendingDepositsList.tsx — Cross-chain pending bridge deposits
-│   ├── Section.tsx          — Collapsible accordion section (Admin page)
 │   └── canton/              — Canton-chain page equivalents
-│       ├── CantonDashboardMint.tsx
+│       ├── CantonDashboard.tsx
+│       ├── CantonMint.tsx
 │       ├── CantonStake.tsx
 │       ├── CantonBorrow.tsx
 │       ├── CantonBridge.tsx
@@ -728,18 +638,16 @@ frontend/src/
 │   ├── useWallet.ts         — Legacy MetaMask hook
 │   ├── useTx.ts             — Tx send with simulation, loading/error/success
 │   ├── useChain.ts          — Chain state (ethereum / canton toggle)
-│   ├── useCanton.ts         — Canton/DAML integration
-│   └── useReferral.ts       — ReferralRegistry contract reads/writes, code gen, link, dashboard state
+│   └── useCanton.ts         — Canton/DAML integration
 │
 ├── lib/
-│   ├── config.ts            — Contract addresses (incl. ReferralRegistry), decimals, validation
-│   └── format.ts            — formatUSD, formatToken, formatBps, formatHealthFactor, shortenAddress
+│   ├── config.ts            — Contract addresses, decimals, validation
+│   └── format.ts            — formatUSD, formatToken, formatBps, formatHealthFactor, shortenAddress, formatTimestamp
 │
 ├── abis/                    — Contract ABI TypeScript exports
 │   ├── MUSD.ts, SMUSD.ts, DirectMint.ts, Treasury.ts
 │   ├── CollateralVault.ts, BorrowModule.ts, LiquidationEngine.ts
 │   ├── BLEBridgeV9.ts, PriceOracle.ts, ERC20.ts
-│   └── ReferralRegistry.ts  — Referral system ABI
 │
 └── styles/
     └── globals.css          — Full Tailwind design system (350 lines)

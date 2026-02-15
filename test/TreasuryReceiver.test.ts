@@ -108,12 +108,11 @@ describe("TreasuryReceiver", function () {
 
   describe("Router Authorization", function () {
     it("Should authorize router", async function () {
-      const { receiver, admin } = await loadFixture(deployFixture);
+      const { receiver, bridgeAdmin } = await loadFixture(deployFixture);
 
       const routerAddress = ethers.zeroPadValue("0x1234567890123456789012345678901234567890", 32);
 
-      // authorizeRouter now requires onlyTimelock (S-H-01); admin IS the timelock in tests
-      await expect(receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress))
+      await expect(receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress))
         .to.emit(receiver, "RouterAuthorized")
         .withArgs(BASE_CHAIN_ID, routerAddress);
 
@@ -121,12 +120,12 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should revoke router", async function () {
-      const { receiver, admin } = await loadFixture(deployFixture);
+      const { receiver, bridgeAdmin } = await loadFixture(deployFixture);
 
       const routerAddress = ethers.zeroPadValue("0x1234567890123456789012345678901234567890", 32);
-      await receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
+      await receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
 
-      await expect(receiver.connect(admin).revokeRouter(BASE_CHAIN_ID))
+      await expect(receiver.connect(bridgeAdmin).revokeRouter(BASE_CHAIN_ID))
         .to.emit(receiver, "RouterRevoked")
         .withArgs(BASE_CHAIN_ID);
 
@@ -231,11 +230,10 @@ describe("TreasuryReceiver", function () {
     }
 
     async function setupReceiveAndMint(fixture: Awaited<ReturnType<typeof deployFixture>>) {
-      const { receiver, wormhole, tokenBridge, admin, user1 } = fixture;
+      const { receiver, wormhole, tokenBridge, bridgeAdmin, user1 } = fixture;
 
       const routerAddress = ethers.zeroPadValue("0xDEAD", 32);
-      // authorizeRouter now requires onlyTimelock (S-H-01); admin IS the timelock in tests
-      await receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
+      await receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
 
       const vaaHash = ethers.keccak256(ethers.toUtf8Bytes("unique-vaa-1"));
       const payload = buildTransferPayload(user1.address);

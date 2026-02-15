@@ -23,7 +23,7 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -32,14 +32,14 @@ import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateTransfer(..
 -- | Individual smUSD position.
 -- Represents a user's share in the yield vault.
 -- Amount is in "shares" — redeemable for mUSD at current share price.
--- D-M01: Added stakedAt timestamp for cooldown enforcement
+-- FIX D-M01: Added stakedAt timestamp for cooldown enforcement
 template CantonSMUSD
   with
     issuer : Party
     owner : Party
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
-    stakedAt : Time         -- D-M01: Timestamp when staked (for cooldown)
+    stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
     privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -54,20 +54,15 @@ template CantonSMUSD
       controller owner
       do create this with privacyObservers = newObservers
 
-    -- DL-C2: Use proposal pattern for safe dual-signatory transfers
-    -- DAML-H-01a: Compliance check — sender must not be blacklisted/frozen
+    -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
-        complianceRegistryCid : ContractId ComplianceRegistry
       controller owner
       do
-        -- DAML-H-01a: Validate sender compliance (transfer, not mint)
-        exercise complianceRegistryCid ValidateTransfer with sender = owner; receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
-          complianceRegistryCid
 
     choice SMUSD_Split : (ContractId CantonSMUSD, ContractId CantonSMUSD)
       with
@@ -91,24 +86,19 @@ template CantonSMUSD
         archive otherCid
         create this with shares = shares + other.shares
 
--- | DL-C2: Transfer proposal for CantonSMUSD (dual-signatory safe)
+-- | FIX DL-C2: Transfer proposal for CantonSMUSD (dual-signatory safe)
 -- Prevents forced signatory obligations on unwitting recipients
 template CantonSMUSDTransferProposal
   with
     smusd : CantonSMUSD
     newOwner : Party
-    complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-H-01a
   where
     signatory smusd.issuer, smusd.owner
     observer newOwner
 
-    -- DAML-H-01a: Recipient must pass compliance check on acceptance
     choice CantonSMUSDTransferProposal_Accept : ContractId CantonSMUSD
       controller newOwner
-      do
-        -- Receiver compliance check (can receive assets)
-        exercise complianceRegistryCid ValidateMint with minter = newOwner
-        create smusd with owner = newOwner
+      do create smusd with owner = newOwner
 
     choice CantonSMUSDTransferProposal_Reject : ContractId CantonSMUSD
       controller newOwner
@@ -127,7 +117,7 @@ template CantonSMUSDTransferProposal
 template CantonStakingService
   with
     operator : Party
-    governance : Party          -- HIGH-07: Governance co-signer for critical operations
+    governance : Party          -- FIX HIGH-07: Governance co-signer for critical operations
     totalShares : Money         -- Total smUSD shares on Canton
     -- UNIFIED YIELD: Global share price from Ethereum (includes all chains)
     globalSharePrice : Money    -- Synced from Ethereum: globalAssets / globalShares
@@ -136,7 +126,7 @@ template CantonStakingService
     lastSyncEpoch : Int         -- Last synced epoch from Ethereum
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
-    -- DAML-H-03: Supply cap tracking for mUSD minted on unstake.
+    -- SECURITY FIX DAML-H-03: Supply cap tracking for mUSD minted on unstake.
     -- Yield accrual means unstake can mint MORE mUSD than was originally staked.
     -- Without a cap, the staking service could mint unbounded mUSD.
     musdMintCap : Money         -- Maximum total mUSD mintable through unstake
@@ -186,7 +176,7 @@ template CantonStakingService
         exercise musdCid CantonMUSD_Burn
 
         -- Issue smUSD shares
-        -- D-M01: Record staked timestamp for cooldown enforcement
+        -- FIX D-M01: Record staked timestamp for cooldown enforcement
         now <- getTime
         userObs <- lookupUserObservers operator user
         smusdCid <- create CantonSMUSD with
@@ -205,7 +195,7 @@ template CantonStakingService
 
     -- | Unstake: smUSD shares → mUSD at GLOBAL share price
     -- User redeems shares at the unified global share price (includes all yield)
-    -- D-M01: Enforce cooldown period symmetry with Solidity's 24h unstake cooldown
+    -- FIX D-M01: Enforce cooldown period symmetry with Solidity's 24h unstake cooldown
     choice Unstake : (ContractId CantonStakingService, ContractId CantonMUSD)
       with
         user : Party
@@ -220,7 +210,7 @@ template CantonStakingService
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
 
-        -- D-M01: Enforce cooldown period before allowing unstake
+        -- FIX D-M01: Enforce cooldown period before allowing unstake
         now <- getTime
         let cooldownRel = seconds cooldownSeconds
         let elapsed = subTime now smusd.stakedAt
@@ -229,7 +219,7 @@ template CantonStakingService
         -- Calculate mUSD value using GLOBAL share price
         let musdAmount = smusd.shares * globalSharePrice
 
-        -- DAML-H-03: Enforce supply cap on unstake minting.
+        -- SECURITY FIX DAML-H-03: Enforce supply cap on unstake minting.
         -- Yield means unstake mints more than was staked, creating net new mUSD.
         assertMsg "UNSTAKE_EXCEEDS_MUSD_MINT_CAP" (currentUnstakeMinted + musdAmount <= musdMintCap)
 
@@ -255,26 +245,26 @@ template CantonStakingService
 
     -- | Sync global share price from Ethereum (replaces old SyncYield)
     -- Called by operator after YieldSyncService calculates global share price
-    -- HIGH-07: Requires governance co-approval — prevents unilateral operator manipulation
+    -- FIX HIGH-07: Requires governance co-approval — prevents unilateral operator manipulation
     choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
         newGlobalSharePrice : Money   -- Global share price from Ethereum
         newGlobalTotalAssets : Money  -- Total assets across both chains
         newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
-        attestationHash : Text        -- D-M-02: Validator attestation hash (SHA-256 of price data)
-        validatorCount : Int          -- D-M-02: Number of validators who signed this attestation
+        attestationHash : Text        -- FIX D-M-02: Validator attestation hash (SHA-256 of price data)
+        validatorCount : Int          -- FIX D-M-02: Number of validators who signed this attestation
       controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
-        -- D-M-02: Require BFT supermajority attestation (at least 3 validators)
+        -- FIX D-M-02: Require BFT supermajority attestation (at least 3 validators)
         assertMsg "ATTESTATION_HASH_REQUIRED" (attestationHash /= "")
         assertMsg "INSUFFICIENT_VALIDATOR_ATTESTATION" (validatorCount >= 3)
-        -- D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
+        -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
-        -- D-M09: Cap share price increase at 10% per epoch to prevent manipulation
+        -- FIX D-M09: Cap share price increase at 10% per epoch to prevent manipulation
         let maxAllowedPrice = globalSharePrice * 1.1
         assertMsg "SHARE_PRICE_INCREASE_TOO_LARGE" (newGlobalSharePrice <= maxAllowedPrice)
 
@@ -285,7 +275,7 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Legacy SyncYield for backwards compatibility (deprecated)
-    -- C-DAML-03: Require governance co-signature (matches SyncGlobalSharePrice)
+    -- FIX C-DAML-03: Require governance co-signature (matches SyncGlobalSharePrice)
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
@@ -298,7 +288,7 @@ template CantonStakingService
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
-        -- DAML-H-04: Apply same share price bounds as SyncGlobalSharePrice.
+        -- SECURITY FIX DAML-H-04: Apply same share price bounds as SyncGlobalSharePrice.
         -- Without bounds, a malicious or buggy oracle could set an extreme value,
         -- causing massive over/under-payments on unstake.
         let minAllowedPrice = globalSharePrice * 0.9

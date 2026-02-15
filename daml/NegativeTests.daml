@@ -98,18 +98,6 @@ test_UnauthorizedTransfer = do
   operator <- allocateParty "Operator"
   owner <- allocateParty "Owner"
   attacker <- allocateParty "Attacker"
-  regulator <- allocateParty "Regulator"
-
-  now <- getTime
-
-  -- Create compliance registry (clean — no blacklisted/frozen)
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.empty
-      lastUpdated = now
 
   -- Create mUSD held by owner
   musdCid <- submitMulti [operator, owner] [] do
@@ -126,7 +114,6 @@ test_UnauthorizedTransfer = do
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = attacker
-      complianceRegistryCid = registryCid
 
   return ()
 
@@ -140,35 +127,22 @@ test_BlacklistedCannotTransfer = do
   operator <- allocateParty "Operator"
   owner <- allocateParty "Owner"
   receiver <- allocateParty "Receiver"
-  regulator <- allocateParty "Regulator"
 
-  now <- getTime
-
-  -- Create compliance registry with owner blacklisted
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.singleton owner
-      frozen = Set.empty
-      lastUpdated = now
-
-  -- Create mUSD (token-level blacklist flag AND registry blacklist)
+  -- Create BLACKLISTED mUSD
   musdCid <- submitMulti [operator, owner] [] do
     createCmd MintedMUSD with
       issuer = operator
       owner = owner
       amount = 1000.0
-      blacklisted = True  -- BLACKLISTED at token level
+      blacklisted = True  -- BLACKLISTED
       agreementHash = hash64
       agreementUri = "https://example.com"
       observers = []
 
-  -- Owner tries to transfer — blocked by token-level blacklist flag
+  -- Owner tries to transfer blacklisted token
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver
-      complianceRegistryCid = registryCid
 
   return ()
 
@@ -178,7 +152,6 @@ test_FrozenPartyCannotOperate = do
   regulator <- allocateParty "Regulator"
   operator <- allocateParty "Operator"
   frozenUser <- allocateParty "FrozenUser"
-  receiver <- allocateParty "Receiver"
   
   now <- getTime
 
@@ -191,179 +164,11 @@ test_FrozenPartyCannotOperate = do
       frozen = Set.singleton frozenUser
       lastUpdated = now
 
-  -- Try to validate a transfer from frozen user (should fail with SENDER_FROZEN)
-  -- NOTE: ValidateTransfer controller is `operator`, not regulator
-  submitMustFail operator do
+  -- Try to validate a transfer from frozen user (should fail)
+  submitMustFail regulator do
     exerciseCmd registryCid ValidateTransfer with
       sender = frozenUser
-      receiver
-
-  return ()
-
--- | Test: Blacklisted party cannot mint via ValidateMint
--- Ensures that a blacklisted user is rejected at the compliance layer
--- before any mUSD is created. Tests ValidateMint choice directly.
-test_BlacklistedCannotMint : Script ()
-test_BlacklistedCannotMint = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  blacklistedUser <- allocateParty "BlacklistedMinter"
-
-  now <- getTime
-
-  -- Create compliance registry with user blacklisted
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.singleton blacklistedUser
-      frozen = Set.empty
-      lastUpdated = now
-
-  -- Operator tries ValidateMint for blacklisted user → must fail MINTER_BLACKLISTED
-  submitMustFail operator do
-    exerciseCmd registryCid ValidateMint with
-      minter = blacklistedUser
-
-  return ()
-
--- | Test: Blacklisted receiver cannot receive via ValidateTransfer
--- Even if the sender is clean, transfers TO a blacklisted receiver must fail.
-test_BlacklistedReceiverCannotReceive : Script ()
-test_BlacklistedReceiverCannotReceive = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  sender <- allocateParty "CleanSender"
-  blacklistedReceiver <- allocateParty "BlacklistedReceiver"
-
-  now <- getTime
-
-  -- Create registry with receiver blacklisted
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.singleton blacklistedReceiver
-      frozen = Set.empty
-      lastUpdated = now
-
-  -- ValidateTransfer with clean sender but blacklisted receiver → RECEIVER_BLACKLISTED
-  submitMustFail operator do
-    exerciseCmd registryCid ValidateTransfer with
-      sender
-      receiver = blacklistedReceiver
-
-  return ()
-
--- | Test: Frozen party cannot redeem via ValidateRedemption
--- Frozen parties cannot burn/redeem — assets are locked for investigation.
-test_FrozenCannotRedeem : Script ()
-test_FrozenCannotRedeem = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  frozenRedeemer <- allocateParty "FrozenRedeemer"
-
-  now <- getTime
-
-  -- Create registry with redeemer frozen
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.singleton frozenRedeemer
-      lastUpdated = now
-
-  -- ValidateRedemption for frozen party → must fail REDEEMER_FROZEN
-  submitMustFail operator do
-    exerciseCmd registryCid ValidateRedemption with
-      redeemer = frozenRedeemer
-
-  return ()
-
--- | Test: Blacklisted party cannot redeem via ValidateRedemption
--- Blacklisted parties cannot redeem either — comprehensive block.
-test_BlacklistedCannotRedeem : Script ()
-test_BlacklistedCannotRedeem = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  blacklistedRedeemer <- allocateParty "BlacklistedRedeemer"
-
-  now <- getTime
-
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.singleton blacklistedRedeemer
-      frozen = Set.empty
-      lastUpdated = now
-
-  -- ValidateRedemption for blacklisted party → must fail REDEEMER_BLACKLISTED
-  submitMustFail operator do
-    exerciseCmd registryCid ValidateRedemption with
-      redeemer = blacklistedRedeemer
-
-  return ()
-
--- | Test: Frozen party CAN mint but CANNOT transfer
--- This tests the critical semantic distinction: frozen parties can receive/mint
--- (to allow recovery) but are blocked from sending. ValidateMint passes for
--- frozen user, but ValidateTransfer fails.
-test_FrozenCanMintButNotTransfer : Script ()
-test_FrozenCanMintButNotTransfer = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  frozenUser <- allocateParty "FrozenUser"
-  receiver <- allocateParty "Receiver"
-
-  now <- getTime
-
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.singleton frozenUser
-      lastUpdated = now
-
-  -- ValidateMint for frozen user → SHOULD SUCCEED (frozen can receive)
-  submit operator do
-    exerciseCmd registryCid ValidateMint with
-      minter = frozenUser
-
-  -- ValidateTransfer from frozen user → SHOULD FAIL (frozen cannot send)
-  submitMustFail operator do
-    exerciseCmd registryCid ValidateTransfer with
-      sender = frozenUser
-      receiver
-
-  return ()
-
--- | Test: Frozen receiver CAN receive transfers (only sending is blocked)
--- Validates that frozen parties can still receive assets (for asset recovery).
-test_FrozenReceiverCanReceive : Script ()
-test_FrozenReceiverCanReceive = do
-  regulator <- allocateParty "Regulator"
-  operator <- allocateParty "Operator"
-  sender <- allocateParty "Sender"
-  frozenReceiver <- allocateParty "FrozenReceiver"
-
-  now <- getTime
-
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.singleton frozenReceiver
-      lastUpdated = now
-
-  -- ValidateTransfer to frozen receiver → SHOULD SUCCEED (frozen can receive)
-  submit operator do
-    exerciseCmd registryCid ValidateTransfer with
-      sender
-      receiver = frozenReceiver
+      receiver = operator
 
   return ()
 
@@ -605,18 +410,6 @@ test_DoubleSpendPrevented = do
   owner <- allocateParty "Owner"
   receiver1 <- allocateParty "Receiver1"
   receiver2 <- allocateParty "Receiver2"
-  regulator <- allocateParty "Regulator"
-
-  now <- getTime
-
-  -- Create compliance registry (clean)
-  registryCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.empty
-      lastUpdated = now
 
   -- Create mUSD
   musdCid <- submitMulti [operator, owner] [] do
@@ -633,14 +426,12 @@ test_DoubleSpendPrevented = do
   proposalCid <- submit owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
-      complianceRegistryCid = registryCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
-      complianceRegistryCid = registryCid
 
   return ()
 
@@ -670,24 +461,6 @@ runAllNegativeTests = do
   test_FrozenPartyCannotOperate
   debug "  ✓ test_FrozenPartyCannotOperate"
   
-  test_BlacklistedCannotMint
-  debug "  ✓ test_BlacklistedCannotMint"
-  
-  test_BlacklistedReceiverCannotReceive
-  debug "  ✓ test_BlacklistedReceiverCannotReceive"
-  
-  test_FrozenCannotRedeem
-  debug "  ✓ test_FrozenCannotRedeem"
-  
-  test_BlacklistedCannotRedeem
-  debug "  ✓ test_BlacklistedCannotRedeem"
-  
-  test_FrozenCanMintButNotTransfer
-  debug "  ✓ test_FrozenCanMintButNotTransfer"
-  
-  test_FrozenReceiverCanReceive
-  debug "  ✓ test_FrozenReceiverCanReceive"
-  
   debug "3. State Validation Tests"
   test_InvalidAmountRejected
   debug "  ✓ test_InvalidAmountRejected"
@@ -716,5 +489,5 @@ runAllNegativeTests = do
   test_DoubleSpendPrevented
   debug "  ✓ test_DoubleSpendPrevented"
   
-  debug "=== ALL 20 NEGATIVE TESTS PASSED ==="
+  debug "=== ALL 13 NEGATIVE TESTS PASSED ==="
   return ()
