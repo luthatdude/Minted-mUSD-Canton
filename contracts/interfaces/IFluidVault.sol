@@ -257,3 +257,228 @@ interface IFluidLiquidity {
     /// @notice Read raw storage slot
     function readFromStorage(bytes32 slot) external view returns (uint256 result);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VAULT RESOLVER — Read-only position + vault data (used by strategies)
+// ═══════════════════════════════════════════════════════════════════════════
+// Reference: FluidVaultResolver on mainnet
+// Returns position data for any NFT ID. For smart col/debt vaults (T2/T3/T4),
+// supply and borrow amounts are in DEX shares, not raw token amounts.
+
+interface IFluidVaultResolver {
+    struct UserPosition {
+        uint256 nftId;
+        address owner;
+        bool isLiquidated;
+        bool isSupplyPosition;  // true = supply-only (no borrow)
+        int256 tick;
+        uint256 tickId;
+        uint256 beforeSupply;   // raw before exchange-price
+        uint256 beforeBorrow;
+        uint256 beforeDustBorrow;
+        uint256 supply;         // final supply (token amount for T1, shares for T2/T4)
+        uint256 borrow;         // final borrow (token amount for T1/T2, shares for T3/T4)
+        uint256 dustBorrow;
+    }
+
+    struct VaultEntireData {
+        address vault;
+        bool isSmartCol;
+        bool isSmartDebt;
+        IFluidVaultCommon.ConstantViews constantVariables;
+        VaultConfigs configs;
+        ExchangePricesAndRates exchangePricesAndRates;
+        TotalSupplyAndBorrow totalSupplyAndBorrow;
+    }
+
+    struct VaultConfigs {
+        uint16 supplyRateMagnifier;
+        uint16 borrowRateMagnifier;
+        uint16 collateralFactor;
+        uint16 liquidationThreshold;
+        uint16 liquidationMaxLimit;
+        uint16 withdrawalGap;
+        uint16 liquidationPenalty;
+        uint16 borrowFee;
+        address oracle;
+        uint256 oraclePriceOperate;
+        uint256 oraclePriceLiquidate;
+        address rebalancer;
+        uint256 lastUpdateTimestamp;
+    }
+
+    struct ExchangePricesAndRates {
+        uint256 lastStoredLiquiditySupplyExchangePrice;
+        uint256 lastStoredLiquidityBorrowExchangePrice;
+        uint256 lastStoredVaultSupplyExchangePrice;
+        uint256 lastStoredVaultBorrowExchangePrice;
+        uint256 liquiditySupplyExchangePrice;  // 1e12 for smart col
+        uint256 liquidityBorrowExchangePrice;  // 1e12 for smart debt
+        uint256 vaultSupplyExchangePrice;
+        uint256 vaultBorrowExchangePrice;
+        uint256 supplyRateVault;
+        uint256 borrowRateVault;
+        uint256 supplyRateLiquidity;
+        uint256 borrowRateLiquidity;
+        uint256 rewardsOrFeeRateSupply;
+        uint256 rewardsOrFeeRateBorrow;
+    }
+
+    struct TotalSupplyAndBorrow {
+        uint256 totalSupplyVault;
+        uint256 totalBorrowVault;
+        uint256 totalSupplyLiquidityOrDex;
+        uint256 totalBorrowLiquidityOrDex;
+        uint256 absorbedSupply;
+        uint256 absorbedBorrow;
+    }
+
+    /// @notice Look up which vault address an NFT belongs to
+    function vaultByNftId(uint256 nftId_) external view returns (address vault_);
+
+    /// @notice Full position + vault data for a given NFT
+    function positionByNftId(uint256 nftId_) external view returns (
+        UserPosition memory userPosition_,
+        VaultEntireData memory vaultData_
+    );
+
+    /// @notice All positions owned by a user
+    function positionsByUser(address user_) external view returns (
+        UserPosition[] memory,
+        VaultEntireData[] memory
+    );
+
+    /// @notice All NFT IDs owned by a user
+    function positionsNftIdOfUser(address user_) external view returns (uint256[] memory nftIds_);
+
+    /// @notice Get complete vault data
+    function getVaultEntireData(address vault_) external view returns (VaultEntireData memory);
+
+    /// @notice Get vault type constant (10000/20000/30000/40000)
+    function getVaultType(address vault_) external view returns (uint256 vaultType_);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLUID DEX T1 — Core DEX interface for Smart Collateral / Smart Debt
+// ═══════════════════════════════════════════════════════════════════════════
+// When a vault has smart collateral, the supply-side token is actually a
+// Fluid DEX pool. Collateral becomes DEX LP, earning trading fees on top
+// of the lending spread. Similarly for smart debt.
+
+interface IFluidDexT1 {
+    struct PricesAndExchangePrice {
+        uint256 lastStoredPrice;           // 1e27 decimals
+        uint256 centerPrice;               // 1e27 decimals
+        uint256 upperRange;                // 1e27 decimals
+        uint256 lowerRange;                // 1e27 decimals
+        uint256 geometricMean;             // geometric mean of upper & lower
+        uint256 supplyToken0ExchangePrice;
+        uint256 borrowToken0ExchangePrice;
+        uint256 supplyToken1ExchangePrice;
+        uint256 borrowToken1ExchangePrice;
+    }
+
+    struct CollateralReserves {
+        uint256 token0RealReserves;
+        uint256 token1RealReserves;
+        uint256 token0ImaginaryReserves;
+        uint256 token1ImaginaryReserves;
+    }
+
+    struct DebtReserves {
+        uint256 token0Debt;
+        uint256 token1Debt;
+        uint256 token0RealReserves;
+        uint256 token1RealReserves;
+        uint256 token0ImaginaryReserves;
+        uint256 token1ImaginaryReserves;
+    }
+
+    struct ConstantViews {
+        uint256 dexId;
+        address liquidity;
+        address factory;
+        address token0;
+        address token1;
+    }
+
+    /// @notice Returns DEX ID
+    function DEX_ID() external view returns (uint256);
+
+    /// @notice Returns DEX constants
+    function constantsView() external view returns (ConstantViews memory);
+
+    /// @notice Read raw storage slot
+    function readFromStorage(bytes32 slot_) external view returns (uint256 result_);
+
+    /// @notice Get reserves (for share → token resolution)
+    function getCollateralReserves(
+        uint256 geometricMean_,
+        uint256 upperRange_,
+        uint256 lowerRange_,
+        uint256 token0SupplyExchangePrice_,
+        uint256 token1SupplyExchangePrice_
+    ) external view returns (CollateralReserves memory c_);
+
+    /// @notice Get debt reserves
+    function getDebtReserves(
+        uint256 geometricMean_,
+        uint256 upperRange_,
+        uint256 lowerRange_,
+        uint256 token0BorrowExchangePrice_,
+        uint256 token1BorrowExchangePrice_
+    ) external view returns (DebtReserves memory d_);
+
+    // NOTE: getPricesAndExchangePrices() uses revert-based return.
+    // Called via try/catch in the resolver. Not callable from on-chain view.
+    // Use the DexResolver wrapper instead.
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEX RESOLVER — Read-only wrapper for DEX state + share resolution
+// ═══════════════════════════════════════════════════════════════════════════
+// Converts DEX shares → underlying token amounts.
+
+interface IFluidDexResolver {
+    struct DexState {
+        uint256 lastToLastStoredPrice;
+        uint256 lastStoredPrice;
+        uint256 centerPrice;
+        uint256 lastUpdateTimestamp;
+        uint256 lastPricesTimeDiff;
+        uint256 oracleCheckPoint;
+        uint256 oracleMapping;
+        uint256 totalSupplyShares;
+        uint256 totalBorrowShares;
+        bool isSwapAndArbitragePaused;
+        uint256 token0PerSupplyShare;  // token0 amount per 1e18 supply shares
+        uint256 token1PerSupplyShare;  // token1 amount per 1e18 supply shares
+        uint256 token0PerBorrowShare;  // token0 amount per 1e18 borrow shares
+        uint256 token1PerBorrowShare;  // token1 amount per 1e18 borrow shares
+    }
+
+    struct DexEntireData {
+        address dex;
+        IFluidDexT1.ConstantViews constantViews;
+        IFluidDexT1.PricesAndExchangePrice pex;
+        IFluidDexT1.CollateralReserves colReserves;
+        IFluidDexT1.DebtReserves debtReserves;
+        DexState dexState;
+    }
+
+    /// @notice Get complete DEX data including share prices
+    function getDexEntireData(address dex_) external returns (DexEntireData memory data_);
+
+    /// @notice Get just the DEX state (contains share → token ratios)
+    function getDexState(address dex_) external returns (DexState memory state_);
+
+    /// @notice Get exchange prices and price info for a DEX
+    function getDexPricesAndExchangePrices(address dex_)
+        external returns (IFluidDexT1.PricesAndExchangePrice memory pex_);
+
+    /// @notice Get DEX tokens
+    function getDexTokens(address dex_) external view returns (address token0_, address token1_);
+
+    /// @notice Get all DEX addresses
+    function getAllDexAddresses() external view returns (address[] memory);
+}
