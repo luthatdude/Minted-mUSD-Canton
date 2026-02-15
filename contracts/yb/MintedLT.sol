@@ -551,7 +551,7 @@ contract MintedLT is IMintedLT, ReentrancyGuard {
         require(IMintedLevAMM(_amm).LT_CONTRACT() == address(this), "Wrong LT");
 
         levAmm = IMintedLevAMM(_amm);
-        agg = IPriceAggregator(IPriceOracle(IMintedLevAMM(_amm).PRICE_ORACLE_CONTRACT()).AGG());
+        agg = IPriceOracle(IMintedLevAMM(_amm).PRICE_ORACLE_CONTRACT()).AGG();
     }
 
     /// @notice Set borrow rate
@@ -679,7 +679,6 @@ contract MintedLT is IMintedLT, ReentrancyGuard {
 
     /// @notice Distribute borrower fees — reinvest as LP
     function distributeBorrowerFees(uint256 discount) external override nonReentrant {
-        IMintedLevAMM _amm = levAmm;
         if (discount > FEE_CLAIM_DISCOUNT) {
             _checkAdmin();
         }
@@ -793,38 +792,88 @@ contract MintedLT is IMintedLT, ReentrancyGuard {
      *   reduced. This effectively transfers value from staker to admin without
      *   diluting other holders. The reduction is capped to prevent extreme cases.
      */
+    /// @dev Intermediate computation state for _calculateValues
+    struct _CalcTemp {
+        int256 stakedTokens;
+        int256 supply;
+        int256 fA;
+        int256 prevValue;
+        int256 valueChangeAmt;
+        int256 dvUse36;
+        int256 adminFee;
+        int256 newTotalValue36;
+        int256 newStakedValue36;
+    }
+
     function _calculateValues(uint256 pO) internal view returns (LiquidityValuesOut memory result) {
         LiquidityValues memory prev = liquidity;
-        address _staker = staker;
-        int256 stakedTokens = 0;
-        if (_staker != address(0)) {
-            stakedTokens = int256(_balances[_staker]);
-        }
-        int256 supply = int256(_totalSupply);
+        _CalcTemp memory t;
 
-        // Calculate admin fee fraction
-        int256 fA;
+        if (staker != address(0)) {
+            t.stakedTokens = int256(_balances[staker]);
+        }
+        t.supply = int256(_totalSupply);
+        t.fA = _adminFeeFraction(t.supply, t.stakedTokens);
+
         {
-            uint256 minAdminFee_ = _minAdminFee();
-            if (supply > 0) {
-                uint256 unstakedFrac = uint256((supply - stakedTokens) * 1e18 / supply);
-                // f_a = 1 - (1 - min_admin_fee) * sqrt(unstaked_fraction)
-                uint256 sqrtUnstaked = _sqrt(unstakedFrac * 1e18);
-                fA = int256(1e18 - ((1e18 - minAdminFee_) * sqrtUnstaked) / 1e18);
-            }
+            OraclizedValue memory ammValue = levAmm.valueOracle();
+            int256 curValue = int256((ammValue.value * 1e18) / pO);
+            t.prevValue = int256(prev.total);
+            t.valueChangeAmt = curValue - (t.prevValue + prev.admin);
         }
 
-        // Current value from AMM oracle
-        OraclizedValue memory ammValue = levAmm.valueOracle();
-        int256 curValue = int256((ammValue.value * 1e18) / pO);
-        int256 prevValue = int256(prev.total);
-        int256 valueChangeAmt = curValue - (prevValue + prev.admin);
+        t.dvUse36 = _computeDvUse36(t.valueChangeAmt, t.fA, t.supply, t.stakedTokens, int256(prev.staked), int256(prev.idealStaked));
+        t.adminFee = prev.admin + (t.valueChangeAmt - t.dvUse36 / 1e18);
 
-        int256 vSt = int256(prev.staked);
-        int256 vStIdeal = int256(prev.idealStaked);
+        // Staked value change
+        {
+            int256 vStLoss = int256(prev.idealStaked) > int256(prev.staked) ? int256(prev.idealStaked) - int256(prev.staked) : int256(0);
+            int256 dvS36;
+            if (t.supply != 0) {
+                dvS36 = (t.dvUse36 * t.stakedTokens) / t.supply;
+            }
+            if (t.dvUse36 > 0) {
+                dvS36 = dvS36 < vStLoss * 1e18 ? dvS36 : vStLoss * 1e18;
+            }
+            t.newTotalValue36 = t.prevValue * 1e18 + t.dvUse36;
+            if (t.newTotalValue36 < 0) t.newTotalValue36 = 0;
+            t.newStakedValue36 = int256(prev.staked) * 1e18 + dvS36;
+            if (t.newStakedValue36 < 0) t.newStakedValue36 = 0;
+        }
 
-        // Calculate effective value change for users (after admin fee)
-        int256 dvUse36 = 0;
+        int256 tokenReduction = _computeTokenReduction(
+            t.newTotalValue36, t.newStakedValue36, t.stakedTokens, t.supply,
+            t.valueChangeAmt, t.prevValue, t.fA
+        );
+
+        result.admin = t.adminFee;
+        result.total = uint256(t.newTotalValue36 / 1e18);
+        result.idealStaked = prev.idealStaked;
+        result.staked = uint256(t.newStakedValue36 / 1e18);
+        result.stakedTokens = uint256(t.stakedTokens - tokenReduction);
+        result.supplyTokens = uint256(t.supply - tokenReduction);
+        result.tokenReduction = tokenReduction;
+    }
+
+    /// @dev Calculate admin fee fraction f_a
+    function _adminFeeFraction(int256 supply, int256 stakedTokens) internal view returns (int256 fA) {
+        uint256 minAdminFee_ = _minAdminFee();
+        if (supply > 0) {
+            uint256 unstakedFrac = uint256((supply - stakedTokens) * 1e18 / supply);
+            uint256 sqrtUnstaked = _sqrt(unstakedFrac * 1e18);
+            fA = int256(1e18 - ((1e18 - minAdminFee_) * sqrtUnstaked) / 1e18);
+        }
+    }
+
+    /// @dev Compute dvUse36 — effective user value change scaled by 1e18
+    function _computeDvUse36(
+        int256 valueChangeAmt,
+        int256 fA,
+        int256 supply,
+        int256 stakedTokens,
+        int256 vSt,
+        int256 vStIdeal
+    ) internal pure returns (int256 dvUse36) {
         int256 vStLoss = vStIdeal > vSt ? vStIdeal - vSt : int256(0);
 
         if (stakedTokens >= MIN_STAKED_FOR_FEES) {
@@ -838,70 +887,51 @@ contract MintedLT is IMintedLT, ReentrancyGuard {
         } else {
             dvUse36 = valueChangeAmt * (1e18 - fA);
         }
+    }
 
-        // Update admin fee
-        int256 adminFee = prev.admin + (valueChangeAmt - dvUse36 / 1e18);
-
-        // Calculate staked value change
-        int256 dvS36;
-        if (supply != 0) {
-            dvS36 = (dvUse36 * stakedTokens) / supply;
+    /// @dev Compute token reduction (avoids stack-too-deep in _calculateValues)
+    function _computeTokenReduction(
+        int256 newTotalValue36,
+        int256 newStakedValue36,
+        int256 stakedTokens,
+        int256 supply,
+        int256 valueChangeAmt,
+        int256 prevValue,
+        int256 fA
+    ) internal pure returns (int256 tokenReduction) {
+        int256 denom = newTotalValue36 - newStakedValue36;
+        if (denom != 0) {
+            tokenReduction = (newTotalValue36 * stakedTokens) / denom
+                - (newStakedValue36 * supply) / denom;
         }
-        if (dvUse36 > 0) {
-            dvS36 = dvS36 < vStLoss * 1e18 ? dvS36 : vStLoss * 1e18;
-        }
 
-        // New values (clamped to >= 0)
-        int256 newTotalValue36 = prevValue * 1e18 + dvUse36;
-        if (newTotalValue36 < 0) newTotalValue36 = 0;
-        int256 newStakedValue36 = vSt * 1e18 + dvS36;
-        if (newStakedValue36 < 0) newStakedValue36 = 0;
-
-        // Token reduction calculation
-        int256 tokenReduction;
+        // Cap token reduction
+        int256 maxTokenReduction;
         {
-            int256 denom = newTotalValue36 - newStakedValue36;
-            if (denom != 0) {
-                tokenReduction = (newTotalValue36 * stakedTokens) / denom
-                    - (newStakedValue36 * supply) / denom;
-            }
-
-            // Cap token reduction
-            int256 maxTokenReduction;
-            {
-                int256 absChange = valueChangeAmt >= 0 ? valueChangeAmt : -valueChangeAmt;
-                int256 denomPv = prevValue + valueChangeAmt + 1;
-                if (denomPv != 0) {
-                    maxTokenReduction = (absChange * supply / denomPv) * (1e18 - fA) / int256(SQRT_MIN_UNSTAKED_FRACTION);
-                    if (maxTokenReduction < 0) maxTokenReduction = -maxTokenReduction;
-                }
-            }
-
-            // Clamp
-            if (stakedTokens > 0) {
-                tokenReduction = tokenReduction < stakedTokens - 1 ? tokenReduction : stakedTokens - 1;
-            }
-            if (supply > 0) {
-                tokenReduction = tokenReduction < supply - 1 ? tokenReduction : supply - 1;
-            }
-            if (tokenReduction >= 0) {
-                tokenReduction = tokenReduction < maxTokenReduction ? tokenReduction : maxTokenReduction;
-            } else {
-                tokenReduction = tokenReduction > -maxTokenReduction ? tokenReduction : -maxTokenReduction;
-            }
-            // Don't allow negatives if denominator was too small
-            if (denom < 1e4 * 1e18) {
-                tokenReduction = tokenReduction > 0 ? tokenReduction : int256(0);
+            int256 absChange = valueChangeAmt >= 0 ? valueChangeAmt : -valueChangeAmt;
+            int256 denomPv = prevValue + valueChangeAmt + 1;
+            if (denomPv != 0) {
+                maxTokenReduction = (absChange * supply / denomPv) * (1e18 - fA) / int256(SQRT_MIN_UNSTAKED_FRACTION);
+                if (maxTokenReduction < 0) maxTokenReduction = -maxTokenReduction;
             }
         }
 
-        result.admin = adminFee;
-        result.total = uint256(newTotalValue36 / 1e18);
-        result.idealStaked = prev.idealStaked;
-        result.staked = uint256(newStakedValue36 / 1e18);
-        result.stakedTokens = uint256(stakedTokens - tokenReduction);
-        result.supplyTokens = uint256(supply - tokenReduction);
-        result.tokenReduction = tokenReduction;
+        // Clamp
+        if (stakedTokens > 0) {
+            tokenReduction = tokenReduction < stakedTokens - 1 ? tokenReduction : stakedTokens - 1;
+        }
+        if (supply > 0) {
+            tokenReduction = tokenReduction < supply - 1 ? tokenReduction : supply - 1;
+        }
+        if (tokenReduction >= 0) {
+            tokenReduction = tokenReduction < maxTokenReduction ? tokenReduction : maxTokenReduction;
+        } else {
+            tokenReduction = tokenReduction > -maxTokenReduction ? tokenReduction : -maxTokenReduction;
+        }
+        // Don't allow negatives if denominator was too small
+        if (denom < 1e4 * 1e18) {
+            tokenReduction = tokenReduction > 0 ? tokenReduction : int256(0);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════

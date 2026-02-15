@@ -84,7 +84,7 @@ interface IPriceOracle {
     function price_w() external returns (uint256);
 
     /// @notice The aggregator contract
-    function AGG() external view returns (address);
+    function AGG() external view returns (IPriceAggregator);
 }
 
 /**

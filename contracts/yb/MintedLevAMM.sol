@@ -94,11 +94,11 @@ contract MintedLevAMM is IMintedLevAMM, ReentrancyGuard {
     /// @notice Maximum fee: 10%
     uint256 public constant MAX_FEE = 0.1e18;
 
-    /// @notice Minimum safe debt ratio (prevents edge cases near zero)
-    uint256 public constant MIN_SAFE_DEBT = 0.005e18; // 0.5%
+    /// @notice Minimum safe debt ratio: 1/(4*L²) scaled to 1e18
+    uint256 public immutable MIN_SAFE_DEBT;
 
-    /// @notice Maximum safe debt ratio
-    uint256 public constant MAX_SAFE_DEBT = 0.995e18; // 99.5%
+    /// @notice Maximum safe debt ratio: (2L-1)²/(4L²) - 1/(8L²) scaled to 1e18
+    uint256 public immutable MAX_SAFE_DEBT;
 
     // ═══════════════════════════════════════════════════════════════════
     // STATE
@@ -188,13 +188,27 @@ contract MintedLevAMM is IMintedLevAMM, ReentrancyGuard {
         // LP tokens from Curve Twocrypto are always 18 decimals
         COLLATERAL_PRECISION = 1;
 
-        // LEV_RATIO = 1e18 * LEVERAGE / (2 * LEVERAGE - 1e18)
-        // For 2x leverage: 1e18 * 2e18 / (4e18 - 1e18) = 2e36/3e18 ≈ 0.6667e18
-        LEV_RATIO = (1e18 * _leverage) / (2 * _leverage - 1e18);
+        // LEV_RATIO = LEVERAGE² * 1e18 / (2 * LEVERAGE - 1e18)²
+        // For 2x leverage: 4e36 * 1e18 / 9e36 ≈ 0.4444e18
+        uint256 denom = 2 * _leverage - 1e18;
+        LEV_RATIO = (_leverage * _leverage * 1e18) / (denom * denom);
+
+        // MIN_SAFE_DEBT = 1e54 / (4 * leverage²)  — i.e. 1/(4L²) scaled to 1e18
+        // For 2x: 1e54 / (4 * 4e36) = 0.0625e18
+        MIN_SAFE_DEBT = 1e54 / (4 * _leverage * _leverage);
+
+        // MAX_SAFE_DEBT = denom² * 1e18 / (4 * leverage²) - 1e54 / (8 * leverage²)
+        // For 2x: 0.5625e18 - 0.03125e18 = 0.53125e18
+        MAX_SAFE_DEBT = (denom * denom * 1e18) / (4 * _leverage * _leverage)
+                      - 1e54 / (8 * _leverage * _leverage);
 
         fee = _fee;
         rateMul = 1e18;
         rateTime = block.timestamp;
+
+        // Approve LT to pull stablecoin (for borrowing during deposit) and collateral (for LP withdrawal)
+        IERC20(_stablecoin).approve(_ltContract, type(uint256).max);
+        IERC20(_collateral).approve(_ltContract, type(uint256).max);
     }
 
     // ═══════════════════════════════════════════════════════════════════
