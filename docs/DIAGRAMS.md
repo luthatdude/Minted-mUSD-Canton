@@ -170,24 +170,39 @@ sequenceDiagram
 
 ---
 
-## 7. smUSD Yield Flow
+## 7. smUSD Yield Flow (2-Vault Architecture)
 
 ```mermaid
 flowchart TD
     A[User deposits mUSD] --> B[smUSD vault]
-    B --> C{Yield Source}
+    B --> C[TreasuryV2]
     
-    C --> D[TreasuryV2 Strategies]
-    D --> E[PendleStrategyV2]
-    D --> F[MorphoLoopStrategy]
+    C --> V1["Vault #1 — Diversified Loop (MetaVault)"]
+    C --> V2["Vault #2 — Primary Yield (MetaVault)"]
+    C --> R[Idle USDC Reserve]
     
-    E --> G[Pendle PT Markets]
-    F --> H[Morpho Lending]
+    V1 --> S1[EulerV2 Cross-Stable Loop]
+    V1 --> S2[Aave V3 Loop]
+    V1 --> S3[Compound V3 Loop]
+    V1 --> S4[Contango Perp Loop]
+    V1 --> S5[Sky sUSDS]
     
-    G --> I[Yield Generated]
-    H --> I
+    V2 --> S6[Fluid Loop #146]
+    V2 --> S7[Pendle PT Markets]
+    V2 --> S8[Morpho Blue Loop]
+    V2 --> S9[Euler V2 Loop]
     
-    I --> J[Treasury records return]
+    S1 --> Y[Yield Generated]
+    S2 --> Y
+    S3 --> Y
+    S4 --> Y
+    S5 --> Y
+    S6 --> Y
+    S7 --> Y
+    S8 --> Y
+    S9 --> Y
+    
+    Y --> J[Treasury records return]
     J --> K[smUSD share price increases]
     K --> L[User withdraws more mUSD]
 ```

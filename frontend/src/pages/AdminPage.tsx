@@ -18,6 +18,10 @@ type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "
 // STRATEGY CATALOG — all deployable yield strategies
 // Addresses are populated from env vars; empty string = not yet deployed
 // ═══════════════════════════════════════════════════════════════════════════
+// TreasuryV2 registers exactly 2 MetaVault instances as its allocation slots.
+// Each vault aggregates sub-strategies internally via weighted allocation.
+type VaultAssignment = "vault1" | "vault2";
+
 interface StrategyInfo {
   name: string;
   shortName: string;
@@ -26,36 +30,24 @@ interface StrategyInfo {
   apy: string;
   description: string;
   color: string;
+  vault: VaultAssignment;
 }
 
+const VAULT_LABELS: Record<VaultAssignment, { label: string; badge: string; desc: string }> = {
+  vault1: {
+    label: "Vault #1 — Diversified Loop",
+    badge: "bg-emerald-800/60 text-emerald-300",
+    desc: "Blue-chip lending loops + alternative yield (Euler xStable, Aave, Compound, Contango, Sky sUSDS)",
+  },
+  vault2: {
+    label: "Vault #2 — Primary Yield",
+    badge: "bg-pink-800/60 text-pink-300",
+    desc: "High-yield core strategies (Fluid, Pendle, Morpho, Euler V2)",
+  },
+};
+
 const KNOWN_STRATEGIES: StrategyInfo[] = [
-  {
-    name: "Fluid Stable Loop #146",
-    shortName: "Fluid #146",
-    address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
-    targetBps: 3500,
-    apy: "~14.3%",
-    description: "syrupUSDC/USDC VaultT1 — leveraged stable loop via Fluid Protocol",
-    color: "#06b6d4", // cyan
-  },
-  {
-    name: "Pendle Multi-Pool",
-    shortName: "Pendle",
-    address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
-    targetBps: 3000,
-    apy: "~11.7%",
-    description: "PT markets with auto-rollover and manual multi-pool allocation",
-    color: "#8b5cf6", // violet
-  },
-  {
-    name: "Morpho Leveraged Loop",
-    shortName: "Morpho",
-    address: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
-    targetBps: 2000,
-    apy: "~11.5%",
-    description: "3.3x leveraged USDC lending on Morpho Blue (70% LTV, 5 loops max)",
-    color: "#3b82f6", // blue
-  },
+  // ── Vault #1 — Diversified Loop ────────────────────────────
   {
     name: "Euler V2 RLUSD/USDC Cross-Stable",
     shortName: "Euler xStable",
@@ -64,6 +56,7 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     apy: "~8-12%",
     description: "Cross-stable leverage with depeg circuit breaker (RLUSD/USDC)",
     color: "#10b981", // emerald
+    vault: "vault1",
   },
   {
     name: "Aave V3 Loop",
@@ -73,6 +66,7 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     apy: "~6-9%",
     description: "Leveraged supply/borrow loop on Aave V3",
     color: "#a855f7", // purple
+    vault: "vault1",
   },
   {
     name: "Compound V3 Loop",
@@ -82,6 +76,7 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     apy: "~5-8%",
     description: "Leveraged supply/borrow loop on Compound V3",
     color: "#22c55e", // green
+    vault: "vault1",
   },
   {
     name: "Contango Perp Loop",
@@ -91,15 +86,7 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     apy: "~8-14%",
     description: "Perp-based yield loop with flash loan leverage via Contango",
     color: "#f59e0b", // amber
-  },
-  {
-    name: "Euler V2 Loop",
-    shortName: "Euler V2",
-    address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
-    targetBps: 0,
-    apy: "~7-10%",
-    description: "Leveraged lending loop on Euler V2",
-    color: "#14b8a6", // teal
+    vault: "vault1",
   },
   {
     name: "Sky sUSDS Savings",
@@ -109,15 +96,48 @@ const KNOWN_STRATEGIES: StrategyInfo[] = [
     apy: "~7.9%",
     description: "USDC → PSM → sUSDS savings vault (zero-slippage, no leverage)",
     color: "#f97316", // orange
+    vault: "vault1",
+  },
+  // ── Vault #2 — Primary Yield ───────────────────────────────
+  {
+    name: "Fluid Stable Loop #146",
+    shortName: "Fluid #146",
+    address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
+    targetBps: 3500,
+    apy: "~14.3%",
+    description: "syrupUSDC/USDC VaultT1 — leveraged stable loop via Fluid Protocol",
+    color: "#06b6d4", // cyan
+    vault: "vault2",
   },
   {
-    name: "MetaVault (Vault-of-Vaults)",
-    shortName: "MetaVault",
-    address: process.env.NEXT_PUBLIC_METAVAULT_ADDRESS || "",
+    name: "Pendle Multi-Pool",
+    shortName: "Pendle",
+    address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
+    targetBps: 3000,
+    apy: "~11.7%",
+    description: "PT markets with auto-rollover and manual multi-pool allocation",
+    color: "#8b5cf6", // violet
+    vault: "vault2",
+  },
+  {
+    name: "Morpho Leveraged Loop",
+    shortName: "Morpho",
+    address: process.env.NEXT_PUBLIC_MORPHO_STRATEGY_ADDRESS || "",
+    targetBps: 2000,
+    apy: "~11.5%",
+    description: "3.3x leveraged USDC lending on Morpho Blue (70% LTV, 5 loops max)",
+    color: "#3b82f6", // blue
+    vault: "vault2",
+  },
+  {
+    name: "Euler V2 Loop",
+    shortName: "Euler V2",
+    address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
     targetBps: 0,
-    apy: "~12.5%",
-    description: "Composable vault aggregating multiple sub-strategies with auto-rebalance",
-    color: "#ec4899", // pink
+    apy: "~7-10%",
+    description: "Leveraged lending loop on Euler V2",
+    color: "#14b8a6", // teal
+    vault: "vault2",
   },
 ];
 
@@ -147,7 +167,6 @@ const STRATEGY_KEY_MAP: Record<string, string> = {
   "Contango": "contango",
   "Euler V2": "euler",
   "Sky sUSDS": "sky",
-  "MetaVault": "metavault",
 };
 
 function strategyKey(addr: string): string {
@@ -560,51 +579,97 @@ export function AdminPage() {
             )}
           </div>
 
-          {/* ── Strategy Catalog (all known strategies) ── */}
+          {/* ── Strategies & Vaults Overview ── */}
           <div className="card">
-            <h3 className="mb-3 font-semibold text-gray-300">Strategy Catalog</h3>
-            <p className="mb-3 text-xs text-gray-500">
-              All available yield strategies. Strategies with addresses configured can be added to Treasury.
+            <h3 className="mb-1 font-semibold text-gray-300">Strategies &amp; Vaults</h3>
+            <p className="mb-4 text-xs text-gray-500">
+              All selectable yield strategies grouped by their parent vault. Green = on-chain active.
             </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {KNOWN_STRATEGIES.map((ks, i) => {
-                const isRegistered = strategyList.some(
+
+            {(["vault1", "vault2"] as VaultAssignment[]).map((vaultKey) => {
+              const vaultMeta = VAULT_LABELS[vaultKey];
+              const strategies = KNOWN_STRATEGIES.filter((ks) => ks.vault === vaultKey);
+              const activeCount = strategies.filter((ks) =>
+                strategyList.some(
                   (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
-                );
-                return (
-                  <div
-                    key={i}
-                    className={`rounded-lg border px-3 py-2 text-xs ${
-                      isRegistered
-                        ? "border-green-700/50 bg-green-900/10"
-                        : ks.address
-                        ? "border-gray-700 bg-gray-800/30"
-                        : "border-gray-800 bg-gray-900/20 opacity-50"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ks.color }} />
-                      <span className="font-medium text-white">{ks.shortName}</span>
-                      {ks.targetBps > 0 && (
-                        <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
-                          {ks.targetBps / 100}%
-                        </span>
-                      )}
-                      {isRegistered && (
-                        <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ACTIVE</span>
-                      )}
-                      {!ks.address && (
-                        <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-500">NO ADDR</span>
-                      )}
-                    </div>
-                    <p className="mt-1 text-gray-500">{ks.description}</p>
-                    {ks.address && (
-                      <p className="mt-0.5 font-mono text-[10px] text-gray-600">{ks.address}</p>
-                    )}
+                )
+              ).length;
+
+              return (
+                <div key={vaultKey} className="mb-5 last:mb-0">
+                  {/* Vault header */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${vaultMeta.badge}`}>
+                      {vaultMeta.label}
+                    </span>
+                    <span className="text-[10px] text-gray-500">
+                      {activeCount}/{strategies.length} active
+                    </span>
                   </div>
-                );
-              })}
-            </div>
+                  <p className="mb-2 text-[10px] text-gray-600">{vaultMeta.desc}</p>
+
+                  {/* Strategy cards */}
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {strategies.map((ks, i) => {
+                      const isRegistered = strategyList.some(
+                        (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
+                      );
+                      const onChain = strategyList.find(
+                        (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
+                      );
+                      return (
+                        <div
+                          key={i}
+                          className={`rounded-lg border px-3 py-2.5 text-xs ${
+                            isRegistered
+                              ? "border-green-700/50 bg-green-900/10"
+                              : ks.address
+                              ? "border-gray-700 bg-gray-800/30"
+                              : "border-gray-800 bg-gray-900/20 opacity-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: ks.color }} />
+                            <span className="font-medium text-white">{ks.shortName}</span>
+                            <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-cyan-300">
+                              {ks.apy}
+                            </span>
+                            {ks.targetBps > 0 && (
+                              <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
+                                Target: {ks.targetBps / 100}%
+                              </span>
+                            )}
+                            {isRegistered && (
+                              <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ACTIVE</span>
+                            )}
+                            {!isRegistered && ks.address && (
+                              <span className="rounded bg-yellow-800/40 px-1.5 py-0.5 text-[10px] text-yellow-400">AVAILABLE</span>
+                            )}
+                            {!ks.address && (
+                              <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-500">NO ADDR</span>
+                            )}
+                          </div>
+                          <p className="mt-1.5 text-gray-500 leading-relaxed">{ks.description}</p>
+                          <div className="mt-1.5 flex items-center gap-3 text-[10px]">
+                            {ks.address && (
+                              <span className="font-mono text-gray-600">{ks.address.slice(0, 6)}…{ks.address.slice(-4)}</span>
+                            )}
+                            {onChain && (
+                              <span className="text-gray-500">
+                                On-chain target: {Number(onChain.targetBps) / 100}%
+                              </span>
+                            )}
+                            {onChain?.value && (
+                              <span className="text-gray-400">{onChain.value} USDC</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* ── Manual Deploy to Strategy ── */}
