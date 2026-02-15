@@ -94,6 +94,9 @@ describe("FluidLoopStrategy", function () {
         flashLoanPool: await aavePool.getAddress(),
         merklDistributor: await merklDistributor.getAddress(),
         swapRouter: await swapRouter.getAddress(),
+        vaultResolver: ethers.ZeroAddress,
+        dexResolver: ethers.ZeroAddress,
+        dexPool: ethers.ZeroAddress,
         treasury: treasury.address,
         admin: admin.address,
         timelock: timelockSigner.address,
@@ -211,6 +214,9 @@ describe("FluidLoopStrategy", function () {
         flashLoanPool: await aavePool.getAddress(),
         merklDistributor: await merklDistributor.getAddress(),
         swapRouter: await swapRouter.getAddress(),
+        vaultResolver: ethers.ZeroAddress,
+        dexResolver: ethers.ZeroAddress,
+        dexPool: ethers.ZeroAddress,
         treasury: treasury.address,
         admin: admin.address,
         timelock: timelockSigner.address,
@@ -290,6 +296,9 @@ describe("FluidLoopStrategy", function () {
             flashLoanPool: ethers.ZeroAddress,
             merklDistributor: ethers.ZeroAddress,
             swapRouter: ethers.ZeroAddress,
+            vaultResolver: ethers.ZeroAddress,
+            dexResolver: ethers.ZeroAddress,
+            dexPool: ethers.ZeroAddress,
             treasury: treasury.address,
             admin: admin.address,
             timelock: timelockSigner.address,
@@ -318,6 +327,9 @@ describe("FluidLoopStrategy", function () {
               flashLoanPool: await usdc.getAddress(),
               merklDistributor: await usdc.getAddress(),
               swapRouter: await usdc.getAddress(),
+              vaultResolver: ethers.ZeroAddress,
+              dexResolver: ethers.ZeroAddress,
+              dexPool: ethers.ZeroAddress,
               treasury: treasury.address,
               admin: admin.address,
               timelock: timelockSigner.address,
@@ -775,6 +787,9 @@ describe("FluidLoopStrategy", function () {
         flashLoanPool: await aavePool.getAddress(),
         merklDistributor: await merklDistributor.getAddress(),
         swapRouter: await swapRouter.getAddress(),
+        vaultResolver: ethers.ZeroAddress,
+        dexResolver: ethers.ZeroAddress,
+        dexPool: ethers.ZeroAddress,
         treasury: treasury.address,
         admin: admin.address,
         timelock: timelockSigner.address,
@@ -937,6 +952,9 @@ describe("FluidLoopStrategy", function () {
         flashLoanPool: await aavePool.getAddress(),
         merklDistributor: await merklDistributor.getAddress(),
         swapRouter: await swapRouter.getAddress(),
+        vaultResolver: ethers.ZeroAddress,
+        dexResolver: ethers.ZeroAddress,
+        dexPool: ethers.ZeroAddress,
         treasury: treasury.address,
         admin: admin.address,
         timelock: timelockSigner.address,
@@ -1104,6 +1122,9 @@ describe("FluidLoopStrategy", function () {
           flashLoanPool: await aavePool.getAddress(),
           merklDistributor: await merklDistributor.getAddress(),
           swapRouter: await swapRouter.getAddress(),
+          vaultResolver: ethers.ZeroAddress,
+          dexResolver: ethers.ZeroAddress,
+          dexPool: ethers.ZeroAddress,
           treasury: treasury.address,
           admin: admin.address,
           timelock: timelockSigner.address,
@@ -1184,6 +1205,575 @@ describe("FluidLoopStrategy", function () {
       await expect(
         strategy.connect(admin).setMinSwapOutput(8000)
       ).to.be.revertedWithCustomError(strategy, "InvalidLTV");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  V2: VAULT RESOLVER INTEGRATION TESTS
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe("VaultResolver Integration (T1 with live resolver)", function () {
+
+    async function deployWithResolverFixture() {
+      const [admin, treasury, strategist, guardian, keeper, user1, timelockSigner] = await ethers.getSigners();
+
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const usdc = await MockERC20.deploy("USD Coin", "USDC", 6);
+
+      const MockAaveV3Pool = await ethers.getContractFactory("MockAaveV3Pool");
+      const aavePool = await MockAaveV3Pool.deploy(await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("100000000", 6));
+      await usdc.approve(await aavePool.getAddress(), ethers.MaxUint256);
+      await aavePool.seedLiquidity(ethers.parseUnits("50000000", 6));
+
+      const MockFluidVaultT1 = await ethers.getContractFactory("MockFluidVaultT1");
+      const fluidVault = await MockFluidVaultT1.deploy(await usdc.getAddress(), await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("50000000", 6));
+      await usdc.approve(await fluidVault.getAddress(), ethers.MaxUint256);
+      await fluidVault.seedLiquidity(await usdc.getAddress(), ethers.parseUnits("50000000", 6));
+
+      const MockFactory = await ethers.getContractFactory("MockFluidVaultFactory");
+      const vaultFactory = await MockFactory.deploy();
+
+      const MockMerklDistributor = await ethers.getContractFactory("MockMerklDistributor");
+      const merklDistributor = await MockMerklDistributor.deploy();
+
+      const MockSwapRouter = await ethers.getContractFactory("MockSwapRouterCrossStable");
+      const swapRouter = await MockSwapRouter.deploy();
+
+      // Deploy MockFluidVaultResolver
+      const MockVaultResolver = await ethers.getContractFactory("MockFluidVaultResolver");
+      const vaultResolver = await MockVaultResolver.deploy();
+
+      // Deploy MockFluidDexResolver
+      const MockDexResolver = await ethers.getContractFactory("MockFluidDexResolver");
+      const dexResolver = await MockDexResolver.deploy();
+
+      const Strategy = await ethers.getContractFactory("FluidLoopStrategyTestable");
+      const strategy = await upgrades.deployProxy(
+        Strategy,
+        [{
+          mode: 1,
+          inputAsset: await usdc.getAddress(),
+          supplyToken: await usdc.getAddress(),
+          borrowToken: await usdc.getAddress(),
+          supplyToken1: ethers.ZeroAddress,
+          borrowToken1: ethers.ZeroAddress,
+          fluidVault: await fluidVault.getAddress(),
+          vaultFactory: await vaultFactory.getAddress(),
+          flashLoanPool: await aavePool.getAddress(),
+          merklDistributor: await merklDistributor.getAddress(),
+          swapRouter: await swapRouter.getAddress(),
+          vaultResolver: await vaultResolver.getAddress(),
+          dexResolver: await dexResolver.getAddress(),
+          dexPool: ethers.ZeroAddress,
+          treasury: treasury.address,
+          admin: admin.address,
+          timelock: timelockSigner.address,
+        }],
+        { kind: "uups", initializer: "initializeTestable", unsafeAllow: ["constructor"] }
+      );
+
+      await strategy.grantRole(await strategy.STRATEGIST_ROLE(), strategist.address);
+      await strategy.grantRole(await strategy.GUARDIAN_ROLE(), guardian.address);
+      await strategy.grantRole(await strategy.KEEPER_ROLE(), keeper.address);
+
+      await usdc.mint(treasury.address, ethers.parseUnits("10000000", 6));
+      await usdc.connect(treasury).approve(await strategy.getAddress(), ethers.MaxUint256);
+
+      return {
+        strategy, usdc, fluidVault, vaultResolver, dexResolver,
+        admin, treasury, strategist, guardian, keeper, user1, timelockSigner,
+      };
+    }
+
+    it("Should store vaultResolver address on initialization", async function () {
+      const { strategy, vaultResolver } = await loadFixture(deployWithResolverFixture);
+      expect(await strategy.vaultResolver()).to.equal(await vaultResolver.getAddress());
+    });
+
+    it("Should store dexResolver address on initialization", async function () {
+      const { strategy, dexResolver } = await loadFixture(deployWithResolverFixture);
+      expect(await strategy.dexResolver()).to.equal(await dexResolver.getAddress());
+    });
+
+    it("Should read position via VaultResolver after deposit", async function () {
+      const { strategy, treasury, vaultResolver, fluidVault } = await loadFixture(deployWithResolverFixture);
+
+      await strategy.connect(treasury).deposit(ethers.parseUnits("100000", 6));
+
+      const nftId = await strategy.positionNftId();
+      expect(nftId).to.be.gt(0);
+
+      // Register position in mock resolver so it can answer positionByNftId
+      await vaultResolver.registerPosition(nftId, await fluidVault.getAddress(), 1);
+
+      // Now totalValue should read from VaultResolver path
+      const totalVal = await strategy.totalValue();
+      expect(totalVal).to.be.gt(0);
+    });
+
+    it("Should return correct health factor via resolver", async function () {
+      const { strategy, treasury, vaultResolver, fluidVault } = await loadFixture(deployWithResolverFixture);
+
+      await strategy.connect(treasury).deposit(ethers.parseUnits("100000", 6));
+      const nftId = await strategy.positionNftId();
+      await vaultResolver.registerPosition(nftId, await fluidVault.getAddress(), 1);
+
+      const hf = await strategy.getHealthFactor();
+      // At 90% LTV, HF ≈ 1.11 (1e18 / 0.9)
+      expect(hf).to.be.gt(ethers.parseEther("1.0"));
+      expect(hf).to.be.lt(ethers.parseEther("1.2"));
+    });
+
+    it("Should allow timelock to set new vaultResolver", async function () {
+      const { strategy, timelockSigner, vaultResolver } = await loadFixture(deployWithResolverFixture);
+
+      const MockVaultResolver = await ethers.getContractFactory("MockFluidVaultResolver");
+      const newResolver = await MockVaultResolver.deploy();
+
+      await strategy.connect(timelockSigner).setVaultResolver(await newResolver.getAddress());
+      expect(await strategy.vaultResolver()).to.equal(await newResolver.getAddress());
+    });
+
+    it("Should reject non-timelock setting vaultResolver", async function () {
+      const { strategy, admin } = await loadFixture(deployWithResolverFixture);
+
+      const MockVaultResolver = await ethers.getContractFactory("MockFluidVaultResolver");
+      const newResolver = await MockVaultResolver.deploy();
+
+      await expect(
+        strategy.connect(admin).setVaultResolver(await newResolver.getAddress())
+      ).to.be.reverted;
+    });
+
+    it("Should reject setting vaultResolver to zero address", async function () {
+      const { strategy, timelockSigner } = await loadFixture(deployWithResolverFixture);
+
+      await expect(
+        strategy.connect(timelockSigner).setVaultResolver(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(strategy, "ZeroAddress");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  V2: DEX SMART COLLATERAL TESTS
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe("DEX Smart Collateral (T2 with DEX integration)", function () {
+
+    async function deployDexFixture() {
+      const [admin, treasury, strategist, guardian, keeper, user1, timelockSigner] = await ethers.getSigners();
+
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
+      const weETH = await MockERC20.deploy("Wrapped eETH", "weETH", 18);
+
+      const MockAaveV3Pool = await ethers.getContractFactory("MockAaveV3Pool");
+      const aavePool = await MockAaveV3Pool.deploy(await weth.getAddress());
+      await weth.mint(admin.address, ethers.parseEther("100000"));
+      await weth.approve(await aavePool.getAddress(), ethers.MaxUint256);
+      await aavePool.seedLiquidity(ethers.parseEther("50000"));
+
+      const MockFluidVaultT2 = await ethers.getContractFactory("MockFluidVaultT2");
+      const fluidVault = await MockFluidVaultT2.deploy(
+        await weth.getAddress(), await weth.getAddress(), await weth.getAddress()
+      );
+      await weth.mint(admin.address, ethers.parseEther("50000"));
+      await weth.approve(await fluidVault.getAddress(), ethers.MaxUint256);
+      await fluidVault.seedLiquidity(await weth.getAddress(), ethers.parseEther("50000"));
+
+      const MockFactory = await ethers.getContractFactory("MockFluidVaultFactory");
+      const vaultFactory = await MockFactory.deploy();
+
+      const MockMerklDistributor = await ethers.getContractFactory("MockMerklDistributor");
+      const merklDistributor = await MockMerklDistributor.deploy();
+
+      const MockSwapRouter = await ethers.getContractFactory("MockSwapRouterCrossStable");
+      const swapRouter = await MockSwapRouter.deploy();
+
+      // Deploy mock resolvers
+      const MockVaultResolver = await ethers.getContractFactory("MockFluidVaultResolver");
+      const vaultResolver = await MockVaultResolver.deploy();
+
+      const MockDexResolver = await ethers.getContractFactory("MockFluidDexResolver");
+      const dexResolver = await MockDexResolver.deploy();
+
+      // Use a mock "DEX pool" address (any non-zero for configuration)
+      const dexPoolAddress = await dexResolver.getAddress(); // just a non-zero addr
+
+      // Configure DEX share ratios (1e18 = 1:1 ratio, simplified)
+      await dexResolver.setShareRatios(
+        dexPoolAddress,
+        ethers.parseEther("0.5"),  // 0.5 token0 per supply share
+        ethers.parseEther("0.5"),  // 0.5 token1 per supply share
+        ethers.parseEther("0.5"),  // 0.5 token0 per borrow share
+        ethers.parseEther("0.5")   // 0.5 token1 per borrow share
+      );
+
+      const Strategy = await ethers.getContractFactory("FluidLoopStrategyTestable");
+      const strategy = await upgrades.deployProxy(
+        Strategy,
+        [{
+          mode: 2, // MODE_LRT
+          inputAsset: await weth.getAddress(),
+          supplyToken: await weth.getAddress(),
+          borrowToken: await weth.getAddress(),
+          supplyToken1: await weth.getAddress(),
+          borrowToken1: ethers.ZeroAddress,
+          fluidVault: await fluidVault.getAddress(),
+          vaultFactory: await vaultFactory.getAddress(),
+          flashLoanPool: await aavePool.getAddress(),
+          merklDistributor: await merklDistributor.getAddress(),
+          swapRouter: await swapRouter.getAddress(),
+          vaultResolver: ethers.ZeroAddress,  // use mock reads for vault ops
+          dexResolver: await dexResolver.getAddress(),
+          dexPool: dexPoolAddress,
+          treasury: treasury.address,
+          admin: admin.address,
+          timelock: timelockSigner.address,
+        }],
+        { kind: "uups", initializer: "initializeTestable", unsafeAllow: ["constructor"] }
+      );
+
+      await strategy.grantRole(await strategy.STRATEGIST_ROLE(), strategist.address);
+      await strategy.grantRole(await strategy.GUARDIAN_ROLE(), guardian.address);
+      await strategy.grantRole(await strategy.KEEPER_ROLE(), keeper.address);
+
+      await weth.mint(treasury.address, ethers.parseEther("10000"));
+      await weth.connect(treasury).approve(await strategy.getAddress(), ethers.MaxUint256);
+
+      // Fund strategy with tokens for DEX deposits
+      await weth.mint(await strategy.getAddress(), ethers.parseEther("1000"));
+
+      return {
+        strategy, weth, weETH, fluidVault, vaultResolver, dexResolver,
+        admin, treasury, strategist, guardian, keeper, user1, timelockSigner,
+        dexPoolAddress,
+      };
+    }
+
+    it("Should initialize with DEX enabled", async function () {
+      const { strategy, dexPoolAddress } = await loadFixture(deployDexFixture);
+      expect(await strategy.dexEnabled()).to.be.true;
+      expect(await strategy.dexPool()).to.equal(dexPoolAddress);
+    });
+
+    it("Should deposit DEX collateral via strategist", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+
+      // First create a normal position
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // Now deposit DEX smart collateral
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(
+          ethers.parseEther("10"),
+          ethers.parseEther("10"),
+          1 // min 1 share
+        )
+      ).to.emit(strategy, "DexCollateralDeposited");
+    });
+
+    it("Should reject DEX deposit on T1 (stable) vault", async function () {
+      // Deploy a T1 strategy with DEX enabled (should still reject)
+      const [admin, treasury, , , , , timelockSigner] = await ethers.getSigners();
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const usdc = await MockERC20.deploy("USDC", "USDC", 6);
+
+      const MockAaveV3Pool = await ethers.getContractFactory("MockAaveV3Pool");
+      const aavePool = await MockAaveV3Pool.deploy(await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("100000000", 6));
+      await usdc.approve(await aavePool.getAddress(), ethers.MaxUint256);
+      await aavePool.seedLiquidity(ethers.parseUnits("50000000", 6));
+
+      const MockFluidVaultT1 = await ethers.getContractFactory("MockFluidVaultT1");
+      const fluidVault = await MockFluidVaultT1.deploy(await usdc.getAddress(), await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("50000000", 6));
+      await usdc.approve(await fluidVault.getAddress(), ethers.MaxUint256);
+      await fluidVault.seedLiquidity(await usdc.getAddress(), ethers.parseUnits("50000000", 6));
+
+      const MockFactory = await ethers.getContractFactory("MockFluidVaultFactory");
+      const vaultFactory = await MockFactory.deploy();
+      const MockMerklDistributor = await ethers.getContractFactory("MockMerklDistributor");
+      const merklDistributor = await MockMerklDistributor.deploy();
+      const MockSwapRouter = await ethers.getContractFactory("MockSwapRouterCrossStable");
+      const swapRouter = await MockSwapRouter.deploy();
+
+      const Strategy = await ethers.getContractFactory("FluidLoopStrategyTestable");
+      const strategy = await upgrades.deployProxy(
+        Strategy,
+        [{
+          mode: 1, // STABLE — no DEX
+          inputAsset: await usdc.getAddress(),
+          supplyToken: await usdc.getAddress(),
+          borrowToken: await usdc.getAddress(),
+          supplyToken1: ethers.ZeroAddress,
+          borrowToken1: ethers.ZeroAddress,
+          fluidVault: await fluidVault.getAddress(),
+          vaultFactory: await vaultFactory.getAddress(),
+          flashLoanPool: await aavePool.getAddress(),
+          merklDistributor: await merklDistributor.getAddress(),
+          swapRouter: await swapRouter.getAddress(),
+          vaultResolver: ethers.ZeroAddress,
+          dexResolver: ethers.ZeroAddress,
+          dexPool: admin.address, // non-zero to make dexEnabled = true
+          treasury: treasury.address,
+          admin: admin.address,
+          timelock: timelockSigner.address,
+        }],
+        { kind: "uups", initializer: "initializeTestable", unsafeAllow: ["constructor"] }
+      );
+
+      await expect(
+        strategy.depositDexCollateral(ethers.parseUnits("100", 6), 0, 1)
+      ).to.be.revertedWithCustomError(strategy, "InvalidVaultMode");
+    });
+
+    it("Should reject DEX deposit from non-strategist", async function () {
+      const { strategy, treasury, user1 } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      await expect(
+        strategy.connect(user1).depositDexCollateral(ethers.parseEther("10"), 0, 1)
+      ).to.be.reverted;
+    });
+
+    it("Should allow timelock to toggle dexPool", async function () {
+      const { strategy, timelockSigner, admin } = await loadFixture(deployDexFixture);
+
+      // Disable DEX
+      await strategy.connect(timelockSigner).setDexPool(ethers.ZeroAddress, false);
+      expect(await strategy.dexEnabled()).to.be.false;
+
+      // Re-enable with a new address
+      await strategy.connect(timelockSigner).setDexPool(admin.address, true);
+      expect(await strategy.dexEnabled()).to.be.true;
+      expect(await strategy.dexPool()).to.equal(admin.address);
+    });
+
+    it("Should reject DEX deposit when dexEnabled is false", async function () {
+      const { strategy, treasury, strategist, timelockSigner } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // Disable DEX
+      await strategy.connect(timelockSigner).setDexPool(ethers.ZeroAddress, false);
+
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(ethers.parseEther("10"), 0, 1)
+      ).to.be.revertedWithCustomError(strategy, "NotActive");
+    });
+
+    it("Should reject DEX deposit with zero amounts", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(0, 0, 1)
+      ).to.be.revertedWithCustomError(strategy, "ZeroAmount");
+    });
+
+    it("Should emit DexCollateralDeposited with correct args", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      const t0 = ethers.parseEther("10");
+      const t1 = ethers.parseEther("5");
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(t0, t1, 1)
+      ).to.emit(strategy, "DexCollateralDeposited").withArgs(t0, t1);
+    });
+
+    it("Should deposit single-sided DEX collateral (token0 only)", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // token0 = 10e18, token1 = 0
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(ethers.parseEther("10"), 0, 1)
+      ).to.emit(strategy, "DexCollateralDeposited").withArgs(ethers.parseEther("10"), 0);
+    });
+
+    it("Should deposit single-sided DEX collateral (token1 only)", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // token0 = 0, token1 = 5e18 — at least one must be non-zero
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(0, ethers.parseEther("5"), 1)
+      ).to.emit(strategy, "DexCollateralDeposited").withArgs(0, ethers.parseEther("5"));
+    });
+
+    it("Should withdraw DEX collateral via strategist", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // First deposit some DEX collateral
+      await strategy.connect(strategist).depositDexCollateral(
+        ethers.parseEther("10"), ethers.parseEther("10"), 1
+      );
+
+      // Now withdraw it
+      await expect(
+        strategy.connect(strategist).withdrawDexCollateral(
+          ethers.parseEther("5"), // sharesToBurn
+          0, // minToken0
+          0  // minToken1
+        )
+      ).to.emit(strategy, "DexCollateralWithdrawn").withArgs(ethers.parseEther("5"));
+    });
+
+    it("Should reject withdrawDexCollateral from non-strategist", async function () {
+      const { strategy, treasury, strategist, user1 } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      await strategy.connect(strategist).depositDexCollateral(
+        ethers.parseEther("10"), ethers.parseEther("10"), 1
+      );
+
+      await expect(
+        strategy.connect(user1).withdrawDexCollateral(ethers.parseEther("5"), 0, 0)
+      ).to.be.reverted;
+    });
+
+    it("Should reject withdrawDexCollateral with zero shares", async function () {
+      const { strategy, treasury, strategist } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      await expect(
+        strategy.connect(strategist).withdrawDexCollateral(0, 0, 0)
+      ).to.be.revertedWithCustomError(strategy, "ZeroAmount");
+    });
+
+    it("Should reject withdrawDexCollateral when dexEnabled is false", async function () {
+      const { strategy, treasury, strategist, timelockSigner } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // Disable DEX
+      await strategy.connect(timelockSigner).setDexPool(ethers.ZeroAddress, false);
+
+      await expect(
+        strategy.connect(strategist).withdrawDexCollateral(ethers.parseEther("5"), 0, 0)
+      ).to.be.revertedWithCustomError(strategy, "NotActive");
+    });
+
+    it("Should reject withdrawDexCollateral on T1 (stable) vault", async function () {
+      // Deploy a T1 strategy with DEX enabled
+      const [admin, treasury, , , , , timelockSigner] = await ethers.getSigners();
+      const MockERC20 = await ethers.getContractFactory("MockERC20");
+      const usdc = await MockERC20.deploy("USDC", "USDC", 6);
+
+      const MockAaveV3Pool = await ethers.getContractFactory("MockAaveV3Pool");
+      const aavePool = await MockAaveV3Pool.deploy(await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("100000000", 6));
+      await usdc.approve(await aavePool.getAddress(), ethers.MaxUint256);
+      await aavePool.seedLiquidity(ethers.parseUnits("50000000", 6));
+
+      const MockFluidVaultT1 = await ethers.getContractFactory("MockFluidVaultT1");
+      const fluidVault = await MockFluidVaultT1.deploy(await usdc.getAddress(), await usdc.getAddress());
+      await usdc.mint(admin.address, ethers.parseUnits("50000000", 6));
+      await usdc.approve(await fluidVault.getAddress(), ethers.MaxUint256);
+      await fluidVault.seedLiquidity(await usdc.getAddress(), ethers.parseUnits("50000000", 6));
+
+      const MockFactory = await ethers.getContractFactory("MockFluidVaultFactory");
+      const vaultFactory = await MockFactory.deploy();
+      const MockMerklDistributor = await ethers.getContractFactory("MockMerklDistributor");
+      const merklDistributor = await MockMerklDistributor.deploy();
+      const MockSwapRouter = await ethers.getContractFactory("MockSwapRouterCrossStable");
+      const swapRouter = await MockSwapRouter.deploy();
+
+      const Strategy = await ethers.getContractFactory("FluidLoopStrategyTestable");
+      const strategy = await upgrades.deployProxy(
+        Strategy,
+        [{
+          mode: 1, // STABLE
+          inputAsset: await usdc.getAddress(),
+          supplyToken: await usdc.getAddress(),
+          borrowToken: await usdc.getAddress(),
+          supplyToken1: ethers.ZeroAddress,
+          borrowToken1: ethers.ZeroAddress,
+          fluidVault: await fluidVault.getAddress(),
+          vaultFactory: await vaultFactory.getAddress(),
+          flashLoanPool: await aavePool.getAddress(),
+          merklDistributor: await merklDistributor.getAddress(),
+          swapRouter: await swapRouter.getAddress(),
+          vaultResolver: ethers.ZeroAddress,
+          dexResolver: ethers.ZeroAddress,
+          dexPool: admin.address,
+          treasury: treasury.address,
+          admin: admin.address,
+          timelock: timelockSigner.address,
+        }],
+        { kind: "uups", initializer: "initializeTestable", unsafeAllow: ["constructor"] }
+      );
+
+      await expect(
+        strategy.withdrawDexCollateral(ethers.parseUnits("100", 6), 0, 0)
+      ).to.be.revertedWithCustomError(strategy, "InvalidVaultMode");
+    });
+
+    it("Should emit DexPoolUpdated on setDexPool", async function () {
+      const { strategy, timelockSigner, admin } = await loadFixture(deployDexFixture);
+
+      await expect(
+        strategy.connect(timelockSigner).setDexPool(admin.address, true)
+      ).to.emit(strategy, "DexPoolUpdated").withArgs(admin.address, true);
+    });
+
+    it("Should allow timelock to set new dexResolver", async function () {
+      const { strategy, timelockSigner } = await loadFixture(deployDexFixture);
+
+      const MockDexResolver = await ethers.getContractFactory("MockFluidDexResolver");
+      const newResolver = await MockDexResolver.deploy();
+
+      await strategy.connect(timelockSigner).setDexResolver(await newResolver.getAddress());
+      expect(await strategy.dexResolver()).to.equal(await newResolver.getAddress());
+    });
+
+    it("Should reject non-timelock setting dexResolver", async function () {
+      const { strategy, admin } = await loadFixture(deployDexFixture);
+
+      const MockDexResolver = await ethers.getContractFactory("MockFluidDexResolver");
+      const newResolver = await MockDexResolver.deploy();
+
+      await expect(
+        strategy.connect(admin).setDexResolver(await newResolver.getAddress())
+      ).to.be.reverted;
+    });
+
+    it("Should reject setting dexResolver to zero address", async function () {
+      const { strategy, timelockSigner } = await loadFixture(deployDexFixture);
+
+      await expect(
+        strategy.connect(timelockSigner).setDexResolver(ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(strategy, "ZeroAddress");
+    });
+
+    it("Should reject DEX deposit when paused", async function () {
+      const { strategy, treasury, strategist, guardian } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+
+      // Pause the contract
+      await strategy.connect(guardian).pause();
+
+      await expect(
+        strategy.connect(strategist).depositDexCollateral(ethers.parseEther("10"), 0, 1)
+      ).to.be.reverted; // EnforcedPause
+    });
+
+    it("Should reject DEX withdrawal when paused", async function () {
+      const { strategy, treasury, strategist, guardian } = await loadFixture(deployDexFixture);
+      await strategy.connect(treasury).deposit(ethers.parseEther("100"));
+      await strategy.connect(strategist).depositDexCollateral(
+        ethers.parseEther("10"), ethers.parseEther("10"), 1
+      );
+
+      // Pause the contract
+      await strategy.connect(guardian).pause();
+
+      await expect(
+        strategy.connect(strategist).withdrawDexCollateral(ethers.parseEther("5"), 0, 0)
+      ).to.be.reverted; // EnforcedPause
     });
   });
 });

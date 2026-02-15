@@ -8,6 +8,10 @@ import "./MockFluidVaults.sol";
  * @title FluidLoopStrategyTestable
  * @notice Test harness that overrides the virtual position-read methods
  *         so they query the mock Fluid vaults directly.
+ *
+ *         V2: Now also accepts VaultResolver/DexResolver addresses in InitParams
+ *         (passed as zero for backward-compatible mock-based tests) and overrides
+ *         `_cachedDexState()` for DEX integration tests.
  */
 contract FluidLoopStrategyTestable is FluidLoopStrategy {
     /// @notice Passthrough initializer for upgrade safety
@@ -37,6 +41,18 @@ contract FluidLoopStrategyTestable is FluidLoopStrategy {
         merklDistributor = IMerklDistributor(p.merklDistributor);
         swapRouter = ISwapRouterFluid(p.swapRouter);
 
+        // Resolvers (address(0) for backward-compatible mock tests)
+        if (p.vaultResolver != address(0)) {
+            vaultResolver = IFluidVaultResolver(p.vaultResolver);
+        }
+        if (p.dexResolver != address(0)) {
+            dexResolver = IFluidDexResolver(p.dexResolver);
+        }
+        if (p.dexPool != address(0)) {
+            dexPool = p.dexPool;
+            dexEnabled = true;
+        }
+
         if (p.mode == MODE_STABLE) {
             targetLtvBps = 9000;
             targetLoops = 4;
@@ -62,35 +78,25 @@ contract FluidLoopStrategyTestable is FluidLoopStrategy {
         _grantRole(GUARDIAN_ROLE, p.admin);
         _grantRole(KEEPER_ROLE, p.admin);
     }
-    /// @dev Read collateral value from mock vault
-    function _readCollateralFromVault() internal view override returns (uint256) {
-        if (positionNftId == 0) return 0;
 
-        if (vaultMode == MODE_STABLE) {
-            (uint256 col,) = MockFluidVaultT1(fluidVault).getPosition(positionNftId);
-            return col;
-        } else if (vaultMode == MODE_LRT) {
-            (uint256 col0, uint256 col1,) = MockFluidVaultT2(fluidVault).getPosition(positionNftId);
-            return col0 + col1; // simplified: sum both tokens
-        } else {
-            (uint256 col0, uint256 col1,,) = MockFluidVaultT4(fluidVault).getPosition(positionNftId);
-            return col0 + col1;
+    /// @dev Read position from mock vault (overrides production VaultResolver path)
+    function _readPosition() internal view override returns (uint256 col, uint256 debt) {
+        if (positionNftId == 0) return (0, 0);
+
+        // If VaultResolver is set, use the production path (single resolver call)
+        if (address(vaultResolver) != address(0)) {
+            return super._readPosition();
         }
-    }
 
-    /// @dev Read debt value from mock vault
-    function _readDebtFromVault() internal view override returns (uint256) {
-        if (positionNftId == 0) return 0;
-
+        // Fallback: read directly from mock vault
         if (vaultMode == MODE_STABLE) {
-            (, uint256 dbt) = MockFluidVaultT1(fluidVault).getPosition(positionNftId);
-            return dbt;
+            return MockFluidVaultT1(fluidVault).getPosition(positionNftId);
         } else if (vaultMode == MODE_LRT) {
-            (,, uint256 dbt) = MockFluidVaultT2(fluidVault).getPosition(positionNftId);
-            return dbt;
+            (uint256 col0, uint256 col1, uint256 dbt) = MockFluidVaultT2(fluidVault).getPosition(positionNftId);
+            return (col0 + col1, dbt);
         } else {
-            (,, uint256 dbt0, uint256 dbt1) = MockFluidVaultT4(fluidVault).getPosition(positionNftId);
-            return dbt0 + dbt1;
+            (uint256 col0, uint256 col1, uint256 dbt0, uint256 dbt1) = MockFluidVaultT4(fluidVault).getPosition(positionNftId);
+            return (col0 + col1, dbt0 + dbt1);
         }
     }
 }
