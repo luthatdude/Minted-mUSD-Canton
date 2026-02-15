@@ -51,7 +51,7 @@ export default function Home() {
     // Ethereum - pages will use hooks internally
     switch (page) {
       case "dashboard":
-        return <DashboardPage />;
+        return <DashboardPage onNavigate={setPage} />;
       case "mint":
         return <MintPage />;
       case "stake":

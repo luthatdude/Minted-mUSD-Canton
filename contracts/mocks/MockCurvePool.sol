@@ -66,7 +66,11 @@ contract MockCurvePool is ERC20 {
     }
 
     function lp_price() external view returns (uint256) {
-        // Simplified: 2 * virtual_price * sqrt(price_scale * 1e18) / 1e18
+        return _lpPrice();
+    }
+
+    function _lpPrice() internal view returns (uint256) {
+        // 2 * virtual_price * sqrt(price_scale * 1e18) / 1e18
         uint256 sqrtPS = _sqrt(_priceScale * 1e18);
         return (2 * _virtualPrice * sqrtPS) / 1e18;
     }
@@ -103,13 +107,21 @@ contract MockCurvePool is ERC20 {
         // Calculate LP tokens: value = amounts[0] + amounts[1] * price_scale
         uint256 value = amounts[0] + (amounts[1] * _priceScale) / 1e18;
 
-        // Mint LP tokens proportional to value
+        // LP price = 2 * virtual_price * sqrt(price_scale * 1e18) / 1e18
+        uint256 lpPrice = _lpPrice();
+
+        // Mint LP tokens: value / lp_price (consistent with oracle pricing)
         uint256 lpTokens;
         if (totalSupply() == 0) {
-            lpTokens = value;
+            lpTokens = lpPrice > 0 ? (value * 1e18) / lpPrice : value;
         } else {
-            uint256 totalValue = _bal0 + (_bal1 * _priceScale) / 1e18 - value;
-            lpTokens = (value * totalSupply()) / totalValue;
+            // Proportional to existing pool
+            uint256 totalValue = (_bal0 + (_bal1 * _priceScale) / 1e18) - value;
+            if (totalValue > 0) {
+                lpTokens = (value * totalSupply()) / totalValue;
+            } else {
+                lpTokens = lpPrice > 0 ? (value * 1e18) / lpPrice : value;
+            }
         }
 
         require(lpTokens >= min_mint_amount, "Slippage");
@@ -172,7 +184,6 @@ contract MockCurvePool is ERC20 {
             require(amount_i <= totalValue0 + (totalValue1 * _priceScale) / 1e18, "Insufficient");
             // Give exactly amount_i of coin0
             uint256 coin0Out = amount_i < totalValue0 ? amount_i : totalValue0;
-            uint256 remainingValue = totalValue0 - coin0Out + (totalValue1 * _priceScale) / 1e18;
             // If amount_i > totalValue0, need to convert some coin1
             if (amount_i > totalValue0) {
                 uint256 extraNeeded = amount_i - totalValue0;
@@ -192,7 +203,6 @@ contract MockCurvePool is ERC20 {
             coin1.safeTransfer(msg.sender, otherAmount);
         } else {
             // Fixed coin1 output; remainder as coin0
-            uint256 coin1Out = amount_i < totalValue1 ? amount_i : totalValue1;
             if (amount_i > totalValue1) {
                 uint256 extraNeeded = (amount_i - totalValue1) * _priceScale / 1e18;
                 otherAmount = totalValue0 - extraNeeded;
@@ -321,11 +331,11 @@ contract MockPriceAggregator is IPriceAggregator {
 }
 
 /**
- * @title MockSwapRouter
+ * @title MockYBSwapRouter
  * @notice Mock swap router for testing YieldBasisStrategy
  * @dev Simulates USDC ↔ crypto asset swaps at configurable rates
  */
-contract MockSwapRouter {
+contract MockYBSwapRouter {
     using SafeERC20 for IERC20;
 
     // exchange rate: amount_out = amount_in * rate / 1e18

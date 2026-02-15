@@ -72,7 +72,7 @@ describe("MintedYB Core", function () {
     priceAgg = await MockAgg.deploy(AGG_PRICE);
 
     // Deploy MockSwapRouter
-    const MockRouter = await ethers.getContractFactory("MockSwapRouter");
+    const MockRouter = await ethers.getContractFactory("MockYBSwapRouter");
     swapRouter = await MockRouter.deploy();
 
     // Seed the Curve pool with liquidity (so add_liquidity/remove_liquidity works)
@@ -249,9 +249,12 @@ describe("MintedYB Core", function () {
     });
 
     it("should compute LEV_RATIO correctly for 2x leverage", async function () {
-      // LEV_RATIO = 1e18 * 2e18 / (4e18 - 1e18) = 2e36/3e18 ≈ 0.6667e18
+      // LEV_RATIO = leverage² * 1e18 / (2 * leverage - 1e18)²
+      // For 2x: 4e36 * 1e18 / 9e36 = 4e18/9 ≈ 0.4444e18
       const levRatio = await amm.LEV_RATIO();
-      const expected = (10n ** 18n * 2n * 10n ** 18n) / (4n * 10n ** 18n - 10n ** 18n);
+      const leverage = 2n * 10n ** 18n;
+      const denom = 2n * leverage - 10n ** 18n;
+      const expected = (leverage * leverage * 10n ** 18n) / (denom * denom);
       expect(levRatio).to.equal(expected);
     });
   });
@@ -298,7 +301,7 @@ describe("MintedYB Core", function () {
       expect(await lt.balanceOf(user1.address)).to.equal(0);
     });
 
-    it("should increase pricePerShare after fee accrual", async function () {
+    it("should reflect interest accrual in pricePerShare", async function () {
       // Deposit
       const depositAmount = ethers.parseEther("5");
       const debtAmount = BTC_PRICE * 5n;
@@ -307,13 +310,15 @@ describe("MintedYB Core", function () {
 
       const ppsBefore = await lt.pricePerShare();
 
-      // Simulate time passing (interest accrues)
-      await time.increase(365 * 24 * 3600); // 1 year
+      // Simulate time passing (interest accrues on debt)
+      await time.increase(30 * 24 * 3600); // 30 days (at ~100% APR, debt grows ~8%)
 
       const ppsAfter = await lt.pricePerShare();
-      // With a positive borrow rate, pricePerShare should increase (from interest)
-      // The actual change depends on accumulated fees
-      expect(ppsAfter).to.be.gte(ppsBefore);
+      // Without trading fees to offset, growing debt reduces LP value
+      // So pricePerShare should decrease when only interest accrues
+      expect(ppsAfter).to.be.lt(ppsBefore);
+      // But it should still be positive (not zero)
+      expect(ppsAfter).to.be.gt(0);
     });
 
     it("should reject deposit of zero assets", async function () {
