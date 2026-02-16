@@ -71,9 +71,9 @@ invariant subStrategyCountBounded()
     subStrategyCount() <= 4
     filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
-/// @notice driftThresholdBps is always >= MIN_DRIFT_BPS (200)
+/// @notice driftThresholdBps is 0 (uninitialized) or >= MIN_DRIFT_BPS (200)
 invariant driftThresholdAboveMinimum()
-    driftThresholdBps() >= 200
+    driftThresholdBps() == 0 || driftThresholdBps() >= 200
     filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -87,7 +87,7 @@ rule deposit_accounting(uint256 amount) {
     require e.msg.value == 0, "MetaVault does not accept ETH";
 
     uint256 principalBefore = totalPrincipal();
-    require principalBefore + amount <= max_uint256;
+    require principalBefore + amount <= max_uint256, "prevent overflow";
 
     deposit@withrevert(e, amount);
     bool succeeded = !lastReverted;
@@ -110,8 +110,8 @@ rule deposit_zero_reverts() {
 /// @notice deposit() when not active must revert
 rule deposit_inactive_reverts(uint256 amount) {
     env e;
-    require !active();
-    require amount > 0;
+    require !active(), "vault is not active";
+    require amount > 0, "deposit amount must be non-zero";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit while inactive must revert";
 }
@@ -141,7 +141,7 @@ rule deposit_no_strategies_reverts(uint256 amount) {
 /// @notice withdraw() reduces totalPrincipal
 rule withdraw_decreases_principal(uint256 amount) {
     env e;
-    require amount > 0;
+    require amount > 0, "withdraw amount must be non-zero";
 
     uint256 principalBefore = totalPrincipal();
 
@@ -177,10 +177,10 @@ rule withdrawAll_clears_principal() {
 /// @notice addSubStrategy increases count by 1
 rule addSubStrategy_increments_count(address strat, uint256 weight, uint256 cap) {
     env e;
-    require strat != 0;
+    require strat != 0, "strategy address must be non-zero";
 
     uint256 countBefore = subStrategyCount();
-    require countBefore < 4;
+    require countBefore < 4, "must have room for another sub-strategy";
 
     addSubStrategy@withrevert(e, strat, weight, cap);
     bool succeeded = !lastReverted;
@@ -199,7 +199,7 @@ rule addSubStrategy_zero_reverts(uint256 weight, uint256 cap) {
 /// @notice Cannot add more than MAX_STRATEGIES (4) sub-strategies
 rule addSubStrategy_max_limit(address strat, uint256 weight, uint256 cap) {
     env e;
-    require subStrategyCount() >= 4;
+    require subStrategyCount() >= 4, "at max sub-strategy capacity";
 
     addSubStrategy@withrevert(e, strat, weight, cap);
     assert lastReverted, "addSubStrategy must revert when at max capacity";
@@ -209,8 +209,8 @@ rule addSubStrategy_max_limit(address strat, uint256 weight, uint256 cap) {
 rule removeSubStrategy_decrements_count(uint256 index) {
     env e;
     uint256 countBefore = subStrategyCount();
-    require countBefore > 0;
-    require index < countBefore;
+    require countBefore > 0, "must have at least one sub-strategy";
+    require index < countBefore, "index must be within bounds";
 
     removeSubStrategy@withrevert(e, index);
     bool succeeded = !lastReverted;
@@ -222,7 +222,7 @@ rule removeSubStrategy_decrements_count(uint256 index) {
 /// @notice removeSubStrategy with out-of-bounds index reverts
 rule removeSubStrategy_invalid_index(uint256 index) {
     env e;
-    require index >= subStrategyCount();
+    require index >= subStrategyCount(), "index out of bounds";
 
     removeSubStrategy@withrevert(e, index);
     assert lastReverted, "removeSubStrategy with invalid index must revert";
@@ -258,7 +258,7 @@ rule rebalance_cooldown_enforced() {
     uint256 cooldown = rebalanceCooldown();
 
     // If current time < lastRebalance + cooldown, must revert
-    require e.block.timestamp < lastRebal + cooldown;
+    require e.block.timestamp < lastRebal + cooldown, "cooldown has not elapsed";
 
     rebalance@withrevert(e);
     assert lastReverted, "rebalance must enforce cooldown";
@@ -267,7 +267,7 @@ rule rebalance_cooldown_enforced() {
 /// @notice rebalance() with zero sub-strategies must revert
 rule rebalance_no_strategies_reverts() {
     env e;
-    require subStrategyCount() == 0;
+    require subStrategyCount() == 0, "no sub-strategies configured";
 
     rebalance@withrevert(e);
     assert lastReverted, "rebalance with no sub-strategies must revert";
@@ -276,7 +276,7 @@ rule rebalance_no_strategies_reverts() {
 /// @notice rebalance() when paused must revert
 rule rebalance_paused_reverts() {
     env e;
-    require paused();
+    require paused(), "contract is paused";
 
     rebalance@withrevert(e);
     assert lastReverted, "rebalance while paused must revert";
@@ -313,7 +313,7 @@ rule rebalance_preserves_principal() {
 /// @notice setDriftThreshold rejects values below MIN_DRIFT_BPS (200)
 rule setDrift_rejects_low(uint256 bps) {
     env e;
-    require bps < 200;
+    require bps < 200, "testing below MIN_DRIFT_BPS boundary";
 
     setDriftThreshold@withrevert(e, bps);
     assert lastReverted, "setDriftThreshold must reject bps < MIN_DRIFT_BPS";
@@ -322,7 +322,7 @@ rule setDrift_rejects_low(uint256 bps) {
 /// @notice setDriftThreshold sets the new value
 rule setDrift_stores_value(uint256 bps) {
     env e;
-    require bps >= 200;
+    require bps >= 200, "testing valid drift threshold";
 
     setDriftThreshold@withrevert(e, bps);
     bool succeeded = !lastReverted;
@@ -338,7 +338,7 @@ rule setDrift_stores_value(uint256 bps) {
 /// @notice emergencyWithdrawFrom with invalid index reverts
 rule emergencyWithdrawFrom_invalid_index(uint256 index) {
     env e;
-    require index >= subStrategyCount();
+    require index >= subStrategyCount(), "index out of bounds";
 
     emergencyWithdrawFrom@withrevert(e, index);
     assert lastReverted, "emergencyWithdrawFrom with invalid index must revert";
@@ -484,7 +484,7 @@ rule paused_blocks_deposits(uint256 amount) {
 
 rule paused_blocks_rebalance() {
     env e;
-    require paused();
+    require paused(), "contract is paused";
     rebalance@withrevert(e);
     assert lastReverted, "rebalance must revert when paused";
 }
