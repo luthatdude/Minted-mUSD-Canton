@@ -4,7 +4,6 @@ pragma solidity 0.8.26;
 import "./interfaces/IGlobalPauseRegistry.sol";
 import "./Errors.sol";
 
-error GloballyPaused();
 
 /// @title GlobalPausable
 /// @notice Mixin providing `whenNotGloballyPaused` modifier.

@@ -174,6 +174,18 @@ function strategyKey(addr: string): string {
   return STRATEGY_KEY_MAP[name] || addr.toLowerCase();
 }
 
+/** H-01: Validate Ethereum address */
+function isAddr(v: string): boolean {
+  try { return ethers.isAddress(v); } catch { return false; }
+}
+
+/** H-02: Validate basis points in range [0, 10000] */
+function isValidBps(v: string): boolean {
+  if (!v) return false;
+  const n = Number(v);
+  return Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 10000;
+}
+
 export function AdminPage() {
   const { address, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
@@ -181,39 +193,7 @@ export function AdminPage() {
   const [section, setSection] = useState<AdminSection>("musd");
   const tx = useTx();
 
-  // H-08: Role gate — only render admin controls if wallet has admin/timelock role
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <h2 className="text-xl font-semibold text-gray-300">Admin Panel</h2>
-        <p className="text-gray-400">Connect your wallet to access admin functions.</p>
-        <WalletConnector />
-      </div>
-    );
-  }
-
-  if (isAdminLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <p className="text-gray-400">Verifying admin role…</p>
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <h2 className="text-xl font-semibold text-red-400">Access Denied</h2>
-        <p className="text-gray-400">
-          Connected wallet <span className="font-mono text-sm">{address}</span> does not
-          hold an admin role on this protocol.
-        </p>
-        <p className="text-gray-500 text-sm">
-          Required: DEFAULT_ADMIN_ROLE or TIMELOCK_ROLE on the MUSD contract.
-        </p>
-      </div>
-    );
-  }
+  // ── All state hooks (must precede conditional returns — Rules of Hooks) ──
 
   // MUSD Admin
   const [newSupplyCap, setNewSupplyCap] = useState("");
@@ -261,12 +241,15 @@ export function AdminPage() {
 
   const { musd, directMint, treasury, bridge, borrow, oracle } = contracts;
 
-  // Current values display
+  // Current values + data-loading state (H-04)
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     async function loadCurrentValues() {
       if (!address) return;
+      setLoadError(null);
       const vals: Record<string, string> = {};
       try {
         if (musd) vals.supplyCap = formatUSD(await musd.supplyCap());
@@ -295,8 +278,10 @@ export function AdminPage() {
                 });
               }
             }
-            setStrategyList(stratItems);
-          } catch {}
+            if (!cancelled) setStrategyList(stratItems);
+          } catch (err) {
+            console.error("[AdminPage] Strategy list load failed:", err);
+          }
         }
         if (bridge) {
           vals.bridgeMinSigs = (await bridge.minSignatures()).toString();
@@ -307,14 +292,48 @@ export function AdminPage() {
           vals.interestRate = formatBps(await borrow.interestRateBps());
           vals.minDebt = formatUSD(await borrow.minDebt());
         }
-      } catch {}
-      setCurrentValues(vals);
+      } catch (err) {
+        console.error("[AdminPage] Failed to load protocol data:", err);
+        if (!cancelled) setLoadError("Failed to load protocol data. Check RPC connection.");
+      }
+      if (!cancelled) setCurrentValues(vals);
     }
     loadCurrentValues();
+    return () => { cancelled = true; };
   }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
 
+  // ── Conditional returns (after all hooks — C-01 fix) ──
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <h2 className="text-xl font-semibold text-gray-300">Admin Panel</h2>
+        <p className="text-gray-400">Connect your wallet to access admin functions.</p>
+        <WalletConnector />
+      </div>
+    );
+  }
+
+  if (isAdminLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-gray-400">Verifying admin role…</p>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <h2 className="text-xl font-semibold text-red-400">Access Denied</h2>
+        <p className="text-gray-400">
+          Connected wallet <span className="font-mono text-sm">{address}</span> does not
+          hold an admin role on this protocol.
+        </p>
+        <p className="text-gray-500 text-sm">
+          Required: DEFAULT_ADMIN_ROLE or TIMELOCK_ROLE on the MUSD contract.
+        </p>
+      </div>
+    );
   }
 
   const sections: { key: AdminSection; label: string }[] = [
@@ -355,6 +374,11 @@ export function AdminPage() {
           Transaction confirmed!
         </div>
       )}
+      {loadError && (
+        <div className="rounded-lg border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-400">
+          ⚠️ {loadError}
+        </div>
+      )}
 
       {/* ===== mUSD Section ===== */}
       {section === "musd" && (
@@ -367,7 +391,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => musd!.setSupplyCap(ethers.parseUnits(newSupplyCap, MUSD_DECIMALS)))}
               loading={tx.loading}
-              disabled={!newSupplyCap}
+              disabled={!musd || !newSupplyCap}
             >
               Set Supply Cap
             </TxButton>
@@ -380,7 +404,7 @@ export function AdminPage() {
                 className="flex-1"
                 onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, true))}
                 loading={tx.loading}
-                disabled={!blacklistAddr}
+                disabled={!musd || !blacklistAddr || !isAddr(blacklistAddr)}
                 variant="danger"
               >
                 Blacklist
@@ -389,7 +413,7 @@ export function AdminPage() {
                 className="flex-1"
                 onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, false))}
                 loading={tx.loading}
-                disabled={!blacklistAddr}
+                disabled={!musd || !blacklistAddr || !isAddr(blacklistAddr)}
                 variant="secondary"
               >
                 Unblacklist
@@ -423,7 +447,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => directMint!.setFees(BigInt(mintFeeBps), BigInt(redeemFeeBps)))}
               loading={tx.loading}
-              disabled={!mintFeeBps || !redeemFeeBps}
+              disabled={!directMint || !isValidBps(mintFeeBps) || !isValidBps(redeemFeeBps)}
             >
               Update Fees
             </TxButton>
@@ -461,7 +485,7 @@ export function AdminPage() {
                 )
               }
               loading={tx.loading}
-              disabled={!minMint || !maxMint || !minRedeem || !maxRedeem}
+              disabled={!directMint || !minMint || !maxMint || !minRedeem || !maxRedeem}
             >
               Update Limits
             </TxButton>
@@ -473,19 +497,19 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => directMint!.setFeeRecipient(newFeeRecipient))}
               loading={tx.loading}
-              disabled={!newFeeRecipient}
+              disabled={!directMint || !newFeeRecipient || !isAddr(newFeeRecipient)}
             >
               Set Fee Recipient
             </TxButton>
           </div>
           <div className="grid gap-4 sm:grid-cols-3">
-            <TxButton onClick={() => tx.send(() => directMint!.withdrawFees())} loading={tx.loading}>
+            <TxButton onClick={() => tx.send(() => directMint!.withdrawFees())} loading={tx.loading} disabled={!directMint}>
               Withdraw Fees
             </TxButton>
-            <TxButton onClick={() => tx.send(() => directMint!.pause())} loading={tx.loading} variant="danger">
+            <TxButton onClick={() => tx.send(() => directMint!.pause())} loading={tx.loading} disabled={!directMint} variant="danger">
               Pause
             </TxButton>
-            <TxButton onClick={() => tx.send(() => directMint!.unpause())} loading={tx.loading} variant="secondary">
+            <TxButton onClick={() => tx.send(() => directMint!.unpause())} loading={tx.loading} disabled={!directMint} variant="secondary">
               Unpause
             </TxButton>
           </div>
@@ -669,7 +693,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.deployToStrategy(deployStratAddr, ethers.parseUnits(deployAmount, USDC_DECIMALS)))}
               loading={tx.loading}
-              disabled={!deployStratAddr || !deployAmount}
+              disabled={!treasury || !deployStratAddr || !deployAmount}
             >
               Deploy to Strategy
             </TxButton>
@@ -703,7 +727,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.withdrawFromStrategy(withdrawStratAddr, ethers.parseUnits(withdrawAmount, USDC_DECIMALS)))}
               loading={tx.loading}
-              disabled={!withdrawStratAddr || !withdrawAmount}
+              disabled={!treasury || !withdrawStratAddr || !withdrawAmount}
               variant="secondary"
             >
               Withdraw from Strategy
@@ -794,7 +818,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.addStrategy(addStrategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), autoAllocate))}
               loading={tx.loading}
-              disabled={!addStrategyAddr || !targetBps || !minBps || !maxBps}
+              disabled={!treasury || !addStrategyAddr || !isAddr(addStrategyAddr) || !isValidBps(targetBps) || !isValidBps(minBps) || !isValidBps(maxBps)}
             >
               Add Strategy
             </TxButton>
@@ -820,7 +844,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.removeStrategy(removeStrategyAddr))}
               loading={tx.loading}
-              disabled={!removeStrategyAddr}
+              disabled={!treasury || !removeStrategyAddr}
               variant="danger"
             >
               Remove Strategy
@@ -836,7 +860,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => treasury!.setReserveBps(BigInt(reserveBps)))}
               loading={tx.loading}
-              disabled={!reserveBps}
+              disabled={!treasury || !isValidBps(reserveBps)}
             >
               Set Reserve
             </TxButton>
@@ -845,12 +869,14 @@ export function AdminPage() {
             <TxButton
               onClick={() => tx.send(() => treasury!.rebalance())}
               loading={tx.loading}
+              disabled={!treasury}
             >
               Rebalance All
             </TxButton>
             <TxButton
               onClick={() => tx.send(() => treasury!.claimFees())}
               loading={tx.loading}
+              disabled={!treasury}
               variant="secondary"
             >
               Claim Fees
@@ -858,6 +884,7 @@ export function AdminPage() {
             <TxButton
               onClick={() => tx.send(() => treasury!.emergencyWithdrawAll())}
               loading={tx.loading}
+              disabled={!treasury}
               variant="danger"
             >
               Emergency Withdraw All
@@ -880,14 +907,14 @@ export function AdminPage() {
               <div>
                 <label className="label">Min Signatures</label>
                 <input className="input" type="number" value={bridgeMinSigs} onChange={(e) => setBridgeMinSigs(e.target.value)} />
-                <TxButton className="mt-2 w-full" onClick={() => tx.send(() => bridge!.setMinSignatures(BigInt(bridgeMinSigs)))} loading={tx.loading} disabled={!bridgeMinSigs}>
+                <TxButton className="mt-2 w-full" onClick={() => tx.send(() => bridge!.setMinSignatures(BigInt(bridgeMinSigs)))} loading={tx.loading} disabled={!bridge || !bridgeMinSigs}>
                   Update
                 </TxButton>
               </div>
               <div>
                 <label className="label">Collateral Ratio (bps)</label>
                 <input className="input" type="number" value={bridgeRatio} onChange={(e) => setBridgeRatio(e.target.value)} />
-                <TxButton className="mt-2 w-full" onClick={() => tx.send(() => bridge!.setCollateralRatio(BigInt(bridgeRatio)))} loading={tx.loading} disabled={!bridgeRatio}>
+                <TxButton className="mt-2 w-full" onClick={() => tx.send(() => bridge!.setCollateralRatio(BigInt(bridgeRatio)))} loading={tx.loading} disabled={!bridge || !isValidBps(bridgeRatio)}>
                   Update
                 </TxButton>
               </div>
@@ -907,17 +934,17 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => bridge!.emergencyReduceCap(ethers.parseUnits(emergencyCap, MUSD_DECIMALS), emergencyReason))}
               loading={tx.loading}
-              disabled={!emergencyCap || !emergencyReason}
+              disabled={!bridge || !emergencyCap || !emergencyReason}
               variant="danger"
             >
               Emergency Reduce Cap
             </TxButton>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <TxButton onClick={() => tx.send(() => bridge!.pause())} loading={tx.loading} variant="danger">
+            <TxButton onClick={() => tx.send(() => bridge!.pause())} loading={tx.loading} disabled={!bridge} variant="danger">
               Pause Bridge
             </TxButton>
-            <TxButton onClick={() => tx.send(() => bridge!.unpause())} loading={tx.loading} variant="secondary">
+            <TxButton onClick={() => tx.send(() => bridge!.unpause())} loading={tx.loading} disabled={!bridge} variant="secondary">
               Unpause Bridge
             </TxButton>
           </div>
@@ -938,7 +965,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => borrow!.setInterestRate(BigInt(newInterestRate)))}
               loading={tx.loading}
-              disabled={!newInterestRate}
+              disabled={!borrow || !isValidBps(newInterestRate)}
             >
               Set Interest Rate
             </TxButton>
@@ -950,7 +977,7 @@ export function AdminPage() {
               className="mt-3 w-full"
               onClick={() => tx.send(() => borrow!.setMinDebt(ethers.parseUnits(newMinDebt, MUSD_DECIMALS)))}
               loading={tx.loading}
-              disabled={!newMinDebt}
+              disabled={!borrow || !newMinDebt}
             >
               Set Min Debt
             </TxButton>
@@ -989,7 +1016,7 @@ export function AdminPage() {
                 )
               }
               loading={tx.loading}
-              disabled={!oracleToken || !oracleFeed}
+              disabled={!oracle || !oracleToken || !oracleFeed || !isAddr(oracleToken) || !isAddr(oracleFeed)}
             >
               Set Feed
             </TxButton>
