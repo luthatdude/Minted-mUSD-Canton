@@ -506,6 +506,7 @@ contract CompoundV3LoopStrategy is
             comet.withdraw(address(collateralAsset), uint256(collBalance));
             // Sell collateral → USDC to repay flash loan
             IERC20(address(collateralAsset)).forceApprove(address(swapRouter), uint256(collBalance));
+            // CV3-01: Use minSwapOutputBps instead of 0 to prevent sandwich attacks
             swapRouter.exactInputSingle(
                 ISwapRouterV3Compound.ExactInputSingleParams({
                     tokenIn: address(collateralAsset),
@@ -513,7 +514,7 @@ contract CompoundV3LoopStrategy is
                     fee: defaultSwapFeeTier,
                     recipient: address(this),
                     amountIn: uint256(collBalance),
-                    amountOutMinimum: 0, // Protected by overall slippage check
+                    amountOutMinimum: (uint256(collBalance) * minSwapOutputBps) / BPS,
                     sqrtPriceLimitX96: 0
                 })
             );
@@ -659,6 +660,7 @@ contract CompoundV3LoopStrategy is
             uint256 balance = IERC20(compToken).balanceOf(address(this));
             if (balance > 0) {
                 IERC20(compToken).forceApprove(address(swapRouter), balance);
+                // CV3-01: Use minSwapOutputBps instead of 0 to prevent sandwich attacks
                 uint256 received = swapRouter.exactInputSingle(
                     ISwapRouterV3Compound.ExactInputSingleParams({
                         tokenIn: compToken,
@@ -666,7 +668,7 @@ contract CompoundV3LoopStrategy is
                         fee: defaultSwapFeeTier,
                         recipient: address(this),
                         amountIn: balance,
-                        amountOutMinimum: 0,
+                        amountOutMinimum: (balance * minSwapOutputBps) / BPS,
                         sqrtPriceLimitX96: 0
                     })
                 );
