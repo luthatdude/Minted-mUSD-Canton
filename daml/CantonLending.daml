@@ -33,6 +33,7 @@ import DA.Optional (fromOptional)
 import DA.List (dedup)
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, CantonDirectMintService(..))
 import CantonSMUSD (CantonSMUSD(..))
+import CantonETHPool (CantonSMUSD_E(..), TimeLockTier(..))
 import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
@@ -48,6 +49,7 @@ data CollateralType
   | CTN_USDC       -- CantonUSDC (stable)
   | CTN_USDCx      -- USDCx / xReserve bridged (stable)
   | CTN_SMUSD      -- CantonSMUSD (yield-bearing stable)
+  | CTN_SMUSDE     -- CantonSMUSD_E (ETH Pool variant — lending/borrowing enabled)
   deriving (Eq, Show, Ord)
 
 -- | Per-asset collateral parameters (mirrors CollateralVault.sol CollateralConfig)
@@ -101,6 +103,18 @@ defaultSMUSDConfig = CollateralConfig with
     liquidationPenaltyBps = 400      -- 4% penalty
     liquidationBonusBps = 200        -- 2% keeper bonus
     maxStalenessSecs = 1800          -- DAML-M-03: 30 min — yield-bearing, moderate refresh
+
+-- | Default config for smUSD-E (ETH Pool variant — lending/borrowing enabled)
+-- Slightly lower LTV than smUSD due to ETH price exposure and time-lock risk
+defaultSMUSDEConfig : CollateralConfig
+defaultSMUSDEConfig = CollateralConfig with
+    collateralType = CTN_SMUSDE
+    enabled = True
+    collateralFactorBps = 8500       -- 85% LTV — ETH price exposure + time-lock risk
+    liquidationThresholdBps = 9000   -- 90%
+    liquidationPenaltyBps = 500      -- 5% penalty
+    liquidationBonusBps = 250        -- 2.5% keeper bonus
+    maxStalenessSecs = 1800          -- 30 min — synced from ETH pool share price
 
 -- ============================================================
 --                     SECTION 2: CANTON PRICE FEED
@@ -779,6 +793,62 @@ template CantonLendingService
 
         return (self, escrowCid)
 
+    -- | Deposit CantonSMUSD_E (ETH Pool variant) as collateral
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositSMUSDE : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user      : Party
+        smusdeCid : ContractId CantonSMUSD_E
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        smusde <- fetch smusdeCid
+        assertMsg "NOT_OWNER" (smusde.owner == user)
+        let cfg = getConfig CTN_SMUSDE configs
+        assertMsg "SMUSDE_NOT_ENABLED" cfg.enabled
+
+        -- DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "SMUSDE_ISSUER_MUST_BE_OPERATOR" (smusde.issuer == operator)
+
+        archive smusdeCid
+
+        now <- getTime
+        -- smUSD-E amount = shares (valued at smUSD-E share price via price feed)
+        userObs <- lookupUserObservers operator user
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSDE)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = smusde.shares
+            caller = user
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_SMUSDE
+            amount = smusde.shares
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = observers <> userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSDE)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = smusde.shares
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_SMUSDE
+              totalDeposited = smusde.shares
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, escrowCid)
+
     -- ──────────────────────────────────────────────────────
     --  BORROW mUSD
     -- ──────────────────────────────────────────────────────
@@ -1175,6 +1245,75 @@ template CantonLendingService
 
         return (self, smusdCid)
 
+    -- | Withdraw CantonSMUSD_E collateral (ETH Pool variant).
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawSMUSDE : (ContractId CantonLendingService, ContractId CantonSMUSD_E)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSDE)
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
+
+        existingDebt <- getExistingDebtAndAccrue operator user
+        if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_SMUSDE configs
+            smusdePrice <- getCtxPrice operator "sMUSD-E" priceFeedCids True (seconds cfg.maxStalenessSecs)
+            return (remainingThisEscrow * smusdePrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          pure ()
+
+        -- Recreate CantonSMUSD_E with current share price from feed
+        currentSharePrice <- getCtxPrice operator "sMUSD-E" priceFeedCids True (seconds (getConfig CTN_SMUSDE configs).maxStalenessSecs)
+        now <- getTime
+        userObs <- lookupUserObservers operator user
+        smusdeCid <- create CantonSMUSD_E with
+          issuer = operator
+          owner = user
+          shares = withdrawAmount
+          entrySharePrice = currentSharePrice
+          musdStaked = withdrawAmount * currentSharePrice  -- approximate underlying
+          tier = NoLock       -- Withdrawn collateral loses time-lock
+          stakedAt = escrow.depositedAt
+          unlockAt = None     -- No lock on withdrawn collateral
+          privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSDE)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, smusdeCid)
+
     -- ──────────────────────────────────────────────────────
     --  LIQUIDATION
     -- ──────────────────────────────────────────────────────
@@ -1290,6 +1429,19 @@ template CantonLendingService
               shares = actualSeize
               entrySharePrice = colPrice
               stakedAt = now2
+              privacyObservers = userObs
+            pure ()
+          CTN_SMUSDE -> do
+            now2 <- getTime
+            create CantonSMUSD_E with
+              issuer = operator
+              owner = liquidator
+              shares = actualSeize
+              entrySharePrice = colPrice
+              musdStaked = actualSeize * colPrice
+              tier = NoLock
+              stakedAt = now2
+              unlockAt = None
               privacyObservers = userObs
             pure ()
 
@@ -1520,10 +1672,11 @@ getCtxPriceByType operator ct cfgs feeds safe =
   let cfg = getConfig ct cfgs
       staleness = seconds cfg.maxStalenessSecs
   in case ct of
-    CTN_Coin  -> getCtxPrice operator "CTN" feeds safe staleness
-    CTN_USDC  -> getCtxPrice operator "USDC" feeds safe staleness
-    CTN_USDCx -> getCtxPrice operator "USDCx" feeds safe staleness
-    CTN_SMUSD -> getCtxPrice operator "sMUSD" feeds safe staleness
+    CTN_Coin   -> getCtxPrice operator "CTN" feeds safe staleness
+    CTN_USDC   -> getCtxPrice operator "USDC" feeds safe staleness
+    CTN_USDCx  -> getCtxPrice operator "USDCx" feeds safe staleness
+    CTN_SMUSD  -> getCtxPrice operator "sMUSD" feeds safe staleness
+    CTN_SMUSDE -> getCtxPrice operator "sMUSD-E" feeds safe staleness
 
 -- | Compute total collateral value weighted by collateralFactorBps
 computeWeightedCollateralValue : Party -> Party -> [CollateralConfig] -> [ContractId EscrowedCollateral] -> [ContractId CantonPriceFeed] -> Bool -> Update Money
