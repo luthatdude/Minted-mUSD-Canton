@@ -10,15 +10,21 @@ dotenv.config();
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 const RPC_URL = process.env.RPC_URL || "";
 
+// solidity-coverage sets SOLIDITY_COVERAGE=true during instrumented compilation.
+// viaIR is needed to avoid "Stack too deep" errors from the extra instrumentation
+// variables, but it slows compilation ~3x so we only enable it for coverage runs.
+const isCoverage = process.env.SOLIDITY_COVERAGE === "true";
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [
       {
         version: "0.8.26",
         settings: {
+          viaIR: isCoverage,
           optimizer: {
             enabled: true,
-            runs: 200,
+            runs: isCoverage ? 1 : 200, // low runs + viaIR avoids stack-too-deep
           },
         },
       },
@@ -27,6 +33,7 @@ const config: HardhatUserConfig = {
       "contracts/strategies/PendleStrategyV2.sol": {
         version: "0.8.26",
         settings: {
+          viaIR: isCoverage,
           optimizer: {
             enabled: true,
             runs: 1,
