@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Minted Protocol — ETH Pool with Time-Locked Staking and smUSD-E Issuance
+// Minted Protocol — ETH Pool with Multi-Asset Staking, Fluid Strategy, and smUSD-E Issuance
 // Security: CEI pattern, ReentrancyGuard, Pausable, oracle price validation
 //
 // Architecture:
-//   Ethereum: User deposits ETH → mUSD minted at oracle price → staked → smUSD-E issued
+//   Ethereum: User deposits ETH/USDC/USDT → mUSD minted at oracle price → staked → smUSD-E issued
 //   Canton:   No ETH exists — mUSD minted directly into pool → staked → smUSD-E issued
 //   smUSD-E is a lending/borrowing-enabled token (depositable in CollateralVault)
+//   Yield: Fluid Protocol smart collateral (T2) + smart debt (T4) leveraged loops
+//
+// Accepted assets (Ethereum):
+//   - ETH (native, converted via oracle price)
+//   - USDC (6 decimals, 1:1 USD)
+//   - USDT (6 decimals, 1:1 USD)
 //
 // Time-Lock Tiers (yield multipliers):
 //   None:   0 days  — 1.0x  (no lock, no boost)
@@ -18,8 +24,11 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IMUSD.sol";
 import "./interfaces/IPriceOracle.sol";
+import "./interfaces/ILeverageLoopStrategy.sol";
 import "./Errors.sol";
 
 /// @dev Minimal interface for smUSD-E mint/burn (avoids circular import)
@@ -30,13 +39,15 @@ interface ISMUSDE_Pool {
 }
 
 /// @title ETHPool
-/// @notice ETH-denominated staking pool: deposit ETH → mint mUSD → stake → receive smUSD-E
-/// @dev On Canton (no native ETH), mUSD is minted directly into the pool and staked
+/// @notice Multi-asset staking pool with Fluid Protocol yield strategy
+/// @dev Accepts ETH/USDC/USDT, deploys capital to Fluid T2/T4 leveraged loops
 contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
+    using SafeERC20 for IERC20;
 
     bytes32 public constant POOL_MANAGER_ROLE = keccak256("POOL_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
+    bytes32 public constant STRATEGY_MANAGER_ROLE = keccak256("STRATEGY_MANAGER_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     //                     EXTERNAL CONTRACTS
@@ -46,6 +57,26 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     ISMUSDE_Pool public immutable smUsdE;
     IPriceOracle public priceOracle;
     address public immutable weth;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     ACCEPTED STABLECOINS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Whitelisted stablecoins that can be deposited (USDC, USDT)
+    mapping(address => bool) public acceptedStablecoins;
+
+    /// @notice Decimal precision for each accepted stablecoin
+    mapping(address => uint8) public stablecoinDecimals;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     FLUID STRATEGY
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Fluid strategy for ETH-denominated yield (T2 or T4 vault)
+    ILeverageLoopStrategy public fluidStrategy;
+
+    /// @notice Total value deployed to the Fluid strategy
+    uint256 public totalDeployedToStrategy;
 
     // ═══════════════════════════════════════════════════════════════════════
     //                     TIME-LOCK TIERS
@@ -65,7 +96,8 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     // ═══════════════════════════════════════════════════════════════════════
 
     struct StakePosition {
-        uint256 ethDeposited;     // Original ETH deposited
+        address depositAsset;     // Asset deposited (address(0) = ETH)
+        uint256 depositAmount;    // Original amount deposited (in deposit asset decimals)
         uint256 musdMinted;       // mUSD minted at deposit time
         uint256 smUsdEShares;     // smUSD-E shares received (after multiplier)
         TimeLockTier tier;        // Selected time-lock tier
@@ -85,6 +117,7 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     // ═══════════════════════════════════════════════════════════════════════
 
     uint256 public totalETHDeposited;
+    uint256 public totalStablecoinDeposited;  // Normalized to 18 decimals
     uint256 public totalMUSDMinted;
     uint256 public totalSMUSDEIssued;
     uint256 public poolCap;
@@ -102,7 +135,8 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     event Staked(
         address indexed user,
         uint256 indexed positionId,
-        uint256 ethAmount,
+        address indexed depositAsset,
+        uint256 depositAmount,
         uint256 musdAmount,
         uint256 smUsdEShares,
         TimeLockTier tier,
@@ -111,13 +145,19 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     event Unstaked(
         address indexed user,
         uint256 indexed positionId,
-        uint256 ethReturned,
+        address depositAsset,
+        uint256 amountReturned,
         uint256 smUsdEBurned
     );
     event SharePriceUpdated(uint256 oldPrice, uint256 newPrice);
     event PoolCapUpdated(uint256 oldCap, uint256 newCap);
     event TierConfigUpdated(TimeLockTier indexed tier, uint256 duration, uint256 multiplierBps);
     event PriceOracleUpdated(address indexed oldOracle, address indexed newOracle);
+    event StablecoinAdded(address indexed token, uint8 decimals);
+    event StablecoinRemoved(address indexed token);
+    event FluidStrategyUpdated(address indexed oldStrategy, address indexed newStrategy);
+    event DeployedToStrategy(uint256 amount);
+    event WithdrawnFromStrategy(uint256 amount);
 
     constructor(
         address _musd,
@@ -158,9 +198,6 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     /// @return positionId The ID of the created stake position
     function stake(TimeLockTier tier) external payable nonReentrant whenNotPaused returns (uint256 positionId) {
         if (msg.value == 0) revert ZeroAmount();
-        if (totalETHDeposited + msg.value > poolCap) revert ExceedsSupplyCap();
-
-        TierConfig memory config = tierConfigs[tier];
 
         // Get ETH/USD price from oracle (18 decimals)
         uint256 ethPrice = priceOracle.getPrice(weth);
@@ -169,6 +206,60 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
         // Calculate mUSD to mint: ethAmount * ethPrice / 1e18
         uint256 musdAmount = (msg.value * ethPrice) / 1e18;
         if (musdAmount == 0) revert ZeroOutput();
+
+        // Pool cap check in mUSD terms
+        if (totalMUSDMinted + musdAmount > poolCap) revert ExceedsSupplyCap();
+
+        positionId = _createPosition(msg.sender, address(0), msg.value, musdAmount, tier);
+
+        totalETHDeposited += msg.value;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     STAKING: USDC/USDT → mUSD → smUSD-E
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Deposit USDC or USDT, mint mUSD 1:1 (minus oracle deviation), stake, receive smUSD-E
+    /// @param token Stablecoin address (must be whitelisted)
+    /// @param amount Amount of stablecoin to deposit (in token decimals)
+    /// @param tier Time-lock tier for yield multiplier boost
+    /// @return positionId The ID of the created stake position
+    function stakeWithToken(
+        address token,
+        uint256 amount,
+        TimeLockTier tier
+    ) external nonReentrant whenNotPaused returns (uint256 positionId) {
+        if (amount == 0) revert ZeroAmount();
+        if (!acceptedStablecoins[token]) revert TokenNotSupported();
+
+        // Transfer stablecoin from user (SafeERC20 handles USDT's non-standard return)
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        // Normalize to 18 decimals for mUSD (stablecoins are 1:1 with USD)
+        uint8 decimals = stablecoinDecimals[token];
+        uint256 musdAmount = amount * (10 ** (18 - decimals));
+        if (musdAmount == 0) revert ZeroOutput();
+
+        // Pool cap check in mUSD terms
+        if (totalMUSDMinted + musdAmount > poolCap) revert ExceedsSupplyCap();
+
+        positionId = _createPosition(msg.sender, token, amount, musdAmount, tier);
+
+        totalStablecoinDeposited += musdAmount;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     INTERNAL: POSITION CREATION
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function _createPosition(
+        address user,
+        address depositAsset,
+        uint256 depositAmount,
+        uint256 musdAmount,
+        TimeLockTier tier
+    ) internal returns (uint256 positionId) {
+        TierConfig memory config = tierConfigs[tier];
 
         // Calculate smUSD-E shares with tier multiplier
         uint256 baseShares = (musdAmount * 1e18) / sharePrice;
@@ -179,14 +270,15 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
         musd.mint(address(this), musdAmount);
 
         // Mint smUSD-E to user
-        smUsdE.mint(msg.sender, boostedShares);
+        smUsdE.mint(user, boostedShares);
 
-        // Create position (Effects before Interactions — ETH already received via payable)
-        positionId = nextPositionId[msg.sender]++;
+        // Create position
+        positionId = nextPositionId[user]++;
         uint256 unlockTime = config.duration > 0 ? block.timestamp + config.duration : 0;
 
-        positions[msg.sender][positionId] = StakePosition({
-            ethDeposited: msg.value,
+        positions[user][positionId] = StakePosition({
+            depositAsset: depositAsset,
+            depositAmount: depositAmount,
             musdMinted: musdAmount,
             smUsdEShares: boostedShares,
             tier: tier,
@@ -195,14 +287,17 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
             active: true
         });
 
-        totalETHDeposited += msg.value;
         totalMUSDMinted += musdAmount;
         totalSMUSDEIssued += boostedShares;
 
-        emit Staked(msg.sender, positionId, msg.value, musdAmount, boostedShares, tier, unlockTime);
+        emit Staked(user, positionId, depositAsset, depositAmount, musdAmount, boostedShares, tier, unlockTime);
     }
 
-    /// @notice Unstake: burn smUSD-E, return original ETH deposit
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     UNSTAKING
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Unstake: burn smUSD-E, return original deposit
     /// @param positionId The position to unstake
     function unstake(uint256 positionId) external nonReentrant whenNotPaused {
         StakePosition storage pos = positions[msg.sender][positionId];
@@ -210,25 +305,99 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
         if (pos.unlockAt > 0 && block.timestamp < pos.unlockAt) revert CooldownActive();
 
         uint256 sharesToBurn = pos.smUsdEShares;
-        uint256 ethToReturn = pos.ethDeposited;
 
         // Check user still holds the smUSD-E shares
         if (smUsdE.balanceOf(msg.sender) < sharesToBurn) revert InsufficientBalance();
 
+        address depositAsset = pos.depositAsset;
+        uint256 amountToReturn = pos.depositAmount;
+
         // Effects: close position before interactions
         pos.active = false;
-        totalETHDeposited -= ethToReturn;
         totalMUSDMinted -= pos.musdMinted;
         totalSMUSDEIssued -= sharesToBurn;
 
-        // Interactions: burn smUSD-E, then transfer ETH
+        if (depositAsset == address(0)) {
+            // ETH position
+            totalETHDeposited -= amountToReturn;
+        } else {
+            // Stablecoin position — denormalize
+            uint8 decimals = stablecoinDecimals[depositAsset];
+            uint256 normalized = amountToReturn * (10 ** (18 - decimals));
+            totalStablecoinDeposited -= normalized;
+        }
+
+        // Interactions: burn smUSD-E
         smUsdE.burn(msg.sender, sharesToBurn);
 
-        // slither-disable-next-line arbitrary-send-eth
-        (bool success, ) = payable(msg.sender).call{value: ethToReturn}("");
-        if (!success) revert ETHTransferFailed();
+        // Return original deposit
+        if (depositAsset == address(0)) {
+            // slither-disable-next-line arbitrary-send-eth
+            (bool success, ) = payable(msg.sender).call{value: amountToReturn}("");
+            if (!success) revert ETHTransferFailed();
+        } else {
+            IERC20(depositAsset).safeTransfer(msg.sender, amountToReturn);
+        }
 
-        emit Unstaked(msg.sender, positionId, ethToReturn, sharesToBurn);
+        emit Unstaked(msg.sender, positionId, depositAsset, amountToReturn, sharesToBurn);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //                     FLUID STRATEGY DEPLOYMENT
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Deploy idle pool capital to the Fluid leveraged loop strategy
+    /// @param amount Amount of input asset to deploy (in strategy asset decimals)
+    function deployToStrategy(uint256 amount) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+        if (address(fluidStrategy) == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
+        if (!fluidStrategy.isActive()) revert NotActive();
+
+        address strategyAsset = fluidStrategy.asset();
+        IERC20(strategyAsset).forceApprove(address(fluidStrategy), amount);
+        uint256 deposited = fluidStrategy.deposit(amount);
+
+        totalDeployedToStrategy += deposited;
+        emit DeployedToStrategy(deposited);
+    }
+
+    /// @notice Withdraw capital from the Fluid strategy back to pool
+    /// @param amount Amount to withdraw
+    function withdrawFromStrategy(uint256 amount) external onlyRole(STRATEGY_MANAGER_ROLE) nonReentrant {
+        if (address(fluidStrategy) == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 withdrawn = fluidStrategy.withdraw(amount);
+        totalDeployedToStrategy = withdrawn > totalDeployedToStrategy
+            ? 0
+            : totalDeployedToStrategy - withdrawn;
+
+        emit WithdrawnFromStrategy(withdrawn);
+    }
+
+    /// @notice Get the total value held in pool + strategy
+    function totalPoolValue() external view returns (uint256) {
+        uint256 strategyValue = address(fluidStrategy) != address(0)
+            ? fluidStrategy.totalValue()
+            : 0;
+        return totalMUSDMinted + strategyValue;
+    }
+
+    /// @notice Get Fluid strategy health factor (1e18 = 1.0x)
+    function strategyHealthFactor() external view returns (uint256) {
+        if (address(fluidStrategy) == address(0)) return type(uint256).max;
+        return fluidStrategy.getHealthFactor();
+    }
+
+    /// @notice Get Fluid strategy position details
+    function strategyPosition() external view returns (
+        uint256 collateral,
+        uint256 borrowed,
+        uint256 principal,
+        uint256 netValue
+    ) {
+        if (address(fluidStrategy) == address(0)) return (0, 0, 0, 0);
+        return fluidStrategy.getPosition();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -253,7 +422,34 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     //                     ADMIN
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Update pool cap
+    /// @notice Add an accepted stablecoin (USDC, USDT)
+    /// @param token Stablecoin contract address
+    /// @param decimals Token decimal precision (6 for USDC/USDT)
+    function addStablecoin(address token, uint8 decimals) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (token == address(0)) revert ZeroAddress();
+        if (decimals > 18) revert TokenDecimalsTooHigh();
+        if (acceptedStablecoins[token]) revert AlreadyAdded();
+
+        acceptedStablecoins[token] = true;
+        stablecoinDecimals[token] = decimals;
+        emit StablecoinAdded(token, decimals);
+    }
+
+    /// @notice Remove an accepted stablecoin
+    function removeStablecoin(address token) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (!acceptedStablecoins[token]) revert NotPreviouslyAdded();
+        acceptedStablecoins[token] = false;
+        emit StablecoinRemoved(token);
+    }
+
+    /// @notice Set the Fluid leveraged loop strategy
+    function setFluidStrategy(address _strategy) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        address old = address(fluidStrategy);
+        fluidStrategy = ILeverageLoopStrategy(_strategy);
+        emit FluidStrategyUpdated(old, _strategy);
+    }
+
+    /// @notice Update pool cap (in mUSD terms, 18 decimals)
     function setPoolCap(uint256 newCap) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (newCap == 0) revert InvalidAmount();
         uint256 oldCap = poolCap;
@@ -262,9 +458,6 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Update a time-lock tier configuration
-    /// @param tier The tier to update
-    /// @param duration Lock duration in seconds
-    /// @param multiplierBps Yield multiplier (10000 = 1.0x, max 30000 = 3.0x)
     function setTierConfig(
         TimeLockTier tier,
         uint256 duration,
