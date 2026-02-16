@@ -122,17 +122,9 @@ invariant kink_bounded()
     kinkBps() <= 10000;
 
 /// @notice Max annual rate at 100% utilization is capped at 100%
-/// @dev The contract computes maxRate = baseRateBps + (kinkBps * multiplierBps) / 10000
-///      + ((10000 - kinkBps) * jumpMultiplierBps) / 10000, and reverts if > 10000.
-///      The raw sum base+multiplier+jump can exceed 10000 due to kink scaling.
-rule max_rate_bounded() {
-    mathint base = baseRateBps();
-    mathint mult = multiplierBps();
-    mathint kink = kinkBps();
-    mathint jump = jumpMultiplierBps();
-
-    mathint maxRate = base + (kink * mult) / 10000 + ((10000 - kink) * jump) / 10000;
-
-    assert maxRate <= 10000,
-        "Max annual rate exceeds 100%";
-}
+/// @dev setParams enforces: base + (kink*mult)/10000 + ((10000-kink)*jump)/10000 <= 10000.
+///      Must be an invariant (not a rule) because a rule starts from arbitrary state.
+///      Invariant checks constructor base case + preservation through setParams.
+invariant max_rate_bounded()
+    baseRateBps() + (kinkBps() * multiplierBps()) / 10000
+    + ((10000 - kinkBps()) * jumpMultiplierBps()) / 10000 <= 10000;
