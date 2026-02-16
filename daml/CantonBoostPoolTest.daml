@@ -1,3 +1,28 @@
+
+
+module CantonBoostPoolTest where
+
+import DA.Time
+import DA.Set qualified as Set
+import DA.List (head)
+import DA.Optional (fromOptional, fromSome)
+import DA.Date
+import Daml.Script
+import CantonBoostPool
+import CantonDirectMint (Money, Bps)
+import CantonSMUSD (CantonSMUSD(..), CantonSMUSDTransferProposal(..), CantonSMUSDTransferProposal_Accept(..), CantonSMUSDTransferProposal_Reject(..), CantonSMUSDTransferProposal_Cancel(..), SMUSD_Transfer(..))
+import CantonLending (EscrowedCollateral, CollateralType(..))
+import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..), CantonCoin_Transfer(..), CantonCoin_Split(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
+import UserPrivacySettings (lookupUserObservers)
+
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
+import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
+
+
+-- | Global base time for all tests (2020-01-01T00:00:00Z)
+baseTime : Time
+baseTime = datetime 2020 Jan 1 0 0 0
+
 -- | CantonBoostPoolTest
 -- Deep test suite for the Canton Boost Pool
 
@@ -1165,12 +1190,12 @@ test_LPTransfer = script do
       cantonCid
       smusdCid
 
-  -- Alice transfers LP to Bob
-  proposalCid <- submit alice do
+  -- Alice transfers LP to Bob (readAs operator needed to see ComplianceRegistry)
+  proposalCid <- submitMulti [alice] [operator] do
     exerciseCmd lpCid BPLP_Transfer with newOwner = bob
 
   -- Bob accepts
-  newLpCid <- submit bob do
+  newLpCid <- submitMulti [bob] [operator] do
     exerciseCmd proposalCid BPLPTransferProposal_Accept
 
   -- Bob can withdraw (after cooldown — uses Alice's original depositedAt)
@@ -1513,4 +1538,51 @@ test_NonOperatorAdmin = script do
       withdrawAmount = 1.0
 
   debug "TEST 25 PASSED: Non-operator cannot call admin choices"
+  pure ()
+
+
+-- ============================================================
+--         TEST 26: CANTON SMUSD TRANSFER PROPOSAL
+-- ============================================================
+
+-- | CantonSMUSDTransferProposal accept/reject/cancel lifecycle
+test_SMUSDTransferProposal : Script ()
+test_SMUSDTransferProposal = script do
+  operator <- allocateParty "Operator"
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  -- Create CantonSMUSD for Alice (using the existing helper)
+  smusdCid <- createSmusd operator alice 1000.0 1.0 baseTime
+
+  -- Transfer: Alice → Bob (needs readAs operator for ComplianceRegistry visibility)
+  proposalCid <- submitMulti [alice] [operator] do
+    exerciseCmd smusdCid SMUSD_Transfer with newOwner = bob
+
+  -- Bob accepts
+  newSmusdCid <- submitMulti [bob] [operator] do
+    exerciseCmd proposalCid CantonSMUSDTransferProposal_Accept
+
+  smusd <- queryContractId operator newSmusdCid
+  assertMsg "Bob owns sMUSD" ((fromSome smusd).owner == bob)
+
+  -- Test reject: create another sMUSD, propose, Bob rejects
+  smusd2Cid <- createSmusd operator alice 500.0 1.0 baseTime
+  proposalCid2 <- submitMulti [alice] [operator] do
+    exerciseCmd smusd2Cid SMUSD_Transfer with newOwner = bob
+  rejectedCid <- submitMulti [bob] [operator] do
+    exerciseCmd proposalCid2 CantonSMUSDTransferProposal_Reject
+  rej <- queryContractId operator rejectedCid
+  assertMsg "Alice still owns after reject" ((fromSome rej).owner == alice)
+
+  -- Test cancel: create another, propose, Alice cancels
+  smusd3Cid <- createSmusd operator alice 300.0 1.0 baseTime
+  proposalCid3 <- submitMulti [alice] [operator] do
+    exerciseCmd smusd3Cid SMUSD_Transfer with newOwner = bob
+  cancelledCid <- submitMulti [alice] [operator] do
+    exerciseCmd proposalCid3 CantonSMUSDTransferProposal_Cancel
+  can <- queryContractId operator cancelledCid
+  assertMsg "Alice still owns after cancel" ((fromSome can).owner == alice)
+
+  debug "TEST 26 PASSED: CantonSMUSDTransferProposal accept/reject/cancel"
   pure ()

@@ -370,6 +370,10 @@ jobs:
         working-directory: relay
         run: npx tsc --noEmit
 
+      - name: Run relay tests
+        working-directory: relay
+        run: npm test
+
   # ============================================================
   #  DOCKER: Build & Scan Relay Image
   # ============================================================
