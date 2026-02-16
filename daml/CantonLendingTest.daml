@@ -161,8 +161,8 @@ testPriceFeedMovementCap = do
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
-  -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown
+  passTime (minutes 31)
   -- Create governance proof for emergency update
   govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-update"
   -- Emergency update bypasses movement cap
@@ -467,8 +467,8 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
-  -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown
+  passTime (minutes 31)
   govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
@@ -972,3 +972,51 @@ testFullLifecycle = do
   coin <- queryContractId setup.operator returnedCoinCid
   assertMsg "Got all 10000 CTN back" ((fromSome coin).amount == 10000.0)
   debug "✅ 30. Full lifecycle: deposit → borrow → repay → withdraw"
+
+
+-- ============================================================
+--         31. LENDING AGGREGATE CREATION & UPDATE
+-- ============================================================
+
+-- | LendingAggregate tracks protocol-wide borrow/supply/reserve state
+testLendingAggregate : Script ()
+testLendingAggregate = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 6 12 0 0)
+  now <- getTime
+
+  -- Create aggregate
+  aggCid <- submit operator do
+    createCmd LendingAggregate with
+      operator
+      serviceName = "CantonLending"
+      totalBorrows = 0.0
+      cantonCurrentSupply = 0.0
+      protocolReserves = 0.0
+      lastUpdateTime = now
+
+  -- Update borrow state
+  aggCid2 <- submit operator do
+    exerciseCmd aggCid Aggregate_UpdateBorrow with
+      borrowDelta = 1000.0
+      supplyDelta = 500.0
+      reserveDelta = 50.0
+
+  agg <- queryContractId operator aggCid2
+  assertMsg "Borrows updated" ((fromSome agg).totalBorrows == 1000.0)
+  assertMsg "Supply updated" ((fromSome agg).cantonCurrentSupply == 500.0)
+  assertMsg "Reserves updated" ((fromSome agg).protocolReserves == 50.0)
+
+  -- Negative delta (repayment)
+  aggCid3 <- submit operator do
+    exerciseCmd aggCid2 Aggregate_UpdateBorrow with
+      borrowDelta = -500.0
+      supplyDelta = -200.0
+      reserveDelta = 10.0
+
+  agg2 <- queryContractId operator aggCid3
+  assertMsg "Borrows after repay" ((fromSome agg2).totalBorrows == 500.0)
+  assertMsg "Supply after withdrawal" ((fromSome agg2).cantonCurrentSupply == 300.0)
+  assertMsg "Reserves after accrual" ((fromSome agg2).protocolReserves == 60.0)
+
+  debug "✅ 31. LendingAggregate created and updated"
