@@ -18,6 +18,18 @@ methods {
     function markDepositsComplete(uint64[]) external;
     function setFee(uint256) external;
     function paused() external returns (bool) envfree;
+
+    // ── External contract summaries ──
+    // Without these, Certora uses HAVOC dispatching for external calls,
+    // which can modify DepositRouter storage (breaking completion_is_final).
+    function _.transfer(address, uint256) external => NONDET;
+    function _.transferFrom(address, address, uint256) external => NONDET;
+    function _.balanceOf(address) external => PER_CALLEE_CONSTANT;
+    function _.allowance(address, address) external => PER_CALLEE_CONSTANT;
+    function _.sendPayloadToEvm(uint16, address, bytes, uint256, uint256) external => NONDET;
+    function _.quoteEVMDeliveryPrice(uint16, uint256, uint256) external => PER_CALLEE_CONSTANT;
+    function _.transferTokensWithPayload(address, uint256, uint16, bytes32, uint32, bytes) external => NONDET;
+    function _.wrappedAsset(uint16, bytes32) external => PER_CALLEE_CONSTANT;
 }
 
 // ═══════════════════════════════════════════════════════════════════
