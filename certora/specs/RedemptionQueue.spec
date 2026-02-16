@@ -43,10 +43,12 @@ methods {
     function hasRole(bytes32, address) external returns (bool) envfree;
 
     // ── External contract summaries ──
-    function _.safeTransferFrom(address, address, uint256) external => NONDET;
-    function _.safeTransfer(address, uint256)               external => NONDET;
+    // SafeERC20 library calls are internal — the actual external calls are transferFrom/transfer
+    function _.transferFrom(address, address, uint256) external => NONDET;
+    function _.transfer(address, uint256)               external => NONDET;
     function _.balanceOf(address)                           external => PER_CALLEE_CONSTANT;
     function _.burn(address, uint256)                       external => NONDET;
+    function _.approve(address, uint256)                    external => NONDET DELETE;
 }
 
 // ═══════════════════════════════════════════════════════════════════
