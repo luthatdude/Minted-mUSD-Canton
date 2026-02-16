@@ -228,12 +228,6 @@ template MintedMUSD
       && T.length agreementHash == 64
       && T.length agreementUri > 0
 
-    agreement
-      "By holding or transferring this MintedMUSD token, the owner acknowledges "
-      <> "they are bound by the Master Participation Agreement. "
-      <> "Agreement hash: " <> agreementHash
-      <> " | URI: " <> agreementUri
-
     -- | Transfer mUSD to another party
     -- Creates a TransferProposal that the newOwner must accept
     choice MUSD_Transfer : ContractId MUSDTransferProposal
@@ -425,9 +419,6 @@ template PriceOracle
   where
     signatory provider
     observer observers
-
-    key (provider, symbol) : (Party, Text)
-    maintainer key._1
 
     ensure price > 0.0
 
@@ -1291,6 +1282,7 @@ template CantonSMUSD
           entrySharePrice = sharePrice
           stakedAt = now
           cooldownSeconds = config.cooldownSeconds
+          complianceRegistryCid = complianceRegistryCid
         
         -- Update pool
         newService <- create this with

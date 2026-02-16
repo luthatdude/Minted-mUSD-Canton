@@ -14,6 +14,7 @@ import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
 import { ETH_POOL_ABI } from "@/abis/ETHPool";
 import { SMUSDE_ABI } from "@/abis/SMUSDE";
+import { META_VAULT_ABI } from "@/abis/MetaVault";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -30,6 +31,9 @@ const ABI_MAP: Record<string, readonly string[]> = {
   USDT: ERC20_ABI,
   ETHPool: ETH_POOL_ABI,
   SMUSDE: SMUSDE_ABI,
+  MetaVault1: META_VAULT_ABI,
+  MetaVault2: META_VAULT_ABI,
+  MetaVault3: META_VAULT_ABI,
 };
 
 /**
@@ -73,6 +77,9 @@ export function useWCContracts() {
         oracle: null,
         ethPool: null,
         smusde: null,
+        metaVault1: null,
+        metaVault2: null,
+        metaVault3: null,
       };
     }
 
@@ -97,6 +104,9 @@ export function useWCContracts() {
       oracle: createContract("PriceOracle"),
       ethPool: createContract("ETHPool"),
       smusde: createContract("SMUSDE"),
+      metaVault1: createContract("MetaVault1"),
+      metaVault2: createContract("MetaVault2"),
+      metaVault3: createContract("MetaVault3"),
     };
   }, [signer, provider, isConnected]);
 }

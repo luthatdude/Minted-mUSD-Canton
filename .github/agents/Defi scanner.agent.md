@@ -46,7 +46,7 @@ DEFILLAMA_LEND_BORROW = "https://yields.llama.fi/lendBorrow"
 DEFILLAMA_PROTOCOLS = "https://api.llama.fi/protocols"
 DEFILLAMA_STABLECOINS = "https://stablecoins.llama.fi/stablecoins?includePrices=true"
 
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+LLM_MODEL = "sonnet-4-20250514"
 
 # Stablecoin symbols for filtering
 STABLECOINS = {
@@ -809,7 +809,7 @@ When answering:
     with console.status("[green]Analyzing with AI + web search...", spinner="dots"):
         try:
             response = client.messages.create(
-                model=ANTHROPIC_MODEL,
+                model=LLM_MODEL,
                 max_tokens=MAX_TOKENS,
                 system=system,
                 messages=[{"role": "user", "content": query}],

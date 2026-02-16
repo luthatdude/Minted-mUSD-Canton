@@ -189,9 +189,6 @@ template CantonLoopStrategyService
     signatory operator
     observer observers
 
-    key (operator, serviceName) : (Party, Text)
-    maintainer key._1
-
     ensure maxLoops > 0 && maxLoops <= 20
         && maxLeverageX10 >= 10 && maxLeverageX10 <= 40
         && minBorrowPerLoop > 0.0
@@ -443,9 +440,7 @@ template CantonLoopRequest
       do
         -- Compliance check from config
         cfg <- fetch configCid
-        case cfg.complianceRegistryCid of
-          Some regCid -> exercise regCid ValidateMint with minter = user
-          None -> pure ()
+        exercise cfg.complianceRegistryCid ValidateMint with minter = user
 
         -- DAML-C-03: Validate issuer matches operator before
         -- archiving dual-signatory token to prevent runtime authorization failures.
@@ -525,9 +520,7 @@ template CantonUnwindRequest
       do
         -- Compliance check from config
         cfg <- fetch configCid
-        case cfg.complianceRegistryCid of
-          Some regCid -> exercise regCid ValidateRedemption with redeemer = user
-          None -> pure ()
+        exercise cfg.complianceRegistryCid ValidateRedemption with redeemer = user
         -- Validate sMUSD count matches loops completed
         assertMsg "SMUSD_COUNT_MISMATCH" (length smusdToArchive == loopsCompleted)
         -- Validate mUSD burn required when debt exists

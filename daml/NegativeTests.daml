@@ -111,9 +111,21 @@ test_UnauthorizedTransfer = do
       observers = []
 
   -- Attacker tries to initiate transfer (not the owner)
+  -- Note: MUSD_Transfer requires complianceRegistryCid but test expects auth failure
+  -- Create a compliance registry for the transfer call
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = attacker
+      complianceRegistryCid = complianceCid
 
   return ()
 
@@ -140,9 +152,19 @@ test_BlacklistedCannotTransfer = do
       observers = []
 
   -- Owner tries to transfer blacklisted token
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver
+      complianceRegistryCid = complianceCid
 
   return ()
 
@@ -423,15 +445,26 @@ test_DoubleSpendPrevented = do
       observers = []
 
   -- First transfer (valid)
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   proposalCid <- submit owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
+      complianceRegistryCid = complianceCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
+      complianceRegistryCid = complianceCid
 
   return ()
 

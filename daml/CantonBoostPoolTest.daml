@@ -1,41 +1,17 @@
 -- | CantonBoostPoolTest
 -- Deep test suite for the Canton Boost Pool
---
--- Tests:
---   1. Deposit flow — Canton-only deposit, sMUSD qualifier, LP issuance
---   2. Deposit cap enforcement — cannot exceed sMUSD value × 0.25
---   3. Withdraw flow — LP burn, proportional Canton return, exit fee
---   4. Cooldown enforcement — cannot withdraw before cooldown
---   5. Validator reward distribution — 60/40 split, share price increase
---   6. Price sync — Canton price update, share price update, bounds
---   7. Admin controls — pause, fee updates, cap ratio, observers
---   8. Edge cases — first depositor, multiple depositors, reward + withdraw
---   9. Negative tests — unauthorized, paused, invalid amounts
---  10. Full lifecycle — deposit → rewards → price change → withdraw with profit
 
-module CantonBoostPoolTest where
-
-import CantonBoostPool
-import CantonCoinToken (CantonCoin(..), CantonCoin_Split(..), CantonCoin_Transfer(..), CantonCoinTransferProposal(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
-import CantonSMUSD (CantonSMUSD(..))
-import CantonDirectMint (Money)
-import Compliance (ComplianceRegistry(..))
-import DA.Set qualified as Set
-import DA.Time
-import DA.Date
-import Daml.Script
-import Governance (GovernanceActionLog(..), ActionType(..))
-
--- ============================================================
---                     HELPERS
--- ============================================================
-
-baseTime : Time
-baseTime = time (date 2026 Jan 1) 0 0 0
-
--- | Create a CantonSMUSD position for a user (operator + user both signatories)
 createSmusd : Party -> Party -> Money -> Money -> Time -> Script (ContractId CantonSMUSD)
-createSmusd operator user shares entryPrice stakedAt =
+createSmusd operator user shares entryPrice stakedAt = do
+  regulator <- allocateParty "SmusdRegulator"
+  now <- getTime
+  tempComplianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submitMulti [operator, user] [] do
     createCmd CantonSMUSD with
       issuer = operator
@@ -43,6 +19,7 @@ createSmusd operator user shares entryPrice stakedAt =
       shares
       entrySharePrice = entryPrice
       stakedAt
+      complianceRegistryCid = tempComplianceCid
       privacyObservers = []
 
 -- | Create a CantonCoin for a user
@@ -818,6 +795,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 100
+      governanceProofCid = feeProof1
 
   -- Invalid: entry fee > 500 bps (5%)
   feeProof2 <- submit operator do
@@ -836,6 +814,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 600
       newExitFeeBps = 100
+      governanceProofCid = feeProof2
 
   -- Invalid: exit fee > 500 bps
   feeProof3 <- submit operator do
@@ -854,6 +833,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 100
       newExitFeeBps = 501
+      governanceProofCid = feeProof3
 
   -- Valid: zero fees
   feeProof4 <- submit operator do
@@ -872,6 +852,7 @@ test_FeeUpdate = script do
     exerciseCmd poolCid2 BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
+      governanceProofCid = feeProof4
 
   debug "TEST 12 PASSED: Fee update — bounds enforced"
   pure ()
@@ -905,6 +886,7 @@ test_CapRatioUpdate = script do
   poolCid2 <- submit operator do
     exerciseCmd poolCid BoostPool_UpdateCapRatio with
       newCapRatio = 0.50
+      governanceProofCid = capProof1
 
   -- Invalid: zero ratio
   capProof2 <- submit operator do
@@ -922,6 +904,7 @@ test_CapRatioUpdate = script do
   submitMustFail operator do
     exerciseCmd poolCid2 BoostPool_UpdateCapRatio with
       newCapRatio = 0.0
+      governanceProofCid = capProof2
 
   -- Invalid: > 1.0
   capProof3 <- submit operator do
@@ -939,6 +922,7 @@ test_CapRatioUpdate = script do
   submitMustFail operator do
     exerciseCmd poolCid2 BoostPool_UpdateCapRatio with
       newCapRatio = 1.5
+      governanceProofCid = capProof3
 
   debug "TEST 13 PASSED: Cap ratio update — bounds enforced"
   pure ()
@@ -1488,11 +1472,25 @@ test_NonOperatorAdmin = script do
     exerciseCmd poolCid BoostPool_SetPaused with
       newPaused = True
 
-  -- Attacker cannot update fees
+  -- Attacker cannot update fees (need governance proof, but test expects auth failure)
+  now <- getTime
+  dummyProof <- submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-attacker-fee"
+      actionType = ParameterUpdate
+      description = "test"
+      payload = ""
+      payloadHash = ""
+      targetModule = "CantonBoostPool"
+      approvers = [governor]
+      executedBy = governor
+      executedAt = now
   submitMultiMustFail [attacker] [operator] do
     exerciseCmd poolCid BoostPool_UpdateFees with
       newEntryFeeBps = 0
       newExitFeeBps = 0
+      governanceProofCid = dummyProof
 
   -- Attacker cannot distribute rewards
   submitMultiMustFail [attacker] [operator] do

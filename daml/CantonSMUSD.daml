@@ -190,6 +190,7 @@ template CantonStakingService
           shares = newShares
           entrySharePrice = globalSharePrice
           stakedAt = now
+          complianceRegistryCid = complianceRegistryCid
           privacyObservers = userObs
 
         -- Update pool state (local shares only - global sync happens via bridge)

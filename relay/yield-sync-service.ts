@@ -20,8 +20,7 @@
  */
 
 import { ethers } from "ethers";
-import Ledger from "@daml/ledger";
-import { ContractId } from "@daml/types";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
 import { readSecret, enforceTLSSecurity, createSigner } from "./utils";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
@@ -196,7 +195,7 @@ interface YieldAttestation {
 
 // Matches BLEBridgeProtocol.YieldSignature
 interface YieldSignature {
-  requestCid: ContractId<YieldAttestation>;
+  requestCid: string;
   validator: string;
   aggregator: string;
   ecdsaSignature: string;
@@ -229,7 +228,7 @@ class YieldSyncService {
   private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
   private smusd!: ethers.Contract;
-  private ledger: Ledger;
+  private canton: CantonClient;
   private isRunning: boolean = false;
 
   // State tracking
@@ -280,11 +279,12 @@ class YieldSyncService {
 
     // Canton connection (TLS by default)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
       token: config.cantonToken,
-      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+      userId: "administrator",
+      actAs: config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
@@ -350,9 +350,9 @@ class YieldSyncService {
     this.lastGlobalSharePrice = BigInt(currentSharePrice.toString());
 
     // Get last epoch from Canton staking service
-    const stakingServices = await (this.ledger.query as any)(
-      "CantonSMUSD:CantonStakingService",
-      { operator: this.config.cantonParty }
+    const stakingServices = await this.canton.queryContracts<CantonStakingService>(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
+      (p) => p.operator === this.config.cantonParty
     );
 
     if (stakingServices.length > 0) {
@@ -381,9 +381,9 @@ class YieldSyncService {
     // ═══════════════════════════════════════════════════════════════════
     console.log(`\n[YieldSync] Step 1: Syncing Canton shares → Ethereum...`);
     
-    const stakingServices = await (this.ledger.query as any)(
-      "CantonSMUSD:CantonStakingService",
-      { operator: this.config.cantonParty }
+    const stakingServices = await this.canton.queryContracts<CantonStakingService>(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
+      (p) => p.operator === this.config.cantonParty
     );
 
     if (stakingServices.length === 0) {
@@ -434,8 +434,8 @@ class YieldSyncService {
     // ═══════════════════════════════════════════════════════════════════
     console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
 
-    await (this.ledger.exercise as any)(
-      "CantonSMUSD:CantonStakingService",
+    await this.canton.exerciseChoice(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
       cantonService.contractId,
       "SyncGlobalSharePrice",
       {

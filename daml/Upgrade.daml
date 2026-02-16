@@ -76,9 +76,6 @@ template UpgradeProposal
         && migrationWindowDays > 0
         && rollbackWindowDays >= 0
 
-    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
-    maintainer key._1
-
     -- | Governance member approves the upgrade
     choice UpgradeProposal_Approve : ContractId UpgradeProposal
       with
@@ -156,9 +153,6 @@ template UpgradeRegistry
 
     ensure totalMigrated >= 0 && totalRolledBack >= 0
 
-    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
-    maintainer key._1
-
     -- | Record a successful migration (called by MigrationTicket)
     choice UpgradeRegistry_RecordMigration : ContractId UpgradeRegistry
       with
@@ -220,12 +214,14 @@ template MigrationTicket
 
     -- | Execute the migration (operator processes after validation)
     choice MigrationTicket_Execute : ContractId UpgradeMigrationLog
+      with
+        registryCid : ContractId UpgradeRegistry  -- LF 2.x: explicit CID instead of fetchByKey
       controller operator
       do
         now <- getTime
         
         -- Verify upgrade is still active
-        (registryCid, registry) <- fetchByKey @UpgradeRegistry upgradeKey
+        registry <- fetch registryCid
         assertMsg "UPGRADE_NOT_ACTIVE" (registry.status == Active)
         
         -- Record migration count

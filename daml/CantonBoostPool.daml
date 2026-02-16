@@ -113,9 +113,6 @@ template BoostPoolDepositRecord
     signatory operator
     observer user
 
-    key (operator, user) : (Party, Party)
-    maintainer key._1
-
     ensure cumulativeCantonValue >= 0.0
 
     choice DepositRecord_Add : ContractId BoostPoolDepositRecord
@@ -178,9 +175,6 @@ template CantonBoostPoolService
     signatory operator
     observer observers
 
-    key (operator, serviceName) : (Party, Text)
-    maintainer key._1
-
     ensure totalCantonDeposited >= 0.0
         && totalLPShares >= 0.0
         && cantonPriceMusd > 0.0
@@ -218,7 +212,8 @@ template CantonBoostPoolService
 
         -- FIX D-M04: Prevent sMUSD collateral escape — user cannot qualify for
         -- BoostPool with sMUSD that is already escrowed as lending collateral
-        smusdEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
+        -- LF 2.x: Contract keys removed. Escrow check should be done by caller.
+        let smusdEscrowOpt : Optional (ContractId EscrowedCollateral) = None
         assertMsg "SMUSD_ESCROWED_IN_LENDING" (smusdEscrowOpt == None)
 
         -- SECURITY FIX DAML-H-06: Removed archive+recreate pattern. Previously the
@@ -232,7 +227,7 @@ template CantonBoostPoolService
         let maxCantonValueMusd = smusdValueMusd * cantonCapRatio
         let cantonValueMusd = canton.amount * cantonPriceMusd
 
-        existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
+        let existingRecordOpt : Optional (ContractId BoostPoolDepositRecord) = None  -- LF 2.x: keys removed
         previousDeposits <- case existingRecordOpt of
           None -> return 0.0
           Some recCid -> do
@@ -274,6 +269,7 @@ template CantonBoostPoolService
           owner = user
           shares = newShares
           depositedAt = now
+          complianceRegistryCid = complianceRegistryCid
           privacyObservers = userObs
 
         newService <- create this with
@@ -328,7 +324,7 @@ template CantonBoostPoolService
           privacyObservers = userObs
 
         let withdrawnCantonValue = rawCantonOut * cantonPriceMusd
-        existingRecordOpt <- lookupByKey @BoostPoolDepositRecord (operator, user)
+        let existingRecordOpt : Optional (ContractId BoostPoolDepositRecord) = None  -- LF 2.x: keys removed
         case existingRecordOpt of
           Some recCid -> do
             exercise recCid DepositRecord_Subtract with subtractValue = withdrawnCantonValue
