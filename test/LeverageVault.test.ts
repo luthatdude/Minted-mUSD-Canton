@@ -54,7 +54,7 @@ describe('LeverageVault', function () {
 
     // Deploy collateral vault
     const CollateralVault = await ethers.getContractFactory('CollateralVault');
-    collateralVault = await CollateralVault.deploy();
+    collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
 
     // Add WETH as collateral (75% LTV, 80% liquidation threshold, 5% penalty)
     await timelockAddCollateral(
@@ -69,7 +69,7 @@ describe('LeverageVault', function () {
 
     // Deploy mUSD contract (with mint/burn roles)
     const MUSD = await ethers.getContractFactory('MUSD');
-    musd = await MUSD.deploy(ethers.parseEther('100000000')); // 100M supply cap
+    musd = await MUSD.deploy(ethers.parseEther('100000000'), ethers.ZeroAddress); // 100M supply cap
 
     // Deploy borrow module
     const BorrowModule = await ethers.getContractFactory('BorrowModule');

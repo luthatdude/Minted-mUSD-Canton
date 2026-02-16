@@ -219,10 +219,10 @@ describe("FUZZ: SMUSD ERC-4626 Properties", function () {
     const [deployer, bridge, yieldManager, user1] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);
@@ -353,7 +353,7 @@ describe("FUZZ: LiquidationEngine", function () {
     const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
@@ -364,7 +364,7 @@ describe("FUZZ: LiquidationEngine", function () {
     await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
 
     await timelockAddCollateral(
       collateralVault, owner,
@@ -538,10 +538,10 @@ describe("FUZZ: Arithmetic Edge Cases", function () {
     const [deployer, bridge, , user1] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSDFactory.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSDFactory.deploy(await musd.getAddress());
+    const smusd = await SMUSDFactory.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.connect(bridge).mint(user1.address, ethers.parseEther("10000000"));

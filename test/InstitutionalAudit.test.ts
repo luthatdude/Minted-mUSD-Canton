@@ -399,7 +399,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
@@ -409,7 +409,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
     await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
     await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
@@ -423,7 +423,7 @@ describe("BorrowModule — Full Coverage (Audit)", function () {
 
     // Deploy SMUSD
     const SMUSD = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSD.deploy(await musd.getAddress());
+    const smusd = await SMUSD.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     // Deploy InterestRateModel (single admin address constructor)
     const InterestRateModel = await ethers.getContractFactory("InterestRateModel");
@@ -1136,10 +1136,10 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
     const [deployer, user1, user2] = await ethers.getSigners();
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const SMUSD = await ethers.getContractFactory("SMUSD");
-    const smusd = await SMUSD.deploy(await musd.getAddress());
+    const smusd = await SMUSD.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     // Grant BRIDGE_ROLE to deployer for minting
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
@@ -1377,7 +1377,7 @@ describe("CollateralVault — Additional Coverage (Audit)", function () {
     const wbtc = await MockERC20.deploy("Wrapped BTC", "WBTC", 8);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const vault = await CollateralVault.deploy();
+    const vault = await CollateralVault.deploy(ethers.ZeroAddress);
 
     await vault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
@@ -1453,7 +1453,7 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
     const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
@@ -1463,7 +1463,7 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
     await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
     await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
 
     const BorrowModule = await ethers.getContractFactory("BorrowModule");
@@ -1569,7 +1569,7 @@ describe("DirectMintV2 — Fee Edge Cases (Audit)", function () {
     const usdc = await MockERC20.deploy("USDC", "USDC", 6);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     // Deploy a TreasuryV2 as UUPS proxy
     const TreasuryV2 = await ethers.getContractFactory("TreasuryV2");
@@ -1665,7 +1665,7 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     const [deployer, admin, attester, user] = await ethers.getSigners();
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     // Deploy BLEBridgeV9 as UUPS proxy
     const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");

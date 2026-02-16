@@ -44,7 +44,7 @@ describe("CoverageBoost — DirectMintV2", function () {
 
     // Deploy MUSD
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Deploy TreasuryV2 (upgradeable)

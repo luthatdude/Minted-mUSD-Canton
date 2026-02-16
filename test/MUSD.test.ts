@@ -23,7 +23,7 @@ describe("MUSD", function () {
     [deployer, bridge, compliance, emergency, user1, user2] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Grant roles
@@ -51,7 +51,7 @@ describe("MUSD", function () {
 
     it("should revert with zero supply cap", async function () {
       const MUSDFactory = await ethers.getContractFactory("MUSD");
-      await expect(MUSDFactory.deploy(0)).to.be.revertedWithCustomError(MUSDFactory, "InvalidSupplyCap");
+      await expect(MUSDFactory.deploy(0, ethers.ZeroAddress)).to.be.revertedWithCustomError(MUSDFactory, "InvalidSupplyCap");
     });
 
     it("should grant DEFAULT_ADMIN_ROLE to deployer", async function () {

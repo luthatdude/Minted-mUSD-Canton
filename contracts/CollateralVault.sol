@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./GlobalPausable.sol";
 import "./Errors.sol";
 
 /// @dev Interface for checking health factor before withdrawal
@@ -21,7 +22,7 @@ interface IBorrowModule {
 /// @title CollateralVault
 /// @notice Holds collateral deposits for the borrowing system.
 ///         BorrowModule and LiquidationEngine interact with this vault.
-contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
+contract CollateralVault is AccessControl, ReentrancyGuard, Pausable, GlobalPausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant BORROW_MODULE_ROLE = keccak256("BORROW_MODULE_ROLE");
@@ -29,17 +30,22 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant VAULT_ADMIN_ROLE = keccak256("VAULT_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    /// @notice SOL-H-15: TIMELOCK_ROLE for critical config changes (48h governance delay)
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     /// @dev BorrowModule reference for health factor checks
     address public borrowModule;
     
     event BorrowModuleUpdated(address indexed oldModule, address indexed newModule);
 
+    /// @dev GAS-H-02: Packed from 4 slots → 1 slot (bool + 3×uint16 = 7 bytes).
+    ///      All BPS values are capped at ≤9500, fitting uint16 (max 65535).
+    ///      Saves ~60,000 gas per write and 3 SLOADs per token in health check loops.
     struct CollateralConfig {
         bool enabled;
-        uint256 collateralFactorBps;  // e.g., 7500 = 75% LTV
-        uint256 liquidationThresholdBps; // e.g., 8000 = 80% — liquidation triggers here
-        uint256 liquidationPenaltyBps;   // e.g., 500 = 5% penalty
+        uint16 collateralFactorBps;     // e.g., 7500 = 75% LTV (max 9500)
+        uint16 liquidationThresholdBps; // e.g., 8000 = 80% (max 9500)
+        uint16 liquidationPenaltyBps;   // e.g., 500 = 5% penalty (max 2000)
     }
 
     // Supported collateral tokens and their configs
@@ -58,13 +64,17 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     event Withdrawn(address indexed user, address indexed token, uint256 amount);
     event Seized(address indexed user, address indexed token, uint256 amount, address indexed liquidator);
 
-    constructor() {
+    /// @param _globalPauseRegistry Address of the GlobalPauseRegistry (address(0) to skip global pause)
+    constructor(address _globalPauseRegistry) GlobalPausable(_globalPauseRegistry) {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(VAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     /// @notice Set the BorrowModule address for health factor checks
-    function setBorrowModule(address _borrowModule) external onlyRole(VAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-15: Changed from VAULT_ADMIN_ROLE to TIMELOCK_ROLE — critical dependency
+    function setBorrowModule(address _borrowModule) external onlyRole(TIMELOCK_ROLE) {
         if (_borrowModule == address(0)) revert InvalidModule();
         emit BorrowModuleUpdated(borrowModule, _borrowModule);
         borrowModule = _borrowModule;
@@ -75,12 +85,13 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Add a new supported collateral token
+    /// @dev SOL-H-15: Changed from VAULT_ADMIN_ROLE to TIMELOCK_ROLE — collateral params are critical
     function addCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
-    ) external onlyRole(VAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (token == address(0)) revert InvalidToken();
         // Use collateralFactorBps == 0 to detect never-added tokens.
         // A disabled token retains its collateralFactorBps > 0, so checking
@@ -95,9 +106,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
 
         collateralConfigs[token] = CollateralConfig({
             enabled: true,
-            collateralFactorBps: collateralFactorBps,
-            liquidationThresholdBps: liquidationThresholdBps,
-            liquidationPenaltyBps: liquidationPenaltyBps
+            collateralFactorBps: uint16(collateralFactorBps),
+            liquidationThresholdBps: uint16(liquidationThresholdBps),
+            liquidationPenaltyBps: uint16(liquidationPenaltyBps)
         });
 
         supportedTokens.push(token);
@@ -105,20 +116,21 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Update collateral parameters
+    /// @dev SOL-H-15: Changed from VAULT_ADMIN_ROLE to TIMELOCK_ROLE — LTV changes affect liquidations
     function updateCollateral(
         address token,
         uint256 collateralFactorBps,
         uint256 liquidationThresholdBps,
         uint256 liquidationPenaltyBps
-    ) external onlyRole(VAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (!collateralConfigs[token].enabled) revert NotSupported();
         if (collateralFactorBps == 0 || collateralFactorBps >= liquidationThresholdBps) revert InvalidFactor();
         if (liquidationThresholdBps > 9500) revert ThresholdTooHigh();
         if (liquidationPenaltyBps > 2000) revert PenaltyTooHigh();
 
-        collateralConfigs[token].collateralFactorBps = collateralFactorBps;
-        collateralConfigs[token].liquidationThresholdBps = liquidationThresholdBps;
-        collateralConfigs[token].liquidationPenaltyBps = liquidationPenaltyBps;
+        collateralConfigs[token].collateralFactorBps = uint16(collateralFactorBps);
+        collateralConfigs[token].liquidationThresholdBps = uint16(liquidationThresholdBps);
+        collateralConfigs[token].liquidationPenaltyBps = uint16(liquidationPenaltyBps);
 
         emit CollateralUpdated(token, collateralFactorBps, liquidationThresholdBps);
     }
@@ -127,7 +139,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @dev Disabled tokens MUST remain in supportedTokens[] so that
     ///      BorrowModule._weightedCollateralValue() continues to count them for health factor.
     ///      The 50-token cap already prevents gas DoS.
-    function disableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-15: Changed from VAULT_ADMIN_ROLE to TIMELOCK_ROLE
+    function disableCollateral(address token) external onlyRole(TIMELOCK_ROLE) {
         if (!collateralConfigs[token].enabled) revert NotSupported();
         collateralConfigs[token].enabled = false;
 
@@ -140,7 +153,8 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Re-enable a previously disabled collateral token
     /// @dev Token already remains in supportedTokens[] after disable,
     ///      so no push needed. Just flips the enabled flag.
-    function enableCollateral(address token) external onlyRole(VAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-15: Changed from VAULT_ADMIN_ROLE to TIMELOCK_ROLE
+    function enableCollateral(address token) external onlyRole(TIMELOCK_ROLE) {
         if (collateralConfigs[token].collateralFactorBps == 0) revert NotPreviouslyAdded();
         if (collateralConfigs[token].enabled) revert AlreadyEnabled();
         collateralConfigs[token].enabled = true;
@@ -154,7 +168,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Deposit collateral
     /// @param token The collateral token address
     /// @param amount Amount to deposit
-    function deposit(address token, uint256 amount) external nonReentrant whenNotPaused {
+    function deposit(address token, uint256 amount) external nonReentrant whenNotPaused whenNotGloballyPaused {
         if (!collateralConfigs[token].enabled) revert TokenNotSupported();
         if (amount == 0) revert InvalidAmount();
 
@@ -168,7 +182,7 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     /// @param user The user to credit the deposit to
     /// @param token The collateral token address
     /// @param amount Amount to deposit
-    function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
+    function depositFor(address user, address token, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused whenNotGloballyPaused {
         if (!collateralConfigs[token].enabled) revert TokenNotSupported();
         if (amount == 0) revert InvalidAmount();
         if (user == address(0)) revert InvalidUser();
@@ -311,8 +325,9 @@ contract CollateralVault is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause deposits
-    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-17: Requires TIMELOCK_ROLE (48h governance delay) to prevent
+    ///      compromised lower-privilege roles from unpausing during active exploits
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 }

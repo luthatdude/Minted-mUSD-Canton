@@ -31,7 +31,7 @@ describe("BLEBridgeV9", function () {
 
     // Deploy MUSD
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP)) as MUSD;
+    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     // Deploy BLEBridgeV9

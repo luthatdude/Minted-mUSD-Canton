@@ -30,7 +30,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
     validators = signers.slice(3, 8);
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP)) as MUSD;
+    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
@@ -149,7 +149,7 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
   describe("MUSD Token — setMUSDToken", function () {
     it("Should update MUSD token via setMUSDToken", async function () {
       const MUSDFactory = await ethers.getContractFactory("MUSD");
-      const newMusd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP);
+      const newMusd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, ethers.ZeroAddress);
 
       await expect(bridge.setMUSDToken(await newMusd.getAddress()))
         .to.emit(bridge, "MUSDTokenUpdated");
