@@ -170,26 +170,32 @@ sequenceDiagram
 
 ---
 
-## 7. smUSD Yield Flow (2-Vault Architecture)
+## 7. smUSD Yield Flow (3-Vault Architecture)
 
 ```mermaid
 flowchart TD
     A[User deposits mUSD] --> B[smUSD vault]
     B --> C[TreasuryV2]
     
-    C --> V1["Vault #1 — Diversified Loop (MetaVault)"]
-    C --> V2["Vault #2 — Primary Yield (MetaVault)"]
-    C --> R[Idle USDC Reserve]
+    C -->|45%| V1["MetaVault #1 — Diversified Yield"]
+    C -->|45%| V2["MetaVault #2 — Fluid Syrup"]
+    C -->|5%| R["Reserve — idle USDC"]
     
-    V1 --> S1[EulerV2 Cross-Stable Loop]
-    V1 --> S2[Aave V3 Loop]
-    V1 --> S3[Compound V3 Loop]
-    V1 --> S4[Contango Perp Loop]
-    V1 --> S5[Sky sUSDS]
+    V1 -->|50%| S1["Euler xStable RLUSD/USDC ~15.7%"]
+    V1 -->|30%| S2["Euler V2 Loop USDC/USDC ~18%"]
+    V1 -->|20%| S3["Pendle 3-PT (top only) ~10.7%"]
     
-    V2 --> S6[Fluid Loop #146]
-    V2 --> S7[Pendle PT Markets]
-    V2 --> S8[Euler V2 Loop]
+    V2 -->|50%| S4["Fluid #148 syrupUSDC/GHO ~18.77%"]
+    V2 -->|30%| S5["Fluid #147 syrupUSDC/USDT ~16.61%"]
+    V2 -->|20%| S6["Fluid #146 syrupUSDC/USDC ~11.66%"]
+    
+    EP["ETH Pool Entry"] -->|ETH/USDC/USDT| SWAP["Convert → USDC"]
+    SWAP -->|routed exclusively| V3["Vault #3 — ETH Pool"]
+    SWAP --> MINT["Mint mUSD (accounting)"]
+    MINT --> SMUSD["smUSD-E to user (30/60/90d lock)"]
+    
+    V3 -->|60%| S8["Fluid #74 LRT weETH-ETH/wstETH ~12-18%"]
+    V3 -->|40%| S9["Fluid #44 LST wstETH-ETH/wstETH-ETH ~14-20%"]
     
     S1 --> Y[Yield Generated]
     S2 --> Y
@@ -197,10 +203,11 @@ flowchart TD
     S4 --> Y
     S5 --> Y
     S6 --> Y
-    S7 --> Y
     S8 --> Y
+    S9 --> Y
+    R --> Y
     
-    Y --> J[Treasury records return]
+    Y --> J["TreasuryV2 accrues yield (20% protocol fee)"]
     J --> K[smUSD share price increases]
     K --> L[User withdraws more mUSD]
 ```

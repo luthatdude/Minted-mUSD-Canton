@@ -70,6 +70,14 @@ interface IWETH {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//                  ERC20 DECIMALS (for cross-borrow decimal scaling)
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface IERC20Decimals {
+    function decimals() external view returns (uint8);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //          FLUID LOOP STRATEGY — Unified for T1 / T2 / T4 Vaults
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -77,8 +85,15 @@ interface IWETH {
 // Three vault modes are supported, selected at initialization:
 //
 //   Mode 1 (STABLE):  syrupUSDC / USDC   — VaultT1 (#146)
+//                      syrupUSDC / GHO    — VaultT1 (#148)  ← cross-borrow
+//                      syrupUSDC / USDT   — VaultT1 (#147)  ← cross-borrow
 //   Mode 2 (LRT):     weETH-ETH / wstETH — VaultT2 (#74)
 //   Mode 3 (LST):     wstETH-ETH / wstETH-ETH — VaultT4 (#44)
+//
+// Cross-borrow support (MODE_STABLE with borrowToken ≠ inputAsset):
+//   When the borrow token differs from the input asset (e.g., borrow GHO but
+//   hold USDC), the strategy automatically swaps between borrow ↔ input tokens
+//   via Uniswap V3 during deposit/withdraw/rebalance operations.
 //
 // All positions are NFT-based. The strategy holds a single NFT per vault.
 // Flash loans (AAVE V3) are used to build/unwind the leveraged position.
@@ -228,6 +243,7 @@ contract FluidLoopStrategy is
     event DexCollateralDeposited(uint256 token0Amount, uint256 token1Amount);
     event DexCollateralWithdrawn(uint256 sharesBurned);
     event DexPoolUpdated(address indexed dexPool, bool enabled);
+    event CrossBorrowUpdated(bool enabled, uint24 swapFeeTier);
 
     // ═══════════════════════════════════════════════════════════════════
     // INITIALIZER
@@ -308,6 +324,20 @@ contract FluidLoopStrategy is
         active = true;
         rewardSwapFeeTier = 3000;
         minSwapOutputBps = 9900;
+
+        // Cross-borrow: auto-detect when borrow token ≠ input asset
+        if (p.borrowToken != p.inputAsset) {
+            crossBorrow = true;
+            crossSwapFeeTier = 500; // 0.05% default (GHO/USDC, USDT/USDC)
+
+            // Compute decimal scale for cross-borrow normalization
+            uint8 borrowDec = IERC20Decimals(p.borrowToken).decimals();
+            uint8 inputDec = IERC20Decimals(p.inputAsset).decimals();
+            if (borrowDec > inputDec) {
+                crossDecimalScale = 10 ** uint256(borrowDec - inputDec);
+            }
+            // If borrowDec <= inputDec, crossDecimalScale stays 0 (no scaling needed)
+        }
 
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
         _grantRole(TREASURY_ROLE, p.treasury);
@@ -642,11 +672,31 @@ contract FluidLoopStrategy is
             // Supply collateral to Fluid vault
             _supplyToVault(totalSupply);
 
-            // Borrow from Fluid vault to repay flash loan
-            _borrowFromVault(amount + premium);
+            if (crossBorrow) {
+                // Cross-borrow: borrow in borrowToken (e.g. GHO), swap → inputAsset (USDC)
+                uint256 repayNeeded = amount + premium;
+                // Round UP to ensure swap output ≥ repayNeeded after slippage
+                uint256 borrowNeeded = (repayNeeded * BPS + minSwapOutputBps - 1) / minSwapOutputBps;
+                // Scale to borrow-token decimals (e.g., USDC 6dec → GHO 18dec)
+                uint256 borrowNative = crossDecimalScale > 0
+                    ? borrowNeeded * crossDecimalScale
+                    : borrowNeeded;
+                _borrowFromVault(borrowNative);
+                uint256 borrowBal = IERC20(borrowToken).balanceOf(address(this));
+                _swapBorrowToInput(borrowBal);
+            } else {
+                // Same-token: borrow inputAsset directly
+                _borrowFromVault(amount + premium);
+            }
         } else if (action == ACTION_WITHDRAW) {
-            // Repay Fluid vault debt
-            _repayToVault(amount);
+            if (crossBorrow) {
+                // Cross-borrow: swap inputAsset → borrowToken, then repay
+                uint256 borrowReceived = _swapInputToBorrow(amount);
+                _repayToVault(borrowReceived);
+            } else {
+                // Same-token: repay directly
+                _repayToVault(amount);
+            }
 
             // Withdraw collateral from Fluid vault
             if (principalAmount == type(uint256).max) {
@@ -823,10 +873,15 @@ contract FluidLoopStrategy is
             // Need flash loan to unwind proportionally
             uint256 debtToRepay = (debt * amount) / _getPositionValue();
             if (debtToRepay > 0) {
+                uint256 flashAmount = debtToRepay;
+                if (crossBorrow) {
+                    // Buffer for swap slippage (borrow token may not be 1:1 with input)
+                    flashAmount = (debtToRepay * BPS) / minSwapOutputBps;
+                }
                 flashLoanPool.flashLoanSimple(
                     address(this),
                     address(inputAsset),
-                    debtToRepay,
+                    flashAmount,
                     abi.encode(ACTION_WITHDRAW, amount),
                     0
                 );
@@ -841,10 +896,15 @@ contract FluidLoopStrategy is
         uint256 debt = _getDebtValue();
 
         if (debt > 0) {
+            uint256 flashAmount = debt;
+            if (crossBorrow) {
+                // Buffer for swap slippage when converting input → borrow token
+                flashAmount = (debt * BPS) / minSwapOutputBps;
+            }
             flashLoanPool.flashLoanSimple(
                 address(this),
                 address(inputAsset),
-                debt,
+                flashAmount,
                 abi.encode(ACTION_WITHDRAW, type(uint256).max),
                 0
             );
@@ -859,19 +919,92 @@ contract FluidLoopStrategy is
 
     /// @dev Repay some debt for rebalancing
     function _repayDebt(uint256 amount) internal {
-        uint256 balance = inputAsset.balanceOf(address(this));
-        if (balance < amount) {
-            // Withdraw collateral to get funds for repayment
-            uint256 needed = amount - balance;
-            _withdrawFromVault(needed);
+        if (crossBorrow) {
+            // Need inputAsset → borrowToken swap before repaying
+            uint256 inputNeeded = (amount * BPS) / minSwapOutputBps;
+            uint256 balance = inputAsset.balanceOf(address(this));
+            if (balance < inputNeeded) {
+                _withdrawFromVault(inputNeeded - balance);
+            }
+            uint256 borrowReceived = _swapInputToBorrow(inputNeeded);
+            // Convert amount (input-dec) → borrow-dec for correct comparison & repay
+            uint256 maxRepay = crossDecimalScale > 0
+                ? amount * crossDecimalScale
+                : amount;
+            _repayToVault(borrowReceived > maxRepay ? maxRepay : borrowReceived);
+        } else {
+            uint256 balance = inputAsset.balanceOf(address(this));
+            if (balance < amount) {
+                uint256 needed = amount - balance;
+                _withdrawFromVault(needed);
+            }
+            _repayToVault(amount);
         }
-        _repayToVault(amount);
     }
 
     /// @dev Borrow more for rebalancing
     function _borrowMore(uint256 amount) internal {
-        _borrowFromVault(amount);
-        _supplyToVault(amount);
+        // Scale from input-asset decimals to borrow-token decimals
+        uint256 borrowAmt = crossDecimalScale > 0
+            ? amount * crossDecimalScale
+            : amount;
+        _borrowFromVault(borrowAmt);
+        if (crossBorrow) {
+            // Swap borrowToken → inputAsset before re-supplying as collateral
+            uint256 borrowBal = IERC20(borrowToken).balanceOf(address(this));
+            uint256 inputReceived = _swapBorrowToInput(borrowBal);
+            _supplyToVault(inputReceived);
+        } else {
+            _supplyToVault(amount);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // INTERNAL — CROSS-BORROW SWAPS
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// @dev Swap borrow token → input asset (e.g., GHO → USDC after borrowing)
+    function _swapBorrowToInput(uint256 amountIn) internal returns (uint256 amountOut) {
+        if (amountIn == 0) return 0;
+        IERC20(borrowToken).forceApprove(address(swapRouter), amountIn);
+        // Scale expected output to input-asset decimals (borrow→input: divide)
+        uint256 expectedOut = crossDecimalScale > 0
+            ? amountIn / crossDecimalScale
+            : amountIn;
+        amountOut = swapRouter.exactInputSingle(
+            ISwapRouterFluid.ExactInputSingleParams({
+                tokenIn: address(borrowToken),
+                tokenOut: address(inputAsset),
+                fee: crossSwapFeeTier,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: (expectedOut * minSwapOutputBps) / BPS,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        emit SwapExecuted(address(borrowToken), address(inputAsset), amountIn, amountOut);
+    }
+
+    /// @dev Swap input asset → borrow token (e.g., USDC → GHO before repaying)
+    function _swapInputToBorrow(uint256 amountIn) internal returns (uint256 amountOut) {
+        if (amountIn == 0) return 0;
+        inputAsset.forceApprove(address(swapRouter), amountIn);
+        // Scale expected output to borrow-token decimals (input→borrow: multiply)
+        uint256 expectedOut = crossDecimalScale > 0
+            ? amountIn * crossDecimalScale
+            : amountIn;
+        amountOut = swapRouter.exactInputSingle(
+            ISwapRouterFluid.ExactInputSingleParams({
+                tokenIn: address(inputAsset),
+                tokenOut: address(borrowToken),
+                fee: crossSwapFeeTier,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: (expectedOut * minSwapOutputBps) / BPS,
+                sqrtPriceLimitX96: 0
+            })
+        );
+        emit SwapExecuted(address(inputAsset), address(borrowToken), amountIn, amountOut);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -925,6 +1058,12 @@ contract FluidLoopStrategy is
         debt = data.isSmartDebt
             ? _resolveDexBorrowShares(pos.borrow)
             : pos.borrow;
+
+        // Cross-borrow: normalize debt to input-asset decimals
+        // e.g., GHO (18 dec) → USDC (6 dec): divide by 10^12
+        if (crossDecimalScale > 0) {
+            debt = debt / crossDecimalScale;
+        }
     }
 
     /// @dev Convert DEX supply shares → total underlying token value.
@@ -1152,11 +1291,43 @@ contract FluidLoopStrategy is
         emit DexPoolUpdated(_dexPool, _enabled);
     }
 
+    /// @notice Update cross-borrow swap fee tier.
+    /// @dev    Use 100 for USDT/USDC (0.01%), 500 for GHO/USDC (0.05%).
+    ///         Only meaningful when crossBorrow == true.
+    error InvalidFeeTier();
+
+    function setCrossSwapFeeTier(uint24 _feeTier) external onlyRole(STRATEGIST_ROLE) {
+        if (_feeTier != 100 && _feeTier != 500 && _feeTier != 3000 && _feeTier != 10000) {
+            revert InvalidFeeTier();
+        }
+        crossSwapFeeTier = _feeTier;
+        emit CrossBorrowUpdated(crossBorrow, _feeTier);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CROSS-BORROW STATE (V3 — appended at end for upgrade safety)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// @notice Whether borrow token differs from input asset (cross-borrow mode)
+    /// @dev Auto-detected in initialize() when borrowToken ≠ inputAsset.
+    ///      When true, swap steps are inserted in deposit/withdraw/rebalance flows.
+    bool public crossBorrow;
+
+    /// @notice Swap fee tier for cross-borrow swaps (borrowToken ↔ inputAsset)
+    /// @dev Uniswap V3 fee tiers: 100=0.01%, 500=0.05%, 3000=0.3%, 10000=1%
+    ///      Defaults: 500 for GHO/USDC, 100 for USDT/USDC
+    uint24 public crossSwapFeeTier;
+
+    /// @notice Decimal scale factor: 10^(borrowDecimals - inputDecimals).
+    /// @dev    0 when decimals match (USDT/USDC both 6-dec). 10^12 for GHO(18)/USDC(6).
+    ///         Used to normalize debt ↔ input amounts in cross-borrow paths.
+    uint256 public crossDecimalScale;
+
     // ═══════════════════════════════════════════════════════════════════
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[26] private __gap;  // reduced from 30 → 26 (4 new storage vars above)
+    uint256[24] private __gap;  // 26 → 25 (crossBorrow+crossSwapFeeTier) → 24 (crossDecimalScale)
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
