@@ -81,13 +81,16 @@ rule deposit_rejects_above_maximum(uint256 amount) {
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice Once completed, a deposit stays completed forever
+/// @dev Tests that NO function can undo completion. Uses f@withrevert
+///      to avoid vacuity (markDepositComplete reverts on already-completed deposits).
 rule completion_is_final(uint64 seqNum) {
-    env e1;
-    env e2;
+    env e;
     require isDepositComplete(seqNum) == true;
 
     // After any state transition, still complete
-    markDepositComplete(e1, seqNum);
+    calldataarg args;
+    method f;
+    f@withrevert(e, args);
 
     assert isDepositComplete(seqNum) == true,
         "Completed deposit reverted to pending";

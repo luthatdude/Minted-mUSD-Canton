@@ -29,6 +29,7 @@ methods {
     function emergencyReduceCap(uint256, string) external;
     function forceUpdateNonce(uint256, string)   external;
     function invalidateAttestationId(bytes32, string) external;
+    function upgradeToAndCall(address, bytes)    external;
 
     // ── Role constants (envfree) ──
     function VALIDATOR_ROLE()     external returns (bytes32) envfree;
@@ -47,18 +48,23 @@ methods {
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice minSignatures is always positive
+/// @dev Filtered: upgradeToAndCall uses delegatecall which HAVOCs all storage
 invariant minSignaturesPositive()
-    minSignatures() > 0;
+    minSignatures() > 0
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice collateralRatioBps is always >= 10000 (100%)
+/// @dev Filtered: upgradeToAndCall uses delegatecall which HAVOCs all storage
 invariant collateralRatioAboveParity()
-    collateralRatioBps() >= 10000;
+    collateralRatioBps() >= 10000
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: ATTESTATION REPLAY PREVENTION
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice Once an attestation ID is used, it stays used (monotonic)
+/// @dev Filtered: upgradeToAndCall HAVOCs storage via delegatecall
 rule attestation_id_monotonic(bytes32 id) {
     env e;
     require usedAttestationIds(id) == true;
@@ -66,7 +72,8 @@ rule attestation_id_monotonic(bytes32 id) {
     // Any state change shouldn't un-use an attestation
     calldataarg args;
     method f;
-    f(e, args);
+    require f.selector != sig:upgradeToAndCall(address, bytes).selector;
+    f@withrevert(e, args);
 
     assert usedAttestationIds(id) == true,
         "Used attestation IDs must remain used";
@@ -77,6 +84,7 @@ rule attestation_id_monotonic(bytes32 id) {
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice currentNonce never decreases (except forceUpdateNonce by EMERGENCY_ROLE)
+/// @dev Filtered: upgradeToAndCall HAVOCs storage via delegatecall
 rule nonce_monotonic_on_normal_ops() {
     env e;
     uint256 nonceBefore = currentNonce();
@@ -85,10 +93,12 @@ rule nonce_monotonic_on_normal_ops() {
     calldataarg args;
     method f;
     require f.selector != sig:forceUpdateNonce(uint256, string).selector;
+    require f.selector != sig:upgradeToAndCall(address, bytes).selector;
 
-    f(e, args);
+    f@withrevert(e, args);
 
-    assert currentNonce() >= nonceBefore,
+    bool succeeded = !lastReverted;
+    assert succeeded => currentNonce() >= nonceBefore,
         "Nonce must not decrease on normal operations";
 }
 
