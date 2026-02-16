@@ -48,9 +48,9 @@ methods {
     function hasRole(bytes32, address) external returns (bool) envfree;
 
     // ── External contract summaries ──
-    function _.deposit(uint256) external   => DISPATCHER(true);
-    function _.withdraw(uint256) external  => DISPATCHER(true);
-    function _.withdrawAll() external      => DISPATCHER(true);
+    function _.deposit(uint256) external   => NONDET;
+    function _.withdraw(uint256) external  => NONDET;
+    function _.withdrawAll() external      => NONDET;
     function _.totalValue() external       => PER_CALLEE_CONSTANT;
     function _.safeTransferFrom(address, address, uint256) external => NONDET;
     function _.safeTransfer(address, uint256)               external => NONDET;
