@@ -31,11 +31,10 @@ methods {
 ///         The mint_respects_cap rule verifies the real property: mint never pushes supply
 ///         above the effective cap (supplyCap * localCapBps / 10000).
 
-/// @notice Sum of all balances equals totalSupply (ERC20 conservation)
-/// @dev Placeholder invariant — a full ghost-based sum tracking is complex.
-///      Individual rules use `require balBefore <= supplyBefore` to encode this.
-invariant total_supply_is_sum_of_balances()
-    to_mathint(totalSupply()) >= 0;
+/// @notice ERC20 conservation (sum of balances == totalSupply) is enforced via
+///         `require balBefore <= supplyBefore` preconditions in individual rules.
+///         A full ghost-based sum invariant requires mirror tracking of all _balances
+///         writes, which is out of scope for this spec.
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES
