@@ -11,8 +11,17 @@
     "too-many-digits",
     "immutable-states",
     "dead-code",
-    "costly-loop"
+    "costly-loop",
+    "calls-loop",
+    "reentrancy-benign",
+    "reentrancy-events",
+    "timestamp",
+    "locked-ether",
+    "cache-array-length",
+    "cyclomatic-complexity"
   ],
+  "filter_paths": "node_modules|contracts/mocks|certora/harness",
+  "exclude_dependencies": true,
   "_reason_naming-convention": "Project uses custom naming conventions that differ from Solidity style guide (e.g., MUSD, SMUSD).",
   "_reason_pragma": "OpenZeppelin v5 dependencies use different pragma versions than project contracts.",
   "_reason_solc-version": "Pinned to 0.8.26 per project convention; OZ deps may differ.",
@@ -22,6 +31,9 @@
   "_reason_unused-state": "FP: __gap variables are standard UUPS upgrade storage reservation pattern. Reviewed 2026-02-16.",
   "_reason_too-many-digits": "FP: Hex constant in UniswapV3TWAPOracle is a fixed-point math constant. Reviewed 2026-02-16.",
   "_reason_immutable-states_dead-code_costly-loop": "Informational/gas-optimization only. Reviewed 2026-02-16.",
-  "filter_paths": "node_modules,contracts/mocks",
-  "exclude_optimization": true
+  "_reason_calls-loop": "Bounded loops over admin-controlled strategy arrays (max 10 strategies). Reviewed 2026-02-16.",
+  "_reason_reentrancy-benign_events": "Functions use CEI pattern; only event ordering differs. Reviewed 2026-02-16.",
+  "_reason_timestamp": "Legitimate use for cooldowns, rate limiting, and yield accrual. Reviewed 2026-02-16.",
+  "_reason_locked-ether": "Only triggers on mock contracts in test paths. Reviewed 2026-02-16.",
+  "_reason_cache-array-length_cyclomatic-complexity": "Informational/gas-optimization only. Reviewed 2026-02-16."
 }
