@@ -342,7 +342,7 @@ template CantonLoopStrategyConfig
   with
     operator              : Party
     config                : LoopConfig
-    complianceRegistryCid : Optional (ContractId ComplianceRegistry)
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-04: mandatory (was Optional)
     observers             : [Party]
   where
     signatory operator
@@ -403,7 +403,7 @@ template CantonLoopStrategyConfig
 
     choice LoopConfig_SetComplianceRegistry : ContractId CantonLoopStrategyConfig
       with
-        newComplianceRegistryCid : Optional (ContractId ComplianceRegistry)
+        newComplianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-04: mandatory
         governanceProofCid : ContractId GovernanceActionLog
       controller operator
       do

@@ -1387,6 +1387,7 @@ template CooldownTicket
     entrySharePrice : Money
     stakedAt : Time
     cooldownSeconds : Int
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-03: mandatory compliance
   where
     signatory operator, owner
 
@@ -1394,12 +1395,16 @@ template CooldownTicket
 
     -- | Transfer ticket to another party
     -- Creates a TicketTransferProposal that the newOwner must accept
+    -- HIGH-03: Validates sender/receiver compliance before creating proposal
     choice Ticket_Transfer : ContractId TicketTransferProposal
       with
         newOwner : Party
       controller owner
       do
         assertMsg "CANNOT_TRANSFER_TO_SELF" (newOwner /= owner)
+        -- HIGH-03: Enforce compliance on both sender and receiver
+        exercise complianceRegistryCid ValidateTransfer
+          with sender = owner; receiver = newOwner
         create TicketTransferProposal with
           operator
           sender = owner
@@ -1408,6 +1413,7 @@ template CooldownTicket
           entrySharePrice
           stakedAt
           cooldownSeconds
+          complianceRegistryCid
 
     -- | Split ticket
     choice Ticket_Split : (ContractId CooldownTicket, ContractId CooldownTicket)
@@ -1431,6 +1437,7 @@ template TicketTransferProposal
     entrySharePrice : Money
     stakedAt : Time
     cooldownSeconds : Int
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-03: carry compliance through transfer
   where
     signatory operator, sender
     observer receiver
@@ -1448,6 +1455,7 @@ template TicketTransferProposal
           entrySharePrice
           stakedAt
           cooldownSeconds
+          complianceRegistryCid
 
     -- | Sender cancels the proposal
     choice TicketTransfer_Cancel : ContractId CooldownTicket
@@ -1461,6 +1469,7 @@ template TicketTransferProposal
           entrySharePrice
           stakedAt
           cooldownSeconds
+          complianceRegistryCid
 
 -- ============================================================
 --                     11. BRIDGE SERVICE

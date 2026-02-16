@@ -704,8 +704,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         emit TokenDisabled(token);
     }
 
-    /// @notice Emergency withdraw stuck tokens
-    function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Emergency withdraw stuck tokens (only when paused)
+    /// @dev H-02 fix: Requires protocol to be paused to prevent misuse during normal operation.
+    function emergencyWithdraw(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) whenPaused {
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 

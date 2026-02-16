@@ -200,8 +200,9 @@ contract CollateralVaultUpgradeable is
         emit Deposited(user, token, amount);
     }
 
-    function withdraw(address token, uint256 amount, address user) external nonReentrant whenNotPaused {
-        require(msg.sender == user || hasRole(BORROW_MODULE_ROLE, msg.sender), "UNAUTHORIZED");
+    /// @dev H-01 fix: Only BorrowModule can call withdraw — users go through BorrowModule.withdrawCollateral()
+    ///      which accrues interest before releasing collateral, preventing stale-debt exploits.
+    function withdraw(address token, uint256 amount, address user) external onlyRole(BORROW_MODULE_ROLE) nonReentrant whenNotPaused {
         require(deposits[user][token] >= amount, "INSUFFICIENT_BALANCE");
 
         deposits[user][token] -= amount;

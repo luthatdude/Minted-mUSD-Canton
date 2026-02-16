@@ -248,10 +248,16 @@ contract TreasuryV2 is
     /**
      * @notice Total value minus accrued protocol fees
      */
+    /// @dev GAS-H-04: Inlined pending fee calculation to avoid calling totalValue() twice
     function totalValueNet() public view returns (uint256) {
-        uint256 total = totalValue();
-        uint256 pending = _calculatePendingFees();
-        return total > pending ? total - pending : 0;
+        uint256 currentValue = totalValue();
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+        uint256 pending = fees.accruedFees;
+        if (currentValue > peak) {
+            uint256 yield_ = currentValue - peak;
+            pending += (yield_ * fees.performanceFeeBps) / BPS;
+        }
+        return currentValue > pending ? currentValue - pending : 0;
     }
 
     /**

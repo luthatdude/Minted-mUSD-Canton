@@ -12,11 +12,26 @@ const RPC_URL = process.env.RPC_URL || "";
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: "0.8.26",
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
+    compilers: [
+      {
+        version: "0.8.26",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+    ],
+    overrides: {
+      "contracts/strategies/PendleStrategyV2.sol": {
+        version: "0.8.26",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1,
+          },
+        },
       },
     },
   },

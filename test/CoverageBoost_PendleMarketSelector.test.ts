@@ -48,6 +48,11 @@ describe("PendleMarketSelector — Coverage Boost", function () {
     await selector.connect(admin).grantRole(MARKET_ADMIN_ROLE, marketAdmin.address);
     await selector.connect(admin).grantRole(PARAMS_ADMIN_ROLE, paramsAdmin.address);
 
+    // Grant TIMELOCK_ROLE — whitelistMarket/removeMarket/setParams now require it
+    const TIMELOCK_ROLE = await selector.TIMELOCK_ROLE();
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, marketAdmin.address);
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, paramsAdmin.address);
+
     return {
       selector, admin, marketAdmin, paramsAdmin, user1,
       market1, market2, marketShortExpiry, marketExpired,

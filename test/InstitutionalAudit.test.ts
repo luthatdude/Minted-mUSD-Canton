@@ -37,6 +37,12 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     const ORACLE_ADMIN_ROLE = await oracle.ORACLE_ADMIN_ROLE();
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
 
+    const TIMELOCK_ROLE = await oracle.TIMELOCK_ROLE();
+    await oracle.grantRole(TIMELOCK_ROLE, admin.address);
+
+    const KEEPER_ROLE = await oracle.KEEPER_ROLE();
+    await oracle.grantRole(KEEPER_ROLE, admin.address);
+
     const WETH = "0x0000000000000000000000000000000000000001";
     await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18, 0);
 
@@ -1665,7 +1671,7 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
     const bridge = await upgrades.deployProxy(
       BLEBridgeV9,
-      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000")],
+      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000"), deployer.address],
       { kind: 'uups' }
     );
     await bridge.waitForDeployment();

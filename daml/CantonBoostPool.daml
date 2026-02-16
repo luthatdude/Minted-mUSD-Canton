@@ -30,7 +30,7 @@ import CantonSMUSD (CantonSMUSD(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..))
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
 -- ============================================================
@@ -45,6 +45,7 @@ template BoostPoolLP
     owner          : Party
     shares         : Money        -- LP share amount
     depositedAt    : Time         -- For cooldown enforcement
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-02: mandatory compliance
     privacyObservers : [Party]    -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -61,7 +62,11 @@ template BoostPoolLP
     choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
       with newOwner : Party
       controller owner
-      do create BoostPoolLPTransferProposal with lp = this; newOwner
+      do
+        -- HIGH-02: Validate both sender and receiver against blacklist/freeze
+        exercise complianceRegistryCid ValidateTransfer
+          with sender = owner; receiver = newOwner
+        create BoostPoolLPTransferProposal with lp = this; newOwner
 
     choice BPLP_Split : (ContractId BoostPoolLP, ContractId BoostPoolLP)
       with splitShares : Money
