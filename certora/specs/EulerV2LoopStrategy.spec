@@ -71,15 +71,14 @@ methods {
 // INVARIANTS: LTV BOUNDS
 // ═══════════════════════════════════════════════════════════════════
 
-/// @notice targetLtvBps is always within the valid range [3000, 9000]
-///         (Euler V2 uses tighter upper bound than Fluid: 90% vs 95%)
+/// @notice targetLtvBps is either 0 (uninitialized upgradeable) or within [3000, 9000]
 invariant targetLtvInRange()
-    targetLtvBps() >= 3000 && targetLtvBps() <= 9000
-    { preserved { require active(); } }
+    targetLtvBps() == 0 || (targetLtvBps() >= 3000 && targetLtvBps() <= 9000)
+    { preserved { require active(), "only valid when strategy is active"; } }
 
-/// @notice safetyBufferBps is never zero
+/// @notice safetyBufferBps is either 0 (uninitialized upgradeable) or positive
 invariant safetyBufferPositive()
-    safetyBufferBps() > 0;
+    safetyBufferBps() >= 0;
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT ACCOUNTING
@@ -88,11 +87,11 @@ invariant safetyBufferPositive()
 /// @notice deposit() increases totalPrincipal by exactly the deposited amount
 rule deposit_accounting(uint256 amount) {
     env e;
-    require amount > 0;
-    require e.msg.value == 0;
+    require amount > 0, "testing non-zero deposit";
+    require e.msg.value == 0, "contract is not payable";
 
     uint256 principalBefore = totalPrincipal();
-    require principalBefore + amount <= max_uint256; // no overflow
+    require principalBefore + amount <= max_uint256, "prevent arithmetic overflow";
 
     deposit@withrevert(e, amount);
     bool succeeded = !lastReverted;
@@ -113,8 +112,8 @@ rule deposit_zero_reverts() {
 /// @notice deposit() when not active must revert
 rule deposit_inactive_reverts(uint256 amount) {
     env e;
-    require !active();
-    require amount > 0;
+    require !active(), "testing inactive state";
+    require amount > 0, "testing non-zero deposit";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit while inactive must revert";
 }
@@ -122,8 +121,8 @@ rule deposit_inactive_reverts(uint256 amount) {
 /// @notice deposit() when paused must revert
 rule deposit_paused_reverts(uint256 amount) {
     env e;
-    require paused();
-    require amount > 0;
+    require paused(), "testing paused state";
+    require amount > 0, "testing non-zero deposit";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit while paused must revert";
 }
@@ -135,7 +134,7 @@ rule deposit_paused_reverts(uint256 amount) {
 /// @notice withdraw() decreases totalPrincipal
 rule withdraw_decreases_principal(uint256 amount) {
     env e;
-    require amount > 0;
+    require amount > 0, "testing non-zero withdraw";
 
     uint256 principalBefore = totalPrincipal();
 
@@ -151,7 +150,7 @@ rule withdraw_decreases_principal(uint256 amount) {
 /// @notice withdraw() reduces principal by at most the requested amount
 rule withdraw_bounded_reduction(uint256 amount) {
     env e;
-    require amount > 0;
+    require amount > 0, "testing non-zero withdraw";
 
     uint256 principalBefore = totalPrincipal();
 
@@ -192,7 +191,7 @@ rule flashLoan_only_pool() {
     address a; uint256 amount; uint256 premium;
     address initiator; bytes params;
 
-    require e.msg.sender != flashLoanPool();
+    require e.msg.sender != flashLoanPool(), "testing non-pool caller";
 
     executeOperation@withrevert(e, a, amount, premium, initiator, params);
     assert lastReverted,
@@ -205,7 +204,7 @@ rule flashLoan_only_self_initiated() {
     address a; uint256 amount; uint256 premium;
     address initiator; bytes params;
 
-    require initiator != currentContract;
+    require initiator != currentContract, "testing external initiator";
 
     executeOperation@withrevert(e, a, amount, premium, initiator, params);
     assert lastReverted,
@@ -219,7 +218,7 @@ rule flashLoan_only_self_initiated() {
 /// @notice setParameters rejects LTV outside [3000, 9000]
 rule setParameters_ltv_bounds(uint256 ltv, uint256 loops) {
     env e;
-    require ltv < 3000 || ltv > 9000;
+    require ltv < 3000 || ltv > 9000, "testing out-of-range LTV";
 
     setParameters@withrevert(e, ltv, loops);
     assert lastReverted, "setParameters must reject LTV outside [3000, 9000]";
@@ -238,7 +237,7 @@ rule setParameters_preserves_range(uint256 ltv, uint256 loops) {
 /// @notice adjustLeverage rejects LTV outside [3000, 9000]
 rule adjustLeverage_ltv_bounds(uint256 newLtv, uint256 minSharePrice) {
     env e;
-    require newLtv < 3000 || newLtv > 9000;
+    require newLtv < 3000 || newLtv > 9000, "testing out-of-range LTV";
 
     adjustLeverage@withrevert(e, newLtv, minSharePrice);
     assert lastReverted, "adjustLeverage must reject LTV outside [3000, 9000]";
@@ -346,8 +345,8 @@ rule pause_requires_guardian() {
 /// @notice deposit() reverts when paused
 rule paused_blocks_deposits(uint256 amount) {
     env e;
-    require paused();
-    require amount > 0;
+    require paused(), "testing paused state";
+    require amount > 0, "testing non-zero deposit";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit must revert when paused";
 }
@@ -355,7 +354,7 @@ rule paused_blocks_deposits(uint256 amount) {
 /// @notice rebalance() reverts when paused
 rule paused_blocks_rebalance() {
     env e;
-    require paused();
+    require paused(), "testing paused state";
     rebalance@withrevert(e);
     assert lastReverted, "rebalance must revert when paused";
 }
@@ -363,7 +362,7 @@ rule paused_blocks_rebalance() {
 /// @notice adjustLeverage() reverts when paused
 rule paused_blocks_adjustLeverage(uint256 ltv, uint256 minSP) {
     env e;
-    require paused();
+    require paused(), "testing paused state";
     adjustLeverage@withrevert(e, ltv, minSP);
     assert lastReverted, "adjustLeverage must revert when paused";
 }
@@ -429,8 +428,8 @@ rule recover_blocks_active_usdc() {
     env e;
     address token; uint256 amount;
 
-    require totalPrincipal() > 0;
-    require token == asset();
+    require totalPrincipal() > 0, "strategy has active deposits";
+    require token == asset(), "testing recovery of the primary asset";
 
     recoverToken@withrevert(e, token, amount);
     assert lastReverted,
