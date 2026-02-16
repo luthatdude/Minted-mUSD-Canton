@@ -21,6 +21,9 @@ methods {
     function setMaxDeviation(uint256)      external;
     function setCrossValidation(bool)      external;
 
+    // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
+    function upgradeToAndCall(address, bytes) external;
+
     // ── Role constants (envfree) ──
     function ORACLE_ADMIN_ROLE() external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
@@ -38,12 +41,14 @@ methods {
 
 /// @notice Adapter count never exceeds MAX_ADAPTERS (5)
 invariant adapterCountBounded()
-    adapterCount() <= 5;
+    adapterCount() <= 5
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice maxDeviationBps is either 0 (uninitialized) or within [50, 5000]
 ///         Upgradeable contracts start with maxDeviationBps = 0 before initialize()
 invariant deviationInRange()
-    maxDeviationBps() == 0 || (maxDeviationBps() >= 50 && maxDeviationBps() <= 5000);
+    maxDeviationBps() == 0 || (maxDeviationBps() >= 50 && maxDeviationBps() <= 5000)
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: ADAPTER MANAGEMENT
