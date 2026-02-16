@@ -326,7 +326,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockG
      * @param amount Amount to withdraw
      * @dev Requires DEFAULT_ADMIN_ROLE
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev H-03 fix: Requires protocol to be paused to prevent misuse during normal operation.
+    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) whenPaused {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }

@@ -369,6 +369,9 @@ describe('LeverageVault', function () {
       // Send some tokens directly to the contract
       await weth.mint(await leverageVault.getAddress(), ethers.parseEther('5'));
 
+      // Must pause first — emergencyWithdraw requires whenPaused
+      await leverageVault.pause();
+
       // emergencyWithdraw is now a direct onlyTimelock call (owner IS the timelock in tests)
       const balanceBefore = await weth.balanceOf(owner.address);
       await leverageVault.emergencyWithdraw(await weth.getAddress(), ethers.parseEther('5'));

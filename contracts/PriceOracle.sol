@@ -34,6 +34,7 @@ contract PriceOracle is AccessControl {
         IAggregatorV3 feed;
         uint256 stalePeriod;  // Max age in seconds before data is considered stale
         uint8 tokenDecimals;  // Decimals of the collateral token (e.g., 18 for ETH, 8 for WBTC)
+        uint8 feedDecimals;   // GAS-H-01: cached from feed.decimals() at setFeed time
         bool enabled;
         uint256 maxDeviationBps; // Per-asset circuit breaker threshold (0 = use global)
     }
@@ -61,6 +62,7 @@ contract PriceOracle is AccessControl {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ORACLE_ADMIN_ROLE, msg.sender);
         _grantRole(KEEPER_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
     }
 
     /// @dev SOL-H-04: Timelock-gated — cooldown affects circuit breaker recovery timing
@@ -81,8 +83,7 @@ contract PriceOracle is AccessControl {
         if (answer <= 0) revert InvalidPrice();
         if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
         
-        uint8 feedDecimals = config.feed.decimals();
-        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+        uint256 newPrice = uint256(answer) * (10 ** (18 - config.feedDecimals));
         lastKnownPrice[token] = newPrice;
         circuitBreakerTrippedAt[token] = 0;
         
@@ -108,8 +109,7 @@ contract PriceOracle is AccessControl {
         if (!config.enabled) revert FeedNotEnabled();
         (, int256 answer, , , ) = config.feed.latestRoundData();
         if (answer <= 0) revert InvalidPrice();
-        uint8 feedDecimals = config.feed.decimals();
-        lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
+        lastKnownPrice[token] = uint256(answer) * (10 ** (18 - config.feedDecimals));
     }
 
     /// @notice Register or update a Chainlink price feed for a collateral token
@@ -135,27 +135,24 @@ contract PriceOracle is AccessControl {
             if (assetMaxDeviationBps < 100 || assetMaxDeviationBps > 5000) revert AssetDeviationOutOfRange();
         }
 
+        // GAS-H-01: cache feedDecimals at registration time to avoid external call on every price read
+        uint8 fd = IAggregatorV3(feed).decimals();
+        if (fd > 18) revert FeedDecimalsTooHigh();
+
         feeds[token] = FeedConfig({
             feed: IAggregatorV3(feed),
             stalePeriod: stalePeriod,
             tokenDecimals: tokenDecimals,
+            feedDecimals: fd,
             enabled: true,
             maxDeviationBps: assetMaxDeviationBps
         });
-
-        // in getPrice() where we compute 10 ** (18 - feedDecimals).
-        // A feed with > 18 decimals would revert at query time, not at config time.
-        {
-            uint8 fd = IAggregatorV3(feed).decimals();
-            if (fd > 18) revert FeedDecimalsTooHigh();
-        }
 
         try IAggregatorV3(feed).latestRoundData() returns (
             uint80, int256 answer, uint256, uint256, uint80
         ) {
             if (answer > 0) {
-                uint256 feedDecimals = IAggregatorV3(feed).decimals();
-                lastKnownPrice[token] = uint256(answer) * (10 ** (18 - feedDecimals));
+                lastKnownPrice[token] = uint256(answer) * (10 ** (18 - fd));
             }
         } catch {
             // Feed not yet reporting — lastKnownPrice stays 0 until first getPrice() call
@@ -200,7 +197,8 @@ contract PriceOracle is AccessControl {
         if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
         if (answeredInRound < roundId) revert StaleRound();
 
-        uint8 feedDecimals = config.feed.decimals();
+        // GAS-H-01: use cached feedDecimals instead of external call
+        uint8 feedDecimals = config.feedDecimals;
         if (feedDecimals > 18) revert UnsupportedFeedDecimals();
 
         // Chainlink answer is price per 1 token unit in USD, scaled to feedDecimals
@@ -243,8 +241,7 @@ contract PriceOracle is AccessControl {
         if (answer <= 0) revert InvalidPrice();
         if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
         
-        uint8 feedDecimals = config.feed.decimals();
-        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+        uint256 newPrice = uint256(answer) * (10 ** (18 - config.feedDecimals));
         uint256 oldPrice = lastKnownPrice[token];
         
         if (oldPrice > 0) {
@@ -299,7 +296,8 @@ contract PriceOracle is AccessControl {
         if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
         if (answeredInRound < roundId) revert StaleRound();
 
-        uint8 feedDecimals = config.feed.decimals();
+        // GAS-H-01: use cached feedDecimals instead of external call
+        uint8 feedDecimals = config.feedDecimals;
         if (feedDecimals > 18) revert UnsupportedFeedDecimals();
         price = uint256(answer) * (10 ** (18 - feedDecimals));
         // No circuit breaker check — raw Chainlink price
@@ -328,8 +326,7 @@ contract PriceOracle is AccessControl {
         if (answer <= 0) revert InvalidPrice();
         if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
 
-        uint8 feedDecimals = config.feed.decimals();
-        uint256 newPrice = uint256(answer) * (10 ** (18 - feedDecimals));
+        uint256 newPrice = uint256(answer) * (10 ** (18 - config.feedDecimals));
 
         lastKnownPrice[token] = newPrice;
         circuitBreakerTrippedAt[token] = 0;

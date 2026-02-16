@@ -220,7 +220,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Mint mUSD to borrower
         musd.mint(msg.sender, amount);
 
-        emit Borrowed(msg.sender, amount, totalDebt(msg.sender));
+        // GAS-H-03: reuse cached newTotalDebt instead of calling totalDebt() again
+        emit Borrowed(msg.sender, amount, newTotalDebt);
     }
 
     /// @notice Borrow mUSD on behalf of a user (for LeverageVault integration)
@@ -247,7 +248,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // Mint mUSD to the LeverageVault (msg.sender) for swapping
         musd.mint(msg.sender, amount);
 
-        emit Borrowed(user, amount, totalDebt(user));
+        // GAS-H-03: reuse cached newTotalDebt instead of calling totalDebt() again
+        emit Borrowed(user, amount, newTotalDebt);
     }
 
     /// @notice Repay mUSD debt
