@@ -100,9 +100,6 @@ const STRATEGY_META: StrategyMeta[] = [
   { key: "pendle",     name: "Pendle Multi-Pool",               shortName: "Pendle",        color: "#8b5cf6", riskTier: 2, gasEstimateUsd: 4.80, fallbackApyBps: 1170 },
   { key: "morpho",     name: "Morpho Leveraged Loop",           shortName: "Morpho",        color: "#3b82f6", riskTier: 2, gasEstimateUsd: 2.10, fallbackApyBps: 1150 },
   { key: "eulerCross", name: "Euler V2 RLUSD/USDC Cross-Stable",shortName: "Euler xStable", color: "#10b981", riskTier: 3, gasEstimateUsd: 3.60, fallbackApyBps: 1000 },
-  { key: "aave",       name: "Aave V3 Loop",                    shortName: "Aave V3",       color: "#a855f7", riskTier: 1, gasEstimateUsd: 1.90, fallbackApyBps: 750  },
-  { key: "compound",   name: "Compound V3 Loop",                shortName: "Compound",      color: "#22c55e", riskTier: 1, gasEstimateUsd: 1.80, fallbackApyBps: 650  },
-  { key: "contango",   name: "Contango Perp Loop",              shortName: "Contango",      color: "#f59e0b", riskTier: 3, gasEstimateUsd: 5.40, fallbackApyBps: 1100 },
   { key: "euler",      name: "Euler V2 Loop",                   shortName: "Euler V2",      color: "#14b8a6", riskTier: 2, gasEstimateUsd: 3.10, fallbackApyBps: 850  },
   { key: "sky",        name: "Sky sUSDS Savings",               shortName: "Sky sUSDS",     color: "#f97316", riskTier: 1, gasEstimateUsd: 1.20, fallbackApyBps: 790  },
 ];

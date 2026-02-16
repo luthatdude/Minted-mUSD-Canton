@@ -212,12 +212,6 @@ template CantonMUSD
       controller owner
       do create this with privacyObservers = newObservers
 
-    agreement
-      "By holding or transferring this Canton mUSD token, the owner acknowledges "
-      <> "they are bound by the Master Participation Agreement. "
-      <> "Agreement hash: " <> agreementHash
-      <> " | URI: " <> agreementUri
-
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
         newOwner : Party
@@ -480,10 +474,6 @@ template CantonDirectMintService
   where
     signatory operator
     observer usdcIssuer, authorizedMinters
-
-    -- D-M02: Contract key for cross-module supply cap coordination
-    key (operator, serviceName) : (Party, Text)
-    maintainer key._1
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
@@ -808,9 +798,6 @@ template BurnRateLimiter
     lastResetTime : Time           -- Window start
   where
     signatory operator
-
-    key operator : Party
-    maintainer key
 
     ensure dailyBurnLimit > 0.0 && dailyBurned >= 0.0
 

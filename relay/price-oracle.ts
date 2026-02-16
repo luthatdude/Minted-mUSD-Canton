@@ -21,7 +21,7 @@
  *   - Circuit breaker: pauses on repeated API failures
  */
 
-import Ledger from "@daml/ledger";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
 import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
@@ -301,7 +301,7 @@ async function fetchTemplePrice(config: PriceOracleConfig): Promise<PriceResult>
 
 export class PriceOracleService {
   private config: PriceOracleConfig;
-  private ledger: Ledger | null = null;
+  private canton: CantonClient | null = null;
   private running = false;
   private health: HealthStatus;
   private lastCtnPrice: number = 0;
@@ -320,7 +320,7 @@ export class PriceOracleService {
    * Connect to Canton ledger via JSON API
    */
   private async connectLedger(): Promise<void> {
-    if (this.ledger) return;
+    if (this.canton) return;
 
     if (!this.config.cantonParty) {
       throw new Error("CANTON_PARTY not configured");
@@ -335,12 +335,13 @@ export class PriceOracleService {
       );
     }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
 
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
       token: this.config.cantonToken,
-      httpBaseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      userId: "administrator",
+      actAs: this.config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log(`[PriceOracle] Connected to Canton ledger at ${this.config.cantonHost}:${this.config.cantonPort}`);
@@ -456,25 +457,29 @@ export class PriceOracleService {
   async pushPriceUpdate(symbol: string, price: number, source: string): Promise<void> {
     await this.connectLedger();
 
-    if (!this.ledger) {
+    if (!this.canton) {
       throw new Error("Ledger not connected");
     }
 
     try {
-      // Exercise PriceFeed_Update on the keyed contract (operator, symbol)
-      // Using DAML JSON API exerciseByKey
-      await this.ledger.exerciseByKey(
-        // Template ID — must match codegen
-        "CantonLending:CantonPriceFeed" as any,
-        // Key: (operator, symbol)
-        { _1: this.config.cantonParty, _2: symbol } as any,
-        // Choice name
-        "PriceFeed_Update" as any,
-        // Choice arguments
+      // Query the price feed contract by (operator, symbol), then exercise on it
+      const feeds = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonPriceFeed"),
+        (p: any) => p.operator === this.config.cantonParty && p.symbol === symbol
+      );
+
+      if (feeds.length === 0) {
+        throw new Error(`No CantonPriceFeed found for operator=${this.config.cantonParty}, symbol=${symbol}`);
+      }
+
+      await this.canton.exerciseChoice(
+        parseTemplateId("CantonLending:CantonPriceFeed"),
+        feeds[0].contractId,
+        "PriceFeed_Update",
         {
           newPriceUsd: price.toFixed(18), // Money is Numeric 18
           newSource: source,
-        } as any
+        }
       );
 
       this.health.lastUpdate = new Date();

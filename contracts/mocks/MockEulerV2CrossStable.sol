@@ -11,6 +11,40 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  *      The supply vault holds RLUSD collateral, the borrow vault tracks USDC debt
  */
 contract MockEulerVaultCrossStable {
+        // Flash loan test: send assets, call callback, require repayment
+        bool public reentrancyEntered;
+
+        function flashLoanMock(address receiver, uint256 amount, bytes calldata data) external {
+            // Send funds
+            underlyingAsset.safeTransfer(receiver, amount);
+            // Reentrancy test: set flag before callback
+            reentrancyEntered = true;
+            (bool success, bytes memory returndata) = receiver.call(
+                abi.encodeWithSignature("onFlashLoan(address,uint256,bytes)", address(underlyingAsset), amount, data)
+            );
+            reentrancyEntered = false;
+            if (!success) {
+                if (returndata.length > 0) {
+                    assembly {
+                        let returndata_size := mload(returndata)
+                        revert(add(32, returndata), returndata_size)
+                    }
+                } else {
+                    revert("Flash loan callback failed");
+                }
+            }
+            // Require repayment
+            uint256 beforeBal = underlyingAsset.balanceOf(address(this));
+            underlyingAsset.safeTransferFrom(receiver, address(this), amount);
+            uint256 afterBal = underlyingAsset.balanceOf(address(this));
+            require(afterBal >= beforeBal + amount, "Flash loan underpayment");
+        }
+
+        // Test-only: force callback revert
+        function testForceCallbackRevert(address receiver, uint256 amount, bytes calldata data) external {
+            underlyingAsset.safeTransfer(receiver, amount);
+            revert("Test: forced callback revert");
+        }
     using SafeERC20 for IERC20;
 
     IERC20 public immutable underlyingAsset;
