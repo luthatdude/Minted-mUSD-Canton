@@ -123,8 +123,16 @@ invariant kink_bounded()
 
 /// @notice Max annual rate at 100% utilization is capped at 100%
 /// @dev setParams enforces: base + (kink*mult)/10000 + ((10000-kink)*jump)/10000 <= 10000.
-///      Must be an invariant (not a rule) because a rule starts from arbitrary state.
-///      Invariant checks constructor base case + preservation through setParams.
+///      Uses to_mathint() to prevent uint256 wrapping in (10000 - kinkBps()).
+///      requireInvariant kink_bounded() in preserved block ensures kink <= 10000
+///      during the induction step (Certora doesn't auto-compose invariants).
 invariant max_rate_bounded()
-    baseRateBps() + (kinkBps() * multiplierBps()) / 10000
-    + ((10000 - kinkBps()) * jumpMultiplierBps()) / 10000 <= 10000;
+    to_mathint(baseRateBps())
+    + (to_mathint(kinkBps()) * to_mathint(multiplierBps())) / 10000
+    + ((10000 - to_mathint(kinkBps())) * to_mathint(jumpMultiplierBps())) / 10000
+    <= 10000
+    {
+        preserved {
+            requireInvariant kink_bounded();
+        }
+    }
