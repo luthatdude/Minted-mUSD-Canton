@@ -65,8 +65,8 @@ rule borrow_rate_monotonic(uint256 borrows1, uint256 borrows2, uint256 supply) {
 
 /// @notice Supply rate never exceeds borrow rate
 rule supply_leq_borrow_rate(uint256 totalBorrows, uint256 totalSupply) {
-    require totalSupply > 0;
-    require totalBorrows <= totalSupply;
+    require totalSupply > 0, "Zero supply causes division by zero in rate calculation";
+    require totalBorrows <= totalSupply, "Borrows cannot exceed supply in valid protocol state";
 
     uint256 borrowRate = getBorrowRateAnnual(totalBorrows, totalSupply);
     uint256 supplyRate = getSupplyRateAnnual(totalBorrows, totalSupply);
@@ -121,6 +121,18 @@ invariant reserve_factor_bounded()
 invariant kink_bounded()
     kinkBps() <= 10000;
 
-/// @notice Max annual rate capped at 100%
-invariant max_rate_bounded()
-    baseRateBps() + multiplierBps() + jumpMultiplierBps() <= 10000;
+/// @notice Max annual rate at 100% utilization is capped at 100%
+/// @dev The contract computes maxRate = baseRateBps + (kinkBps * multiplierBps) / 10000
+///      + ((10000 - kinkBps) * jumpMultiplierBps) / 10000, and reverts if > 10000.
+///      The raw sum base+multiplier+jump can exceed 10000 due to kink scaling.
+rule max_rate_bounded() {
+    mathint base = baseRateBps();
+    mathint mult = multiplierBps();
+    mathint kink = kinkBps();
+    mathint jump = jumpMultiplierBps();
+
+    mathint maxRate = base + (kink * mult) / 10000 + ((10000 - kink) * jump) / 10000;
+
+    assert maxRate <= 10000,
+        "Max annual rate exceeds 100%";
+}
