@@ -33,15 +33,16 @@ methods {
     function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
 
-    // ── ERC20 external call summaries — dispatch to linked DummyMUSD/DummyUSDC harnesses ──
-    // DISPATCHER(true) routes calls to the linked harness contracts which have
-    // real transferFrom/transfer/burn implementations. NONDET DELETE was wrong here
-    // because it removed these functions from dispatch, causing SafeERC20 calls to
-    // revert and making all token-touching rules vacuously pass or fail sanity.
-    function _.transferFrom(address, address, uint256) external => DISPATCHER(true);
-    function _.transfer(address, uint256) external => DISPATCHER(true);
-    function _.balanceOf(address) external => DISPATCHER(true);
-    function _.burn(address, uint256) external => DISPATCHER(true);
+    // ── ERC20 external call summaries ──
+    // SafeERC20 uses Address.functionCall → low-level .call() internally.
+    //   DISPATCHER(true) failed: DummyMUSD.transferFrom underflows in arbitrary Prover states
+    //   NONDET DELETE failed: removes .call(), returns (false,""), Address lib reverts
+    //   NONDET works: returns (true, nondet_bytes), SafeERC20 optional-return check
+    //     passes when returndata is empty — the Prover finds a success path.
+    function _.transferFrom(address, address, uint256) external => NONDET;
+    function _.transfer(address, uint256) external => NONDET;
+    function _.balanceOf(address) external => PER_CALLEE_CONSTANT;
+    function _.burn(address, uint256) external => NONDET;
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -25,7 +25,8 @@ methods {
     function _.getPrice(address) external       => NONDET;
     function _.supportsToken(address) external  => PER_CALLEE_CONSTANT;
     function _.isHealthy(address) external      => PER_CALLEE_CONSTANT;
-    function _.source() external                => NONDET;
+    // NOTE: _.source() omitted — returns string memory which CVL cannot represent.
+    //       Only called in getPriceWithSource/getAllPrices (view), not tested by rules.
 }
 
 // ═══════════════════════════════════════════════════════════════════
