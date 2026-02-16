@@ -18,9 +18,12 @@ type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "
 // STRATEGY CATALOG — all deployable yield strategies
 // Addresses are populated from env vars; empty string = not yet deployed
 // ═══════════════════════════════════════════════════════════════════════════
-// TreasuryV2 registers exactly 2 MetaVault instances as its allocation slots.
+// TreasuryV2 registers MetaVault instances as allocation slots.
 // Each vault aggregates sub-strategies internally via weighted allocation.
-type VaultAssignment = "vault1" | "vault2";
+// Routing:
+//   - DirectMint / smUSD deposits → TreasuryV2 → Vaults 1 & 2 (USDC strategies)
+//   - ETH Pool deposits (ETH/USDC/USDT) → TreasuryV2 → Vault 3 only (ETH strategies)
+type VaultAssignment = "vault1" | "vault2" | "vault3";
 
 interface StrategyInfo {
   name: string;
@@ -35,99 +38,107 @@ interface StrategyInfo {
 
 const VAULT_LABELS: Record<VaultAssignment, { label: string; badge: string; desc: string }> = {
   vault1: {
-    label: "Vault #1 — Diversified Loop",
+    label: "Vault #1 — Diversified Yield",
     badge: "bg-emerald-800/60 text-emerald-300",
-    desc: "Blue-chip lending loops + alternative yield (Euler xStable, Aave, Compound, Contango, Sky sUSDS)",
+    desc: "Blue-chip lending loops + PT yield (Euler xStable, Euler V2, Pendle 3-PT)",
   },
   vault2: {
-    label: "Vault #2 — Primary Yield",
+    label: "Vault #2 — Fluid Syrup",
     badge: "bg-pink-800/60 text-pink-300",
-    desc: "High-yield core strategies (Fluid, Pendle, Euler V2)",
+    desc: "Leveraged syrupUSDC loops across borrow tokens (GHO, USDT, USDC)",
+  },
+  vault3: {
+    label: "Vault #3 — ETH Pool",
+    badge: "bg-blue-800/60 text-blue-300",
+    desc: "ETH Pool deposits (ETH/USDC/USDT) are routed exclusively here — Fluid T2 #74 LRT + T4 #44 LST. Exit: mUSD (30/60/90 day lock)",
   },
 };
 
 const KNOWN_STRATEGIES: StrategyInfo[] = [
-  // ── Vault #1 — Diversified Loop ────────────────────────────
+  // ── Vault #1 — Diversified Yield (45% of treasury) ─────────
   {
     name: "Euler V2 RLUSD/USDC Cross-Stable",
     shortName: "Euler xStable",
     address: process.env.NEXT_PUBLIC_EULER_CROSS_STRATEGY_ADDRESS || "",
-    targetBps: 1000,
-    apy: "~8-12%",
+    targetBps: 5000,
+    apy: "~15.7%",
     description: "Cross-stable leverage with depeg circuit breaker (RLUSD/USDC)",
     color: "#10b981", // emerald
     vault: "vault1",
   },
   {
-    name: "Aave V3 Loop",
-    shortName: "Aave V3",
-    address: process.env.NEXT_PUBLIC_AAVE_STRATEGY_ADDRESS || "",
-    targetBps: 0,
-    apy: "~6-9%",
-    description: "Leveraged supply/borrow loop on Aave V3",
-    color: "#a855f7", // purple
+    name: "Euler V2 Loop USDC/USDC",
+    shortName: "Euler V2",
+    address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
+    targetBps: 3000,
+    apy: "~18%",
+    description: "Leveraged lending loop on Euler V2 (same-asset USDC, incentivized)",
+    color: "#14b8a6", // teal
     vault: "vault1",
   },
   {
-    name: "Compound V3 Loop",
-    shortName: "Compound",
-    address: process.env.NEXT_PUBLIC_COMPOUND_STRATEGY_ADDRESS || "",
-    targetBps: 0,
-    apy: "~5-8%",
-    description: "Leveraged supply/borrow loop on Compound V3",
-    color: "#22c55e", // green
+    name: "Pendle 3-PT Markets",
+    shortName: "Pendle",
+    address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
+    targetBps: 2000,
+    apy: "~10.7%",
+    description: "PT markets with auto-rollover — top pools only",
+    color: "#8b5cf6", // violet
     vault: "vault1",
   },
+  // ── Vault #2 — Fluid Syrup (45% of treasury) ──────────────
   {
-    name: "Contango Perp Loop",
-    shortName: "Contango",
-    address: process.env.NEXT_PUBLIC_CONTANGO_STRATEGY_ADDRESS || "",
-    targetBps: 0,
-    apy: "~8-14%",
-    description: "Perp-based yield loop with flash loan leverage via Contango",
-    color: "#f59e0b", // amber
-    vault: "vault1",
-  },
-  {
-    name: "Sky sUSDS Savings",
-    shortName: "Sky sUSDS",
-    address: process.env.NEXT_PUBLIC_SKY_STRATEGY_ADDRESS || "",
-    targetBps: 0,
-    apy: "~7.9%",
-    description: "USDC → PSM → sUSDS savings vault (zero-slippage, no leverage)",
-    color: "#f97316", // orange
-    vault: "vault1",
-  },
-  // ── Vault #2 — Primary Yield ───────────────────────────────
-  {
-    name: "Fluid Stable Loop #146",
-    shortName: "Fluid #146",
-    address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
-    targetBps: 4500,
-    apy: "~14.3%",
-    description: "syrupUSDC/USDC VaultT1 — leveraged stable loop via Fluid Protocol",
+    name: "Fluid #148 syrupUSDC/GHO",
+    shortName: "Fluid #148",
+    address: process.env.NEXT_PUBLIC_FLUID_GHO_STRATEGY_ADDRESS || "",
+    targetBps: 5000,
+    apy: "~18.77%",
+    description: "syrupUSDC/GHO VaultT1 — cross-borrow loop via Fluid Protocol",
     color: "#06b6d4", // cyan
     vault: "vault2",
   },
   {
-    name: "Pendle Multi-Pool",
-    shortName: "Pendle",
-    address: process.env.NEXT_PUBLIC_PENDLE_STRATEGY_ADDRESS || "",
-    targetBps: 3500,
-    apy: "~11.7%",
-    description: "PT markets with auto-rollover and manual multi-pool allocation",
-    color: "#8b5cf6", // violet
+    name: "Fluid #147 syrupUSDC/USDT",
+    shortName: "Fluid #147",
+    address: process.env.NEXT_PUBLIC_FLUID_USDT_STRATEGY_ADDRESS || "",
+    targetBps: 3000,
+    apy: "~16.61%",
+    description: "syrupUSDC/USDT VaultT1 — cross-borrow loop via Fluid Protocol",
+    color: "#0891b2", // cyan-600
     vault: "vault2",
   },
   {
-    name: "Euler V2 Loop",
-    shortName: "Euler V2",
-    address: process.env.NEXT_PUBLIC_EULER_STRATEGY_ADDRESS || "",
+    name: "Fluid #146 syrupUSDC/USDC",
+    shortName: "Fluid #146",
+    address: process.env.NEXT_PUBLIC_FLUID_STRATEGY_ADDRESS || "",
     targetBps: 2000,
-    apy: "~7-10%",
-    description: "Leveraged lending loop on Euler V2",
-    color: "#14b8a6", // teal
+    apy: "~11.66%",
+    description: "syrupUSDC/USDC VaultT1 — same-asset stable loop via Fluid Protocol",
+    color: "#22d3ee", // cyan-400
     vault: "vault2",
+  },
+  // ── Vault #3 — ETH Pool (10% of treasury) ─────────────────
+  // All ETH Pool deposits (ETH/USDC/USDT) are routed exclusively here.
+  // DirectMint / smUSD deposits do NOT flow into Vault 3.
+  {
+    name: "Fluid #74 weETH-ETH/wstETH (Mode 2 LRT)",
+    shortName: "Fluid #74",
+    address: process.env.NEXT_PUBLIC_FLUID_ETH_STRATEGY_ADDRESS || "",
+    targetBps: 6000,
+    apy: "~12-18%",
+    description: "Mode 2 — LRT Smart Collateral + Smart Debt, Fluid T2 Vault #74 (92% LTV, 4 loops)",
+    color: "#3b82f6", // blue-500
+    vault: "vault3",
+  },
+  {
+    name: "Fluid #44 wstETH-ETH/wstETH-ETH (Mode 3 LST)",
+    shortName: "Fluid #44",
+    address: process.env.NEXT_PUBLIC_FLUID_LST_STRATEGY_ADDRESS || "",
+    targetBps: 4000,
+    apy: "~14-20%",
+    description: "Mode 3 — LST Smart Collateral + Smart Debt, Fluid T4 Vault #44 (94% LTV, 5 loops, ~16.7x leverage)",
+    color: "#2563eb", // blue-600
+    vault: "vault3",
   },
 ];
 
@@ -148,14 +159,14 @@ function strategyColor(addr: string): string {
 
 /** Map shortName → optimizer engine key for the AI yield optimizer */
 const STRATEGY_KEY_MAP: Record<string, string> = {
-  "Fluid #146": "fluid",
+  "Fluid #146": "fluid146",
+  "Fluid #147": "fluid147",
+  "Fluid #148": "fluid148",
   "Pendle": "pendle",
   "Euler xStable": "eulerCross",
-  "Aave V3": "aave",
-  "Compound": "compound",
-  "Contango": "contango",
   "Euler V2": "euler",
-  "Sky sUSDS": "sky",
+  "Fluid #74": "fluidETH",
+  "Fluid #44": "fluidLST",
 };
 
 function strategyKey(addr: string): string {
@@ -219,10 +230,12 @@ export function AdminPage() {
   const [maxRedeem, setMaxRedeem] = useState("");
 
   // Treasury Admin
-  const [strategyAddr, setStrategyAddr] = useState("");
+  const [addStrategyAddr, setAddStrategyAddr] = useState("");
+  const [removeStrategyAddr, setRemoveStrategyAddr] = useState("");
   const [targetBps, setTargetBps] = useState("");
   const [minBps, setMinBps] = useState("");
   const [maxBps, setMaxBps] = useState("");
+  const [autoAllocate, setAutoAllocate] = useState(true);
   const [reserveBps, setReserveBps] = useState("");
   const [deployStratAddr, setDeployStratAddr] = useState("");
   const [deployAmount, setDeployAmount] = useState("");
@@ -489,9 +502,10 @@ export function AdminPage() {
             <StatCard label="Reserve Target (bps)" value={currentValues.maxDeploy || "..."} />
           </div>
 
-          <div className="rounded-lg border border-amber-700/50 bg-amber-900/10 p-3 text-xs text-amber-400">
-            <strong>Manual Deployment:</strong> All deposits sit idle in the reserve until you explicitly deploy them below.
-            No funds are auto-allocated.
+          <div className="rounded-lg border border-blue-700/50 bg-blue-900/10 p-3 text-xs text-blue-400">
+            <strong>Auto-Allocation:</strong> Deposits ≥ $1,000 are automatically split across active strategies
+            according to their target allocations. Smaller deposits stay in reserve until the next rebalance.
+            Use the deploy/withdraw controls below for manual adjustments.
           </div>
 
           {/* ── DeFi Yield Scanner (live market data) ── */}
@@ -568,97 +582,51 @@ export function AdminPage() {
             )}
           </div>
 
-          {/* ── Strategies & Vaults Overview ── */}
+          {/* ── Strategy Catalog (all known strategies) ── */}
           <div className="card">
-            <h3 className="mb-1 font-semibold text-gray-300">Strategies &amp; Vaults</h3>
-            <p className="mb-4 text-xs text-gray-500">
-              All selectable yield strategies grouped by their parent vault. Green = on-chain active.
+            <h3 className="mb-3 font-semibold text-gray-300">Strategy Catalog</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              All available yield strategies. Strategies with addresses configured can be added to Treasury.
             </p>
-
-            {(["vault1", "vault2"] as VaultAssignment[]).map((vaultKey) => {
-              const vaultMeta = VAULT_LABELS[vaultKey];
-              const strategies = KNOWN_STRATEGIES.filter((ks) => ks.vault === vaultKey);
-              const activeCount = strategies.filter((ks) =>
-                strategyList.some(
+            <div className="grid gap-2 sm:grid-cols-2">
+              {KNOWN_STRATEGIES.map((ks, i) => {
+                const isRegistered = strategyList.some(
                   (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
-                )
-              ).length;
-
-              return (
-                <div key={vaultKey} className="mb-5 last:mb-0">
-                  {/* Vault header */}
-                  <div className="flex items-center gap-3 mb-3">
-                    <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${vaultMeta.badge}`}>
-                      {vaultMeta.label}
-                    </span>
-                    <span className="text-[10px] text-gray-500">
-                      {activeCount}/{strategies.length} active
-                    </span>
+                );
+                return (
+                  <div
+                    key={i}
+                    className={`rounded-lg border px-3 py-2 text-xs ${
+                      isRegistered
+                        ? "border-green-700/50 bg-green-900/10"
+                        : ks.address
+                        ? "border-gray-700 bg-gray-800/30"
+                        : "border-gray-800 bg-gray-900/20 opacity-50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ks.color }} />
+                      <span className="font-medium text-white">{ks.shortName}</span>
+                      {ks.targetBps > 0 && (
+                        <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
+                          {ks.targetBps / 100}%
+                        </span>
+                      )}
+                      {isRegistered && (
+                        <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ACTIVE</span>
+                      )}
+                      {!ks.address && (
+                        <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-500">NO ADDR</span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-gray-500">{ks.description}</p>
+                    {ks.address && (
+                      <p className="mt-0.5 font-mono text-[10px] text-gray-600">{ks.address}</p>
+                    )}
                   </div>
-                  <p className="mb-2 text-[10px] text-gray-600">{vaultMeta.desc}</p>
-
-                  {/* Strategy cards */}
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {strategies.map((ks, i) => {
-                      const isRegistered = strategyList.some(
-                        (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
-                      );
-                      const onChain = strategyList.find(
-                        (s) => ks.address && s.strategy.toLowerCase() === ks.address.toLowerCase()
-                      );
-                      return (
-                        <div
-                          key={i}
-                          className={`rounded-lg border px-3 py-2.5 text-xs ${
-                            isRegistered
-                              ? "border-green-700/50 bg-green-900/10"
-                              : ks.address
-                              ? "border-gray-700 bg-gray-800/30"
-                              : "border-gray-800 bg-gray-900/20 opacity-50"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <div className="h-2.5 w-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: ks.color }} />
-                            <span className="font-medium text-white">{ks.shortName}</span>
-                            <span className="rounded bg-gray-700/60 px-1.5 py-0.5 text-[10px] text-cyan-300">
-                              {ks.apy}
-                            </span>
-                            {ks.targetBps > 0 && (
-                              <span className="rounded bg-gray-700 px-1.5 py-0.5 text-[10px] text-gray-400">
-                                Target: {ks.targetBps / 100}%
-                              </span>
-                            )}
-                            {isRegistered && (
-                              <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ACTIVE</span>
-                            )}
-                            {!isRegistered && ks.address && (
-                              <span className="rounded bg-yellow-800/40 px-1.5 py-0.5 text-[10px] text-yellow-400">AVAILABLE</span>
-                            )}
-                            {!ks.address && (
-                              <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-500">NO ADDR</span>
-                            )}
-                          </div>
-                          <p className="mt-1.5 text-gray-500 leading-relaxed">{ks.description}</p>
-                          <div className="mt-1.5 flex items-center gap-3 text-[10px]">
-                            {ks.address && (
-                              <span className="font-mono text-gray-600">{ks.address.slice(0, 6)}…{ks.address.slice(-4)}</span>
-                            )}
-                            {onChain && (
-                              <span className="text-gray-500">
-                                On-chain target: {Number(onChain.targetBps) / 100}%
-                              </span>
-                            )}
-                            {onChain?.value && (
-                              <span className="text-gray-400">{onChain.value} USDC</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
 
           {/* ── Manual Deploy to Strategy ── */}
@@ -752,9 +720,9 @@ export function AdminPage() {
               <label className="label">Strategy</label>
               <select
                 className="input"
-                value={strategyAddr}
+                value={addStrategyAddr}
                 onChange={(e) => {
-                  setStrategyAddr(e.target.value);
+                  setAddStrategyAddr(e.target.value);
                   // Pre-fill target bps from catalog
                   const found = KNOWN_STRATEGIES.find(
                     (ks) => ks.address && ks.address.toLowerCase() === e.target.value.toLowerCase()
@@ -785,14 +753,14 @@ export function AdminPage() {
                 className="input"
                 type="text"
                 placeholder="0x..."
-                value={strategyAddr}
-                onChange={(e) => setStrategyAddr(e.target.value)}
+                value={addStrategyAddr}
+                onChange={(e) => setAddStrategyAddr(e.target.value)}
               />
             </div>
-            {strategyAddr && (
+            {addStrategyAddr && (
               <p className="mt-1 text-xs text-gray-400">
                 {KNOWN_STRATEGIES.find(
-                  (ks) => ks.address && ks.address.toLowerCase() === strategyAddr.toLowerCase()
+                  (ks) => ks.address && ks.address.toLowerCase() === addStrategyAddr.toLowerCase()
                 )?.description || "Custom strategy (not in catalog)"}
               </p>
             )}
@@ -810,11 +778,23 @@ export function AdminPage() {
                 <input className="input" type="number" placeholder="4500" value={maxBps} onChange={(e) => setMaxBps(e.target.value)} />
               </div>
             </div>
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="autoAllocate"
+                checked={autoAllocate}
+                onChange={(e) => setAutoAllocate(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-600 bg-gray-800 text-brand-500"
+              />
+              <label htmlFor="autoAllocate" className="text-xs text-gray-400">
+                Auto-allocate deposits to this strategy (recommended)
+              </label>
+            </div>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.addStrategy(strategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), false))}
+              onClick={() => tx.send(() => treasury!.addStrategy(addStrategyAddr, BigInt(targetBps), BigInt(minBps), BigInt(maxBps), autoAllocate))}
               loading={tx.loading}
-              disabled={!strategyAddr || !targetBps || !minBps || !maxBps}
+              disabled={!addStrategyAddr || !targetBps || !minBps || !maxBps}
             >
               Add Strategy
             </TxButton>
@@ -826,8 +806,8 @@ export function AdminPage() {
             <p className="mb-3 text-xs text-gray-500">Deactivate a strategy. Funds will be withdrawn first.</p>
             <select
               className="input"
-              value={strategyAddr}
-              onChange={(e) => setStrategyAddr(e.target.value)}
+              value={removeStrategyAddr}
+              onChange={(e) => setRemoveStrategyAddr(e.target.value)}
             >
               <option value="">Select strategy to remove…</option>
               {strategyList.map((s, i) => (
@@ -838,9 +818,9 @@ export function AdminPage() {
             </select>
             <TxButton
               className="mt-3 w-full"
-              onClick={() => tx.send(() => treasury!.removeStrategy(strategyAddr))}
+              onClick={() => tx.send(() => treasury!.removeStrategy(removeStrategyAddr))}
               loading={tx.loading}
-              disabled={!strategyAddr}
+              disabled={!removeStrategyAddr}
               variant="danger"
             >
               Remove Strategy

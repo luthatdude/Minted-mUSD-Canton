@@ -24,7 +24,7 @@ import "./interfaces/IYieldAdapter.sol";
  *   4. Compares live rate to indexer's claimed rate within tolerance
  *   5. Returns pass/fail + live rate data
  *
- * Security: Only verified opportunities should be whitelisted via governance before deployment.
+ * Security: Only verified opportunities should be deployed to via StrategyFactory.
  */
 contract YieldVerifier is AccessControl {
 
