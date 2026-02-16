@@ -23,7 +23,7 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -40,6 +40,7 @@ template CantonSMUSD
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
     stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-01: mandatory compliance
     privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -55,11 +56,15 @@ template CantonSMUSD
       do create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
+    -- HIGH-01: Enforce compliance validation on transfers
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
+        -- HIGH-01: Validate both sender and receiver against blacklist/freeze
+        exercise complianceRegistryCid ValidateTransfer
+          with sender = owner; receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner

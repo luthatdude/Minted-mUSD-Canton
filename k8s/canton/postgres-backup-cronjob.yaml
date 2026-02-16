@@ -16,6 +16,10 @@
 # Set BACKUP_S3_BUCKET to the target S3/GCS bucket for cross-region disaster recovery.
 # The backup CronJob will upload each backup to this bucket after the local dump completes.
 # Ensure the pod's ServiceAccount (or IRSA / Workload Identity) has write access to this bucket.
+#
+# F-02 FIX: CI must validate these are NOT placeholder values before deployment.
+# Add to CI pipeline:
+#   grep -rq 'REPLACE_WITH_ACTUAL' k8s/canton/postgres-backup-cronjob.yaml && echo 'FAIL: backup bucket not configured' && exit 1
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,8 +28,12 @@ metadata:
   labels:
     app.kubernetes.io/name: postgres-backup
     app.kubernetes.io/component: backup
+  annotations:
+    # F-02: CI validation gate — deployment blocked if buckets are still placeholders
+    musd.io/requires-configuration: "BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET must be set before production deploy"
 data:
-  # Replace with your actual backup bucket name.
+  # ⚠️ MUST be configured per-environment before production deployment.
+  # CI pipeline should fail if these contain 'REPLACE_WITH_ACTUAL'.
   # For AWS: "my-org-musd-canton-backups-us-east-1"
   # For GCS: "my-org-musd-canton-backups" (and use gsutil cp instead of aws s3 cp)
   BACKUP_S3_BUCKET: "REPLACE_WITH_ACTUAL_BUCKET_NAME"

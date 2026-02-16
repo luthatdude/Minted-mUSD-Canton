@@ -38,7 +38,8 @@ describe("BLEBridgeV9 — Coverage Boost", function () {
       MIN_SIGNATURES,
       await musd.getAddress(),
       COLLATERAL_RATIO,
-      DAILY_CAP_LIMIT
+      DAILY_CAP_LIMIT,
+      deployer.address
     ])) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
 

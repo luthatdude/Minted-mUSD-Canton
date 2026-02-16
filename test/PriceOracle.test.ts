@@ -55,7 +55,7 @@ describe("PriceOracle", function () {
 
   describe("Feed Management", function () {
     it("should add a feed", async function () {
-      const [feed, stalePeriod, tokenDecimals, enabled] = await oracle.feeds(WETH_ADDR);
+      const [feed, stalePeriod, tokenDecimals, feedDecimals, enabled] = await oracle.feeds(WETH_ADDR);
       expect(enabled).to.be.true;
       expect(stalePeriod).to.equal(STALE_PERIOD);
       expect(tokenDecimals).to.equal(18);
@@ -87,7 +87,7 @@ describe("PriceOracle", function () {
 
     it("should remove a feed", async function () {
       await timelockRemoveFeed(oracle, deployer, WETH_ADDR);
-      const [, , , enabled] = await oracle.feeds(WETH_ADDR);
+      const [, , , , enabled] = await oracle.feeds(WETH_ADDR);
       expect(enabled).to.be.false;
     });
 

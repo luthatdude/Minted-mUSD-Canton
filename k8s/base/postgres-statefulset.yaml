@@ -123,8 +123,16 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-            readOnlyRootFilesystem: true
-          volumeMounts:
+            readOnlyRootFilesystem: true          volumeMounts:
+            # F-01 FIX: Mount DB credentials as files (consistent with postgres + pgbouncer)
+            - name: db-credentials
+              mountPath: /run/secrets/db-username
+              subPath: username
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-password
+              subPath: password
+              readOnly: true          volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
             - name: tmp
@@ -259,17 +267,8 @@ spec:
               containerPort: 9187
               protocol: TCP
           env:
-            # Connect to the local postgres instance for metrics collection
-            - name: DATA_SOURCE_USER
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: username
-            - name: DATA_SOURCE_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: postgres-credentials
-                  key: password
+            # F-01 FIX: Removed secretKeyRef env vars (visible in /proc/<pid>/environ).
+            # Credentials are loaded from file-mounted secrets via entrypoint wrapper below.
             - name: DATA_SOURCE_URI
               # INFRA-H-02: Use sslmode=require (postgres has TLS enabled via args)
               value: "127.0.0.1:5432/canton?sslmode=require"
@@ -278,6 +277,15 @@ spec:
               value: "false"
             - name: PG_EXPORTER_DISABLE_SETTINGS_METRICS
               value: "false"
+          # F-01 FIX: Wrap entrypoint to load credentials from mounted secret files
+          # (same pattern as pgbouncer sidecar — prevents /proc credential leak)
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export DATA_SOURCE_USER="$(cat /run/secrets/db-username)"
+              export DATA_SOURCE_PASS="$(cat /run/secrets/db-password)"
+              exec /postgres_exporter
           resources:
             requests:
               cpu: 50m
