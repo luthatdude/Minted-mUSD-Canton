@@ -581,6 +581,36 @@ jobs:
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
+      - name: Run Certora — InterestRateModel invariants
+        run: certoraRun certora/InterestRateModel.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — DepositRouter invariants
+        run: certoraRun certora/DepositRouter.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — PriceOracle invariants
+        run: certoraRun certora/PriceOracle.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — BLEBridgeV9 invariants
+        run: certoraRun certora/BLEBridgeV9.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — FluidLoopStrategy invariants
+        run: certoraRun certora/FluidLoopStrategy.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — MetaVault invariants
+        run: certoraRun certora/MetaVault.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
   # ============================================================
   #  SECRET SCANNING
   # ============================================================

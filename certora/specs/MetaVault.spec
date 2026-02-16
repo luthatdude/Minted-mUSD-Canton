@@ -371,7 +371,7 @@ rule emergencyWithdrawAll_preserves_principal() {
 rule deposit_requires_treasury(uint256 amount) {
     env e;
     deposit@withrevert(e, amount);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can deposit";
 }
 
@@ -379,7 +379,7 @@ rule deposit_requires_treasury(uint256 amount) {
 rule withdraw_requires_treasury(uint256 amount) {
     env e;
     withdraw@withrevert(e, amount);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can withdraw";
 }
 
@@ -387,7 +387,7 @@ rule withdraw_requires_treasury(uint256 amount) {
 rule withdrawAll_requires_treasury() {
     env e;
     withdrawAll@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can withdrawAll";
 }
 
@@ -395,7 +395,7 @@ rule withdrawAll_requires_treasury() {
 rule rebalance_requires_keeper() {
     env e;
     rebalance@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, KEEPER_ROLE()),
+    assert !lastReverted => hasRole(KEEPER_ROLE(), e.msg.sender),
         "Only KEEPER_ROLE can rebalance";
 }
 
@@ -403,7 +403,7 @@ rule rebalance_requires_keeper() {
 rule addSubStrategy_requires_strategist(address s, uint256 w, uint256 c) {
     env e;
     addSubStrategy@withrevert(e, s, w, c);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can addSubStrategy";
 }
 
@@ -411,7 +411,7 @@ rule addSubStrategy_requires_strategist(address s, uint256 w, uint256 c) {
 rule removeSubStrategy_requires_strategist(uint256 idx) {
     env e;
     removeSubStrategy@withrevert(e, idx);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can removeSubStrategy";
 }
 
@@ -419,7 +419,7 @@ rule removeSubStrategy_requires_strategist(uint256 idx) {
 rule toggleSubStrategy_requires_guardian(uint256 idx, bool en) {
     env e;
     toggleSubStrategy@withrevert(e, idx, en);
-    assert !lastReverted => hasRole(e.msg.sender, GUARDIAN_ROLE()),
+    assert !lastReverted => hasRole(GUARDIAN_ROLE(), e.msg.sender),
         "Only GUARDIAN_ROLE can toggleSubStrategy";
 }
 
@@ -427,7 +427,7 @@ rule toggleSubStrategy_requires_guardian(uint256 idx, bool en) {
 rule setWeights_requires_strategist(uint256[] w) {
     env e;
     setWeights@withrevert(e, w);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can setWeights";
 }
 
@@ -435,7 +435,7 @@ rule setWeights_requires_strategist(uint256[] w) {
 rule setDriftThreshold_requires_strategist(uint256 bps) {
     env e;
     setDriftThreshold@withrevert(e, bps);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can setDriftThreshold";
 }
 
@@ -443,7 +443,7 @@ rule setDriftThreshold_requires_strategist(uint256 bps) {
 rule emergencyWithdrawFrom_requires_guardian(uint256 idx) {
     env e;
     emergencyWithdrawFrom@withrevert(e, idx);
-    assert !lastReverted => hasRole(e.msg.sender, GUARDIAN_ROLE()),
+    assert !lastReverted => hasRole(GUARDIAN_ROLE(), e.msg.sender),
         "Only GUARDIAN_ROLE can emergencyWithdrawFrom";
 }
 
@@ -451,7 +451,7 @@ rule emergencyWithdrawFrom_requires_guardian(uint256 idx) {
 rule emergencyWithdrawAll_requires_guardian() {
     env e;
     emergencyWithdrawAll@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, GUARDIAN_ROLE()),
+    assert !lastReverted => hasRole(GUARDIAN_ROLE(), e.msg.sender),
         "Only GUARDIAN_ROLE can emergencyWithdrawAll";
 }
 
@@ -459,7 +459,7 @@ rule emergencyWithdrawAll_requires_guardian() {
 rule pause_requires_guardian() {
     env e;
     pause@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, GUARDIAN_ROLE()),
+    assert !lastReverted => hasRole(GUARDIAN_ROLE(), e.msg.sender),
         "Only GUARDIAN_ROLE can pause";
 }
 
