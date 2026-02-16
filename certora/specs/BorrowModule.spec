@@ -56,9 +56,9 @@ methods {
 ///      avoiding vacuity from paths that legitimately revert (access control, capacity, etc.)
 rule borrow_increases_total_borrows(uint256 amount) {
     env e;
-    require amount > 0;
-    require e.msg.value == 0;
-    require !paused();
+    require amount > 0, "Zero-amount borrow reverts unconditionally, not interesting";
+    require e.msg.value == 0, "BorrowModule is not payable; non-zero msg.value always reverts";
+    require !paused(), "Paused state tested separately in paused_blocks_borrow";
 
     uint256 totalBefore = totalBorrows();
 
@@ -75,9 +75,9 @@ rule borrow_increases_total_borrows(uint256 amount) {
 /// @notice First borrow must respect minimum debt requirement
 rule borrow_respects_min_debt(uint256 amount) {
     env e;
-    require totalDebt(e, e.msg.sender) == 0; // First borrow
-    require amount > 0;
-    require amount < minDebt();
+    require totalDebt(e, e.msg.sender) == 0, "Test first-borrow path where minDebt check applies";
+    require amount > 0, "Zero-amount borrow reverts unconditionally, not interesting";
+    require amount < minDebt(), "Amount must be below minDebt to test the guard";
 
     borrow@withrevert(e, amount);
 
@@ -95,18 +95,18 @@ rule borrow_respects_min_debt(uint256 amount) {
 ///      Without this, a counter-example exists where accrued interest > repaid amount.
 rule repay_decreases_total_borrows(uint256 amount) {
     env e;
-    require amount > 0;
-    require e.msg.value == 0;
+    require amount > 0, "Zero-amount repay reverts unconditionally, not interesting";
+    require e.msg.value == 0, "BorrowModule is not payable; non-zero msg.value always reverts";
 
     // Isolate repay accounting: no time elapsed → no interest accrual
     uint256 pBefore; uint256 aBefore; uint256 tBefore;
     (pBefore, aBefore, tBefore) = positions(e.msg.sender);
-    require pBefore + aBefore > 0;                          // Must have debt
-    require e.block.timestamp == tBefore;                    // No user interest elapsed
-    require e.block.timestamp == lastGlobalAccrualTime();    // No global interest elapsed
+    require pBefore + aBefore > 0, "User must have existing debt to repay";
+    require e.block.timestamp == tBefore, "No user-level interest elapsed, isolates repay accounting";
+    require e.block.timestamp == lastGlobalAccrualTime(), "No global interest elapsed, isolates repay accounting";
 
     uint256 totalBefore = totalBorrows();
-    require totalBefore > 0;
+    require totalBefore > 0, "Protocol must have outstanding borrows for repay to decrease them";
 
     repay(e, amount);
 
@@ -124,7 +124,7 @@ rule repay_decreases_total_borrows(uint256 amount) {
 ///      principal == 0 && accruedInterest == 0.
 rule no_phantom_interest(address user) {
     env e;
-    require totalDebt(e, user) == 0;
+    require totalDebt(e, user) == 0, "Test that zero-debt users stay at zero after accrual";
 
     accrueInterest(e, user);
 
@@ -142,7 +142,7 @@ rule interest_never_decreases_debt(address user) {
     uint256 pBefore; uint256 aBefore; uint256 tBefore;
     (pBefore, aBefore, tBefore) = positions(user);
     mathint storedDebtBefore = pBefore + aBefore;
-    require storedDebtBefore > 0;
+    require storedDebtBefore > 0, "Only meaningful to test interest on non-zero debt positions";
 
     accrueInterest(e, user);
 
@@ -157,7 +157,7 @@ rule interest_never_decreases_debt(address user) {
 /// @dev The contract auto-closes positions where remaining < minDebt
 rule repay_auto_close_invariant(uint256 amount) {
     env e;
-    require amount > 0;
+    require amount > 0, "Zero-amount repay reverts unconditionally, not interesting";
 
     repay(e, amount);
 
@@ -173,7 +173,7 @@ rule repay_auto_close_invariant(uint256 amount) {
 /// @notice Paused contract blocks borrowing
 rule paused_blocks_borrow(uint256 amount) {
     env e;
-    require paused();
+    require paused(), "Test that pause modifier blocks borrowing";
 
     borrow@withrevert(e, amount);
 
@@ -184,7 +184,7 @@ rule paused_blocks_borrow(uint256 amount) {
 /// @notice Paused contract blocks repaying
 rule paused_blocks_repay(uint256 amount) {
     env e;
-    require paused();
+    require paused(), "Test that pause modifier blocks repaying";
 
     repay@withrevert(e, amount);
 
@@ -195,7 +195,7 @@ rule paused_blocks_repay(uint256 amount) {
 /// @notice Paused contract blocks collateral withdrawal
 rule paused_blocks_withdrawal(address token, uint256 amount) {
     env e;
-    require paused();
+    require paused(), "Test that pause modifier blocks collateral withdrawal";
 
     withdrawCollateral@withrevert(e, token, amount);
 
