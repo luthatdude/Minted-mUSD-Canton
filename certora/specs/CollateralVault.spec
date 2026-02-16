@@ -81,7 +81,7 @@ rule deposit_accounting(address token, uint256 amount) {
 rule depositFor_accounting(address user, address token, uint256 amount) {
     env e;
     require amount > 0;
-    require user != address(0);
+    require user != 0;
     require e.msg.value == 0;
 
     uint256 balBefore = deposits(user, token);
@@ -191,7 +191,7 @@ rule withdrawFor_accounting(
 ) {
     env e;
     require amount > 0;
-    require recipient != address(0);
+    require recipient != 0;
 
     uint256 balBefore = deposits(user, token);
 
