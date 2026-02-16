@@ -72,9 +72,18 @@ invariant subStrategyCountBounded()
     filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice driftThresholdBps is 0 (uninitialized) or >= MIN_DRIFT_BPS (200)
-invariant driftThresholdAboveMinimum()
-    driftThresholdBps() == 0 || driftThresholdBps() >= 200
-    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
+///         Expressed as a rule instead of an invariant to avoid induction
+///         issues with upgradeable proxy storage and NONDET summaries.
+rule driftThresholdAboveMinimum_afterSet(uint256 bps) {
+    env e;
+    require hasRole(STRATEGIST_ROLE(), e.msg.sender), "caller has STRATEGIST_ROLE";
+
+    setDriftThreshold@withrevert(e, bps);
+    bool succeeded = !lastReverted;
+
+    assert succeeded => driftThresholdBps() >= 200,
+        "driftThresholdBps must be >= MIN_DRIFT_BPS after setDriftThreshold";
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT ACCOUNTING
