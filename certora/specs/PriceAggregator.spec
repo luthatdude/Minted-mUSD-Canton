@@ -14,15 +14,8 @@ methods {
     function crossValidationEnabled() external returns (bool)    envfree;
     function MAX_ADAPTERS()           external returns (uint256) envfree;
 
-    // ── State-changing functions ──
-    function addAdapter(address)           external;
-    function removeAdapter(address)        external;
-    function setAdapters(address[])        external;
-    function setMaxDeviation(uint256)      external;
-    function setCrossValidation(bool)      external;
-
     // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
-    function upgradeToAndCall(address, bytes) external;
+    function upgradeToAndCall(address, bytes) external => NONDET;
 
     // ── Role constants (envfree) ──
     function ORACLE_ADMIN_ROLE() external returns (bytes32) envfree;
@@ -32,7 +25,7 @@ methods {
     function _.getPrice(address) external       => NONDET;
     function _.supportsToken(address) external  => PER_CALLEE_CONSTANT;
     function _.isHealthy(address) external      => PER_CALLEE_CONSTANT;
-    function _.source() external                => PER_CALLEE_CONSTANT;
+    function _.source() external                => NONDET;
 }
 
 // ═══════════════════════════════════════════════════════════════════
