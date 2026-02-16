@@ -13,6 +13,7 @@ methods {
     function maxDeviationBps()        external returns (uint256) envfree;
     function crossValidationEnabled() external returns (bool)    envfree;
     function MAX_ADAPTERS()           external returns (uint256) envfree;
+    function timelock()               external returns (address) envfree;
 
     // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
     function upgradeToAndCall(address, bytes) external => NONDET;
@@ -21,8 +22,11 @@ methods {
     function ORACLE_ADMIN_ROLE() external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
 
-    // ── External contract summaries ──
-    function _.getPrice(address) external       => NONDET;
+    // ── External adapter summaries ──
+    // Wildcard summaries — no return types allowed on wildcards.
+    // _.getPrice() catches all getPrice(address) calls including PriceAggregator's
+    // own, but no rule calls getPrice() on the main contract so this is safe.
+    function _.getPrice(address) external => NONDET;
     function _.supportsToken(address) external  => PER_CALLEE_CONSTANT;
     function _.isHealthy(address) external      => PER_CALLEE_CONSTANT;
     // NOTE: _.source() omitted — returns string memory which CVL cannot represent.
@@ -102,7 +106,7 @@ rule removeAdapter_decrements(address adapter) {
 rule setAdapters_max_limit(address[] adaptersArr) {
     env e;
     require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
-    require adaptersArr.length > 5;
+    require assert_uint256(adaptersArr.length) > 5;
 
     setAdapters@withrevert(e, adaptersArr);
     assert lastReverted, "setAdapters must reject arrays > MAX_ADAPTERS";
@@ -112,12 +116,12 @@ rule setAdapters_max_limit(address[] adaptersArr) {
 rule setAdapters_sets_count(address[] adaptersArr) {
     env e;
     require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
-    require adaptersArr.length <= 5;
+    require assert_uint256(adaptersArr.length) <= 5;
 
     setAdapters@withrevert(e, adaptersArr);
     bool succeeded = !lastReverted;
 
-    assert succeeded => adapterCount() == adaptersArr.length,
+    assert succeeded => adapterCount() == assert_uint256(adaptersArr.length),
         "setAdapters must set adapter count to array length";
 }
 
