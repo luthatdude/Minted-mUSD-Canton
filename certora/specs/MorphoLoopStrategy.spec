@@ -47,14 +47,9 @@ methods {
     function _.safeTransfer(address, uint256)               external => NONDET;
     function _.forceApprove(address, uint256)               external => NONDET;
     function _.balanceOf(address)                           external => PER_CALLEE_CONSTANT;
-    function _.supplyCollateral(IMorphoBlue.MarketParams, uint256, address, bytes) external => NONDET;
-    function _.borrow(IMorphoBlue.MarketParams, uint256, uint256, address, address) external => NONDET;
-    function _.repay(IMorphoBlue.MarketParams, uint256, uint256, address, bytes) external => NONDET;
-    function _.withdrawCollateral(IMorphoBlue.MarketParams, uint256, address, address) external => NONDET;
     function _.position(bytes32, address) external => NONDET;
     function _.market(bytes32) external => NONDET;
     function _.idToMarketParams(bytes32) external => NONDET;
-    function _.borrowRateView(IMorphoBlue.MarketParams, MorphoMarket) external => PER_CALLEE_CONSTANT;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -147,7 +142,7 @@ rule withdraw_bounded_reduction(uint256 amount) {
     withdraw@withrevert(e, amount);
     bool succeeded = !lastReverted;
 
-    uint256 reduction = principalBefore - totalPrincipal();
+    mathint reduction = principalBefore - totalPrincipal();
 
     assert succeeded => reduction <= amount,
         "withdraw must not reduce principal by more than requested";

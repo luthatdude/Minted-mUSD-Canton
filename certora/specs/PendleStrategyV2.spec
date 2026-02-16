@@ -66,9 +66,6 @@ methods {
     function _.readTokens() external                        => NONDET;
     function _.expiry() external                            => PER_CALLEE_CONSTANT;
     function _.isExpired() external                         => PER_CALLEE_CONSTANT;
-    function _.swapExactTokenForPt(address, address, uint256, IPendleRouter.ApproxParams, IPendleRouter.TokenInput, IPendleRouter.LimitOrderData) external => NONDET;
-    function _.swapExactPtForToken(address, address, uint256, IPendleRouter.TokenOutput, IPendleRouter.LimitOrderData) external => NONDET;
-    function _.redeemPyToToken(address, address, uint256, IPendleRouter.TokenOutput) external => NONDET;
     function _.decimals() external                          => PER_CALLEE_CONSTANT;
 }
 
