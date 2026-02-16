@@ -86,7 +86,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy MUSD (constructor takes initialSupplyCap)
     const MUSDF = await ethers.getContractFactory("MUSD");
-    musd = await MUSDF.deploy(SUPPLY_CAP);
+    musd = await MUSDF.deploy(SUPPLY_CAP, ethers.ZeroAddress);
 
     // Deploy InterestRateModel (constructor takes admin address)
     const IRMF = await ethers.getContractFactory("InterestRateModel");
@@ -98,7 +98,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(ethers.ZeroAddress);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -112,7 +112,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy SMUSD (constructor takes IERC20 _musd)
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     // Deploy BorrowModule (constructor: vault, oracle, musd, interestRateBps, minDebt)
     const BMF = await ethers.getContractFactory("BorrowModule");

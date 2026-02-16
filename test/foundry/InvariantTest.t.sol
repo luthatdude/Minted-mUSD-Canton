@@ -41,11 +41,11 @@ contract InvariantTest is Test {
         ethFeed = new MockAggregatorV3(8, 2000e8);
 
         // Deploy core protocol
-        musd = new MUSD(100_000_000e18);
-        smusd = new SMUSD(IERC20(address(musd)));
+        musd = new MUSD(100_000_000e18, address(0));
+        smusd = new SMUSD(IERC20(address(musd)), address(0));
         oracle = new PriceOracle();
         irm = new InterestRateModel(address(this));
-        vault = new CollateralVault();
+        vault = new CollateralVault(address(0));
         borrowModule = new BorrowModule(
             address(vault), address(oracle), address(musd), 500, 100e18
         );

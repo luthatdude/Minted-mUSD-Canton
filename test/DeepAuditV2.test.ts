@@ -95,7 +95,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy MUSD
     const MUSDF = await ethers.getContractFactory("MUSD");
-    musd = await MUSDF.deploy(SUPPLY_CAP);
+    musd = await MUSDF.deploy(SUPPLY_CAP, ethers.ZeroAddress);
 
     // Deploy InterestRateModel
     const IRMF = await ethers.getContractFactory("InterestRateModel");
@@ -107,7 +107,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(ethers.ZeroAddress);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -121,7 +121,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     // Deploy SMUSD
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     // Deploy BorrowModule
     const BMF = await ethers.getContractFactory("BorrowModule");

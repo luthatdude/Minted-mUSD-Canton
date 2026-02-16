@@ -33,7 +33,7 @@ describe("DirectMintV2", function () {
 
     // Deploy MUSD with supply cap
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Deploy TreasuryV2 (upgradeable)

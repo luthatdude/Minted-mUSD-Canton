@@ -575,24 +575,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///      disabled tokens would instantly drop their health factor, making them
     ///      liquidatable through no fault of their own. The collateral config
     ///      (liqThreshold) persists even after disableCollateral().
+    /// @dev GAS-H-05: Delegates to _collateralMetrics for single-loop efficiency
     function _weightedCollateralValue(address user) internal view returns (uint256) {
-        address[] memory tokens = vault.getSupportedTokens();
-        uint256 totalWeighted = 0;
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 deposited = vault.deposits(user, tokens[i]);
-            if (deposited == 0) continue;
-
-            (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
-            // must retain their collateral value for health factor calculations.
-            // Only liqThreshold == 0 means truly unconfigured (never added).
-            if (liqThreshold == 0) continue;
-
-            uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
-            totalWeighted += (valueUsd * liqThreshold) / 10000;
-        }
-
-        return totalWeighted;
+        (uint256 weighted, ) = _collateralMetrics(user);
+        return weighted;
     }
 
     /// @dev Mirrors _weightedCollateralValue but uses getValueUsdUnsafe so liquidation
@@ -621,22 +607,43 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///      credits disabled collateral via liqThreshold > 0) to avoid trapping users. The
     ///      asymmetry is by design: disabled tokens protect against new risk but don't orphan
     ///      existing positions.
+    /// @dev GAS-H-05: Delegates to _collateralMetrics for single-loop efficiency
     function _borrowCapacity(address user) internal view returns (uint256) {
+        (, uint256 capacity) = _collateralMetrics(user);
+        return capacity;
+    }
+
+    /// @notice GAS-H-05: Combined collateral metrics in a single loop.
+    ///         Returns both weighted collateral value (for health factor) and
+    ///         borrow capacity (for new borrows) with ONE getSupportedTokens() call,
+    ///         ONE deposits() call per token, ONE getConfig() call per token, and
+    ///         ONE getValueUsd() call per token. With 10 tokens this eliminates
+    ///         ~30 redundant cross-contract calls vs. separate loops.
+    /// @param user The borrower address
+    /// @return weightedValue Collateral value weighted by liquidation threshold (all tokens, incl. disabled)
+    /// @return borrowCap Maximum borrowable amount (enabled tokens only, by collateral factor)
+    function _collateralMetrics(address user) internal view returns (uint256 weightedValue, uint256 borrowCap) {
         address[] memory tokens = vault.getSupportedTokens();
-        uint256 totalCapacity = 0;
 
         for (uint256 i = 0; i < tokens.length; i++) {
             uint256 deposited = vault.deposits(user, tokens[i]);
             if (deposited == 0) continue;
 
-            (bool enabled, uint256 colFactor, , ) = vault.getConfig(tokens[i]);
-            if (!enabled) continue; // Intentional: no new borrows against disabled collateral
+            (bool enabled, uint256 colFactor, uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
+
+            // Skip truly unconfigured tokens (never added)
+            if (liqThreshold == 0) continue;
 
             uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
-            totalCapacity += (valueUsd * colFactor) / 10000;
-        }
 
-        return totalCapacity;
+            // Health factor: uses liqThreshold for ALL tokens (incl. disabled)
+            weightedValue += (valueUsd * liqThreshold) / 10000;
+
+            // Borrow capacity: uses colFactor for ENABLED tokens only
+            if (enabled) {
+                borrowCap += (valueUsd * colFactor) / 10000;
+            }
+        }
     }
 
     // ============================================================

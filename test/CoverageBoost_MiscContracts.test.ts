@@ -360,7 +360,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
       const MUSD = await ethers.getContractFactory("MUSD");
-      musd = await MUSD.deploy(ethers.parseEther("100000000"));
+      musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
       const PriceOracle = await ethers.getContractFactory("PriceOracle");
       priceOracle = await PriceOracle.deploy();
@@ -371,7 +371,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       await timelockSetFeed(priceOracle, owner, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
       const CollateralVault = await ethers.getContractFactory("CollateralVault");
-      collateralVault = await CollateralVault.deploy();
+      collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
 
       await timelockAddCollateral(collateralVault, owner, await weth.getAddress(), 7500, 8000, 1000);
 
@@ -584,7 +584,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       wbtc = await MockERC20.deploy("WBTC", "WBTC", 8);
 
       const VF = await ethers.getContractFactory("CollateralVault");
-      vault = await VF.deploy();
+      vault = await VF.deploy(ethers.ZeroAddress);
 
       await vault.grantRole(await vault.BORROW_MODULE_ROLE(), borrowModule.address);
       await vault.grantRole(await vault.LIQUIDATION_ROLE(), liquidator.address);
@@ -1121,10 +1121,10 @@ describe("CoverageBoost — Misc Contracts", function () {
       [deployer, bridge, yieldManager, interestRouter, user1, user2, pauser] = await ethers.getSigners();
 
       const MF = await ethers.getContractFactory("MUSD");
-      musd = await MF.deploy(ethers.parseEther("100000000"));
+      musd = await MF.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
       const SF = await ethers.getContractFactory("SMUSD");
-      smusd = await SF.deploy(await musd.getAddress());
+      smusd = await SF.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
       await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
       await smusd.grantRole(await smusd.YIELD_MANAGER_ROLE(), yieldManager.address);

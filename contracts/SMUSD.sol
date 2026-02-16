@@ -11,6 +11,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./GlobalPausable.sol";
 import "./Errors.sol";
 
 /// @dev Typed interface for Treasury calls
@@ -18,13 +19,15 @@ interface ITreasury {
     function totalValue() external view returns (uint256);
 }
 
-contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
+contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausable {
     using SafeERC20 for IERC20;
 
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant INTEREST_ROUTER_ROLE = keccak256("INTEREST_ROUTER_ROLE");
+    /// @notice SOL-H-17: TIMELOCK_ROLE for unpause (48h governance delay)
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
@@ -75,15 +78,19 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
 
-    constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+    /// @param _musd The mUSD token (underlying asset)
+    /// @param _globalPauseRegistry Address of the GlobalPauseRegistry (address(0) to skip global pause)
+    constructor(IERC20 _musd, address _globalPauseRegistry) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") GlobalPausable(_globalPauseRegistry) {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     // Always set cooldown for receiver to prevent bypass via third-party deposit.
     // A depositor can always set their own cooldown, and depositing on behalf of someone
     // correctly locks the receiver's withdrawal window.
-    function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
+    function deposit(uint256 assets, address receiver) public override nonReentrant whenNotPaused whenNotGloballyPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.deposit(assets, receiver);
@@ -91,19 +98,19 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
 
     // Always set cooldown for receiver to prevent bypass via third-party mint.
     // Matches deposit() behavior — any path that increases shares must reset cooldown.
-    function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused returns (uint256) {
+    function mint(uint256 shares, address receiver) public override nonReentrant whenNotPaused whenNotGloballyPaused returns (uint256) {
         lastDeposit[receiver] = block.timestamp;
         emit CooldownUpdated(receiver, block.timestamp);
         return super.mint(shares, receiver);
     }
 
-    function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
+    function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant whenNotPaused whenNotGloballyPaused returns (uint256) {
         if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) revert CooldownActive();
         return super.withdraw(assets, receiver, owner);
     }
 
     // Override redeem to enforce cooldown
-    function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused returns (uint256) {
+    function redeem(uint256 shares, address receiver, address owner) public override nonReentrant whenNotPaused whenNotGloballyPaused returns (uint256) {
         if (block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) revert CooldownActive();
         return super.redeem(shares, receiver, owner);
     }
@@ -350,9 +357,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause all deposits and withdrawals
-    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties.
-    /// This ensures a compromised PAUSER cannot immediately re-enable operations
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-17: Requires TIMELOCK_ROLE (48h governance delay). Prevents
+    ///      compromised PAUSER from re-enabling operations during active exploits.
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 }
