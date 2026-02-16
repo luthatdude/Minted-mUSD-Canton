@@ -40,9 +40,10 @@ methods {
 invariant adapterCountBounded()
     adapterCount() <= 5;
 
-/// @notice maxDeviationBps stays within [50, 5000]
+/// @notice maxDeviationBps is either 0 (uninitialized) or within [50, 5000]
+///         Upgradeable contracts start with maxDeviationBps = 0 before initialize()
 invariant deviationInRange()
-    maxDeviationBps() >= 50 && maxDeviationBps() <= 5000;
+    maxDeviationBps() == 0 || (maxDeviationBps() >= 50 && maxDeviationBps() <= 5000);
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: ADAPTER MANAGEMENT
@@ -52,6 +53,7 @@ invariant deviationInRange()
 rule addAdapter_increments(address adapter) {
     env e;
     require adapter != 0;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
 
     uint256 countBefore = adapterCount();
     require countBefore < 5;
@@ -66,6 +68,8 @@ rule addAdapter_increments(address adapter) {
 /// @notice addAdapter with zero address must revert
 rule addAdapter_zero_reverts() {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
+
     addAdapter@withrevert(e, 0);
     assert lastReverted, "addAdapter(address(0)) must revert";
 }
@@ -73,6 +77,7 @@ rule addAdapter_zero_reverts() {
 /// @notice addAdapter rejects when at MAX_ADAPTERS capacity
 rule addAdapter_max_limit(address adapter) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require adapterCount() >= 5;
 
     addAdapter@withrevert(e, adapter);
@@ -82,6 +87,7 @@ rule addAdapter_max_limit(address adapter) {
 /// @notice removeAdapter decreases adapter count by 1
 rule removeAdapter_decrements(address adapter) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
 
     uint256 countBefore = adapterCount();
     require countBefore > 0;
@@ -96,6 +102,7 @@ rule removeAdapter_decrements(address adapter) {
 /// @notice setAdapters rejects arrays longer than MAX_ADAPTERS
 rule setAdapters_max_limit(address[] adaptersArr) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require adaptersArr.length > 5;
 
     setAdapters@withrevert(e, adaptersArr);
@@ -105,6 +112,7 @@ rule setAdapters_max_limit(address[] adaptersArr) {
 /// @notice setAdapters sets the exact count
 rule setAdapters_sets_count(address[] adaptersArr) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require adaptersArr.length <= 5;
 
     setAdapters@withrevert(e, adaptersArr);
@@ -121,6 +129,7 @@ rule setAdapters_sets_count(address[] adaptersArr) {
 /// @notice setMaxDeviation rejects values < 50 bps (0.5%)
 rule setMaxDeviation_min(uint256 bps) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require bps < 50;
 
     setMaxDeviation@withrevert(e, bps);
@@ -130,6 +139,7 @@ rule setMaxDeviation_min(uint256 bps) {
 /// @notice setMaxDeviation rejects values > 5000 bps (50%)
 rule setMaxDeviation_max(uint256 bps) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require bps > 5000;
 
     setMaxDeviation@withrevert(e, bps);
@@ -139,6 +149,7 @@ rule setMaxDeviation_max(uint256 bps) {
 /// @notice setMaxDeviation stores the new value on success
 rule setMaxDeviation_stores(uint256 bps) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
     require bps >= 50 && bps <= 5000;
 
     setMaxDeviation@withrevert(e, bps);
@@ -155,6 +166,7 @@ rule setMaxDeviation_stores(uint256 bps) {
 /// @notice setCrossValidation stores the flag
 rule setCrossValidation_stores(bool enabled) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
 
     setCrossValidation@withrevert(e, enabled);
     bool succeeded = !lastReverted;
@@ -214,6 +226,7 @@ rule setCrossValidation_requires_oracleAdmin(bool enabled) {
 /// @notice No operation increases adapter count beyond MAX_ADAPTERS
 rule adapter_count_never_exceeds_max(address adapter) {
     env e;
+    require hasRole(ORACLE_ADMIN_ROLE(), e.msg.sender);
 
     addAdapter@withrevert(e, adapter);
     bool succeeded = !lastReverted;
