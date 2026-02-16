@@ -32,6 +32,16 @@ methods {
     function TIMELOCK_ROLE()     external returns (bytes32) envfree;
     function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
+
+    // ── ERC20 external call summaries — dispatch to linked DummyMUSD/DummyUSDC harnesses ──
+    // DISPATCHER(true) routes calls to the linked harness contracts which have
+    // real transferFrom/transfer/burn implementations. NONDET DELETE was wrong here
+    // because it removed these functions from dispatch, causing SafeERC20 calls to
+    // revert and making all token-touching rules vacuously pass or fail sanity.
+    function _.transferFrom(address, address, uint256) external => DISPATCHER(true);
+    function _.transfer(address, uint256) external => DISPATCHER(true);
+    function _.balanceOf(address) external => DISPATCHER(true);
+    function _.burn(address, uint256) external => DISPATCHER(true);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -53,7 +63,8 @@ invariant fulfillIndexBounded()
 /// @notice queueRedemption increases queue length by 1
 rule queueRedemption_appends(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require musdAmount > 0;
+    require musdAmount > 0, "testing non-zero mUSD amount";
+    require e.msg.value == 0, "contract is not payable";
 
     uint256 lenBefore = queueLength();
 
@@ -67,7 +78,8 @@ rule queueRedemption_appends(uint256 musdAmount, uint256 minUsdcOut) {
 /// @notice queueRedemption increases totalPendingMusd
 rule queueRedemption_increases_pending(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require musdAmount > 0;
+    require musdAmount > 0, "testing non-zero mUSD amount";
+    require e.msg.value == 0, "contract is not payable";
 
     uint256 pendingBefore = totalPendingMusd();
 
@@ -81,7 +93,8 @@ rule queueRedemption_increases_pending(uint256 musdAmount, uint256 minUsdcOut) {
 /// @notice queueRedemption increases activePendingCount by 1
 rule queueRedemption_increments_active(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require musdAmount > 0;
+    require musdAmount > 0, "testing non-zero mUSD amount";
+    require e.msg.value == 0, "contract is not payable";
 
     uint256 activeBefore = activePendingCount();
 
@@ -95,7 +108,8 @@ rule queueRedemption_increments_active(uint256 musdAmount, uint256 minUsdcOut) {
 /// @notice queueRedemption increases per-user pending count by 1
 rule queueRedemption_increments_user_count(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require musdAmount > 0;
+    require musdAmount > 0, "testing non-zero mUSD amount";
+    require e.msg.value == 0, "contract is not payable";
 
     uint256 userBefore = userPendingCount(e.msg.sender);
 
@@ -116,7 +130,7 @@ rule queueRedemption_zero_reverts() {
 /// @notice queueRedemption when paused must revert
 rule queueRedemption_paused_reverts(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require paused();
+    require paused(), "testing paused state";
     queueRedemption@withrevert(e, musdAmount, minUsdcOut);
     assert lastReverted, "queueRedemption while paused must revert";
 }
@@ -127,8 +141,8 @@ rule queueRedemption_paused_reverts(uint256 musdAmount, uint256 minUsdcOut) {
 rule queueRedemption_min_amount(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
     // musdAmount / 1e12 < 100e6 means musdAmount < 100e18
-    require musdAmount < 100000000000000000000; // 100e18
-    require musdAmount > 0;
+    require musdAmount < 100000000000000000000, "amount below 100 mUSD (100e18)";
+    require musdAmount > 0, "testing non-zero mUSD amount";
 
     queueRedemption@withrevert(e, musdAmount, minUsdcOut);
     assert lastReverted, "queueRedemption must reject below MIN_REDEMPTION_USDC";
@@ -137,8 +151,8 @@ rule queueRedemption_min_amount(uint256 musdAmount, uint256 minUsdcOut) {
 /// @notice queueRedemption rejects when global queue cap reached
 rule queueRedemption_queue_full(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require activePendingCount() >= 10000;
-    require musdAmount > 0;
+    require activePendingCount() >= 10000, "queue is at MAX_QUEUE_SIZE";
+    require musdAmount > 0, "testing non-zero mUSD amount";
 
     queueRedemption@withrevert(e, musdAmount, minUsdcOut);
     assert lastReverted, "queueRedemption must revert when MAX_QUEUE_SIZE reached";
@@ -147,8 +161,8 @@ rule queueRedemption_queue_full(uint256 musdAmount, uint256 minUsdcOut) {
 /// @notice queueRedemption rejects when per-user limit reached
 rule queueRedemption_user_limit(uint256 musdAmount, uint256 minUsdcOut) {
     env e;
-    require userPendingCount(e.msg.sender) >= 10;
-    require musdAmount > 0;
+    require userPendingCount(e.msg.sender) >= 10, "user at MAX_PENDING_PER_USER";
+    require musdAmount > 0, "testing non-zero mUSD amount";
 
     queueRedemption@withrevert(e, musdAmount, minUsdcOut);
     assert lastReverted, "queueRedemption must revert when MAX_PENDING_PER_USER reached";
@@ -163,7 +177,7 @@ rule cancelRedemption_decrements_active(uint256 requestId) {
     env e;
 
     uint256 activeBefore = activePendingCount();
-    require activeBefore > 0;
+    require activeBefore > 0, "at least one active pending request";
 
     cancelRedemption@withrevert(e, requestId);
     bool succeeded = !lastReverted;
@@ -177,7 +191,7 @@ rule cancelRedemption_decrements_user(uint256 requestId) {
     env e;
 
     uint256 userBefore = userPendingCount(e.msg.sender);
-    require userBefore > 0;
+    require userBefore > 0, "user has at least one pending request";
 
     cancelRedemption@withrevert(e, requestId);
     bool succeeded = !lastReverted;
@@ -190,7 +204,7 @@ rule cancelRedemption_decrements_user(uint256 requestId) {
 rule cancelRedemption_invalid_id() {
     env e;
     uint256 id;
-    require id >= queueLength();
+    require id >= queueLength(), "ID is out of bounds";
 
     cancelRedemption@withrevert(e, id);
     assert lastReverted, "cancelRedemption with invalid ID must revert";
@@ -203,6 +217,7 @@ rule cancelRedemption_invalid_id() {
 /// @notice processBatch advances nextFulfillIndex (or keeps it same if nothing processed)
 rule processBatch_advances_index(uint256 maxCount) {
     env e;
+    require hasRole(PROCESSOR_ROLE(), e.msg.sender), "caller has PROCESSOR_ROLE";
 
     uint256 indexBefore = nextFulfillIndex();
 
@@ -216,6 +231,7 @@ rule processBatch_advances_index(uint256 maxCount) {
 /// @notice processBatch decreases or preserves totalPendingUsdc
 rule processBatch_reduces_pending(uint256 maxCount) {
     env e;
+    require hasRole(PROCESSOR_ROLE(), e.msg.sender), "caller has PROCESSOR_ROLE";
 
     uint256 pendingBefore = totalPendingUsdc();
 
@@ -277,8 +293,11 @@ rule setMinRequestAge_requires_admin(uint256 newAge) {
 /// @notice dailyRedeemed never exceeds maxDailyRedemption (within a day window)
 rule dailyRedeemed_bounded(uint256 maxCount) {
     env e;
+    require hasRole(PROCESSOR_ROLE(), e.msg.sender), "caller has PROCESSOR_ROLE";
     // Within same day
-    require e.block.timestamp < lastDayReset() + 86400;
+    require e.block.timestamp < lastDayReset() + 86400, "within same calendar day";
+    // Pre-condition: dailyRedeemed is consistent
+    require dailyRedeemed() <= maxDailyRedemption(), "daily redeemed within limit pre-condition";
 
     processBatch@withrevert(e, maxCount);
     bool succeeded = !lastReverted;
