@@ -36,6 +36,9 @@ methods {
     function emergencyDeleverage()               external;
     function recoverToken(address, uint256)       external;
 
+    // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
+    function upgradeToAndCall(address, bytes) external;
+
     // ── Role constants (envfree) ──
     function TREASURY_ROLE()    external returns (bytes32) envfree;
     function STRATEGIST_ROLE()  external returns (bytes32) envfree;
@@ -56,18 +59,20 @@ methods {
 // INVARIANTS: LTV & LOOP BOUNDS
 // ═══════════════════════════════════════════════════════════════════
 
-/// @notice targetLtvBps is always within [5000, 8500]
+/// @notice targetLtvBps is 0 (uninitialized) or within [5000, 8500]
 invariant targetLtvInRange()
-    targetLtvBps() >= 5000 && targetLtvBps() <= 8500
-    { preserved { require active(); } }
+    targetLtvBps() == 0 || (targetLtvBps() >= 5000 && targetLtvBps() <= 8500)
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
-/// @notice targetLoops never exceeds MAX_LOOPS (5)
+/// @notice targetLoops is 0 (uninitialized) or within [1, 5]
 invariant loopCountBounded()
-    targetLoops() <= 5;
+    targetLoops() <= 5
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
-/// @notice safetyBufferBps stays within [200, 2000]
+/// @notice safetyBufferBps is 0 (uninitialized) or within [200, 2000]
 invariant safetyBufferInRange()
-    safetyBufferBps() >= 200 && safetyBufferBps() <= 2000;
+    safetyBufferBps() == 0 || (safetyBufferBps() >= 200 && safetyBufferBps() <= 2000)
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT ACCOUNTING
