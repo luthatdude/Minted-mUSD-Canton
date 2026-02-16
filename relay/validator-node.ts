@@ -43,20 +43,15 @@ enforceTLSSecurity();
 // BRIDGE-H-04: V1 validator produces signatures with a 7-parameter hash
 // (missing cantonStateHash) while V2 uses 8 parameters matching BLEBridgeV9 on-chain.
 // Mixed V1/V2 signatures silently reduce the effective validator count below the BFT
-// threshold, potentially blocking all attestations. V1 is now hard-disabled.
-if (process.env.ALLOW_V1_VALIDATOR !== "true") {
-  console.error(
-    "FATAL: validator-node.ts (V1) is DISABLED. V1 signatures are incompatible with " +
-    "BLEBridgeV9 on-chain verification and will silently reduce effective security. " +
-    "Migrate to validator-node-v2.ts. Set ALLOW_V1_VALIDATOR=true to override (NOT recommended)."
-  );
-  process.exit(1);
-}
-console.warn(
-  "[DEPRECATED] validator-node.ts (V1) is running with ALLOW_V1_VALIDATOR override. " +
-  "V1 uses a 7-parameter message hash WITHOUT cantonStateHash — signatures are INCOMPATIBLE " +
-  "with V2 and BLEBridgeV9. Migrate ALL validators to validator-node-v2.ts immediately."
+// threshold, potentially blocking all attestations. V1 is PERMANENTLY DISABLED.
+// TS-H-01: Removed ALLOW_V1_VALIDATOR env override — V1 cannot be force-enabled.
+console.error(
+  "FATAL: validator-node.ts (V1) is PERMANENTLY DISABLED and cannot be re-enabled. " +
+  "V1 signatures use a 7-parameter hash that is incompatible with BLEBridgeV9 " +
+  "on-chain verification. Using V1 silently reduces effective validator security. " +
+  "Migrate to validator-node-v2.ts."
 );
+process.exit(1);
 
 // ============================================================
 //                     CONFIGURATION

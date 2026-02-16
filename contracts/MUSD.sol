@@ -121,7 +121,20 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
     }
 
     /// @dev SOL-H-16: Added whenNotGloballyPaused for protocol-wide emergency stop
-    function _update(address from, address to, uint256 value) internal override whenNotPaused whenNotGloballyPaused {
+    /// @dev SYS-H-01: Liquidation burns are exempt from pause to prevent bad debt
+    ///      accumulation during emergencies. Liquidations are the most critical
+    ///      operations during a crisis — blocking them causes cascading insolvency.
+    function _update(address from, address to, uint256 value) internal override {
+        // Burns by LIQUIDATOR_ROLE bypass pause so liquidations always work.
+        // A burn is: from != address(0) && to == address(0).
+        bool isLiquidationBurn = (to == address(0)) && hasRole(LIQUIDATOR_ROLE, msg.sender);
+        if (!isLiquidationBurn) {
+            _requireNotPaused();
+            // GlobalPausable check
+            if (address(globalPauseRegistry) != address(0) && globalPauseRegistry.isGloballyPaused()) {
+                revert GloballyPaused();
+            }
+        }
         if (isBlacklisted[from] || isBlacklisted[to]) revert ComplianceReject();
         super._update(from, to, value);
     }

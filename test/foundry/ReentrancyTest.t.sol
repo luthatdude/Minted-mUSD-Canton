@@ -253,6 +253,49 @@ contract ReentrancyTest is Test {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // TEST: LiquidationEngine.liquidate reentrancy
+    // ════════════════════════════════════════════════════════════════════
+
+    /// @notice Attacker liquidates an undercollateralized position and tries to re-enter
+    function test_reentrancy_liquidation() public {
+        // Create an undercollateralized position for a separate borrower
+        address borrower = address(0xBEEF);
+        uint256 collateral = 10e18;
+        uint256 borrowAmount = 10_000e18;
+
+        weth.mint(borrower, collateral);
+        vm.startPrank(borrower);
+        weth.approve(address(vault), collateral);
+        vault.deposit(address(weth), collateral);
+        borrowModule.borrow(borrowAmount);
+        vm.stopPrank();
+
+        // Crash price to make position liquidatable
+        ethFeed.setAnswer(500e8); // $2000 → $500
+
+        // Give attacker mUSD to liquidate
+        uint256 liquidateAmount = 1000e18;
+        musd.mint(address(attacker), liquidateAmount * 2);
+        attacker.approve(address(musd), address(liquidation), type(uint256).max);
+
+        // Setup reentrancy attack targeting liquidate
+        attacker.setAttack(
+            address(liquidation),
+            MockReentrantAttacker.AttackType.LIQUIDATION,
+            address(weth),
+            liquidateAmount
+        );
+
+        vm.prank(address(attacker));
+        liquidation.liquidate(borrower, address(weth), liquidateAmount);
+
+        assertFalse(
+            attacker.attackSucceeded(),
+            "Reentrancy attack on liquidation succeeded!"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // TEST: Verify nonReentrant modifier is present on all critical functions
     // ════════════════════════════════════════════════════════════════════
 

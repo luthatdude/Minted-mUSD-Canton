@@ -20,7 +20,7 @@ describe("MetaVault", function () {
     const euler  = await MockStrategy.deploy(usdcAddr, treasury.address);
 
     // Deploy MetaVault
-    const MetaVault = await ethers.getContractFactory("MetaVault");
+    const MetaVault = await ethers.getContractFactory("contracts/MetaVault.sol:MetaVault");
     const vault = await upgrades.deployProxy(
       MetaVault,
       [usdcAddr, treasury.address, admin.address, timelockSigner.address],
@@ -73,7 +73,7 @@ describe("MetaVault", function () {
     });
 
     it("reverts on zero addresses in initialize", async function () {
-      const MetaVault = await ethers.getContractFactory("MetaVault");
+      const MetaVault = await ethers.getContractFactory("contracts/MetaVault.sol:MetaVault");
       await expect(
         upgrades.deployProxy(MetaVault, [ethers.ZeroAddress, ethers.ZeroAddress, ethers.ZeroAddress, ethers.ZeroAddress], { kind: "uups", initializer: "initialize" })
       ).to.be.reverted;
@@ -486,10 +486,11 @@ describe("MetaVault", function () {
     });
 
     it("unpause resumes deposits", async function () {
-      const { vault, admin, strategist, treasury, guardian, pendle, fluid, morpho, euler } = await loadFixture(deployFixture);
+      const { vault, admin, strategist, treasury, guardian, timelockSigner, pendle, fluid, morpho, euler } = await loadFixture(deployFixture);
       await addFourStrategies(vault, strategist, pendle, fluid, morpho, euler);
       await vault.connect(guardian).pause();
-      await vault.connect(admin).unpause();
+      // MV-02: unpause now requires timelock (not DEFAULT_ADMIN_ROLE)
+      await vault.connect(timelockSigner).unpause();
 
       await expect(
         vault.connect(treasury).deposit(ethers.parseUnits("1000", 6))
