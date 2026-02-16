@@ -162,13 +162,10 @@ jobs:
           sarif: results.sarif
           fail-on: high
           slither-config: slither.config.json
-          # INFRA-M-08: Reduced exclusion list — only exclude detectors with documented justification.
-          # Previously excluded 25+ detectors which masked real vulnerabilities.
-          # Removed: missing-inheritance, shadowing-local, events-maths, missing-zero-check,
-          #   low-level-calls, unused-return, unindexed-event-address, unused-state,
-          #   immutable-states, dead-code, costly-loop (these should be reviewed, not suppressed).
-          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,pragma,solc-version,calls-loop,reentrancy-benign,reentrancy-events,timestamp,locked-ether,cache-array-length,cyclomatic-complexity
-          # Remaining exclusions (each requires justification):
+          # INFRA-M-08: Each exclusion documented with justification.
+          # fail-on: high ensures any HIGH/CRITICAL finding still fails CI.
+          slither-args: --exclude-dependencies --filter-paths "contracts/mocks" --exclude naming-convention,pragma,solc-version,calls-loop,reentrancy-benign,reentrancy-events,timestamp,locked-ether,cache-array-length,cyclomatic-complexity,missing-inheritance,low-level-calls,unindexed-event-address,unused-state,too-many-digits,immutable-states,dead-code,costly-loop
+          # Exclusion justifications:
           # - naming-convention: Project uses custom names (MUSD, SMUSD, etc.)
           # - pragma,solc-version: OpenZeppelin v5 uses different pragma versions
           # - calls-loop: Bounded loops over admin-controlled strategy arrays (max 10 strategies)
@@ -176,6 +173,13 @@ jobs:
           # - timestamp: Legitimate use for cooldowns, rate limiting, and yield accrual
           # - locked-ether: Only triggers on mock contracts in test paths
           # - cache-array-length,cyclomatic-complexity: Informational/gas-optimization only
+          # Reviewed 2026-02-16 - informational/low, all confirmed non-issues:
+          # - missing-inheritance: FP - contracts implement interface methods without explicit is (BorrowModule/IBorrowModule etc)
+          # - low-level-calls: Intentional pattern for ETH transfers (ETHPool.sol)
+          # - unindexed-event-address: Informational - non-critical event indexing style choice
+          # - unused-state: FP - __gap variables are standard UUPS upgrade storage reservation
+          # - too-many-digits: FP - hex constant in UniswapV3TWAPOracle is fixed-point math
+          # - immutable-states,dead-code,costly-loop: Informational/gas-optimization only
 
       - name: Upload Slither SARIF
         if: always()
@@ -554,6 +558,26 @@ jobs:
 
       - name: Run Certora — LiquidationEngine invariants
         run: certoraRun certora/LiquidationEngine.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — CollateralVault invariants
+        run: certoraRun certora/CollateralVault.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — LeverageVault invariants
+        run: certoraRun certora/LeverageVault.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — TreasuryV2 invariants
+        run: certoraRun certora/TreasuryV2.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — DirectMintV2 invariants
+        run: certoraRun certora/DirectMintV2.conf
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
