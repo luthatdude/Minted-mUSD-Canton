@@ -1,41 +1,45 @@
-import { ethers } from "hardhat";
+import { ethers, upgrades } from "hardhat";
 
 /**
  * Testnet deployment script for the Minted / BLE Protocol.
  *
  * Deployment order:
- *   1. MintedTimelockController  (governance primitive — everything depends on it)
- *   2. MUSD                      (stablecoin — needed by most downstream contracts)
- *   3. PriceOracle               (price feeds — needed by vault, borrow, liquidation)
- *   4. InterestRateModel         (rate model — needed by BorrowModule)
- *   5. CollateralVault           (vault — needed by borrow + liquidation)
- *   6. BorrowModule              (lending — needed by liquidation)
- *   7. SMUSD                     (staking vault — needs MUSD)
- *   8. LiquidationEngine         (liquidation — needs vault, borrow, oracle, MUSD)
- *   9. DirectMintV2              (direct mint — needs MUSD, USDC, treasury)
- *  10. TreasuryV2                (UUPS proxy — asset management)
- *  11. BLEBridgeV9               (UUPS proxy — Canton bridge)
- *  12. LeverageVault             (leverage — needs vault, borrow, oracle, MUSD)
- *
- * All non-upgradeable contracts receive `timelockAddress` as their last
- * constructor arg.  UUPS contracts receive it in `initialize()`.
+ *   0. GlobalPauseRegistry       (needed by MUSD, SMUSD, CollateralVault)
+ *   1. MintedTimelockController   (governance primitive)
+ *   2. MUSD                       (stablecoin)
+ *   3. PriceOracle                (price feeds)
+ *   4. InterestRateModel          (rate model)
+ *   5. CollateralVault            (vault)
+ *   6. BorrowModule               (lending)
+ *   7. SMUSD                      (staking vault)
+ *   8. LiquidationEngine          (liquidation)
+ *   9. DirectMintV2               (direct mint)
+ *  10. TreasuryV2                 (UUPS proxy)
+ *  11. BLEBridgeV9                (UUPS proxy — Canton bridge)
+ *  12. LeverageVault              (leverage)
  */
 async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
-  console.log("Balance:", ethers.formatEther(await ethers.provider.getBalance(deployer.address)));
+  const startBalance = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
+  console.log("Balance:", startBalance, "ETH");
+  if (parseFloat(startBalance) < 0.01) throw new Error("Insufficient Sepolia ETH");
 
-  // ─────────────────────────────────────────────────────────────────────
-  // Testnet placeholder addresses (replace with real values for staging)
-  // ─────────────────────────────────────────────────────────────────────
-  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"; // mainnet USDC (fork) or testnet mock
+  const USDC_ADDRESS = deployer.address; // placeholder for testnet
   const FEE_RECIPIENT = deployer.address;
-  const SWAP_ROUTER = deployer.address; // placeholder — not used in testnet
+  const SWAP_ROUTER = deployer.address;
 
-  // ─────────────────────────────────────────────────────────────────────
-  // 1. MintedTimelockController
-  // ─────────────────────────────────────────────────────────────────────
-  const MIN_DELAY = 86400; // 24 h (meets MIN_EMERGENCY_DELAY)
+  // ─── 0. GlobalPauseRegistry ───
+  console.log("\n[0/12] Deploying GlobalPauseRegistry...");
+  const GPRFactory = await ethers.getContractFactory("GlobalPauseRegistry");
+  const gpr = await GPRFactory.deploy(deployer.address, deployer.address);
+  await gpr.waitForDeployment();
+  const gprAddress = await gpr.getAddress();
+  console.log("GlobalPauseRegistry:", gprAddress);
+
+  // ─── 1. MintedTimelockController ───
+  console.log("\n[1/12] Deploying MintedTimelockController...");
+  const MIN_DELAY = 86400;
   const proposers = [deployer.address];
   const executors = [deployer.address];
   const admin = deployer.address;
@@ -51,7 +55,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   const INITIAL_SUPPLY_CAP = ethers.parseEther("10000000"); // 10 M mUSD
   const MUSDFactory = await ethers.getContractFactory("MUSD");
-  const musd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP);
+  const musd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, gprAddress);
   await musd.waitForDeployment();
   const musdAddress = await musd.getAddress();
   console.log("MUSD:", musdAddress);
@@ -60,7 +64,7 @@ async function main() {
   // 3. PriceOracle
   // ─────────────────────────────────────────────────────────────────────
   const OracleFactory = await ethers.getContractFactory("PriceOracle");
-  const oracle = await OracleFactory.deploy(timelockAddress);
+  const oracle = await OracleFactory.deploy();
   await oracle.waitForDeployment();
   const oracleAddress = await oracle.getAddress();
   console.log("PriceOracle:", oracleAddress);
@@ -69,7 +73,7 @@ async function main() {
   // 4. InterestRateModel
   // ─────────────────────────────────────────────────────────────────────
   const IRMFactory = await ethers.getContractFactory("InterestRateModel");
-  const irm = await IRMFactory.deploy(deployer.address, timelockAddress);
+  const irm = await IRMFactory.deploy(deployer.address);
   await irm.waitForDeployment();
   const irmAddress = await irm.getAddress();
   console.log("InterestRateModel:", irmAddress);
@@ -78,7 +82,7 @@ async function main() {
   // 5. CollateralVault
   // ─────────────────────────────────────────────────────────────────────
   const VaultFactory = await ethers.getContractFactory("CollateralVault");
-  const vault = await VaultFactory.deploy(timelockAddress);
+  const vault = await VaultFactory.deploy(gprAddress);
   await vault.waitForDeployment();
   const vaultAddress = await vault.getAddress();
   console.log("CollateralVault:", vaultAddress);
@@ -95,8 +99,7 @@ async function main() {
     oracleAddress,
     musdAddress,
     INTEREST_RATE_BPS,
-    MIN_DEBT,
-    timelockAddress
+    MIN_DEBT
   );
   await borrow.waitForDeployment();
   const borrowAddress = await borrow.getAddress();
@@ -106,7 +109,7 @@ async function main() {
   // 7. SMUSD
   // ─────────────────────────────────────────────────────────────────────
   const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-  const smusd = await SMUSDFactory.deploy(musdAddress, timelockAddress);
+  const smusd = await SMUSDFactory.deploy(musdAddress, gprAddress);
   await smusd.waitForDeployment();
   const smusdAddress = await smusd.getAddress();
   console.log("SMUSD:", smusdAddress);
@@ -122,8 +125,7 @@ async function main() {
     borrowAddress,
     oracleAddress,
     musdAddress,
-    CLOSE_FACTOR_BPS,
-    timelockAddress
+    CLOSE_FACTOR_BPS
   );
   await liquidation.waitForDeployment();
   const liquidationAddress = await liquidation.getAddress();
@@ -137,8 +139,7 @@ async function main() {
     USDC_ADDRESS,
     musdAddress,
     deployer.address, // treasury placeholder
-    FEE_RECIPIENT,
-    timelockAddress
+    FEE_RECIPIENT
   );
   await directMint.waitForDeployment();
   const directMintAddress = await directMint.getAddress();
@@ -148,25 +149,9 @@ async function main() {
   // 10. TreasuryV2 (UUPS proxy)
   // ─────────────────────────────────────────────────────────────────────
   const TreasuryImpl = await ethers.getContractFactory("TreasuryV2");
-  const treasuryImpl = await TreasuryImpl.deploy();
-  await treasuryImpl.waitForDeployment();
-  console.log("TreasuryV2 impl:", await treasuryImpl.getAddress());
-
-  const treasuryInitData = TreasuryImpl.interface.encodeFunctionData("initialize", [
-    USDC_ADDRESS,        // _asset
-    vaultAddress,        // _vault
-    deployer.address,    // _admin
-    FEE_RECIPIENT,       // _feeRecipient
-    timelockAddress,     // _timelock
-  ]);
-
-  const ERC1967ProxyFactory = await ethers.getContractFactory(
-    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol:ERC1967Proxy"
-  );
-  const treasuryProxy = await ERC1967ProxyFactory.deploy(
-    await treasuryImpl.getAddress(),
-    treasuryInitData
-  );
+  const treasuryProxy = await upgrades.deployProxy(TreasuryImpl, [
+    USDC_ADDRESS, vaultAddress, deployer.address, FEE_RECIPIENT, timelockAddress,
+  ], { kind: "uups" });
   await treasuryProxy.waitForDeployment();
   const treasuryAddress = await treasuryProxy.getAddress();
   console.log("TreasuryV2 proxy:", treasuryAddress);
@@ -175,26 +160,13 @@ async function main() {
   // 11. BLEBridgeV9 (UUPS proxy)
   // ─────────────────────────────────────────────────────────────────────
   const BridgeImpl = await ethers.getContractFactory("BLEBridgeV9");
-  const bridgeImpl = await BridgeImpl.deploy();
-  await bridgeImpl.waitForDeployment();
-  console.log("BLEBridgeV9 impl:", await bridgeImpl.getAddress());
-
-  const MIN_SIGS = 2;
+  const MIN_SIGS = 1; // testnet: single validator
   const COLLATERAL_RATIO_BPS = 10000; // 100 %
   const DAILY_CAP_INCREASE = ethers.parseEther("1000000"); // 1 M
 
-  const bridgeInitData = BridgeImpl.interface.encodeFunctionData("initialize", [
-    MIN_SIGS,
-    musdAddress,
-    COLLATERAL_RATIO_BPS,
-    DAILY_CAP_INCREASE,
-    timelockAddress,
-  ]);
-
-  const bridgeProxy = await ERC1967ProxyFactory.deploy(
-    await bridgeImpl.getAddress(),
-    bridgeInitData
-  );
+  const bridgeProxy = await upgrades.deployProxy(BridgeImpl, [
+    MIN_SIGS, musdAddress, COLLATERAL_RATIO_BPS, DAILY_CAP_INCREASE, timelockAddress,
+  ], { kind: "uups" });
   await bridgeProxy.waitForDeployment();
   const bridgeAddress = await bridgeProxy.getAddress();
   console.log("BLEBridgeV9 proxy:", bridgeAddress);
@@ -220,25 +192,28 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════════
   console.log("\n=== Configuring roles ===");
 
-  // MUSD: grant BRIDGE_ROLE to BLEBridge and LIQUIDATOR_ROLE to LiquidationEngine
   const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
   const LIQUIDATOR_ROLE = await musd.LIQUIDATOR_ROLE();
-  await musd.grantRole(BRIDGE_ROLE, bridgeAddress);
-  await musd.grantRole(LIQUIDATOR_ROLE, liquidationAddress);
-  // Also grant BRIDGE_ROLE to BorrowModule for mint/burn
-  await musd.grantRole(BRIDGE_ROLE, borrowAddress);
+  await (await musd.grantRole(BRIDGE_ROLE, bridgeAddress)).wait();
+  await (await musd.grantRole(LIQUIDATOR_ROLE, liquidationAddress)).wait();
+  await (await musd.grantRole(BRIDGE_ROLE, borrowAddress)).wait();
   console.log("MUSD roles configured");
 
-  // CollateralVault: grant VAULT_ADMIN_ROLE to BorrowModule & LiquidationEngine
   const VAULT_ADMIN_ROLE = await vault.VAULT_ADMIN_ROLE();
-  await vault.grantRole(VAULT_ADMIN_ROLE, borrowAddress);
-  await vault.grantRole(VAULT_ADMIN_ROLE, liquidationAddress);
+  await (await vault.grantRole(VAULT_ADMIN_ROLE, borrowAddress)).wait();
+  await (await vault.grantRole(VAULT_ADMIN_ROLE, liquidationAddress)).wait();
   console.log("CollateralVault roles configured");
 
+  // Register deployer as validator on BLEBridgeV9 for testnet
+  const bridge = await ethers.getContractAt("BLEBridgeV9", bridgeAddress);
+  const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
+  await (await bridge.grantRole(VALIDATOR_ROLE, deployer.address)).wait();
+  console.log("BLEBridgeV9: deployer registered as validator");
+
   // ═══════════════════════════════════════════════════════════════════════
-  // SUMMARY
-  // ═══════════════════════════════════════════════════════════════════════
-  console.log("\n=== Deployment Summary ===");
+  const remaining = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
+  console.log("\n========== SEPOLIA DEPLOYMENT COMPLETE ==========");
+  console.log("GlobalPauseRegistry:", gprAddress);
   console.log("MintedTimelockController:", timelockAddress);
   console.log("MUSD:", musdAddress);
   console.log("PriceOracle:", oracleAddress);
@@ -251,14 +226,9 @@ async function main() {
   console.log("TreasuryV2 (proxy):", treasuryAddress);
   console.log("BLEBridgeV9 (proxy):", bridgeAddress);
   console.log("LeverageVault:", leverageAddress);
-
-  console.log("\n=== Post-deployment checklist ===");
-  console.log("1. Transfer DEFAULT_ADMIN_ROLE on each contract to a multisig");
-  console.log("2. Grant PROPOSER_ROLE / EXECUTOR_ROLE on timelock to the multisig");
-  console.log("3. Renounce deployer's admin on the timelock");
-  console.log("4. Configure Chainlink feeds on PriceOracle via timelock");
-  console.log("5. Add collateral tokens to CollateralVault via timelock");
-  console.log("6. Set BorrowModule on SMUSD via timelock (setInterestRateModel, setSMUSD, setTreasury)");
+  console.log("=================================================");
+  console.log("Gas used:", (parseFloat(startBalance) - parseFloat(remaining)).toFixed(6), "ETH");
+  console.log("Remaining:", remaining, "ETH");
 }
 
 main().catch((error) => {
