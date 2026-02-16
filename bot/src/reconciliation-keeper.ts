@@ -11,26 +11,62 @@
 
 import { ethers } from "ethers";
 import * as fs from "fs";
+import * as path from "path";
+
+// TS-H-03: Import shared utilities instead of duplicating them.
+// readSecret handles Docker /run/secrets/ with env var fallback.
+// createSigner supports KMS in production, raw key in dev only.
+// enforceTLSSecurity blocks NODE_TLS_REJECT_UNAUTHORIZED=0.
+const RELAY_UTILS_PATH = path.resolve(__dirname, "../../relay/utils");
+let readSecret: (name: string, envVar: string) => string;
+let createSigner: (
+  provider: ethers.JsonRpcProvider,
+  secretName: string,
+  envVar: string,
+) => Promise<ethers.Signer>;
+let enforceTLSSecurity: () => void;
+try {
+  const utils = require(RELAY_UTILS_PATH);
+  readSecret = utils.readSecret;
+  createSigner = utils.createSigner;
+  enforceTLSSecurity = utils.enforceTLSSecurity;
+} catch {
+  // Fallback if relay/utils not available (standalone deployment)
+  readSecret = (name: string, envVar: string): string => {
+    const secretPath = `/run/secrets/${name}`;
+    try {
+      if (fs.existsSync(secretPath)) {
+        return fs.readFileSync(secretPath, "utf-8").trim();
+      }
+    } catch { /* fall through */ }
+    return process.env[envVar] || "";
+  };
+  // No KMS fallback — force raw key with production guard
+  createSigner = async (provider, secretName, envVar) => {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SECURITY: Raw private key forbidden in production. Configure KMS_KEY_ID.");
+    }
+    const key = readSecret(secretName, envVar);
+    if (!key) throw new Error(`FATAL: Neither KMS_KEY_ID nor ${envVar} configured`);
+    return new ethers.Wallet(key, provider);
+  };
+  enforceTLSSecurity = () => {
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+      throw new Error("SECURITY: NODE_TLS_REJECT_UNAUTHORIZED=0 is forbidden");
+    }
+  };
+}
+
+// Enforce TLS at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
 
-function readSecret(name: string, envVar: string): string {
-  const secretPath = `/run/secrets/${name}`;
-  try {
-    if (fs.existsSync(secretPath)) {
-      return fs.readFileSync(secretPath, "utf-8").trim();
-    }
-  } catch { /* fall through to env var */ }
-  return process.env[envVar] || "";
-}
-
 interface ReconciliationConfig {
   rpcUrl: string;
   borrowModuleAddress: string;
-  // Guard against raw private key in production
-  privateKey: string;
   intervalMs: number; // How often to reconcile (default: 7 days)
   maxGasPrice: bigint; // Max gas price to avoid overpaying
   fromBlock: number;  // Block to start indexing events from
@@ -43,21 +79,9 @@ function loadConfig(): ReconciliationConfig {
   const borrowModuleAddress = process.env.BORROW_MODULE_ADDRESS;
   if (!borrowModuleAddress) throw new Error("FATAL: BORROW_MODULE_ADDRESS is required");
 
-  // Block raw private key usage in production
-  if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
-    throw new Error(
-      "SECURITY: Raw private key usage is forbidden in production. " +
-      "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables."
-    );
-  }
-
-  const privateKey = readSecret("reconciliation_keeper_key", "RECONCILIATION_KEEPER_KEY");
-  if (!privateKey) throw new Error("FATAL: RECONCILIATION_KEEPER_KEY not set");
-
   return {
     rpcUrl,
     borrowModuleAddress,
-    privateKey,
     intervalMs: parseInt(process.env.RECONCILIATION_INTERVAL_MS || String(7 * 24 * 60 * 60 * 1000)), // 7 days
     maxGasPrice: BigInt(process.env.MAX_GAS_PRICE_GWEI || "50") * 10n ** 9n,
     fromBlock: parseInt(process.env.RECONCILIATION_FROM_BLOCK || "0"),
@@ -85,17 +109,31 @@ const BORROW_MODULE_ABI = [
 class ReconciliationKeeper {
   private config: ReconciliationConfig;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
-  private contract: ethers.Contract;
+  private signer!: ethers.Signer;
+  private contract!: ethers.Contract;
   private knownBorrowers: Set<string> = new Set();
   private lastIndexedBlock: number;
 
   constructor(config: ReconciliationConfig) {
     this.config = config;
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
-    this.wallet = new ethers.Wallet(config.privateKey, this.provider);
-    this.contract = new ethers.Contract(config.borrowModuleAddress, BORROW_MODULE_ABI, this.wallet);
     this.lastIndexedBlock = config.fromBlock;
+  }
+
+  /// TS-H-03: Initialize signer via shared createSigner (KMS in prod, raw key in dev)
+  async init(): Promise<void> {
+    this.signer = await createSigner(
+      this.provider,
+      "reconciliation_keeper_key",
+      "RECONCILIATION_KEEPER_KEY",
+    );
+    this.contract = new ethers.Contract(
+      this.config.borrowModuleAddress,
+      BORROW_MODULE_ABI,
+      this.signer,
+    );
+    const address = await this.signer.getAddress();
+    console.log(`[Reconciliation] Signer address: ${address}`);
   }
 
   /// Index all borrowers from historical events
@@ -224,7 +262,9 @@ class ReconciliationKeeper {
     console.log("[Reconciliation] Keeper starting...");
     console.log(`[Reconciliation] BorrowModule: ${this.config.borrowModuleAddress}`);
     console.log(`[Reconciliation] Interval: ${this.config.intervalMs / (1000 * 60 * 60)} hours`);
-    console.log(`[Reconciliation] Keeper address: ${this.wallet.address}`);
+
+    // TS-H-03: Initialize signer via shared createSigner (supports KMS)
+    await this.init();
 
     // Initial reconciliation
     await this.reconcile();

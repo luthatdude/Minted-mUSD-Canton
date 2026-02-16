@@ -198,13 +198,17 @@ export async function createSigner(
 
       console.log(`[KMS] Signer initialised — address ${address}`);
 
-      // Do NOT load raw private key when KMS is configured.
-      // Previously the code loaded the raw key into a Wallet even with KMS present,
-      // completely defeating the purpose of KMS (key stays in heap memory).
-      // Return a VoidSigner for now — full KMS AbstractSigner integration is required
-      // before production write operations will work without a raw key.
-      console.warn("[KMS] Using VoidSigner — full KMS AbstractSigner required for write ops");
-      return new ethers.VoidSigner(address, provider);
+      // TS-H-02: Do NOT return a VoidSigner. VoidSigner cannot sign transactions,
+      // making all write operations silently fail at runtime. Instead, throw a clear
+      // error requiring the KMS AbstractSigner implementation to be completed.
+      // Previously this returned new ethers.VoidSigner(address, provider) which
+      // created a non-functional signer that appeared to work until tx submission.
+      throw new Error(
+        `KMS signer address ${address} derived successfully, but full KMS AbstractSigner ` +
+        `integration is not yet implemented. The relay CANNOT use VoidSigner for write ` +
+        `operations — implement kms-ethereum-signer.ts with AWS KMS sign() calls, ` +
+        `or use a raw private key in non-production environments.`
+      );
     } catch (err) {
       console.error(`[KMS] Failed to initialise KMS signer: ${(err as Error).message}`);
       console.error("[KMS] Falling back to raw private key");

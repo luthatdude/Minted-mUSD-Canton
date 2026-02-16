@@ -17,7 +17,8 @@ contract MockReentrantAttacker {
         SMUSD_DEPOSIT,
         SMUSD_REDEEM,
         DIRECT_MINT,
-        DIRECT_REDEEM
+        DIRECT_REDEEM,
+        LIQUIDATION
     }
 
     address public target;
@@ -104,6 +105,9 @@ contract MockReentrantAttacker {
         } else if (attackType == AttackType.DIRECT_REDEEM) {
             // Re-enter DirectMintV2.redeem
             data = abi.encodeWithSignature("redeem(uint256)", amount);
+        } else if (attackType == AttackType.LIQUIDATION) {
+            // Re-enter LiquidationEngine.liquidate
+            data = abi.encodeWithSignature("liquidate(address,address,uint256)", address(this), token, amount);
         } else {
             return;
         }
