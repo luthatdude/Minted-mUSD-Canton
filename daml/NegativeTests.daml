@@ -454,14 +454,14 @@ test_DoubleSpendPrevented = do
       blacklisted = Set.empty
       frozen = Set.empty
       lastUpdated = now
-  proposalCid <- submit owner do
+  proposalCid <- submitMulti [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
       complianceRegistryCid = complianceCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
-  submitMustFail owner do
+  submitMultiMustFail [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
       complianceRegistryCid = complianceCid

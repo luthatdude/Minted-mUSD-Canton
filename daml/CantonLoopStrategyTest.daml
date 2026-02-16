@@ -13,6 +13,7 @@ import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Mo
 import CantonSMUSD (CantonSMUSD(..))
 import CantonCoinToken (CantonCoin(..))
 import CantonLoopStrategy
+import CantonLending (CantonLendingService(..), defaultCTNConfig)
 import Governance (GovernanceActionLog(..), ActionType(..))
 import Compliance
 
@@ -941,3 +942,85 @@ testConfigUpdateCtnTargetLtv = do
       newCtnTargetLtvBps = 2000
       governanceProofCid = proof3
   debug "✅ 26. Governance-gated CTN target LTV update with safety bounds"
+
+
+-- ============================================================
+--         27. LOOP STRATEGY SERVICE CREATION & ADMIN
+-- ============================================================
+
+-- | CantonLoopStrategyService creation, pause, param update, fee withdrawal
+testLoopServiceAdmin : Script ()
+testLoopServiceAdmin = do
+  setup <- setupLoopTest
+  -- Create a lending service (required by CantonLoopStrategyService)
+  lendingCid <- submit setup.operator do
+    createCmd CantonLendingService with
+      operator = setup.operator
+      configs = [defaultCTNConfig]
+      totalBorrows = 0.0
+      interestRateBps = 500
+      reserveFactorBps = 1000
+      protocolReserves = 0.0
+      minBorrow = 10.0
+      closeFactorBps = 5000
+      paused = False
+      cantonSupplyCap = 10000000.0
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "direct-mint"
+      globalMintCap = 50000000.0
+      complianceRegistryCid = setup.registryCid
+      mpaHash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+      mpaUri = "https://minted.app/terms"
+      serviceName = "lending"
+      observers = [setup.user]
+
+  -- Create CantonLoopStrategyService
+  svcCid <- submit setup.operator do
+    createCmd CantonLoopStrategyService with
+      operator = setup.operator
+      maxLoops = 10
+      maxLeverageX10 = 30
+      minBorrowPerLoop = 100.0
+      totalPositions = 0
+      totalCollateralLocked = 0.0
+      totalDebtIssued = 0.0
+      entryFeeBps = 25
+      exitFeeBps = 50
+      protocolFeesAccrued = 0.0
+      paused = False
+      complianceRegistryCid = setup.registryCid
+      lendingServiceCid = lendingCid
+      serviceName = "CantonLoopStrategy"
+      observers = [setup.user]
+
+  -- Pause the service
+  svcCid2 <- submit setup.operator do
+    exerciseCmd svcCid Loop_SetPaused with newPaused = True
+
+  svc <- queryContractId setup.operator svcCid2
+  assertMsg "Service paused" ((fromSome svc).paused)
+
+  -- Unpause
+  svcCid3 <- submit setup.operator do
+    exerciseCmd svcCid2 Loop_SetPaused with newPaused = False
+
+  -- Update params
+  svcCid4 <- submit setup.operator do
+    exerciseCmd svcCid3 Loop_UpdateParams with
+      newMaxLoops = 5
+      newMaxLeverageX10 = 20
+      newMinBorrowPerLoop = 200.0
+
+  svc2 <- queryContractId setup.operator svcCid4
+  assertMsg "Max loops updated" ((fromSome svc2).maxLoops == 5)
+  assertMsg "Max leverage updated" ((fromSome svc2).maxLeverageX10 == 20)
+  assertMsg "Min borrow updated" ((fromSome svc2).minBorrowPerLoop == 200.0)
+
+  -- Add some fees manually (simulate accumulated fees via create)
+  svcCid5 <- submit setup.operator do
+    exerciseCmd svcCid4 Loop_SetPaused with newPaused = False
+  -- The service has 0 fees accrued; withdraw should fail
+  submitMustFail setup.operator do
+    exerciseCmd svcCid5 Loop_WithdrawFees with amount = 100.0
+
+  debug "✅ 27. CantonLoopStrategyService created and admin choices exercised"
