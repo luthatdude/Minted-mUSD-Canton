@@ -5,18 +5,24 @@ pragma solidity 0.8.26;
 /// @notice Minimal ERC20 implementation so the prover can resolve
 ///         all external calls made by RedemptionQueue via SafeERC20.
 ///         Linked to RedemptionQueue:usdc.
+/// @dev All arithmetic is unchecked to prevent underflow reverts in
+///      arbitrary Prover states (same rationale as DummyMUSD).
 contract DummyUSDC {
     mapping(address => uint256) internal _balances;
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        _balances[from] -= amount;
-        _balances[to] += amount;
+        unchecked {
+            _balances[from] -= amount;
+            _balances[to] += amount;
+        }
         return true;
     }
 
     function transfer(address to, uint256 amount) external returns (bool) {
-        _balances[msg.sender] -= amount;
-        _balances[to] += amount;
+        unchecked {
+            _balances[msg.sender] -= amount;
+            _balances[to] += amount;
+        }
         return true;
     }
 
