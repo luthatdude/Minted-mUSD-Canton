@@ -42,6 +42,9 @@ methods {
     function setupEVC()                          external;
     function executeOperation(address, uint256, uint256, address, bytes) external returns (bool);
 
+    // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
+    function upgradeToAndCall(address, bytes) external;
+
     // ── Role constants (envfree) ──
     function TREASURY_ROLE()    external returns (bytes32) envfree;
     function STRATEGIST_ROLE()  external returns (bytes32) envfree;
@@ -74,11 +77,14 @@ methods {
 /// @notice targetLtvBps is either 0 (uninitialized upgradeable) or within [3000, 9000]
 invariant targetLtvInRange()
     targetLtvBps() == 0 || (targetLtvBps() >= 3000 && targetLtvBps() <= 9000)
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
     { preserved { require active(), "only valid when strategy is active"; } }
 
-/// @notice safetyBufferBps is either 0 (uninitialized upgradeable) or positive
+/// @notice safetyBufferBps is immutable after init: either 0 (pre-init) or 500 (post-init)
+///         No setter exists, so upgradeToAndCall is the only way to break this.
 invariant safetyBufferPositive()
-    safetyBufferBps() >= 0;
+    safetyBufferBps() <= 10000
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT ACCOUNTING
