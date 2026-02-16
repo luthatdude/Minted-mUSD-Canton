@@ -123,16 +123,8 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-            readOnlyRootFilesystem: true          volumeMounts:
-            # F-01 FIX: Mount DB credentials as files (consistent with postgres + pgbouncer)
-            - name: db-credentials
-              mountPath: /run/secrets/db-username
-              subPath: username
-              readOnly: true
-            - name: db-credentials
-              mountPath: /run/secrets/db-password
-              subPath: password
-              readOnly: true          volumeMounts:
+            readOnlyRootFilesystem: true
+          volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
             - name: tmp
@@ -298,6 +290,16 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+          volumeMounts:
+            # DB credentials needed by entrypoint wrapper above
+            - name: db-credentials
+              mountPath: /run/secrets/db-username
+              subPath: username
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-password
+              subPath: password
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /metrics
