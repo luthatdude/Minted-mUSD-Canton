@@ -248,7 +248,7 @@ rule minSwapOutput_bounds(uint256 bps) {
 rule deposit_requires_treasury(uint256 amount) {
     env e;
     deposit@withrevert(e, amount);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can deposit";
 }
 
@@ -256,7 +256,7 @@ rule deposit_requires_treasury(uint256 amount) {
 rule withdraw_requires_treasury(uint256 amount) {
     env e;
     withdraw@withrevert(e, amount);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can withdraw";
 }
 
@@ -264,7 +264,7 @@ rule withdraw_requires_treasury(uint256 amount) {
 rule withdrawAll_requires_treasury() {
     env e;
     withdrawAll@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, TREASURY_ROLE()),
+    assert !lastReverted => hasRole(TREASURY_ROLE(), e.msg.sender),
         "Only TREASURY_ROLE can withdrawAll";
 }
 
@@ -272,7 +272,7 @@ rule withdrawAll_requires_treasury() {
 rule rebalance_requires_keeper() {
     env e;
     rebalance@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, KEEPER_ROLE()),
+    assert !lastReverted => hasRole(KEEPER_ROLE(), e.msg.sender),
         "Only KEEPER_ROLE can rebalance";
 }
 
@@ -280,7 +280,7 @@ rule rebalance_requires_keeper() {
 rule emergency_requires_guardian() {
     env e;
     emergencyDeleverage@withrevert(e);
-    assert !lastReverted => hasRole(e.msg.sender, GUARDIAN_ROLE()),
+    assert !lastReverted => hasRole(GUARDIAN_ROLE(), e.msg.sender),
         "Only GUARDIAN_ROLE can emergencyDeleverage";
 }
 
@@ -288,7 +288,7 @@ rule emergency_requires_guardian() {
 rule setParameters_requires_strategist(uint256 ltv, uint256 loops) {
     env e;
     setParameters@withrevert(e, ltv, loops);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can setParameters";
 }
 
@@ -296,7 +296,7 @@ rule setParameters_requires_strategist(uint256 ltv, uint256 loops) {
 rule adjustLeverage_requires_strategist(uint256 ltv, uint256 minSP) {
     env e;
     adjustLeverage@withrevert(e, ltv, minSP);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can adjustLeverage";
 }
 
@@ -304,7 +304,7 @@ rule adjustLeverage_requires_strategist(uint256 ltv, uint256 minSP) {
 rule dexDeposit_requires_strategist(uint256 t0, uint256 t1, int256 ms) {
     env e;
     depositDexCollateral@withrevert(e, t0, t1, ms);
-    assert !lastReverted => hasRole(e.msg.sender, STRATEGIST_ROLE()),
+    assert !lastReverted => hasRole(STRATEGIST_ROLE(), e.msg.sender),
         "Only STRATEGIST_ROLE can depositDexCollateral";
 }
 

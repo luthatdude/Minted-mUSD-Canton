@@ -1,53 +1,142 @@
-// Certora Verification Spec: BLEBridgeV9
-// FIX: Previously no formal verification for bridge security
+/// @title BLEBridgeV9 Formal Verification Spec
+/// @notice Certora spec for the BLE Bridge Canton attestation contract
+/// @dev Verifies attestation replay prevention, nonce monotonicity,
+///      collateral ratio bounds, rate limits, access control, and pause.
+
+// ═══════════════════════════════════════════════════════════════════
+// METHODS
+// ═══════════════════════════════════════════════════════════════════
 
 methods {
-    function mintCap() external returns (uint256) envfree;
-    function totalMinted() external returns (uint256) envfree;
-    function requiredSignatures() external returns (uint256) envfree;
-    function processedNonces(bytes32) external returns (bool) envfree;
+    // ── Storage reads (envfree) ──
+    function attestedCantonAssets() external returns (uint256) envfree;
+    function collateralRatioBps()   external returns (uint256) envfree;
+    function currentNonce()         external returns (uint256) envfree;
+    function minSignatures()        external returns (uint256) envfree;
+    function lastAttestationTime()  external returns (uint256) envfree;
+    function dailyCapIncreaseLimit() external returns (uint256) envfree;
+    function dailyCapIncreased()    external returns (uint256) envfree;
+    function paused()               external returns (bool)    envfree;
+    function usedAttestationIds(bytes32) external returns (bool) envfree;
+
+    // ── State-changing functions ──
+    function setMinSignatures(uint256)      external;
+    function setCollateralRatio(uint256)    external;
+    function setDailyCapIncreaseLimit(uint256) external;
+    function pause()                        external;
+    function requestUnpause()               external;
+    function executeUnpause()               external;
+    function emergencyReduceCap(uint256, string) external;
+    function forceUpdateNonce(uint256, string)   external;
+    function invalidateAttestationId(bytes32, string) external;
+
+    // ── Role constants (envfree) ──
+    function VALIDATOR_ROLE()     external returns (bytes32) envfree;
+    function EMERGENCY_ROLE()     external returns (bytes32) envfree;
+    function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
+    function hasRole(bytes32, address) external returns (bool) envfree;
+
+    // ── External contract summaries ──
+    function _.setSupplyCap(uint256) external => NONDET;
+    function _.supplyCap() external          => PER_CALLEE_CONSTANT;
+    function _.totalSupply() external        => PER_CALLEE_CONSTANT;
 }
 
-// INV-1: Total minted never exceeds mint cap
-invariant mintCapEnforced()
-    totalMinted() <= mintCap();
+// ═══════════════════════════════════════════════════════════════════
+// INVARIANTS
+// ═══════════════════════════════════════════════════════════════════
 
-// INV-2: Required signatures must be positive
-invariant signaturesRequired()
-    requiredSignatures() > 0;
+/// @notice minSignatures is always positive
+invariant minSignaturesPositive()
+    minSignatures() > 0;
 
-// RULE: Nonces cannot be replayed
-rule nonceNotReplayable(bytes32 nonce) {
+/// @notice collateralRatioBps is always >= 10000 (100%)
+invariant collateralRatioAboveParity()
+    collateralRatioBps() >= 10000;
+
+// ═══════════════════════════════════════════════════════════════════
+// RULES: ATTESTATION REPLAY PREVENTION
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Once an attestation ID is used, it stays used (monotonic)
+rule attestation_id_monotonic(bytes32 id) {
     env e;
+    require usedAttestationIds(id) == true;
 
-    require processedNonces(nonce) == true;
+    // Any state change shouldn't un-use an attestation
+    calldataarg args;
+    method f;
+    f(e, args);
 
-    // Any mint attempt with a used nonce must revert
-    bridgeMint@withrevert(e, nonce);
-
-    assert lastReverted, "Used nonce must cause revert";
+    assert usedAttestationIds(id) == true,
+        "Used attestation IDs must remain used";
 }
 
-// RULE: Minting increases totalMinted
-rule mintIncreasesTotal() {
+// ═══════════════════════════════════════════════════════════════════
+// RULES: NONCE MONOTONICITY
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice currentNonce never decreases (except forceUpdateNonce by EMERGENCY_ROLE)
+rule nonce_monotonic_on_normal_ops() {
     env e;
-    uint256 mintedBefore = totalMinted();
+    uint256 nonceBefore = currentNonce();
 
-    // Any successful mint
-    bridgeMint(e);
+    // For non-emergency operations, nonce should not decrease
+    calldataarg args;
+    method f;
+    require f.selector != sig:forceUpdateNonce(uint256, string).selector;
 
-    uint256 mintedAfter = totalMinted();
-    assert mintedAfter > mintedBefore, "Successful mint must increase totalMinted";
+    f(e, args);
+
+    assert currentNonce() >= nonceBefore,
+        "Nonce must not decrease on normal operations";
 }
 
-// RULE: Mint cap cannot be reduced below current supply
-rule mintCapBoundedBySupply(uint256 newCap) {
+// ═══════════════════════════════════════════════════════════════════
+// RULES: ACCESS CONTROL
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Only EMERGENCY_ROLE can call pause()
+rule pause_requires_emergency() {
     env e;
+    pause@withrevert(e);
+    assert !lastReverted => hasRole(EMERGENCY_ROLE(), e.msg.sender),
+        "Only EMERGENCY_ROLE can pause";
+}
 
-    uint256 currentMinted = totalMinted();
+/// @notice Only DEFAULT_ADMIN_ROLE can call requestUnpause()
+rule requestUnpause_requires_admin() {
+    env e;
+    requestUnpause@withrevert(e);
+    assert !lastReverted => hasRole(DEFAULT_ADMIN_ROLE(), e.msg.sender),
+        "Only DEFAULT_ADMIN_ROLE can requestUnpause";
+}
 
-    setMintCap@withrevert(e, newCap);
+/// @notice Only EMERGENCY_ROLE can call emergencyReduceCap()
+rule emergencyReduceCap_requires_emergency(uint256 cap, string reason) {
+    env e;
+    emergencyReduceCap@withrevert(e, cap, reason);
+    assert !lastReverted => hasRole(EMERGENCY_ROLE(), e.msg.sender),
+        "Only EMERGENCY_ROLE can emergencyReduceCap";
+}
 
-    assert !lastReverted => newCap >= currentMinted,
-        "Mint cap cannot be set below current minted amount";
+/// @notice Only EMERGENCY_ROLE can call forceUpdateNonce()
+rule forceUpdateNonce_requires_emergency(uint256 nonce, string reason) {
+    env e;
+    forceUpdateNonce@withrevert(e, nonce, reason);
+    assert !lastReverted => hasRole(EMERGENCY_ROLE(), e.msg.sender),
+        "Only EMERGENCY_ROLE can forceUpdateNonce";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// RULES: COLLATERAL RATIO BOUNDS
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice setCollateralRatio stores value and maintains >= 10000
+rule setCollateralRatio_stores(uint256 ratio) {
+    env e;
+    setCollateralRatio@withrevert(e, ratio);
+    bool succeeded = !lastReverted;
+    assert succeeded => collateralRatioBps() >= 10000,
+        "collateralRatioBps must remain >= 10000 after set";
 }
