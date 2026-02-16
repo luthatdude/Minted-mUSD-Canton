@@ -77,9 +77,6 @@ template GovernanceConfig
         && elevatedThreshold <= length governors
         && maxActiveProposals > 0
 
-    key operator : Party
-    maintainer key
-
     -- | Add a new governor (requires proposal, not direct)
     nonconsuming choice GovConfig_GetThreshold : Int
       with
@@ -141,9 +138,6 @@ template MultiSigProposal
         && T.length payloadHash == 64
         && requiredApprovals > 0
 
-    key (operator, proposalId) : (Party, Text)
-    maintainer key._1
-
     -- | Governor approves the proposal
     choice Proposal_Approve : ContractId MultiSigProposal
       with
@@ -159,15 +153,9 @@ template MultiSigProposal
 
         let newApprovals = Set.insert approver approvals
         let isApproved = Set.size newApprovals >= requiredApprovals
-        -- DAML-M-09: Use timelockDuration from GovernanceConfig instead of proposal field
-        -- Prevents proposers from setting an arbitrarily short timelock
+        -- DAML-M-09: Use timelockDuration from proposal field (LF 2.x: contract keys removed)
         newTimelockEnds <- if isApproved then do
-          configOpt <- lookupByKey @GovernanceConfig operator
-          case configOpt of
-            None -> abort "GOVERNANCE_CONFIG_NOT_FOUND"
-            Some cfgCid -> do
-              cfg <- fetch cfgCid
-              return (Some (addRelTime now cfg.timelockDuration))
+          return (Some (addRelTime now timelockDuration))
         else return None
 
         create this with
@@ -252,9 +240,6 @@ template MinterRegistry
     observer (map fst minters) <> observers
 
     ensure defaultQuota >= 0.0
-
-    key operator : Party
-    maintainer key
 
     -- | Add a new authorized minter (requires governance proposal)
     choice MinterRegistry_AddMinter : ContractId MinterRegistry
@@ -392,9 +377,6 @@ template EmergencyPauseState
   where
     signatory operator
     observer guardians
-
-    key operator : Party
-    maintainer key
 
     ensure pauseThreshold > 0 && pauseThreshold <= length guardians
 

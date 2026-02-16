@@ -14,8 +14,7 @@
  * This allows Canton to choose which assets back mUSD.
  */
 
-import Ledger, { CreateEvent } from "@daml/ledger";
-import { ContractId } from "@daml/types";
+import { CantonClient, CantonClientConfig, ActiveContract, TEMPLATES, parseTemplateId } from "./canton-client";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
 import { formatKMSSignature } from "./signer";
@@ -267,8 +266,8 @@ class CantonAssetClient {
 
 class ValidatorNode {
   private config: ValidatorConfig;
-  private ledger: Ledger;
-  private cantonClient: CantonAssetClient;
+  private canton: CantonClient;
+  private cantonAssetClient: CantonAssetClient;
   private kmsClient: KMSClient;
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
@@ -315,15 +314,16 @@ class ValidatorNode {
     if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
       throw new Error("[ValidatorV2] CANTON_USE_TLS=false is not allowed in production");
     }
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
       token: config.cantonLedgerToken,
-      httpBaseUrl: `${protocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonLedgerHost}:${config.cantonLedgerPort}`,
+      userId: "administrator",
+      actAs: config.validatorParty,
+      timeoutMs: 30_000,
     });
 
     // Initialize Canton Asset API client
-    this.cantonClient = new CantonAssetClient(
+    this.cantonAssetClient = new CantonAssetClient(
       config.cantonAssetApiUrl,
       config.cantonAssetApiKey
     );
@@ -414,10 +414,9 @@ class ValidatorNode {
   private async pollForAttestations(): Promise<void> {
     // Only query allowed DAML templates (prevents signing arbitrary contracts)
     const templateId = this.config.allowedTemplates[0] || "MintedProtocolV3:AttestationRequest";
-    const attestations = await (this.ledger.query as any)(
-      templateId,
-      {}
-    ) as CreateEvent<AttestationRequest>[];
+    const attestations = await this.canton.queryContracts<AttestationRequest>(
+      parseTemplateId(templateId)
+    );
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -492,7 +491,7 @@ class ValidatorNode {
   }> {
     try {
       // 1. Fetch current asset snapshot from Canton
-      const snapshot = await this.cantonClient.getAssetSnapshot();
+      const snapshot = await this.cantonAssetClient.getAssetSnapshot();
 
       // 3. Verify each asset exists and value matches
       for (const attestedAsset of payload.cantonAssets) {
@@ -591,7 +590,7 @@ class ValidatorNode {
         };
       }
 
-      const stateValid = await this.cantonClient.verifyStateHash(snapshot.stateHash);
+      const stateValid = await this.cantonAssetClient.verifyStateHash(snapshot.stateHash);
       if (!stateValid) {
         return {
           valid: false,
@@ -617,7 +616,7 @@ class ValidatorNode {
   }
 
   private async signAttestation(
-    contractId: ContractId<AttestationRequest>,
+    contractId: string,
     payload: AttestationPayload,
     cantonStateHash: string
   ): Promise<void> {
@@ -633,8 +632,8 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
-      await (this.ledger.exercise as any)(
-        "MintedProtocolV3:AttestationRequest",
+      await this.canton.exerciseChoice(
+        TEMPLATES.AttestationRequest,
         contractId,
         "Attestation_Sign",
         {

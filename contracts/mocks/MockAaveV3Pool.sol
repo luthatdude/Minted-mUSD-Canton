@@ -10,6 +10,9 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  * @dev Supports: supply, withdraw, borrow, repay, flashLoanSimple, getUserAccountData
  */
 contract MockAaveV3Pool {
+        // Reentrancy test hook
+        bool public reentrancyEntered;
+
     using SafeERC20 for IERC20;
 
     IERC20 public usdc;
@@ -65,16 +68,39 @@ contract MockAaveV3Pool {
         IERC20(asset).safeTransfer(receiverAddress, amount);
 
         // Call receiver callback
-        (bool success,) = receiverAddress.call(
+
+        // Reentrancy test: set flag before callback
+        reentrancyEntered = true;
+        (bool success, bytes memory returndata) = receiverAddress.call(
             abi.encodeWithSignature(
                 "executeOperation(address,uint256,uint256,address,bytes)",
                 asset, amount, premium, msg.sender, params
             )
         );
-        require(success, "Flash loan callback failed");
+        reentrancyEntered = false;
+        if (!success) {
+            // Bubble up revert reason if present
+            if (returndata.length > 0) {
+                assembly {
+                    let returndata_size := mload(returndata)
+                    revert(add(32, returndata), returndata_size)
+                }
+            } else {
+                revert("Flash loan callback failed");
+            }
+        }
 
         // Recover amount + premium
+        uint256 before = IERC20(asset).balanceOf(address(this));
         IERC20(asset).safeTransferFrom(receiverAddress, address(this), amount + premium);
+        uint256 afterBal = IERC20(asset).balanceOf(address(this));
+        require(afterBal >= before + premium, "Flash loan underpayment");
+    }
+
+    // Test-only: force callback revert
+    function testForceCallbackRevert(address receiverAddress, address asset, uint256 amount, bytes calldata params) external {
+        IERC20(asset).safeTransfer(receiverAddress, amount);
+        revert("Test: forced callback revert");
     }
 
     function setUserEMode(uint8 categoryId) external {

@@ -1,0 +1,435 @@
+-- | UpgradeTest
+-- Tests for Upgrade module: UpgradeProposal, UpgradeRegistry,
+-- MigrationTicket, UpgradeMigrationLog.
+
+module UpgradeTest where
+
+import Upgrade
+import DA.Set qualified as Set
+import DA.Time
+import DA.Date
+import DA.Optional
+import Daml.Script
+
+-- ============================================================
+--                     HELPERS
+-- ============================================================
+
+setupUpgrade : Script (Party, Party, Party, ContractId UpgradeRegistry)
+setupUpgrade = script do
+  admin <- allocateParty "Admin"
+  guardian1 <- allocateParty "Guardian1"
+  guardian2 <- allocateParty "Guardian2"
+  now <- getTime
+
+  registry <- submit admin do
+    createCmd UpgradeRegistry with
+      operator = admin
+      governance = [admin, guardian1, guardian2]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      activatedAt = now
+      migrationDeadline = addRelTime now (hours 720)
+      rollbackDeadline = addRelTime now (hours 960)
+      totalMigrated = 0
+      totalRolledBack = 0
+      status = Active
+
+  pure (admin, guardian1, guardian2, registry)
+
+-- ============================================================
+--         TEST 1: CREATE UPGRADE PROPOSAL
+-- ============================================================
+
+test_CreateUpgradeProposal : Script ()
+test_CreateUpgradeProposal = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = now
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Proposed
+
+  r <- queryContractId admin proposal
+  assertMsg "proposal created" (isSome r)
+  pure ()
+
+-- ============================================================
+--         TEST 2: APPROVE UPGRADE PROPOSAL
+-- ============================================================
+
+test_ApproveUpgradeProposal : Script ()
+test_ApproveUpgradeProposal = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = now
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Proposed
+
+  proposal2 <- submit g1 do
+    exerciseCmd proposal UpgradeProposal_Approve with approver = g1
+
+  r <- queryContractId admin proposal2
+  case r of
+    Some p -> assertMsg "g1 approved" (Set.member g1 p.approvals)
+    None -> abort "not found"
+  pure ()
+
+-- ============================================================
+--         TEST 3: ACTIVATE UPGRADE PROPOSAL
+-- ============================================================
+
+test_ActivateUpgradeProposal : Script ()
+test_ActivateUpgradeProposal = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-48))
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin, g1]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = pastTime  -- created 48h ago, delay is 24h
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Approved
+
+  submit admin do
+    exerciseCmd proposal UpgradeProposal_Activate with activator = admin
+
+  r <- queryContractId admin proposal
+  assertMsg "proposal archived after activation" (isNone r)
+  pure ()
+
+-- ============================================================
+--         TEST 4: ACTIVATE BEFORE DELAY FAILS
+-- ============================================================
+
+test_ActivateBeforeDelayFails : Script ()
+test_ActivateBeforeDelayFails = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin, g1]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = now  -- just created, delay is 48h
+      activationDelay = hours 48
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Approved
+
+  submitMustFail admin do
+    exerciseCmd proposal UpgradeProposal_Activate with activator = admin
+  pure ()
+
+-- ============================================================
+--         TEST 5: CANCEL UPGRADE PROPOSAL
+-- ============================================================
+
+test_CancelUpgradeProposal : Script ()
+test_CancelUpgradeProposal = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = now
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Proposed
+
+  submit admin do
+    exerciseCmd proposal UpgradeProposal_Cancel with reason = "No longer needed"
+
+  r <- queryContractId admin proposal
+  assertMsg "proposal cancelled" (isNone r)
+  pure ()
+
+-- ============================================================
+--         TEST 6: RECORD MIGRATION
+-- ============================================================
+
+test_RecordMigration : Script ()
+test_RecordMigration = script do
+  (admin, g1, g2, registry) <- setupUpgrade
+
+  registry2 <- submit admin do
+    exerciseCmd registry UpgradeRegistry_RecordMigration with
+      count = 42
+      direction = Forward
+
+  r <- queryContractId admin registry2
+  case r of
+    Some reg -> assertMsg "migration recorded" (reg.totalMigrated == 42)
+    None -> abort "not found"
+  pure ()
+
+-- ============================================================
+--         TEST 7: COMPLETE UPGRADE
+-- ============================================================
+
+test_CompleteUpgrade : Script ()
+test_CompleteUpgrade = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  g2 <- allocateParty "Guardian2"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-100))
+
+  -- Create registry with migration deadline in the past
+  registry <- submit admin do
+    createCmd UpgradeRegistry with
+      operator = admin
+      governance = [admin, g1, g2]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      activatedAt = pastTime
+      migrationDeadline = addRelTime pastTime (hours 72)  -- already passed
+      rollbackDeadline = addRelTime pastTime (hours 960)
+      totalMigrated = 42
+      totalRolledBack = 0
+      status = Active
+
+  registry2 <- submit admin do
+    exerciseCmd registry UpgradeRegistry_Complete
+
+  r <- queryContractId admin registry2
+  case r of
+    Some reg -> assertMsg "status completed" (reg.status == Completed)
+    None -> abort "not found"
+  pure ()
+
+-- ============================================================
+--         TEST 8: EMERGENCY ROLLBACK
+-- ============================================================
+
+test_EmergencyRollback : Script ()
+test_EmergencyRollback = script do
+  (admin, g1, g2, registry) <- setupUpgrade
+
+  registry2 <- submit admin do
+    exerciseCmd registry UpgradeRegistry_RecordMigration with
+      count = 42; direction = Forward
+
+  registry3 <- submit admin do
+    exerciseCmd registry2 UpgradeRegistry_EmergencyRollback with
+      reason = "Critical bug found"; authorizer = admin
+
+  r <- queryContractId admin registry3
+  case r of
+    Some reg -> assertMsg "rolled back" (reg.status == RolledBack)
+    None -> abort "not found"
+  pure ()
+
+-- ============================================================
+--         TEST 9: MIGRATION TICKET — EXECUTE
+-- ============================================================
+
+test_MigrationTicketExecute : Script ()
+test_MigrationTicketExecute = script do
+  (admin, g1, g2, registry) <- setupUpgrade
+  holder <- allocateParty "Holder"
+  now <- getTime
+
+  ticket <- submitMulti [admin, holder] [] do
+    createCmd MigrationTicket with
+      operator = admin
+      holder
+      upgradeKey = (admin, "2.0.0", "3.0.0")
+      contractsToMigrate = ["contract-1", "contract-2"]
+      requestedAt = now
+      batchSize = 100
+      direction = Forward
+
+  submit admin do
+    exerciseCmd ticket MigrationTicket_Execute with registryCid = registry
+
+  r <- queryContractId admin ticket
+  assertMsg "ticket executed/archived" (isNone r)
+  pure ()
+
+-- ============================================================
+--         TEST 10: MIGRATION TICKET — CANCEL
+-- ============================================================
+
+test_MigrationTicketCancel : Script ()
+test_MigrationTicketCancel = script do
+  admin <- allocateParty "Admin"
+  holder <- allocateParty "Holder"
+  now <- getTime
+
+  ticket <- submitMulti [admin, holder] [] do
+    createCmd MigrationTicket with
+      operator = admin
+      holder
+      upgradeKey = (admin, "2.0.0", "3.0.0")
+      contractsToMigrate = ["contract-1"]
+      requestedAt = now
+      batchSize = 50
+      direction = Forward
+
+  submit holder do
+    exerciseCmd ticket MigrationTicket_Cancel
+
+  r <- queryContractId admin ticket
+  assertMsg "ticket cancelled" (isNone r)
+  pure ()
+
+-- ============================================================
+--         TEST 11: UPGRADE MIGRATION LOG IS IMMUTABLE
+-- ============================================================
+
+test_MigrationLogCreated : Script ()
+test_MigrationLogCreated = script do
+  admin <- allocateParty "Admin"
+  holder <- allocateParty "Holder"
+  now <- getTime
+
+  logEntry <- submitMulti [admin, holder] [] do
+    createCmd UpgradeMigrationLog with
+      operator = admin
+      holder
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      contractsMigrated = ["c1", "c2", "c3"]
+      migratedAt = now
+      direction = Forward
+      txHash = ""
+
+  r <- queryContractId admin logEntry
+  assertMsg "log created" (isSome r)
+  pure ()
+
+-- ============================================================
+--         TEST 12: INSUFFICIENT APPROVALS ACTIVATION FAILS
+-- ============================================================
+
+test_InsufficientApprovalsActivationFails : Script ()
+test_InsufficientApprovalsActivationFails = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-48))
+
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin]  -- only 1, need 2
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = pastTime
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Proposed  -- Not Approved, so activation should fail
+
+  submitMustFail admin do
+    exerciseCmd proposal UpgradeProposal_Activate with activator = admin
+  pure ()
+
+-- ============================================================
+--         TEST 13: FULL UPGRADE LIFECYCLE
+-- ============================================================
+
+test_FullUpgradeLifecycle : Script ()
+test_FullUpgradeLifecycle = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-48))
+
+  -- 1. Create proposal
+  proposal <- submit admin do
+    createCmd UpgradeProposal with
+      operator = admin
+      governance = [admin, g1]
+      approvalThreshold = 2
+      approvals = Set.fromList [admin]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      changelogUri = "https://minted.finance/changelog/3.0.0"
+      proposedAt = pastTime
+      activationDelay = hours 24
+      migrationWindowDays = 7
+      rollbackWindowDays = 3
+      status = Proposed
+
+  -- 2. Approve
+  proposal2 <- submit g1 do
+    exerciseCmd proposal UpgradeProposal_Approve with approver = g1
+
+  -- 3. Activate (returns an UpgradeRegistry)
+  registryCid <- submit admin do
+    exerciseCmd proposal2 UpgradeProposal_Activate with activator = admin
+
+  -- 4. Record migration
+  registry2 <- submit admin do
+    exerciseCmd registryCid UpgradeRegistry_RecordMigration with
+      count = 50; direction = Forward
+
+  r <- queryContractId admin registry2
+  case r of
+    Some reg -> assertMsg "migrated 50" (reg.totalMigrated == 50)
+    None -> abort "not found"
+  pure ()

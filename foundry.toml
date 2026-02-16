@@ -11,9 +11,10 @@ remappings = [
     "@openzeppelin/=node_modules/@openzeppelin/",
 ]
 
+
 [invariant]
-runs = 256
-depth = 64
+runs = 100000
+depth = 15
 fail_on_revert = false
 dictionary_weight = 80
 include_storage = true

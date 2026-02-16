@@ -12,7 +12,7 @@ import WalletConnector from "@/components/WalletConnector";
 import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
 import { YieldScanner } from "@/components/YieldScanner";
 
-type AdminSection = "musd" | "directmint" | "treasury" | "bridge" | "borrow" | "oracle";
+type AdminSection = "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STRATEGY CATALOG — all deployable yield strategies
@@ -35,6 +35,33 @@ interface StrategyInfo {
   color: string;
   vault: VaultAssignment;
 }
+
+interface SubStrategyView {
+  strategy: string;
+  weightBps: number;
+  capUsd: bigint;
+  enabled: boolean;
+  currentValue: bigint;
+}
+
+interface VaultViewData {
+  key: VaultAssignment;
+  contract: any;
+  totalValue: bigint;
+  totalPrincipal: bigint;
+  idle: bigint;
+  drift: number;
+  driftThreshold: number;
+  paused: boolean;
+  active: boolean;
+  subStrategies: SubStrategyView[];
+}
+
+const VAULT_CONTRACTS_MAP: { key: VaultAssignment; envKey: string }[] = [
+  { key: "vault1", envKey: "metaVault1" },
+  { key: "vault2", envKey: "metaVault2" },
+  { key: "vault3", envKey: "metaVault3" },
+];
 
 const VAULT_LABELS: Record<VaultAssignment, { label: string; badge: string; desc: string }> = {
   vault1: {
@@ -239,7 +266,19 @@ export function AdminPage() {
   const [oracleStale, setOracleStale] = useState("3600");
   const [oracleDecimals, setOracleDecimals] = useState("18");
 
-  const { musd, directMint, treasury, bridge, borrow, oracle } = contracts;
+  // Vault Admin
+  const [vaultData, setVaultData] = useState<Record<string, VaultViewData>>({});
+  const [selectedVaultDeploy, setSelectedVaultDeploy] = useState<string>("");
+  const [vaultDeployAmount, setVaultDeployAmount] = useState("");
+  const [selectedVaultWithdraw, setSelectedVaultWithdraw] = useState<string>("");
+  const [vaultWithdrawSubIdx, setVaultWithdrawSubIdx] = useState("");
+  const [vaultWithdrawAmount, setVaultWithdrawAmount] = useState("");
+  const [addSubAddr, setAddSubAddr] = useState("");
+  const [addSubWeight, setAddSubWeight] = useState("");
+  const [addSubCap, setAddSubCap] = useState("0");
+  const [addSubVault, setAddSubVault] = useState<string>("");
+
+  const { musd, directMint, treasury, bridge, borrow, oracle, metaVault1, metaVault2, metaVault3 } = contracts as any;
 
   // Current values + data-loading state (H-04)
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -302,6 +341,60 @@ export function AdminPage() {
     return () => { cancelled = true; };
   }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
 
+  // ── Load MetaVault data ──
+  useEffect(() => {
+    let cancelled = false;
+    async function loadVaultData() {
+      const vaults: Record<string, VaultViewData> = {};
+      const mvContracts: Record<string, any> = { vault1: metaVault1, vault2: metaVault2, vault3: metaVault3 };
+
+      for (const { key } of VAULT_CONTRACTS_MAP) {
+        const mv = mvContracts[key];
+        if (!mv) continue;
+        try {
+          const [totalVal, principal, idle, drift, driftThreshold, isPaused, isAct, count] = await Promise.all([
+            mv.totalValue(),
+            mv.totalPrincipal(),
+            mv.idleBalance(),
+            mv.currentDrift(),
+            mv.driftThresholdBps(),
+            mv.paused(),
+            mv.isActive(),
+            mv.subStrategyCount(),
+          ]);
+          const subs: SubStrategyView[] = [];
+          for (let i = 0; i < Number(count); i++) {
+            const s = await mv.getSubStrategy(i);
+            subs.push({
+              strategy: s.strategy,
+              weightBps: Number(s.weightBps),
+              capUsd: s.capUsd,
+              enabled: s.enabled,
+              currentValue: s.currentValue,
+            });
+          }
+          vaults[key] = {
+            key,
+            contract: mv,
+            totalValue: totalVal,
+            totalPrincipal: principal,
+            idle,
+            drift: Number(drift),
+            driftThreshold: Number(driftThreshold),
+            paused: isPaused,
+            active: isAct,
+            subStrategies: subs,
+          };
+        } catch (err) {
+          console.error(`[AdminPage] Failed to load ${key} data:`, err);
+        }
+      }
+      if (!cancelled) setVaultData(vaults);
+    }
+    loadVaultData();
+    return () => { cancelled = true; };
+  }, [metaVault1, metaVault2, metaVault3, tx.success]);
+
   // ── Conditional returns (after all hooks — C-01 fix) ──
   if (!isConnected) {
     return (
@@ -340,6 +433,7 @@ export function AdminPage() {
     { key: "musd", label: "mUSD" },
     { key: "directmint", label: "DirectMint" },
     { key: "treasury", label: "Treasury" },
+    { key: "vaults", label: "Vaults" },
     { key: "bridge", label: "Bridge" },
     { key: "borrow", label: "Borrow" },
     { key: "oracle", label: "Oracle" },
@@ -888,6 +982,306 @@ export function AdminPage() {
               variant="danger"
             >
               Emergency Withdraw All
+            </TxButton>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Vaults Section ===== */}
+      {section === "vaults" && (
+        <div className="space-y-6">
+          {/* Overview stats */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard
+              label="Total Across Vaults"
+              value={formatUSD(
+                Object.values(vaultData).reduce((sum, v) => sum + v.totalValue, 0n),
+                6
+              )}
+            />
+            <StatCard
+              label="Active Vaults"
+              value={`${Object.values(vaultData).filter((v) => v.active).length} / 3`}
+              color="green"
+            />
+            <StatCard
+              label="Total Idle USDC"
+              value={formatUSD(
+                Object.values(vaultData).reduce((sum, v) => sum + v.idle, 0n),
+                6
+              )}
+            />
+          </div>
+
+          {/* Per-vault cards */}
+          {(["vault1", "vault2", "vault3"] as VaultAssignment[]).map((vk) => {
+            const label = VAULT_LABELS[vk];
+            const vd = vaultData[vk];
+            const strategies = KNOWN_STRATEGIES.filter((ks) => ks.vault === vk);
+
+            return (
+              <div key={vk} className="rounded-xl border border-gray-700 bg-gray-900/50 overflow-hidden">
+                {/* Vault header */}
+                <div className="flex items-center justify-between border-b border-gray-700/50 px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${label.badge}`}>
+                      {vk.replace("vault", "#")}
+                    </span>
+                    <div>
+                      <h3 className="text-base font-semibold text-white">{label.label}</h3>
+                      <p className="text-xs text-gray-500">{label.desc}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {vd ? (
+                      <>
+                        {vd.paused && (
+                          <span className="rounded bg-red-900/60 px-2 py-0.5 text-[10px] font-medium text-red-400">PAUSED</span>
+                        )}
+                        {!vd.active && !vd.paused && (
+                          <span className="rounded bg-yellow-900/60 px-2 py-0.5 text-[10px] font-medium text-yellow-400">INACTIVE</span>
+                        )}
+                        {vd.active && !vd.paused && (
+                          <span className="rounded bg-green-900/60 px-2 py-0.5 text-[10px] font-medium text-green-400">LIVE</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="rounded bg-gray-800 px-2 py-0.5 text-[10px] text-gray-500">NOT DEPLOYED</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Vault body */}
+                {vd ? (
+                  <div className="px-5 py-4 space-y-4">
+                    {/* Stats row */}
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-gray-500">Total Value</p>
+                        <p className="text-sm font-medium text-white">{formatUSD(vd.totalValue, 6)}</p>
+                      </div>
+                      <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-gray-500">Principal</p>
+                        <p className="text-sm font-medium text-white">{formatUSD(vd.totalPrincipal, 6)}</p>
+                      </div>
+                      <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-gray-500">Idle USDC</p>
+                        <p className="text-sm font-medium text-white">{formatUSD(vd.idle, 6)}</p>
+                      </div>
+                      <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-gray-500">Drift / Threshold</p>
+                        <p className={`text-sm font-medium ${vd.drift >= vd.driftThreshold ? "text-yellow-400" : "text-white"}`}>
+                          {(vd.drift / 100).toFixed(1)}% / {(vd.driftThreshold / 100).toFixed(1)}%
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Sub-strategies */}
+                    <div>
+                      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Sub-Strategies</h4>
+                      {vd.subStrategies.length === 0 ? (
+                        <p className="text-xs text-gray-500">No sub-strategies registered.</p>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {vd.subStrategies.map((ss, idx) => {
+                            const name = strategyName(ss.strategy);
+                            const color = strategyColor(ss.strategy);
+                            const pct = vd.totalValue > 0n
+                              ? Number((ss.currentValue * 10000n) / vd.totalValue) / 100
+                              : 0;
+                            return (
+                              <div key={idx} className="flex items-center justify-between rounded-lg bg-gray-800/30 px-4 py-2.5 text-sm">
+                                <div className="flex items-center gap-3">
+                                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                                  <span className="font-medium text-white">{name}</span>
+                                  <span className="font-mono text-[10px] text-gray-600">
+                                    {ss.strategy.slice(0, 6)}…{ss.strategy.slice(-4)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs text-gray-400">{formatUSD(ss.currentValue, 6)}</span>
+                                  {/* Weight bar */}
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="h-1.5 w-16 rounded-full bg-gray-700 overflow-hidden">
+                                      <div
+                                        className="h-full rounded-full"
+                                        style={{ width: `${pct}%`, backgroundColor: color }}
+                                      />
+                                    </div>
+                                    <span className="text-[10px] text-gray-400 w-8 text-right">
+                                      {(ss.weightBps / 100).toFixed(0)}%
+                                    </span>
+                                  </div>
+                                  {ss.enabled ? (
+                                    <span className="rounded bg-green-900/40 px-1.5 py-0.5 text-[10px] text-green-400">ON</span>
+                                  ) : (
+                                    <span className="rounded bg-red-900/40 px-1.5 py-0.5 text-[10px] text-red-400">OFF</span>
+                                  )}
+                                  {/* Toggle circuit breaker */}
+                                  <button
+                                    onClick={() => tx.send(() => vd.contract.toggleSubStrategy(idx, !ss.enabled))}
+                                    className="rounded bg-gray-700 px-2 py-0.5 text-[10px] text-gray-300 hover:bg-gray-600"
+                                    disabled={tx.loading}
+                                  >
+                                    {ss.enabled ? "Disable" : "Enable"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Vault actions */}
+                    <div className="flex flex-wrap gap-2 border-t border-gray-700/30 pt-3">
+                      <TxButton
+                        size="sm"
+                        onClick={() => tx.send(() => vd.contract.rebalance())}
+                        loading={tx.loading}
+                        disabled={vd.drift < vd.driftThreshold}
+                      >
+                        Rebalance
+                      </TxButton>
+                      <TxButton
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => tx.send(() => vd.contract.pause())}
+                        loading={tx.loading}
+                        disabled={vd.paused}
+                      >
+                        Pause
+                      </TxButton>
+                      <TxButton
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => tx.send(() => vd.contract.unpause())}
+                        loading={tx.loading}
+                        disabled={!vd.paused}
+                      >
+                        Unpause
+                      </TxButton>
+                      <TxButton
+                        size="sm"
+                        variant="danger"
+                        onClick={() => {
+                          if (confirm(`Emergency withdraw ALL from ${label.label}? This will disable all sub-strategies.`)) {
+                            tx.send(() => vd.contract.emergencyWithdrawAll());
+                          }
+                        }}
+                        loading={tx.loading}
+                      >
+                        Emergency Withdraw All
+                      </TxButton>
+                    </div>
+                  </div>
+                ) : (
+                  /* Not deployed — show catalog preview */
+                  <div className="px-5 py-4">
+                    <p className="mb-3 text-xs text-gray-500">
+                      Not yet deployed. Planned sub-strategies:
+                    </p>
+                    <div className="space-y-1">
+                      {strategies.map((ks, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs text-gray-400">
+                          <div className="h-2 w-2 rounded-full" style={{ backgroundColor: ks.color }} />
+                          <span>{ks.shortName}</span>
+                          <span className="text-gray-600">— {ks.apy}</span>
+                          <span className="text-gray-600">({ks.targetBps / 100}%)</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* ── Deploy to Vault ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Deploy USDC to Vault</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              TreasuryV2 calls deposit() on the selected MetaVault. The vault splits across sub-strategies by weight.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Vault</label>
+                <select className="input" value={selectedVaultDeploy} onChange={(e) => setSelectedVaultDeploy(e.target.value)}>
+                  <option value="">Select vault…</option>
+                  {(["vault1", "vault2", "vault3"] as VaultAssignment[]).map((vk) => {
+                    const vd = vaultData[vk];
+                    if (!vd) return null;
+                    return (
+                      <option key={vk} value={vk}>
+                        {VAULT_LABELS[vk].label} — {formatUSD(vd.totalValue, 6)}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div>
+                <label className="label">Amount (USDC)</label>
+                <input className="input" type="number" placeholder="10000" value={vaultDeployAmount} onChange={(e) => setVaultDeployAmount(e.target.value)} />
+              </div>
+            </div>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => {
+                const vd = vaultData[selectedVaultDeploy];
+                if (vd) tx.send(() => treasury!.deployToStrategy(vd.contract.target, ethers.parseUnits(vaultDeployAmount, USDC_DECIMALS)));
+              }}
+              loading={tx.loading}
+              disabled={!treasury || !selectedVaultDeploy || !vaultDeployAmount}
+            >
+              Deploy to Vault
+            </TxButton>
+          </div>
+
+          {/* ── Add Sub-Strategy to Vault ── */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Add Sub-Strategy to Vault</h3>
+            <p className="mb-3 text-xs text-gray-500">Register a new sub-strategy inside a MetaVault. Remember to call setWeights() afterwards so weights sum to 100%.</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label className="label">Vault</label>
+                <select className="input" value={addSubVault} onChange={(e) => setAddSubVault(e.target.value)}>
+                  <option value="">Select vault…</option>
+                  {(["vault1", "vault2", "vault3"] as VaultAssignment[]).map((vk) => (
+                    vaultData[vk] ? <option key={vk} value={vk}>{VAULT_LABELS[vk].label}</option> : null
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Strategy Address</label>
+                <input className="input" type="text" placeholder="0x..." value={addSubAddr} onChange={(e) => setAddSubAddr(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Weight (bps)</label>
+                <input className="input" type="number" placeholder="2500" value={addSubWeight} onChange={(e) => setAddSubWeight(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Cap (USDC, 0=∞)</label>
+                <input className="input" type="number" placeholder="0" value={addSubCap} onChange={(e) => setAddSubCap(e.target.value)} />
+              </div>
+            </div>
+            <TxButton
+              className="mt-3 w-full"
+              onClick={() => {
+                const vd = vaultData[addSubVault];
+                if (vd) {
+                  tx.send(() =>
+                    vd.contract.addSubStrategy(
+                      addSubAddr,
+                      BigInt(addSubWeight),
+                      ethers.parseUnits(addSubCap || "0", USDC_DECIMALS)
+                    )
+                  );
+                }
+              }}
+              loading={tx.loading}
+              disabled={!addSubVault || !isAddr(addSubAddr) || !addSubWeight}
+            >
+              Add Sub-Strategy
             </TxButton>
           </div>
         </div>

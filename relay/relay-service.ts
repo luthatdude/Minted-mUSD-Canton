@@ -13,8 +13,7 @@
  */
 
 import { ethers } from "ethers";
-import Ledger, { CreateEvent } from "@daml/ledger";
-import { ContractId } from "@daml/types";
+import { CantonClient, ActiveContract, TEMPLATES } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // Use shared readSecret utility
 // Use readAndValidatePrivateKey for secp256k1 range validation
@@ -144,7 +143,7 @@ interface AttestationRequest {
   aggregator: string;
   validatorGroup: string[];
   payload: AttestationPayload;
-  positionCids: ContractId<unknown>[];
+  positionCids: string[];
   collectedSignatures: string[];  // Set as array (party identifiers)
   // BRIDGE-C-01: ECDSA signatures stored alongside party set on DAML ledger.
   // Each entry is [Party, hex-encoded ECDSA signature].
@@ -154,7 +153,7 @@ interface AttestationRequest {
 }
 
 interface ValidatorSignature {
-  requestId: ContractId<AttestationRequest>;
+  requestId: string;
   validator: string;
   aggregator: string;
   ecdsaSignature: string;
@@ -228,7 +227,7 @@ const BRIDGE_ABI = [
 
 class RelayService {
   private config: RelayConfig;
-  private ledger: Ledger;
+  private canton: CantonClient;
   private provider: ethers.JsonRpcProvider;
   private wallet!: ethers.Signer;  // Abstract signer (KMS or raw)
   private bridgeContract!: ethers.Contract;
@@ -264,11 +263,12 @@ class RelayService {
       );
     }
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
       token: config.cantonToken,
-      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+      userId: process.env.CANTON_USER_ID || "administrator",
+      actAs: config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     // Initialize Ethereum connection
@@ -469,23 +469,15 @@ class RelayService {
    * Processes up to MAX_BATCH_SIZE attestations per cycle, prioritizing by nonce.
    */
   private async pollForAttestations(): Promise<void> {
-    // Query active AttestationRequest contracts
-    // Use MintedProtocolV3 to match validator-node-v2.ts
-    // Previously used V2 which meant relay and validator saw different data
-    // Added query timeout to prevent indefinite hangs (matching validator-node.ts)
-    let attestations: CreateEvent<AttestationRequest>[];
+    // Query active AttestationRequest contracts via Canton v2 HTTP API
+    // Filter by aggregator party to only see attestations assigned to us
+    let attestations: ActiveContract<AttestationRequest>[];
     
     try {
-      const queryPromise = (this.ledger.query as any)(
-        "MintedProtocolV3:AttestationRequest",
-        { aggregator: this.config.cantonParty }
-      ) as Promise<CreateEvent<AttestationRequest>[]>;
-      
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Canton query timeout (30s)")), 30_000)
+      attestations = await this.canton.queryContracts<AttestationRequest>(
+        TEMPLATES.AttestationRequest,
+        (payload) => payload.aggregator === this.config.cantonParty
       );
-      
-      attestations = await Promise.race([queryPromise, timeoutPromise]);
     } catch (error) {
       console.error(`[Relay] Failed to query attestations: ${error}`);
       return;
@@ -557,14 +549,13 @@ class RelayService {
    * Fetch ValidatorSignature contracts for an attestation
    */
   private async fetchValidatorSignatures(
-    requestId: ContractId<AttestationRequest>
+    requestId: string
   ): Promise<ValidatorSignature[]> {
-    // Use MintedProtocolV3 to match pollForAttestations query version
-    // Previously used V2 which would miss signatures created on V3 templates
-    const signatures = await (this.ledger.query as any)(
-      "MintedProtocolV3:ValidatorSignature",
-      { requestId }
-    ) as CreateEvent<ValidatorSignature>[];
+    // Query all ValidatorSignature contracts and filter by requestId client-side
+    const signatures = await this.canton.queryContracts<ValidatorSignature>(
+      TEMPLATES.ValidatorSignature,
+      (payload) => payload.requestId === requestId
+    );
     return signatures.map(s => s.payload);
   }
 
@@ -574,7 +565,7 @@ class RelayService {
   private async bridgeAttestation(
     payload: AttestationPayload,
     validatorSigs: ValidatorSignature[],
-    attestation: CreateEvent<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
+    cantonContract: ActiveContract<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
@@ -710,9 +701,9 @@ class RelayService {
         // the Canton ledger, causing the relay to re-process them on every poll cycle
         // (retry storms) and leaving DAML state inconsistent with Ethereum.
         try {
-          await (this.ledger.exercise as any)(
-            "MintedProtocolV3:AttestationRequest",
-            attestation.contractId,
+          await this.canton.exerciseChoice(
+            TEMPLATES.AttestationRequest,
+            cantonContract.contractId,
             "Attestation_Complete",
             {}
           );

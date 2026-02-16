@@ -22,7 +22,7 @@
  *   - Rate-limits liquidation calls to prevent ledger spam
  */
 
-import Ledger from "@daml/ledger";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
 import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 import { fetchTradecraftQuote, fetchTradecraftPoolState, PriceOracleService } from "./price-oracle";
 
@@ -194,7 +194,7 @@ interface KeeperStats {
 
 export class LendingKeeperBot {
   private config: KeeperBotConfig;
-  private ledger: Ledger | null = null;
+  private canton: CantonClient | null = null;
   private oracle: PriceOracleService;
   private running = false;
   private lastLiquidationTime = 0;
@@ -216,15 +216,16 @@ export class LendingKeeperBot {
    * Connect to Canton ledger
    */
   private async connectLedger(): Promise<void> {
-    if (this.ledger) return;
+    if (this.canton) return;
 
     // Default to TLS for Canton ledger connections (consistent with relay-service.ts)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
       token: this.config.cantonToken,
-      httpBaseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      userId: "administrator",
+      actAs: this.config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log(`[Keeper] Connected to Canton ledger`);
@@ -234,11 +235,10 @@ export class LendingKeeperBot {
    * Fetch all active debt positions from ledger
    */
   private async fetchDebtPositions(): Promise<DebtPosition[]> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
-    const contracts = await this.ledger.query(
-      "CantonLending:CantonDebtPosition" as any,
-      {}
+    const contracts = await this.canton.queryContracts(
+      parseTemplateId("CantonLending:CantonDebtPosition")
     );
 
     return contracts.map((c: any) => ({
@@ -257,11 +257,11 @@ export class LendingKeeperBot {
    * Fetch all escrowed collateral for a specific borrower
    */
   private async fetchEscrowPositions(borrower: string): Promise<EscrowPosition[]> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
-    const contracts = await this.ledger.query(
-      "CantonLending:EscrowedCollateral" as any,
-      { owner: borrower }
+    const contracts = await this.canton.queryContracts(
+      parseTemplateId("CantonLending:EscrowedCollateral"),
+      (p: any) => p.owner === borrower
     );
 
     return contracts.map((c: any) => ({
@@ -496,7 +496,7 @@ export class LendingKeeperBot {
   private async executeLiquidation(
     candidate: LiquidationCandidate
   ): Promise<LiquidationResult> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
     const timestamp = new Date();
 
@@ -534,9 +534,9 @@ export class LendingKeeperBot {
       }
 
       // Fetch keeper's mUSD balance to use for repayment
-      const keeperMusd = await this.ledger.query(
-        "CantonDirectMint:CantonMUSD" as any,
-        { owner: this.config.keeperParty }
+      const keeperMusd = await this.canton.queryContracts(
+        parseTemplateId("CantonDirectMint:CantonMUSD"),
+        (p: any) => p.owner === this.config.keeperParty
       );
 
       if (keeperMusd.length === 0) {
@@ -580,9 +580,9 @@ export class LendingKeeperBot {
       }
 
       // Re-fetch debt position (may have been repaid since scan)
-      const freshDebtPositions = await this.ledger.query(
-        "CantonLending:CantonDebtPosition" as any,
-        { borrower: candidate.borrower }
+      const freshDebtPositions = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonDebtPosition"),
+        (p: any) => p.borrower === candidate.borrower
       );
       if (freshDebtPositions.length === 0) {
         return {
@@ -609,15 +609,13 @@ export class LendingKeeperBot {
       }
 
       // Collect all price feed contract IDs
-      const priceFeeds = await this.ledger.query(
-        "CantonLending:CantonPriceFeed" as any,
-        {}
+      const priceFeeds = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonPriceFeed")
       );
 
       // Find the lending service contract
-      const services = await this.ledger.query(
-        "CantonLending:CantonLendingService" as any,
-        {}
+      const services = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonLendingService")
       );
 
       if (services.length === 0) {
@@ -635,10 +633,10 @@ export class LendingKeeperBot {
         `repay=$${candidate.maxRepay.toFixed(2)}`
       );
 
-      await this.ledger.exercise(
-        "CantonLending:CantonLendingService" as any,
+      await this.canton.exerciseChoice(
+        parseTemplateId("CantonLending:CantonLendingService"),
         serviceContract.contractId,
-        "Lending_Liquidate" as any,
+        "Lending_Liquidate",
         {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
@@ -648,7 +646,7 @@ export class LendingKeeperBot {
           musdCid: (musdContract as any).contractId,
           escrowCids: freshEscrows.map((e) => e.contractId), // Fresh CIDs
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
-        } as any
+        }
       );
 
       this.lastLiquidationTime = Date.now();

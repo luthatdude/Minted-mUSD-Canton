@@ -11,6 +11,37 @@ import "../interfaces/IFluidVault.sol";
 // Simulates syrupUSDC supply / USDC borrow (Vault #146)
 
 contract MockFluidVaultT1 {
+        // Flash loan test: send tokens, call callback, require repayment
+        bool public reentrancyEntered;
+
+        function flashLoanMock(address receiver, address token, uint256 amount, bytes calldata data) external {
+            IERC20(token).safeTransfer(receiver, amount);
+            reentrancyEntered = true;
+            (bool success, bytes memory returndata) = receiver.call(
+                abi.encodeWithSignature("onFlashLoan(address,uint256,bytes)", token, amount, data)
+            );
+            reentrancyEntered = false;
+            if (!success) {
+                if (returndata.length > 0) {
+                    assembly {
+                        let returndata_size := mload(returndata)
+                        revert(add(32, returndata), returndata_size)
+                    }
+                } else {
+                    revert("Flash loan callback failed");
+                }
+            }
+            uint256 beforeBal = IERC20(token).balanceOf(address(this));
+            IERC20(token).safeTransferFrom(receiver, address(this), amount);
+            uint256 afterBal = IERC20(token).balanceOf(address(this));
+            require(afterBal >= beforeBal + amount, "Flash loan underpayment");
+        }
+
+        // Test-only: force callback revert
+        function testForceCallbackRevert(address receiver, address token, uint256 amount, bytes calldata data) external {
+            IERC20(token).safeTransfer(receiver, amount);
+            revert("Test: forced callback revert");
+        }
     using SafeERC20 for IERC20;
 
     IERC20 public immutable supplyToken;

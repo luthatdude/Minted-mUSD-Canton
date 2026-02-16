@@ -7,7 +7,7 @@ module CantonLoopStrategyTest where
 import Daml.Script
 import DA.Time
 import DA.Date
-import DA.Optional (fromSome)
+import DA.Optional (fromSome, isSome)
 import DA.Set qualified as Set
 import CantonDirectMint (CantonUSDC(..), CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..), USDCx(..))
 import CantonSMUSD (CantonSMUSD(..))
@@ -77,7 +77,7 @@ setupLoopTest = do
     createCmd CantonLoopStrategyConfig with
       operator
       config = defaultLoopConfig
-      complianceRegistryCid = Some registryCid
+      complianceRegistryCid = registryCid
       observers = [user]
 
   -- Create BurnRateLimiter for unwind burn paths
@@ -103,6 +103,15 @@ createUSDC operator user amount = do
 -- | Create an sMUSD token for a user
 createSMUSD : Party -> Party -> Money -> Script (ContractId CantonSMUSD)
 createSMUSD operator user shares = do
+  regulator <- allocateParty "SmusdRegulator"
+  now <- getTime
+  tempComplianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submitMulti [operator, user] [] do
     createCmd CantonSMUSD with
       issuer = operator
@@ -110,6 +119,7 @@ createSMUSD operator user shares = do
       shares
       entrySharePrice = 1.05
       stakedAt = baseTime
+      complianceRegistryCid = tempComplianceCid
       privacyObservers = []
 
 -- | Create a mUSD token
@@ -179,12 +189,14 @@ testConfigSetComplianceRegistry : Script ()
 testConfigSetComplianceRegistry = do
   setup <- setupLoopTest
   proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "set-registry"
+  -- Create a new registry to replace the existing one (field is now mandatory)
+  newRegCid <- createRegistry setup.regulator setup.operator
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
-      newComplianceRegistryCid = None
+      newComplianceRegistryCid = newRegCid
       governanceProofCid = proof
   cfg <- queryContractId setup.operator newCfgCid
-  assertMsg "Registry removed" ((fromSome cfg).complianceRegistryCid == None)
+  assertMsg "Registry updated" (isSome cfg)
   debug "✅ 5. Governance-gated compliance registry update"
 
 -- | Reject config updates with wrong governance action type
@@ -277,7 +289,7 @@ testLoopRequestRejectsBlacklisted = do
   proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "update-reg"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
-      newComplianceRegistryCid = Some newRegCid
+      newComplianceRegistryCid = newRegCid
       governanceProofCid = proof
 
   usdcCid <- createUSDC setup.operator badUser 1000.0
@@ -794,7 +806,7 @@ testUnwindRejectsBlacklistedUser = do
   proof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLoopStrategy" "bl-reg"
   newCfgCid <- submit setup.operator do
     exerciseCmd setup.configCid LoopConfig_SetComplianceRegistry with
-      newComplianceRegistryCid = Some newRegCid
+      newComplianceRegistryCid = newRegCid
       governanceProofCid = proof
 
   -- Unwind

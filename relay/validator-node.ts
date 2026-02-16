@@ -27,8 +27,7 @@
  *   5. Submit ValidatorSignature to Canton
  */
 
-import Ledger, { CreateEvent } from "@daml/ledger";
-import { ContractId } from "@daml/types";
+import { CantonClient, CantonClientConfig, ActiveContract, TEMPLATES, parseTemplateId } from "./canton-client";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
 // Use static import instead of dynamic require
@@ -112,7 +111,7 @@ interface AttestationRequest {
   aggregator: string;
   validatorGroup: string[];
   payload: AttestationPayload;
-  positionCids: ContractId<unknown>[];
+  positionCids: string[];
   collectedSignatures: string[];
 }
 
@@ -131,7 +130,7 @@ interface InstitutionalEquityPosition {
 
 class ValidatorNode {
   private config: ValidatorConfig;
-  private ledger: Ledger;
+  private canton: CantonClient;
   private kmsClient: KMSClient;
   // Use a bounded cache with eviction instead of unbounded Set
   private signedAttestations: Set<string> = new Set();
@@ -149,11 +148,12 @@ class ValidatorNode {
     if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
       throw new Error("[Validator] CANTON_USE_TLS=false is not allowed in production");
     }
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
       token: config.cantonToken,
-      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+      userId: "administrator",
+      actAs: config.validatorParty,
+      timeoutMs: 30_000,
     });
 
     // Initialize AWS KMS
@@ -278,11 +278,10 @@ class ValidatorNode {
     // Query AttestationRequest contracts where we're in the validator group
     // Use MintedProtocolV3 to match relay-service.ts
     const attestations = await queryWithTimeout(() =>
-      (this.ledger.query as any)(
-        "MintedProtocolV3:AttestationRequest",
-        {}  // Query all, filter locally
+      this.canton.queryContracts<AttestationRequest>(
+        TEMPLATES.AttestationRequest
       )
-    ) as CreateEvent<AttestationRequest>[];
+    );
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -336,10 +335,9 @@ class ValidatorNode {
     let totalValue = 0n;
     try {
       // Use MintedProtocolV3 to match relay-service.ts
-      const positions = await (this.ledger.query as any)(
-        "MintedProtocolV3:InstitutionalEquityPosition",
-        {}
-      ) as CreateEvent<InstitutionalEquityPosition>[];
+      const positions = await this.canton.queryContracts<InstitutionalEquityPosition>(
+        parseTemplateId("MintedProtocolV3:InstitutionalEquityPosition")
+      );
 
       // Deduplicate by referenceId to prevent double-counting
       const seen = new Set<string>();
@@ -386,7 +384,7 @@ class ValidatorNode {
    * Sign attestation and submit to Canton
    */
   private async signAttestation(
-    contractId: ContractId<AttestationRequest>,
+    contractId: string,
     payload: AttestationPayload
   ): Promise<void> {
     const attestationId = payload.attestationId;
@@ -403,8 +401,8 @@ class ValidatorNode {
 
       // Submit to Canton
       // Use MintedProtocolV3 to match relay-service.ts
-      await (this.ledger.exercise as any)(
-        "MintedProtocolV3:AttestationRequest",
+      await this.canton.exerciseChoice(
+        TEMPLATES.AttestationRequest,
         contractId,
         "Attestation_Sign",
         {
