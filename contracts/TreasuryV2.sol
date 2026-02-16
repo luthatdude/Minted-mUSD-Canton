@@ -74,7 +74,7 @@ contract TreasuryV2 is
     }
 
     struct ProtocolFees {
-        uint256 performanceFeeBps;  // Fee on yield (default 4000 = 40%)
+        uint256 performanceFeeBps;  // Fee on yield (default 2000 = 20%)
         uint256 accruedFees;        // Accumulated protocol fees
         address feeRecipient;       // Where fees go
     }
