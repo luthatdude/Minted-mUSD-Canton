@@ -26,29 +26,12 @@ methods {
     function MAX_QUEUE_SIZE()      external returns (uint256) envfree;
     function MAX_PENDING_PER_USER() external returns (uint256) envfree;
 
-    // ── State-changing functions ──
-    function queueRedemption(uint256, uint256) external;
-    function processBatch(uint256)            external;
-    function cancelRedemption(uint256)         external;
-    function setMaxDailyRedemption(uint256)    external;
-    function setMinRequestAge(uint256)         external;
-    function pause()                           external;
-    function unpause()                         external;
-
     // ── Role constants (envfree) ──
     function PROCESSOR_ROLE()    external returns (bytes32) envfree;
     function PAUSER_ROLE()       external returns (bytes32) envfree;
     function TIMELOCK_ROLE()     external returns (bytes32) envfree;
     function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
-
-    // ── External contract summaries ──
-    // SafeERC20 library calls are internal — the actual external calls are transferFrom/transfer
-    function _.transferFrom(address, address, uint256) external => NONDET;
-    function _.transfer(address, uint256)               external => NONDET;
-    function _.balanceOf(address)                           external => PER_CALLEE_CONSTANT;
-    function _.burn(address, uint256)                       external => NONDET;
-    function _.approve(address, uint256)                    external => NONDET DELETE;
 }
 
 // ═══════════════════════════════════════════════════════════════════
