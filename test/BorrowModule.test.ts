@@ -27,6 +27,10 @@ describe("BorrowModule", function () {
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
 
+    // Grant TIMELOCK_ROLE on PriceOracle to owner for setFeed
+    const TIMELOCK_ROLE_PO = await priceOracle.TIMELOCK_ROLE();
+    await priceOracle.grantRole(TIMELOCK_ROLE_PO, owner.address);
+
     // Deploy mock Chainlink aggregator (decimals, initialAnswer)
     const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // 8 decimals, $2000

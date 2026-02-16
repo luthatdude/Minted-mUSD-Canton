@@ -51,6 +51,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
   let wbtc: any;
   let ethFeed: any;
   let btcFeed: any;
+  let smusdFeed: any;
   let mockStrategy: any;
   let mockStrategy2: any;
 
@@ -58,6 +59,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
   const USDC_DECIMALS = 6;
   const WETH_DECIMALS = 18;
   const WBTC_DECIMALS = 8;
+  const SMUSD_DECIMALS = 18;
   const ETH_PRICE = 2000n;
   const BTC_PRICE = 60000n;
   const SUPPLY_CAP = ethers.parseEther("10000000");
@@ -89,6 +91,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
     const MockAggF = await ethers.getContractFactory("MockAggregatorV3");
     ethFeed = await MockAggF.deploy(8, ETH_PRICE * 10n ** 8n);
     btcFeed = await MockAggF.deploy(8, BTC_PRICE * 10n ** 8n);
+    smusdFeed = await MockAggF.deploy(8, 1n * 10n ** 8n); // $1.00 per smUSD share
 
     // Deploy MUSD
     const MUSDF = await ethers.getContractFactory("MUSD");
@@ -180,16 +183,22 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
 
     await smusd.grantRole(INTEREST_ROUTER_ROLE, await borrowModule.getAddress());
 
+    // Grant TIMELOCK_ROLE on PriceOracle so admin can set feeds
+    const TIMELOCK_ROLE_PO = await priceOracle.TIMELOCK_ROLE();
+    await priceOracle.grantRole(TIMELOCK_ROLE_PO, admin.address);
+
     // ── Setup Price Feeds ──
     await timelockSetFeed(priceOracle, admin, await weth.getAddress(), await ethFeed.getAddress(), 3600, WETH_DECIMALS);
     await timelockSetFeed(priceOracle, admin, await wbtc.getAddress(), await btcFeed.getAddress(), 3600, WBTC_DECIMALS);
+    await timelockSetFeed(priceOracle, admin, await smusd.getAddress(), await smusdFeed.getAddress(), 3600, SMUSD_DECIMALS);
 
     // ── Setup Collateral ──
     await timelockAddCollateral(vault, admin, await weth.getAddress(), 7500, 8000, 500);
     await timelockAddCollateral(vault, admin, await wbtc.getAddress(), 7000, 7500, 500);
+    await timelockAddCollateral(vault, admin, await smusd.getAddress(), 9000, 9300, 400);
 
     // ── Refresh price feeds after timelock advances ──
-    await refreshFeeds(ethFeed, btcFeed);
+    await refreshFeeds(ethFeed, btcFeed, smusdFeed);
 
     // ── Mint test tokens ──
     await usdc.mint(user1.address, ethers.parseUnits("1000000", USDC_DECIMALS));
@@ -568,10 +577,10 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
   // ================================================================
   describe("7. enableCollateral 50-Token Cap", function () {
     it("should enforce 50-token cap on addCollateral", async function () {
-      // Already have 2 tokens. Add 48 more to hit cap.
+      // Already have 3 tokens (WETH, WBTC, smUSD). Add 47 more to hit cap.
       const MockERC20F = await ethers.getContractFactory("MockERC20");
 
-      for (let i = 0; i < 48; i++) {
+      for (let i = 0; i < 47; i++) {
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
         await timelockAddCollateral(vault, admin, await token.getAddress(), 5000, 6000, 300);
       }
@@ -592,7 +601,7 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       //   3. Adding a 51st token still fails with TOO_MANY_TOKENS
       const MockERC20F = await ethers.getContractFactory("MockERC20");
 
-      for (let i = 0; i < 47; i++) {
+      for (let i = 0; i < 46; i++) {
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
         await timelockAddCollateral(vault, admin, await token.getAddress(), 5000, 6000, 300);
       }
@@ -728,10 +737,16 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       expect(supported).to.not.include(musdAddr);
     });
 
-    it("should not allow smUSD as collateral (admin responsibility check)", async function () {
+    it("should allow smUSD as collateral (yield-bearing stable, 90% LTV)", async function () {
       const supported = await vault.getSupportedTokens();
       const smusdAddr = await smusd.getAddress();
-      expect(supported).to.not.include(smusdAddr);
+      expect(supported).to.include(smusdAddr);
+
+      const config = await vault.collateralConfigs(smusdAddr);
+      expect(config.enabled).to.be.true;
+      expect(config.collateralFactorBps).to.equal(9000n);       // 90% LTV
+      expect(config.liquidationThresholdBps).to.equal(9300n);   // 93%
+      expect(config.liquidationPenaltyBps).to.equal(400n);      // 4%
     });
   });
 
