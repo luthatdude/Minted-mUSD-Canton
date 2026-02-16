@@ -77,7 +77,7 @@ describe("TreasuryV2", function () {
       expect(await treasury.minAutoAllocateAmount()).to.equal(1000n * ONE_USDC);
 
       const fees = await treasury.fees();
-      expect(fees.performanceFeeBps).to.equal(4000); // 40% — stakers get ~6% on 10% gross
+      expect(fees.performanceFeeBps).to.equal(2000); // 20% — stakers keep 80% of gross yield
       expect(fees.feeRecipient).to.equal(feeRecipient.address);
     });
 
@@ -363,9 +363,9 @@ describe("TreasuryV2", function () {
       // Trigger fee accrual
       await treasury.accrueFees();
 
-      // 40% of 10K yield = 4K fees (stakers get 6K = ~6% target)
+      // 20% of 10K yield = 2K fees (stakers keep 8K = 80% of gross)
       const pending = await treasury.pendingFees();
-      expect(pending).to.be.closeTo(4_000n * ONE_USDC, 100n * ONE_USDC);
+      expect(pending).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
     });
 
     it("Should claim fees to recipient", async function () {
@@ -388,7 +388,7 @@ describe("TreasuryV2", function () {
       await treasury.claimFees();
 
       const recipientBal = await usdc.balanceOf(feeRecipient.address);
-      expect(recipientBal).to.be.closeTo(4_000n * ONE_USDC, 100n * ONE_USDC);
+      expect(recipientBal).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
     });
   });
 
@@ -653,6 +653,52 @@ describe("TreasuryV2", function () {
       // Can re-add the same strategy address
       await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 4500, 2000, 6000, true);
       expect(await treasury.isStrategy(await strategyA.getAddress())).to.be.true;
+    });
+  });
+
+  // ─── Token Recovery ──────────────────────────────────────────
+
+  describe("Token Recovery", function () {
+    let strayToken: MockERC20;
+
+    beforeEach(async function () {
+      // Deploy a random ERC-20 that is NOT the primary asset (USDC)
+      const MockERC20Factory = await ethers.getContractFactory("MockERC20");
+      strayToken = (await MockERC20Factory.deploy("Stray Token", "STRAY", 18)) as MockERC20;
+      await strayToken.waitForDeployment();
+    });
+
+    it("Should recover a non-primary token to the timelock", async function () {
+      const amount = ethers.parseUnits("500", 18);
+
+      // Send stray tokens to the treasury
+      await strayToken.mint(await treasury.getAddress(), amount);
+      expect(await strayToken.balanceOf(await treasury.getAddress())).to.equal(amount);
+
+      // Recover as timelock (admin in tests)
+      await treasury.connect(admin).recoverToken(await strayToken.getAddress(), amount);
+
+      // Tokens moved to admin (timelock)
+      expect(await strayToken.balanceOf(admin.address)).to.equal(amount);
+      expect(await strayToken.balanceOf(await treasury.getAddress())).to.equal(0);
+    });
+
+    it("Should revert when trying to recover the primary asset (USDC)", async function () {
+      const amount = 1000n * ONE_USDC;
+      await usdc.mint(await treasury.getAddress(), amount);
+
+      await expect(
+        treasury.connect(admin).recoverToken(await usdc.getAddress(), amount)
+      ).to.be.revertedWithCustomError(treasury, "CannotRecoverAsset");
+    });
+
+    it("Should revert when called by a non-timelock address", async function () {
+      const amount = ethers.parseUnits("100", 18);
+      await strayToken.mint(await treasury.getAddress(), amount);
+
+      await expect(
+        treasury.connect(user).recoverToken(await strayToken.getAddress(), amount)
+      ).to.be.revertedWithCustomError(treasury, "OnlyTimelock");
     });
   });
 });

@@ -18,23 +18,19 @@ import "./Errors.sol";
  *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
  *
  * Available Strategies (contracts/strategies/):
- *   PendleStrategyV2        — Pendle PT yield (multi-pool via PendleMarketSelector)
- *   MorphoLoopStrategy      — Morpho leverage looping
- *   SkySUSDSStrategy        — Sky sUSDS stable yield
- *   AaveV3LoopStrategy      — Aave V3 leverage looping
- *   CompoundV3LoopStrategy  — Compound V3 leverage looping
- *   EulerV2LoopStrategy     — Euler V2 leverage looping
- *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping
- *   FluidLoopStrategy       — Fluid leverage looping
- *   ContangoLoopStrategy    — Contango leverage looping
- *   MetaVault               — Vault-of-vaults aggregating up to 4 sub-strategies
+ *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping (RLUSD/USDC)
+ *   EulerV2LoopStrategy            — Euler V2 same-asset leverage looping
+ *   PendleStrategyV2               — Pendle PT yield (multi-pool, top pools only)
+ *   FluidLoopStrategy              — Fluid leverage looping (cross-borrow capable)
+ *   FluidETHStrategy               — USDC→WETH→Fluid T2/T4 ETH vaults
+ *   MetaVault                      — Vault-of-vaults aggregating up to 4 sub-strategies
  *
  * Allocations are configured per-deployment via addStrategy(targetBps, minBps, maxBps).
- * Reserve buffer (reserveBps) is held as idle USDC for instant redemptions.
+ * Reserve buffer (reserveBps) is held in USDC for emergency liquidity.
  *
  * Revenue Split:
- *   smUSD Holders:      60% (net APY depends on strategy mix)
- *   Protocol:           40% (performance fee on yield)
+ *   smUSD Holders:      80% (net APY depends on strategy mix)
+ *   Protocol:           20% (performance fee on yield)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
@@ -194,7 +190,7 @@ contract TreasuryV2 is
 
         // Default fee configuration
         fees = ProtocolFees({
-            performanceFeeBps: 4000,  // 40% of yield → stakers get ~6% on 10% gross
+            performanceFeeBps: 2000,  // 20% of yield → stakers keep 80% of gross
             accruedFees: 0,
             feeRecipient: _feeRecipient
         });
@@ -318,13 +314,15 @@ contract TreasuryV2 is
     }
 
     /**
-     * @notice Calculate pending protocol fees
+     * @notice Calculate pending protocol fees using high-water mark
+     * @dev Mirrors _accrueFees() logic: only yield above peakRecordedValue is subject to fees
      */
     function _calculatePendingFees() internal view returns (uint256) {
         uint256 currentValue = totalValue();
-        if (currentValue <= lastRecordedValue) return fees.accruedFees;
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+        if (currentValue <= peak) return fees.accruedFees;
 
-        uint256 yield_ = currentValue - lastRecordedValue;
+        uint256 yield_ = currentValue - peak;
         uint256 newFees = (yield_ * fees.performanceFeeBps) / BPS;
 
         return fees.accruedFees + newFees;
@@ -900,6 +898,63 @@ contract TreasuryV2 is
 
         lastRecordedValue = totalValue();
         emit Rebalanced(lastRecordedValue);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // MANUAL DEPLOY / WITHDRAW PER-STRATEGY
+    // ═════════════════════════════════════════════════════════════════════
+
+    event StrategyManualDeposit(address indexed strategy, uint256 amount, uint256 deposited);
+    event StrategyManualWithdraw(address indexed strategy, uint256 amount, uint256 withdrawn);
+
+    /**
+     * @notice Manually deploy idle USDC from reserve into a specific strategy
+     * @param strategy Strategy address (must be registered and active)
+     * @param amount USDC amount to deploy
+     */
+    function deployToStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 idx = strategyIndex[strategy];
+        if (!strategies[idx].active) revert StrategyNotFound();
+
+        uint256 reserve = reserveBalance();
+        if (reserve < amount) revert InsufficientReserves();
+
+        _accrueFees();
+
+        asset.forceApprove(strategy, amount);
+        uint256 deposited = IStrategy(strategy).deposit(amount);
+        asset.forceApprove(strategy, 0);
+
+        lastRecordedValue = totalValue();
+
+        emit StrategyManualDeposit(strategy, amount, deposited);
+    }
+
+    /**
+     * @notice Manually withdraw USDC from a specific strategy back to reserve
+     * @param strategy Strategy address (must be registered)
+     * @param amount USDC amount to withdraw
+     */
+    function withdrawFromStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        if (amount == 0) revert ZeroAmount();
+
+        _accrueFees();
+
+        uint256 withdrawn = IStrategy(strategy).withdraw(amount);
+
+        lastRecordedValue = totalValue();
+
+        emit StrategyManualWithdraw(strategy, amount, withdrawn);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
