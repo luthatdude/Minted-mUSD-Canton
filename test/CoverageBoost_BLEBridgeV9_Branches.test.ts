@@ -29,7 +29,7 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     validators = signers.slice(3, 8);
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP)) as MUSD;
+    musd = (await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");

@@ -7,17 +7,20 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./GlobalPausable.sol";
 import "./Errors.sol";
 
 /// @title MUSD
 /// @notice ERC-20 stablecoin with supply cap, compliance, and emergency pause
-contract MUSD is ERC20, AccessControl, Pausable {
+contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @dev LiquidationEngine needs burn permission
     bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
+    /// @notice SOL-H-17: TIMELOCK_ROLE for critical operations (48h governance delay)
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
@@ -42,19 +45,23 @@ contract MUSD is ERC20, AccessControl, Pausable {
     /// @dev Event for when cap drops below current supply (undercollateralization response)
     event SupplyCapBelowSupply(uint256 newCap, uint256 currentSupply);
 
-    constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
+    /// @param _initialSupplyCap Initial mUSD supply cap
+    /// @param _globalPauseRegistry Address of the GlobalPauseRegistry (address(0) to skip global pause)
+    constructor(uint256 _initialSupplyCap, address _globalPauseRegistry) ERC20("Minted USD", "mUSD") GlobalPausable(_globalPauseRegistry) {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
         if (_initialSupplyCap == 0) revert InvalidSupplyCap();
         supplyCap = _initialSupplyCap;
         emit SupplyCapUpdated(0, _initialSupplyCap);
     }
 
-    /// @notice Set supply cap - callable by admin or cap manager (BLEBridgeV9)
-    /// @dev Allows cap decreases for undercollateralization response.
-    ///      When attestations report lower backing, cap MUST be able to drop.
-    ///      If cap < totalSupply, no new mints allowed but existing holders unaffected.
+    /// @notice Set supply cap - callable by timelock admin or cap manager (BLEBridgeV9)
+    /// @dev SOL-H-18: Admin increases now require TIMELOCK_ROLE (48h delay).
+    ///      CAP_MANAGER_ROLE (BLEBridgeV9) can still adjust via attestation logic.
+    ///      Decreases are always allowed (emergency undercollateralization response).
     function setSupplyCap(uint256 _cap) external {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
+        if (!hasRole(TIMELOCK_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
         if (_cap == 0) revert InvalidSupplyCap();
         
         uint256 oldCap = supplyCap;
@@ -113,7 +120,8 @@ contract MUSD is ERC20, AccessControl, Pausable {
         emit Burn(from, amount);
     }
 
-    function _update(address from, address to, uint256 value) internal override whenNotPaused {
+    /// @dev SOL-H-16: Added whenNotGloballyPaused for protocol-wide emergency stop
+    function _update(address from, address to, uint256 value) internal override whenNotPaused whenNotGloballyPaused {
         if (isBlacklisted[from] || isBlacklisted[to]) revert ComplianceReject();
         super._update(from, to, value);
     }
@@ -123,8 +131,9 @@ contract MUSD is ERC20, AccessControl, Pausable {
         _pause();
     }
 
-    /// @notice Unpause requires admin (separation of duties)
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Unpause requires timelock (separation of duties)
+    /// @dev SOL-H-17: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE (48h governance delay)
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 }

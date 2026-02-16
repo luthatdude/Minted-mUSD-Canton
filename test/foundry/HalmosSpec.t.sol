@@ -21,7 +21,7 @@ contract HalmosSpec is Test {
 
     function setUp() public {
         vm.startPrank(admin);
-        musd = new MUSD(100_000_000e18);
+        musd = new MUSD(100_000_000e18, address(0));
         musd.grantRole(musd.BRIDGE_ROLE(), minter);
         vm.stopPrank();
     }

@@ -21,7 +21,7 @@ describe("BorrowModule", function () {
 
     // Deploy MUSD with initial supply cap
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000")); // 100M cap
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress); // 100M cap
 
     // Deploy PriceOracle (timelock = owner for testing)
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
@@ -40,7 +40,7 @@ describe("BorrowModule", function () {
 
     // Deploy CollateralVault (no constructor args)
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
 
     // Add collateral (token, collateralFactorBps, liquidationThresholdBps, liquidationPenaltyBps)
     await timelockAddCollateral(

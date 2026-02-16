@@ -34,7 +34,7 @@ describe("CollateralVault", function () {
 
     // Deploy vault
     const VaultFactory = await ethers.getContractFactory("CollateralVault");
-    vault = await VaultFactory.deploy();
+    vault = await VaultFactory.deploy(ethers.ZeroAddress);
     await vault.waitForDeployment();
 
     // Grant roles

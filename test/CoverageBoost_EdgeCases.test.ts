@@ -18,7 +18,7 @@ describe("socializeBadDebt — Incomplete List Invariant", function () {
     const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const oracle = await PriceOracle.deploy();
@@ -29,7 +29,7 @@ describe("socializeBadDebt — Incomplete List Invariant", function () {
     await timelockSetFeed(oracle, admin, await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const vault = await CollateralVault.deploy();
+    const vault = await CollateralVault.deploy(ethers.ZeroAddress);
 
     await timelockAddCollateral(vault, admin, await weth.getAddress(), 7500, 8000, 1000);
     await refreshFeeds(ethFeed);

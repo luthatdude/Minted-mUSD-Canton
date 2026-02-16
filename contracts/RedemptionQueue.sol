@@ -33,6 +33,8 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
 
     bytes32 public constant PROCESSOR_ROLE = keccak256("PROCESSOR_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    /// @notice SOL-H-17: TIMELOCK_ROLE for unpause (48h governance delay)
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     IERC20 public immutable musd;
     IMUSDBurnable public immutable musdBurnable;
@@ -93,6 +95,8 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PROCESSOR_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     /// @notice Queue a redemption request. Locks mUSD in this contract.
@@ -231,7 +235,8 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     }
 
     function pause() external onlyRole(PAUSER_ROLE) { _pause(); }
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) { _unpause(); }
+    /// @dev SOL-H-17: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE (48h governance delay)
+    function unpause() external onlyRole(TIMELOCK_ROLE) { _unpause(); }
 
     function _resetDailyIfNeeded() internal {
         if (block.timestamp >= lastDayReset + 1 days) {

@@ -28,7 +28,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy mock tokens
     const MockERC20 = await ethers.getContractFactory("MockERC20");
-    const musd: any = await (await ethers.getContractFactory("MUSD")).deploy(ethers.parseEther("100000000"));
+    const musd: any = await (await ethers.getContractFactory("MUSD")).deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
     const weth: any = await MockERC20.deploy("Wrapped ETH", "WETH", 18);
 
     // Deploy price oracle + feed
@@ -42,7 +42,7 @@ describe("TEST-004: LeverageVault Flash Loan & Security Tests", function () {
 
     // Deploy CollateralVault
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
     await timelockAddCollateral(
       collateralVault, owner,
       await weth.getAddress(),
