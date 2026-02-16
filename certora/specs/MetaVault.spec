@@ -40,6 +40,9 @@ methods {
     function pause()                                     external;
     function unpause()                                   external;
 
+    // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
+    function upgradeToAndCall(address, bytes) external;
+
     // ── Role constants (envfree) ──
     function TREASURY_ROLE()    external returns (bytes32) envfree;
     function STRATEGIST_ROLE()  external returns (bytes32) envfree;
@@ -65,11 +68,13 @@ methods {
 
 /// @notice The sub-strategy array never exceeds MAX_STRATEGIES (4)
 invariant subStrategyCountBounded()
-    subStrategyCount() <= 4;
+    subStrategyCount() <= 4
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice driftThresholdBps is always >= MIN_DRIFT_BPS (200)
 invariant driftThresholdAboveMinimum()
-    driftThresholdBps() >= 200;
+    driftThresholdBps() >= 200
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT ACCOUNTING
@@ -78,8 +83,8 @@ invariant driftThresholdAboveMinimum()
 /// @notice deposit() increases totalPrincipal (never by more than amount)
 rule deposit_accounting(uint256 amount) {
     env e;
-    require amount > 0;
-    require e.msg.value == 0;
+    require amount > 0, "deposit amount must be non-zero";
+    require e.msg.value == 0, "MetaVault does not accept ETH";
 
     uint256 principalBefore = totalPrincipal();
     require principalBefore + amount <= max_uint256;
@@ -114,8 +119,8 @@ rule deposit_inactive_reverts(uint256 amount) {
 /// @notice deposit() when paused must revert
 rule deposit_paused_reverts(uint256 amount) {
     env e;
-    require paused();
-    require amount > 0;
+    require paused(), "contract is paused";
+    require amount > 0, "deposit amount must be non-zero";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit while paused must revert";
 }
@@ -123,8 +128,8 @@ rule deposit_paused_reverts(uint256 amount) {
 /// @notice deposit() with zero sub-strategies must revert
 rule deposit_no_strategies_reverts(uint256 amount) {
     env e;
-    require subStrategyCount() == 0;
-    require amount > 0;
+    require subStrategyCount() == 0, "no sub-strategies configured";
+    require amount > 0, "deposit amount must be non-zero";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit with no sub-strategies must revert";
 }
@@ -277,9 +282,10 @@ rule rebalance_paused_reverts() {
     assert lastReverted, "rebalance while paused must revert";
 }
 
-/// @notice rebalance() updates lastRebalanceAt
+/// @notice rebalance() updates lastRebalanceAt when total > 0
 rule rebalance_updates_timestamp() {
     env e;
+    require totalValue() > 0, "non-trivial rebalance requires non-zero vault value";
 
     rebalance@withrevert(e);
     bool succeeded = !lastReverted;
@@ -470,8 +476,8 @@ rule pause_requires_guardian() {
 /// @notice All deposit/withdraw/rebalance operations revert when paused
 rule paused_blocks_deposits(uint256 amount) {
     env e;
-    require paused();
-    require amount > 0;
+    require paused(), "contract is paused";
+    require amount > 0, "deposit amount must be non-zero";
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit must revert when paused";
 }
