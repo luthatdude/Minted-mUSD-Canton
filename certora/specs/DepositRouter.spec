@@ -30,6 +30,8 @@ methods {
     function _.quoteEVMDeliveryPrice(uint16, uint256, uint256) external => PER_CALLEE_CONSTANT;
     function _.transferTokensWithPayload(address, uint256, uint16, bytes32, uint32, bytes) external => NONDET;
     function _.wrappedAsset(uint16, bytes32) external => PER_CALLEE_CONSTANT;
+    function _.forceApprove(address, uint256) external => NONDET;
+    function _.approve(address, uint256) external => NONDET;
 }
 
 // ═══════════════════════════════════════════════════════════════════
