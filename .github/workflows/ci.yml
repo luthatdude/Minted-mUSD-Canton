@@ -617,6 +617,31 @@ jobs:
         env:
           CERTORAKEY: ${{ secrets.CERTORAKEY }}
 
+      - name: Run Certora — EulerV2LoopStrategy invariants
+        run: certoraRun certora/EulerV2LoopStrategy.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — MorphoLoopStrategy invariants
+        run: certoraRun certora/MorphoLoopStrategy.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — PendleStrategyV2 invariants
+        run: certoraRun certora/PendleStrategyV2.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — RedemptionQueue invariants
+        run: certoraRun certora/RedemptionQueue.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
+      - name: Run Certora — PriceAggregator invariants
+        run: certoraRun certora/PriceAggregator.conf
+        env:
+          CERTORAKEY: ${{ secrets.CERTORAKEY }}
+
   # ============================================================
   #  SECRET SCANNING
   # ============================================================

@@ -159,7 +159,7 @@ rule withdraw_bounded_reduction(uint256 amount) {
     bool succeeded = !lastReverted;
 
     uint256 principalAfter = totalPrincipal();
-    uint256 reduction = principalBefore - principalAfter;
+    mathint reduction = principalBefore - principalAfter;
 
     assert succeeded => reduction <= amount,
         "withdraw must not reduce principal by more than requested";
