@@ -14,6 +14,9 @@ export const CONTRACTS: Record<string, string> = {
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
+  ETHPool: process.env.NEXT_PUBLIC_ETH_POOL_ADDRESS || "",
+  SMUSDE: process.env.NEXT_PUBLIC_SMUSDE_ADDRESS || "",
+  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
 };
 
 // Validate contract addresses at config time

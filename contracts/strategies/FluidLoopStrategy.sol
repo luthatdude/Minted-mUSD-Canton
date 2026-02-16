@@ -70,14 +70,6 @@ interface IWETH {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//                  ERC20 DECIMALS (for cross-borrow decimal scaling)
-// ═══════════════════════════════════════════════════════════════════════════
-
-interface IERC20Decimals {
-    function decimals() external view returns (uint8);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 //          FLUID LOOP STRATEGY — Unified for T1 / T2 / T4 Vaults
 // ═══════════════════════════════════════════════════════════════════════════
 //
@@ -85,15 +77,8 @@ interface IERC20Decimals {
 // Three vault modes are supported, selected at initialization:
 //
 //   Mode 1 (STABLE):  syrupUSDC / USDC   — VaultT1 (#146)
-//                      syrupUSDC / GHO    — VaultT1 (#148)  ← cross-borrow
-//                      syrupUSDC / USDT   — VaultT1 (#147)  ← cross-borrow
 //   Mode 2 (LRT):     weETH-ETH / wstETH — VaultT2 (#74)
 //   Mode 3 (LST):     wstETH-ETH / wstETH-ETH — VaultT4 (#44)
-//
-// Cross-borrow support (MODE_STABLE with borrowToken ≠ inputAsset):
-//   When the borrow token differs from the input asset (e.g., borrow GHO but
-//   hold USDC), the strategy automatically swaps between borrow ↔ input tokens
-//   via Uniswap V3 during deposit/withdraw/rebalance operations.
 //
 // All positions are NFT-based. The strategy holds a single NFT per vault.
 // Flash loans (AAVE V3) are used to build/unwind the leveraged position.
@@ -240,10 +225,6 @@ contract FluidLoopStrategy is
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
     event SwapExecuted(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut);
-    event DexCollateralDeposited(uint256 token0Amount, uint256 token1Amount);
-    event DexCollateralWithdrawn(uint256 sharesBurned);
-    event DexPoolUpdated(address indexed dexPool, bool enabled);
-    event CrossBorrowUpdated(bool enabled, uint24 swapFeeTier);
 
     // ═══════════════════════════════════════════════════════════════════
     // INITIALIZER
@@ -324,20 +305,6 @@ contract FluidLoopStrategy is
         active = true;
         rewardSwapFeeTier = 3000;
         minSwapOutputBps = 9900;
-
-        // Cross-borrow: auto-detect when borrow token ≠ input asset
-        if (p.borrowToken != p.inputAsset) {
-            crossBorrow = true;
-            crossSwapFeeTier = 500; // 0.05% default (GHO/USDC, USDT/USDC)
-
-            // Compute decimal scale for cross-borrow normalization
-            uint8 borrowDec = IERC20Decimals(p.borrowToken).decimals();
-            uint8 inputDec = IERC20Decimals(p.inputAsset).decimals();
-            if (borrowDec > inputDec) {
-                crossDecimalScale = 10 ** uint256(borrowDec - inputDec);
-            }
-            // If borrowDec <= inputDec, crossDecimalScale stays 0 (no scaling needed)
-        }
 
         _grantRole(DEFAULT_ADMIN_ROLE, p.admin);
         _grantRole(TREASURY_ROLE, p.treasury);
@@ -672,31 +639,11 @@ contract FluidLoopStrategy is
             // Supply collateral to Fluid vault
             _supplyToVault(totalSupply);
 
-            if (crossBorrow) {
-                // Cross-borrow: borrow in borrowToken (e.g. GHO), swap → inputAsset (USDC)
-                uint256 repayNeeded = amount + premium;
-                // Round UP to ensure swap output ≥ repayNeeded after slippage
-                uint256 borrowNeeded = (repayNeeded * BPS + minSwapOutputBps - 1) / minSwapOutputBps;
-                // Scale to borrow-token decimals (e.g., USDC 6dec → GHO 18dec)
-                uint256 borrowNative = crossDecimalScale > 0
-                    ? borrowNeeded * crossDecimalScale
-                    : borrowNeeded;
-                _borrowFromVault(borrowNative);
-                uint256 borrowBal = IERC20(borrowToken).balanceOf(address(this));
-                _swapBorrowToInput(borrowBal);
-            } else {
-                // Same-token: borrow inputAsset directly
-                _borrowFromVault(amount + premium);
-            }
+            // Borrow from Fluid vault to repay flash loan
+            _borrowFromVault(amount + premium);
         } else if (action == ACTION_WITHDRAW) {
-            if (crossBorrow) {
-                // Cross-borrow: swap inputAsset → borrowToken, then repay
-                uint256 borrowReceived = _swapInputToBorrow(amount);
-                _repayToVault(borrowReceived);
-            } else {
-                // Same-token: repay directly
-                _repayToVault(amount);
-            }
+            // Repay Fluid vault debt
+            _repayToVault(amount);
 
             // Withdraw collateral from Fluid vault
             if (principalAmount == type(uint256).max) {
@@ -873,15 +820,10 @@ contract FluidLoopStrategy is
             // Need flash loan to unwind proportionally
             uint256 debtToRepay = (debt * amount) / _getPositionValue();
             if (debtToRepay > 0) {
-                uint256 flashAmount = debtToRepay;
-                if (crossBorrow) {
-                    // Buffer for swap slippage (borrow token may not be 1:1 with input)
-                    flashAmount = (debtToRepay * BPS) / minSwapOutputBps;
-                }
                 flashLoanPool.flashLoanSimple(
                     address(this),
                     address(inputAsset),
-                    flashAmount,
+                    debtToRepay,
                     abi.encode(ACTION_WITHDRAW, amount),
                     0
                 );
@@ -896,15 +838,10 @@ contract FluidLoopStrategy is
         uint256 debt = _getDebtValue();
 
         if (debt > 0) {
-            uint256 flashAmount = debt;
-            if (crossBorrow) {
-                // Buffer for swap slippage when converting input → borrow token
-                flashAmount = (debt * BPS) / minSwapOutputBps;
-            }
             flashLoanPool.flashLoanSimple(
                 address(this),
                 address(inputAsset),
-                flashAmount,
+                debt,
                 abi.encode(ACTION_WITHDRAW, type(uint256).max),
                 0
             );
@@ -919,92 +856,19 @@ contract FluidLoopStrategy is
 
     /// @dev Repay some debt for rebalancing
     function _repayDebt(uint256 amount) internal {
-        if (crossBorrow) {
-            // Need inputAsset → borrowToken swap before repaying
-            uint256 inputNeeded = (amount * BPS) / minSwapOutputBps;
-            uint256 balance = inputAsset.balanceOf(address(this));
-            if (balance < inputNeeded) {
-                _withdrawFromVault(inputNeeded - balance);
-            }
-            uint256 borrowReceived = _swapInputToBorrow(inputNeeded);
-            // Convert amount (input-dec) → borrow-dec for correct comparison & repay
-            uint256 maxRepay = crossDecimalScale > 0
-                ? amount * crossDecimalScale
-                : amount;
-            _repayToVault(borrowReceived > maxRepay ? maxRepay : borrowReceived);
-        } else {
-            uint256 balance = inputAsset.balanceOf(address(this));
-            if (balance < amount) {
-                uint256 needed = amount - balance;
-                _withdrawFromVault(needed);
-            }
-            _repayToVault(amount);
+        uint256 balance = inputAsset.balanceOf(address(this));
+        if (balance < amount) {
+            // Withdraw collateral to get funds for repayment
+            uint256 needed = amount - balance;
+            _withdrawFromVault(needed);
         }
+        _repayToVault(amount);
     }
 
     /// @dev Borrow more for rebalancing
     function _borrowMore(uint256 amount) internal {
-        // Scale from input-asset decimals to borrow-token decimals
-        uint256 borrowAmt = crossDecimalScale > 0
-            ? amount * crossDecimalScale
-            : amount;
-        _borrowFromVault(borrowAmt);
-        if (crossBorrow) {
-            // Swap borrowToken → inputAsset before re-supplying as collateral
-            uint256 borrowBal = IERC20(borrowToken).balanceOf(address(this));
-            uint256 inputReceived = _swapBorrowToInput(borrowBal);
-            _supplyToVault(inputReceived);
-        } else {
-            _supplyToVault(amount);
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════
-    // INTERNAL — CROSS-BORROW SWAPS
-    // ═══════════════════════════════════════════════════════════════════
-
-    /// @dev Swap borrow token → input asset (e.g., GHO → USDC after borrowing)
-    function _swapBorrowToInput(uint256 amountIn) internal returns (uint256 amountOut) {
-        if (amountIn == 0) return 0;
-        IERC20(borrowToken).forceApprove(address(swapRouter), amountIn);
-        // Scale expected output to input-asset decimals (borrow→input: divide)
-        uint256 expectedOut = crossDecimalScale > 0
-            ? amountIn / crossDecimalScale
-            : amountIn;
-        amountOut = swapRouter.exactInputSingle(
-            ISwapRouterFluid.ExactInputSingleParams({
-                tokenIn: address(borrowToken),
-                tokenOut: address(inputAsset),
-                fee: crossSwapFeeTier,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: (expectedOut * minSwapOutputBps) / BPS,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        emit SwapExecuted(address(borrowToken), address(inputAsset), amountIn, amountOut);
-    }
-
-    /// @dev Swap input asset → borrow token (e.g., USDC → GHO before repaying)
-    function _swapInputToBorrow(uint256 amountIn) internal returns (uint256 amountOut) {
-        if (amountIn == 0) return 0;
-        inputAsset.forceApprove(address(swapRouter), amountIn);
-        // Scale expected output to borrow-token decimals (input→borrow: multiply)
-        uint256 expectedOut = crossDecimalScale > 0
-            ? amountIn * crossDecimalScale
-            : amountIn;
-        amountOut = swapRouter.exactInputSingle(
-            ISwapRouterFluid.ExactInputSingleParams({
-                tokenIn: address(inputAsset),
-                tokenOut: address(borrowToken),
-                fee: crossSwapFeeTier,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: (expectedOut * minSwapOutputBps) / BPS,
-                sqrtPriceLimitX96: 0
-            })
-        );
-        emit SwapExecuted(address(inputAsset), address(borrowToken), amountIn, amountOut);
+        _borrowFromVault(amount);
+        _supplyToVault(amount);
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1013,19 +877,24 @@ contract FluidLoopStrategy is
 
     /// @dev Get total collateral value in input asset terms
     function _getCollateralValue() internal view returns (uint256) {
-        (uint256 col, ) = _readPosition();
-        return col;
+        if (positionNftId == 0) return 0;
+
+        // For mocks, we use a simplified view
+        // In production, this would read from Fluid's VaultResolver
+        // or the vault's position data directly
+        return _readCollateralFromVault();
     }
 
     /// @dev Get total debt value in input asset terms
     function _getDebtValue() internal view returns (uint256) {
-        (, uint256 debt) = _readPosition();
-        return debt;
+        if (positionNftId == 0) return 0;
+        return _readDebtFromVault();
     }
 
-    /// @dev Net position value (collateral - debt) — single resolver call
+    /// @dev Net position value (collateral - debt)
     function _getPositionValue() internal view returns (uint256) {
-        (uint256 col, uint256 debt) = _readPosition();
+        uint256 col = _getCollateralValue();
+        uint256 debt = _getDebtValue();
         return col > debt ? col - debt : 0;
     }
 
@@ -1036,34 +905,49 @@ contract FluidLoopStrategy is
         return (col * 100) / totalPrincipal;
     }
 
-    /// @dev Read position (collateral + debt) from VaultResolver in a single external call.
-    ///      For T1: supply/borrow are raw token amounts.
-    ///      For T2/T4 (smart collateral/debt): supply/borrow are DEX shares,
-    ///      resolved to token amounts via _resolveDexSupplyShares / _resolveDexBorrowShares.
-    ///      Virtual so test harness can override with mock vault reads.
-    function _readPosition() internal view virtual returns (uint256 col, uint256 debt) {
-        if (positionNftId == 0 || address(vaultResolver) == address(0)) return (0, 0);
+    /// @dev Read collateral from vault via VaultResolver + DexResolver.
+    ///      For T1 vaults, supply is in raw token amounts.
+    ///      For T2/T4 (smart collateral), supply is in DEX shares
+    ///      which are resolved to token amounts via the DexResolver.
+    ///      Still virtual so test harness can override with mock reads.
+    function _readCollateralFromVault() internal view virtual returns (uint256) {
+        if (address(vaultResolver) == address(0)) return 0; // no resolver = test mode
 
-        // Single resolver call for both collateral and debt
         (IFluidVaultResolver.UserPosition memory pos,
          IFluidVaultResolver.VaultEntireData memory data) =
             vaultResolver.positionByNftId(positionNftId);
 
-        // Collateral: T1 = raw amounts, T2/T4 = DEX supply shares
-        col = data.isSmartCol
-            ? _resolveDexSupplyShares(pos.supply)
-            : pos.supply;
+        uint256 supplyRaw = pos.supply; // token amount for T1, shares for T2/T4
 
-        // Debt: T1/T2 = raw amounts, T4 = DEX borrow shares
-        debt = data.isSmartDebt
-            ? _resolveDexBorrowShares(pos.borrow)
-            : pos.borrow;
-
-        // Cross-borrow: normalize debt to input-asset decimals
-        // e.g., GHO (18 dec) → USDC (6 dec): divide by 10^12
-        if (crossDecimalScale > 0) {
-            debt = debt / crossDecimalScale;
+        if (!data.isSmartCol) {
+            // T1: supply is already in token amounts, adjust by vault exchange price
+            // pos.supply is already the final amount after exchange price application
+            return supplyRaw;
         }
+
+        // T2/T4: supply is in DEX shares → resolve to token amounts
+        return _resolveDexSupplyShares(supplyRaw);
+    }
+
+    /// @dev Read debt from vault via VaultResolver + DexResolver.
+    ///      For T1/T2 vaults, borrow is in raw token amounts.
+    ///      For T4 (smart debt), borrow is in DEX shares.
+    function _readDebtFromVault() internal view virtual returns (uint256) {
+        if (address(vaultResolver) == address(0)) return 0;
+
+        (IFluidVaultResolver.UserPosition memory pos,
+         IFluidVaultResolver.VaultEntireData memory data) =
+            vaultResolver.positionByNftId(positionNftId);
+
+        uint256 borrowRaw = pos.borrow;
+
+        if (!data.isSmartDebt) {
+            // T1/T2: borrow is in raw token amounts
+            return borrowRaw;
+        }
+
+        // T4: borrow is in DEX shares → resolve to token amounts
+        return _resolveDexBorrowShares(borrowRaw);
     }
 
     /// @dev Convert DEX supply shares → total underlying token value.
@@ -1072,6 +956,10 @@ contract FluidLoopStrategy is
     function _resolveDexSupplyShares(uint256 shares) internal view returns (uint256) {
         if (shares == 0 || address(dexResolver) == address(0) || dexPool == address(0)) return 0;
 
+        // getDexState is a non-view that uses staticcall internally;
+        // safe to call from a view context via the resolver's caching pattern.
+        // For on-chain view calls, we use the last cached values.
+        // token0PerSupplyShare and token1PerSupplyShare are 1e18-based.
         IFluidDexResolver.DexState memory state = _cachedDexState();
 
         uint256 token0Value = (shares * state.token0PerSupplyShare) / WAD;
@@ -1092,19 +980,15 @@ contract FluidLoopStrategy is
         return token0Value + token1Value;
     }
 
-    /// @dev Read DEX state via staticcall to the DexResolver.
-    ///      Fluid's DexResolver.getDexState() is non-view on mainnet (updates internal caches),
-    ///      but the read is idempotent and safe via staticcall for view contexts.
+    /// @dev Read cached DEX state. In production the DexResolver may be
+    ///      non-view (it updates internal caches on mainnet). This base
+    ///      implementation returns a zero struct. The test harness and
+    ///      production child contracts MUST override this to return
+    ///      live share-to-token ratios from the DexResolver.
     function _cachedDexState() internal view virtual returns (IFluidDexResolver.DexState memory state) {
-        if (address(dexResolver) != address(0) && dexPool != address(0)) {
-            (bool ok, bytes memory data) = address(dexResolver).staticcall(
-                abi.encodeWithSelector(IFluidDexResolver.getDexState.selector, dexPool)
-            );
-            if (ok && data.length > 0) {
-                return abi.decode(data, (IFluidDexResolver.DexState));
-            }
-        }
-        // Fallback: zeroed struct (test mode without resolver)
+        // Default: returns zeroed struct. Override in child contracts.
+        // Production override should read DEX storage slots directly
+        // (view-safe) or use an off-chain keeper to cache the values.
         return state;
     }
 
@@ -1115,8 +999,6 @@ contract FluidLoopStrategy is
     /// @notice Deposit both tokens into the DEX pool as smart collateral LP.
     ///         This makes vault collateral also act as DEX LP, earning trading fees.
     ///         Only applicable for T2/T4 vaults where supply side is a Fluid DEX.
-    /// @dev    Yield-enhancement operation — does NOT increase totalPrincipal.
-    ///         Tokens must already be held by the strategy (from rewards, etc.).
     /// @param token0Amount Amount of token0 to deposit into DEX LP
     /// @param token1Amount Amount of token1 to deposit into DEX LP
     /// @param minShares Minimum DEX shares to receive (slippage protection)
@@ -1181,12 +1063,9 @@ contract FluidLoopStrategy is
     }
 
     /// @notice Withdraw DEX LP collateral back to individual tokens.
-    /// @dev    Withdrawn tokens remain in the strategy for redeployment via
-    ///         depositDexCollateral or recoverToken. This avoids unnecessary
-    ///         transfers and allows the strategist to rebalance DEX positions.
-    /// @param sharesToBurn DEX shares to redeem
-    /// @param minToken0 Minimum token0 to receive (slippage protection)
-    /// @param minToken1 Minimum token1 to receive (slippage protection)
+    /// @param sharesToBurn DEX shares to redeem (negative for withdraw)
+    /// @param minToken0 Minimum token0 to receive
+    /// @param minToken1 Minimum token1 to receive
     function withdrawDexCollateral(
         uint256 sharesToBurn,
         uint256 minToken0,
@@ -1280,54 +1159,26 @@ contract FluidLoopStrategy is
         dexResolver = IFluidDexResolver(_resolver);
     }
 
-    /// @notice Enable/disable DEX smart collateral and set the DEX pool address.
-    /// @dev    IMPORTANT: _dexPool must match the vault's supply-side DEX pool.
-    ///         On mainnet, verify via IFluidVaultCommon(fluidVault).constantsView().supply.
-    ///         A mismatched dexPool will cause incorrect share → token resolution,
-    ///         silently breaking all position valuation for T2/T4 vaults.
+    /// @notice Enable/disable DEX smart collateral and set the DEX pool address
     function setDexPool(address _dexPool, bool _enabled) external onlyTimelock {
         dexPool = _dexPool;
         dexEnabled = _enabled;
         emit DexPoolUpdated(_dexPool, _enabled);
     }
 
-    /// @notice Update cross-borrow swap fee tier.
-    /// @dev    Use 100 for USDT/USDC (0.01%), 500 for GHO/USDC (0.05%).
-    ///         Only meaningful when crossBorrow == true.
-    error InvalidFeeTier();
-
-    function setCrossSwapFeeTier(uint24 _feeTier) external onlyRole(STRATEGIST_ROLE) {
-        if (_feeTier != 100 && _feeTier != 500 && _feeTier != 3000 && _feeTier != 10000) {
-            revert InvalidFeeTier();
-        }
-        crossSwapFeeTier = _feeTier;
-        emit CrossBorrowUpdated(crossBorrow, _feeTier);
-    }
-
     // ═══════════════════════════════════════════════════════════════════
-    // CROSS-BORROW STATE (V3 — appended at end for upgrade safety)
+    // EVENTS (V2 — DEX integration)
     // ═══════════════════════════════════════════════════════════════════
 
-    /// @notice Whether borrow token differs from input asset (cross-borrow mode)
-    /// @dev Auto-detected in initialize() when borrowToken ≠ inputAsset.
-    ///      When true, swap steps are inserted in deposit/withdraw/rebalance flows.
-    bool public crossBorrow;
-
-    /// @notice Swap fee tier for cross-borrow swaps (borrowToken ↔ inputAsset)
-    /// @dev Uniswap V3 fee tiers: 100=0.01%, 500=0.05%, 3000=0.3%, 10000=1%
-    ///      Defaults: 500 for GHO/USDC, 100 for USDT/USDC
-    uint24 public crossSwapFeeTier;
-
-    /// @notice Decimal scale factor: 10^(borrowDecimals - inputDecimals).
-    /// @dev    0 when decimals match (USDT/USDC both 6-dec). 10^12 for GHO(18)/USDC(6).
-    ///         Used to normalize debt ↔ input amounts in cross-borrow paths.
-    uint256 public crossDecimalScale;
+    event DexCollateralDeposited(uint256 token0Amount, uint256 token1Amount);
+    event DexCollateralWithdrawn(uint256 sharesBurned);
+    event DexPoolUpdated(address indexed dexPool, bool enabled);
 
     // ═══════════════════════════════════════════════════════════════════
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[24] private __gap;  // 26 → 25 (crossBorrow+crossSwapFeeTier) → 24 (crossDecimalScale)
+    uint256[26] private __gap;  // reduced from 30 → 26 (4 new storage vars above)
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }
