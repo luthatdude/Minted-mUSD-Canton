@@ -14,6 +14,7 @@ methods {
     function isBlacklisted(address) external returns (bool) envfree;
     function allowance(address, address) external returns (uint256) envfree;
     function paused() external returns (bool) envfree;
+    function localCapBps() external returns (uint256) envfree;
 
     // State-changing functions don't need declaration in Certora v8+
     // (mint, burn, transfer, transferFrom, approve are auto-detected)
@@ -37,49 +38,64 @@ invariant total_supply_is_sum_of_balances()
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice Mint increases totalSupply by exactly the minted amount
+/// @dev Uses @withrevert and asserts properties only when mint succeeds.
+///      Mint can legitimately revert due to: access control (BRIDGE_ROLE),
+///      pause, blacklist, zero-address, effective cap (localCapBps), or overflow.
 rule mint_increases_supply(address to, uint256 amount) {
     env e;
     uint256 supplyBefore = totalSupply();
     uint256 balBefore = balanceOf(to);
 
-    mint(e, to, amount);
+    mint@withrevert(e, to, amount);
+    bool succeeded = !lastReverted;
 
     uint256 supplyAfter = totalSupply();
     uint256 balAfter = balanceOf(to);
 
-    assert supplyAfter == supplyBefore + amount,
+    assert succeeded => supplyAfter == supplyBefore + amount,
         "Mint did not increase supply by exact amount";
-    assert balAfter == balBefore + amount,
+    assert succeeded => balAfter == balBefore + amount,
         "Mint did not credit recipient correctly";
 }
 
 /// @notice Burn decreases totalSupply by exactly the burned amount
+/// @dev Uses @withrevert because burn can revert due to: access control
+///      (BRIDGE_ROLE or LIQUIDATOR_ROLE), pause, blacklist, or insufficient allowance.
 rule burn_decreases_supply(address from, uint256 amount) {
     env e;
     uint256 supplyBefore = totalSupply();
     uint256 balBefore = balanceOf(from);
     require balBefore >= amount;
 
-    burn(e, from, amount);
+    burn@withrevert(e, from, amount);
+    bool succeeded = !lastReverted;
 
     uint256 supplyAfter = totalSupply();
-    assert supplyAfter == supplyBefore - amount,
+    assert succeeded => supplyAfter == supplyBefore - amount,
         "Burn did not decrease supply by exact amount";
 }
 
-/// @notice Mint cannot exceed supply cap
+/// @notice Mint cannot exceed effective supply cap (supplyCap * localCapBps / 10000)
+/// @dev The contract enforces: totalSupply() + amount <= (supplyCap * localCapBps) / 10000
+///      localCapBps defaults to 6000 (60%), so effective cap < raw supplyCap.
 rule mint_respects_cap(address to, uint256 amount) {
     env e;
     uint256 supplyBefore = totalSupply();
     uint256 cap = supplyCap();
+    uint256 bps = localCapBps();
+    // Compute effective cap the same way the contract does
+    mathint effectiveCap = (cap * bps) / 10000;
 
-    // If minting would exceed cap, it must revert
-    require supplyBefore + amount > cap;
+    // If minting would exceed effective cap, it must revert
+    require to_mathint(supplyBefore) + to_mathint(amount) > effectiveCap;
+    // Guard against mathint overflow in multiplication
+    require cap <= 2^128;
+    require bps <= 10000;
 
     mint@withrevert(e, to, amount);
 
     assert lastReverted,
-        "Mint succeeded despite exceeding supply cap";
+        "Mint succeeded despite exceeding effective supply cap";
 }
 
 /// @notice Transfer does not change totalSupply
