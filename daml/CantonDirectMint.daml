@@ -52,10 +52,10 @@ template CantonUSDC
 
     -- | Update observers from user's privacy settings
     choice CantonUSDC_UpdateObservers : ContractId CantonUSDC
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     -- DAML-M-05: Compliance check on transfer recipient (matches MUSD behavior)
     choice CantonUSDC_Transfer : ContractId CantonUSDCTransferProposal
@@ -123,10 +123,10 @@ template USDCx
 
     -- | Update observers from user's privacy settings
     choice USDCx_UpdateObservers : ContractId USDCx
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     -- DAML-H-01: Mandatory compliance check on USDCx transfers
     choice USDCx_Transfer : ContractId USDCxTransferProposal
@@ -207,10 +207,10 @@ template CantonMUSD
 
     -- | Update observers from user's privacy settings
     choice CantonMUSD_UpdateObservers : ContractId CantonMUSD
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
       with
@@ -828,4 +828,3 @@ template BurnRateLimiter
       do
         assertMsg "LIMIT_POSITIVE" (newLimit > 0.0)
         create this with dailyBurnLimit = newLimit
-
