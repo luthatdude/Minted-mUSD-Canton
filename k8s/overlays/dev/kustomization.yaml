@@ -1,0 +1,259 @@
+# ══════════════════════════════════════════════════════════════
+# Kustomize Overlay — DEV Environment
+# ══════════════════════════════════════════════════════════════
+# Local / Sepolia development environment:
+#   - Single replicas for all services
+#   - Reduced resource limits
+#   - Self-signed TLS (or TLS disabled)
+#   - 2-block confirmations (Sepolia)
+#   - Lower rate limits for rapid iteration
+#   - Manual secrets (no External Secrets Operator)
+#   - Canton Community edition (no license)
+# ══════════════════════════════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: musd-canton-dev
+
+namePrefix: dev-
+
+commonLabels:
+  app.kubernetes.io/environment: dev
+  app.kubernetes.io/part-of: minted-musd
+
+commonAnnotations:
+  musd.io/environment: "dev"
+  musd.io/tls-mode: "self-signed"
+  musd.io/secrets-backend: "manual"
+
+resources:
+  - ../../base
+
+patches:
+  # ── Namespace: dev-specific PSA (warn instead of enforce) ──
+  - target:
+      kind: Namespace
+      name: musd-canton
+    patch: |
+      - op: replace
+        path: /metadata/name
+        value: musd-canton-dev
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: baseline
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1audit
+        value: restricted
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1warn
+        value: restricted
+
+  # ── PostgreSQL: single replica, smaller PVC, lower resources ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 2Gi
+
+  # ── Canton Participant: lower resources, TLS optional ──
+  - target:
+      kind: Deployment
+      name: canton-participant
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 2Gi
+
+  # ── NGINX Proxy: single replica, no LB, use NodePort ──
+  - target:
+      kind: Deployment
+      name: nginx-proxy
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 50m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 64Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 128Mi
+  - target:
+      kind: Service
+      name: nginx-proxy
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: NodePort
+
+  # ── Bridge Relay: lower confirmations, faster polling ──
+  # Using strategic merge patch (named env vars) to avoid fragile positional indices
+  - target:
+      kind: Deployment
+      name: bridge-relay
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bridge-relay
+      spec:
+        template:
+          spec:
+            containers:
+              - name: bridge-relay
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 256Mi
+                env:
+                  - name: CONFIRMATIONS
+                    value: "2"
+                  - name: POLL_INTERVAL_MS
+                    value: "3000"
+
+  # ── Relay ConfigMap: Sepolia addresses ──
+  - target:
+      kind: ConfigMap
+      name: relay-config
+    patch: |
+      - op: replace
+        path: /data/BRIDGE_CONTRACT_ADDRESS
+        value: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+      - op: replace
+        path: /data/TREASURY_ADDRESS
+        value: "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d"
+
+  # ── Bot ConfigMap: Sepolia addresses ──
+  - target:
+      kind: ConfigMap
+      name: bot-config
+    patch: |
+      - op: replace
+        path: /data/CHAIN_ID
+        value: "11155111"
+      - op: replace
+        path: /data/MIN_PROFIT_USD
+        value: "1"
+      - op: replace
+        path: /data/MAX_GAS_PRICE_GWEI
+        value: "200"
+      - op: replace
+        path: /data/USE_FLASHBOTS
+        value: "false"
+
+  # ── Liquidation Bot: lower resources ──
+  - target:
+      kind: Deployment
+      name: liquidation-bot
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 50m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+
+  # ── Validators: lower resources ──
+  - target:
+      kind: Deployment
+      name: bridge-validator-1
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 25m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+  - target:
+      kind: Deployment
+      name: bridge-validator-2
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 25m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+
+  # ── Backup CronJob: smaller PVC, no offsite upload ──
+  - target:
+      kind: PersistentVolumeClaim
+      name: postgres-backups
+    patch: |
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 10Gi
+      - op: replace
+        path: /spec/storageClassName
+        value: standard
+
+  # ── Health check: less frequent in dev ──
+  - target:
+      kind: CronJob
+      name: canton-health-check
+    patch: |
+      - op: replace
+        path: /spec/schedule
+        value: "*/15 * * * *"
+
+  # ── Postgres PVC: smaller in dev ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 20Gi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: standard
