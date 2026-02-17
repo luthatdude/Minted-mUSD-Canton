@@ -740,7 +740,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await expect(
         f.strategy
           .connect(f.admin)
-          .recoverToken(await f.usdc.getAddress(), f.admin.address)
+          .recoverToken(await f.usdc.getAddress(), f.admin.address, 1)
       ).to.be.revertedWithCustomError(f.strategy, "CannotRecoverUsdc");
     });
 
@@ -751,7 +751,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await expect(
         f.strategy
           .connect(f.admin)
-          .recoverToken(await f.pt.getAddress(), f.admin.address)
+          .recoverToken(await f.pt.getAddress(), f.admin.address, 1)
       ).to.be.revertedWithCustomError(f.strategy, "CannotRecoverPt");
     });
 
@@ -761,7 +761,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
 
       await f.strategy
         .connect(f.admin)
-        .recoverToken(await f.rnd.getAddress(), f.admin.address);
+        .recoverToken(await f.rnd.getAddress(), f.admin.address, D18("1000"));
       expect(await f.rnd.balanceOf(f.admin.address)).to.equal(D18("1000"));
     });
   });
@@ -905,7 +905,7 @@ describe("PendleStrategyV2 — Full Coverage", function () {
       await expect(
         f.strategy
           .connect(f.user1)
-          .recoverToken(await f.rnd.getAddress(), f.user1.address)
+          .recoverToken(await f.rnd.getAddress(), f.user1.address, 1)
       ).to.be.reverted;
     });
 
