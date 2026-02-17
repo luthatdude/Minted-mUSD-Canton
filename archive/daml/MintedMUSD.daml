@@ -89,9 +89,19 @@ template MUSD_RedemptionRequest
   where
     signatory usd.provider, requester
     -- SUCCESS: Bank processes wire and archives request
-    choice MUSD_FulfillRedemption : ()
+    choice MUSD_FulfillRedemption : ContractId RedemptionReceipt
+      with
+        settlementRef : Text
       controller usd.provider
-      do return ()
+      do
+        assertMsg "SETTLEMENT_REF_REQUIRED" (settlementRef /= "")
+        now <- getTime
+        create RedemptionReceipt with
+          provider = usd.provider
+          requester
+          amount = usd.amount
+          settlementRef
+          settledAt = now
     -- IMPROVED: NEW CHOICE to prevent "Stuck" funds.
     -- If the bank cannot fulfill (e.g. KYC fail), they return the token to the owner.
     choice MUSD_RejectRedemption : ContractId MUSD
@@ -185,7 +195,7 @@ template IssuerRole
           observers = mintObservers
         newRole <- create this with
           currentSupply = currentSupply + mintAmount
-          observers = mintOwner :: observers  -- Add mint recipient as observer for future proposals
+          observers = observers
         return (newRole, musdCid)
 
     -- | Update the supply cap (admin only).
@@ -226,6 +236,17 @@ template IssuerRole
       controller issuer
       do
         create this with observers = newObserver :: observers
+
+template RedemptionReceipt
+  with
+    provider : Party
+    requester : Party
+    amount : Decimal
+    settlementRef : Text
+    settledAt : Time
+  where
+    signatory provider
+    observer requester
 
 -- | User-initiated mint request.
 -- Separation of duties: the user requests minting, the issuer approves

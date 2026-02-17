@@ -158,6 +158,10 @@ template MintingService
     signatory operator
     observer usdcIssuer, observers
 
+    ensure supplyCap > 0.0
+        && currentSupply >= 0.0
+        && currentSupply <= supplyCap
+
     -- Consuming choice to track supply cap
     choice Mint_Musd : (ContractId MintingService, ContractId Musd)
       with
@@ -210,7 +214,8 @@ template MintingService
         archive musdCid
         -- Decrement supply tracker
         let burnAmount = musd.amount
-        let newSupply = if currentSupply > burnAmount then currentSupply - burnAmount else 0.0
+        assertMsg "SUPPLY_UNDERFLOW" (currentSupply >= burnAmount)
+        let newSupply = currentSupply - burnAmount
         newService <- create this with currentSupply = newSupply
         -- Split reserve if needed, transfer USDC to user
         -- Usdc_Transfer returns proposal; accept it
@@ -341,11 +346,13 @@ template BridgeService
     operator : Party
     validators : [Party]
     observers : [Party]   -- Users who can exercise Lock_Musd_For_Bridge
+    lastNonce : Int
   where
     signatory operator
     observer validators, observers
+    ensure lastNonce >= 0
 
-    nonconsuming choice Lock_Musd_For_Bridge : ContractId BridgeLock
+    choice Lock_Musd_For_Bridge : (ContractId BridgeService, ContractId BridgeLock)
       with
         user : Party
         musdCid : ContractId Musd
@@ -356,12 +363,13 @@ template BridgeService
       do
         musd <- fetch musdCid
         assertMsg "Bridge: Only mUSD can be bridged" (musd.issuer == operator)
+        assertMsg "NONCE_NOT_SEQUENTIAL" (nonce == lastNonce + 1)
         -- Transfer mUSD to operator (Locking mechanism)
         -- Alternatively, we could archive it here if the bridge mints fresh on the other side.
         -- Here we archive to remove from circulation on Source Domain.
         archive musdCid
         now <- getTime
-        create BridgeLock with
+        lockCid <- create BridgeLock with
           operator = operator
           user = user
           amount = musd.amount
@@ -370,6 +378,8 @@ template BridgeService
           validators = validators
           nonce = nonce
           lockedAt = now
+        newService <- create this with lastNonce = nonce
+        return (newService, lockCid)
 
 -- | Step 2: Attestation (The Proof).
 -- | Validators observe the BridgeLock and create an attestation.
@@ -479,6 +489,7 @@ setup = do
       operator = operator
       validators = [validator1, validator2]
       observers = [alice]  -- Alice needs visibility to exercise Lock_Musd_For_Bridge
+      lastNonce = 100
 
   -- 4. Alice Mints mUSD (Swaps USDC)
   -- Re-query MintingService to get current active contract

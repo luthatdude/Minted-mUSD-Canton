@@ -50,10 +50,10 @@ template CantonSMUSD
 
     -- | Update observers from user's privacy settings
     choice SMUSD_UpdateObservers : ContractId CantonSMUSD
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
     -- HIGH-01: Enforce compliance validation on transfers

@@ -31,8 +31,6 @@ setupGov = script do
       elevatedThreshold = 3
       timelockDuration = hours 24
       proposalExpiry = hours 168
-      maxActiveProposals = 10
-      activeProposalCount = 0
       observers = []
   pure (admin, guardian1, guardian2, guardian3, cfg)
 
