@@ -475,6 +475,28 @@ describe('LeverageVault', function () {
         leverageVault.enableToken(await newToken.getAddress(), 999)
       ).to.be.revertedWithCustomError(leverageVault, "InvalidFeeTier");
     });
+
+    it('should revert cleanly on swap failure without leaving debt or position', async function () {
+      await mockSwapRouter.setShouldRevert(true);
+
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          ethers.parseEther('10'),
+          20,
+          5,
+          futureDeadline()
+        )
+      ).to.be.revertedWithCustomError(leverageVault, "SwapFailedOrphanedDebt");
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.totalCollateral).to.equal(0);
+      expect(position.totalDebt).to.equal(0);
+
+      expect(await borrowModule.totalDebt(user.address)).to.equal(0);
+      expect(await collateralVault.deposits(user.address, await weth.getAddress())).to.equal(0);
+      expect(await weth.balanceOf(user.address)).to.equal(INITIAL_WETH_BALANCE);
+    });
   });
 
   // ================================================================

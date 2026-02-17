@@ -36,6 +36,7 @@ interface IBorrowModule {
     /// @dev Unsafe variant bypasses circuit breaker for liquidation path
     function healthFactorUnsafe(address user) external view returns (uint256);
     function reduceDebt(address user, uint256 amount) external;
+    function absorbBadDebt(uint256 amount) external;
 }
 
 interface IPriceOracleLiq {
@@ -273,16 +274,28 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Write off bad debt for a specific borrower
     /// @dev Called after all collateral has been seized and position is fully underwater.
-    ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
+    ///      Reduces totalBadDebt accounting and realizes the loss in BorrowModule:
+    ///      reserves absorb first, residual queues supplier-interest haircut.
     /// @dev SOL-M-21: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — bad debt write-off is a critical operation
     function socializeBadDebt(address borrower) external onlyRole(TIMELOCK_ROLE) {
-        uint256 amount = borrowerBadDebt[borrower];
-        if (amount == 0) revert NoBadDebt();
+        uint256 recorded = borrowerBadDebt[borrower];
+        if (recorded == 0) revert NoBadDebt();
+
+        // If borrower repaid part of debt after liquidation, only socialize remaining debt.
+        uint256 currentDebt = borrowModule.totalDebt(borrower);
+        uint256 socializedAmount = recorded > currentDebt ? currentDebt : recorded;
+
         borrowerBadDebt[borrower] = 0;
-        totalBadDebt -= amount;
-        // Reduce the borrower's debt record in BorrowModule
-        borrowModule.reduceDebt(borrower, amount);
-        emit BadDebtSocialized(borrower, amount, totalBadDebt);
+        totalBadDebt -= recorded;
+
+        if (socializedAmount > 0) {
+            // 1) Remove borrower liability from debt book.
+            borrowModule.reduceDebt(borrower, socializedAmount);
+            // 2) Realize loss economically (reserves first, then supplier queue).
+            borrowModule.absorbBadDebt(socializedAmount);
+        }
+
+        emit BadDebtSocialized(borrower, socializedAmount, totalBadDebt);
     }
 
     // ============================================================

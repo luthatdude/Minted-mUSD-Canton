@@ -17,6 +17,8 @@ import {
   timelockAddCollateral,
   timelockSetCloseFactor,
   timelockSetFullLiquidationThreshold,
+  timelockSetInterestRate,
+  timelockSetSMUSD,
   refreshFeeds,
 } from "./helpers/timelock";
 
@@ -205,7 +207,7 @@ describe("VaultEdgeCases: Multi-Collateral Liquidation", function () {
 
 describe("VaultEdgeCases: Bad Debt & Insolvency", function () {
   async function deployBadDebtFixture() {
-    const [owner, user1, liquidator] = await ethers.getSigners();
+    const [owner, user1, user2, liquidator] = await ethers.getSigners();
 
     const MockERC20 = await ethers.getContractFactory("MockERC20");
     const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
@@ -253,17 +255,21 @@ describe("VaultEdgeCases: Bad Debt & Insolvency", function () {
     await borrowModule.grantRole(await borrowModule.LIQUIDATION_ROLE(), await liquidationEngine.getAddress());
     await collateralVault.setBorrowModule(await borrowModule.getAddress());
 
-    // Grant TIMELOCK_ROLE for setFullLiquidationThreshold
-    const TIMELOCK_ROLE = await liquidationEngine.TIMELOCK_ROLE();
-    await liquidationEngine.grantRole(TIMELOCK_ROLE, owner.address);
+    // Grant TIMELOCK_ROLEs for admin setters in tests
+    const LIQ_TIMELOCK_ROLE = await liquidationEngine.TIMELOCK_ROLE();
+    await liquidationEngine.grantRole(LIQ_TIMELOCK_ROLE, owner.address);
+    const BORROW_TIMELOCK_ROLE = await borrowModule.TIMELOCK_ROLE();
+    await borrowModule.grantRole(BORROW_TIMELOCK_ROLE, owner.address);
 
     await weth.mint(user1.address, ethers.parseEther("10"));
+    await weth.mint(user2.address, ethers.parseEther("100"));
     await musd.mint(liquidator.address, ethers.parseEther("500000"));
     await weth.connect(user1).approve(await collateralVault.getAddress(), ethers.MaxUint256);
+    await weth.connect(user2).approve(await collateralVault.getAddress(), ethers.MaxUint256);
     await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.MaxUint256);
 
     return {
-      owner, user1, liquidator,
+      owner, user1, user2, liquidator,
       weth, musd, priceOracle, ethFeed,
       collateralVault, borrowModule, liquidationEngine,
     };
@@ -307,10 +313,53 @@ describe("VaultEdgeCases: Bad Debt & Insolvency", function () {
     expect(await f.collateralVault.deposits(f.user1.address, await f.weth.getAddress())).to.equal(0);
   });
 
-  it("should socialize bad debt via timelock governance", async function () {
+  it("should realize socialized bad debt from reserves first, then queue supplier loss", async function () {
     const f = await loadFixture(deployBadDebtFixture);
 
-    // Create bad debt position
+    // Create protocol reserves first (so socialization has a reserve buffer to use).
+    await timelockSetInterestRate(f.borrowModule, f.owner, 5000); // 50% APR
+    await f.collateralVault.connect(f.user1).deposit(await f.weth.getAddress(), ethers.parseEther("5"));
+    await f.borrowModule.connect(f.user1).borrow(ethers.parseEther("7000"));
+    await time.increase(365 * 24 * 60 * 60);
+    await f.borrowModule.accrueInterest(f.user1.address);
+    // Freeze further accrual so socialization math is deterministic.
+    await timelockSetInterestRate(f.borrowModule, f.owner, 0);
+    await f.borrowModule.accrueInterest(f.user1.address);
+
+    const reservesBefore = await f.borrowModule.protocolReserves();
+    expect(reservesBefore).to.be.gt(0);
+
+    await timelockSetFullLiquidationThreshold(f.liquidationEngine, f.owner, 5000);
+    await f.ethFeed.setAnswer(10000000000n); // $100
+
+    await f.liquidationEngine.connect(f.liquidator).liquidate(
+      f.user1.address,
+      await f.weth.getAddress(),
+      ethers.parseEther("7000")
+    );
+
+    const recordedBadDebt = await f.liquidationEngine.borrowerBadDebt(f.user1.address);
+    expect(recordedBadDebt).to.be.gt(0);
+
+    // Socialize bad debt and realize loss economically.
+    await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.user1.address);
+
+    const reserveAbsorbed = reservesBefore > recordedBadDebt ? recordedBadDebt : reservesBefore;
+    const queuedForSuppliers = recordedBadDebt - reserveAbsorbed;
+
+    expect(await f.borrowModule.totalBadDebtAbsorbedByReserves()).to.equal(reserveAbsorbed);
+    expect(await f.borrowModule.protocolReserves()).to.equal(reservesBefore - reserveAbsorbed);
+    expect(await f.borrowModule.badDebtQueuedForSuppliers()).to.equal(queuedForSuppliers);
+
+    // LiquidationEngine accounting cleared.
+    expect(await f.liquidationEngine.borrowerBadDebt(f.user1.address)).to.equal(0);
+    expect(await f.liquidationEngine.totalBadDebt()).to.equal(0);
+  });
+
+  it("should realize queued supplier loss by haircutting future supplier interest", async function () {
+    const f = await loadFixture(deployBadDebtFixture);
+
+    // 1) Create bad debt and socialize while reserves are still zero.
     await f.collateralVault.connect(f.user1).deposit(await f.weth.getAddress(), ethers.parseEther("5"));
     await f.borrowModule.connect(f.user1).borrow(ethers.parseEther("7000"));
     await timelockSetFullLiquidationThreshold(f.liquidationEngine, f.owner, 5000);
@@ -321,16 +370,65 @@ describe("VaultEdgeCases: Bad Debt & Insolvency", function () {
       await f.weth.getAddress(),
       ethers.parseEther("7000")
     );
-
-    const badDebt = await f.liquidationEngine.borrowerBadDebt(f.user1.address);
-    expect(badDebt).to.be.gt(0);
-
-    // Socialize bad debt (timelock-gated)
     await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.user1.address);
 
-    // Bad debt cleared
-    expect(await f.liquidationEngine.borrowerBadDebt(f.user1.address)).to.equal(0);
-    expect(await f.liquidationEngine.totalBadDebt()).to.equal(0);
+    const queuedBefore = await f.borrowModule.badDebtQueuedForSuppliers();
+    expect(queuedBefore).to.be.gt(0);
+
+    // Restore feed to normal so subsequent borrow path doesn't trip circuit breaker.
+    await f.ethFeed.setAnswer(200000000000n); // $2000
+    await f.priceOracle.updatePrice(await f.weth.getAddress());
+
+    // 2) Wire SMUSD as supplier sink and seed shares.
+    const SMUSD = await ethers.getContractFactory("SMUSD");
+    const smusd = await SMUSD.deploy(await f.musd.getAddress(), ethers.ZeroAddress);
+
+    await f.musd.connect(f.owner).mint(f.user2.address, ethers.parseEther("50000"));
+    await f.musd.connect(f.user2).approve(await smusd.getAddress(), ethers.MaxUint256);
+    await smusd.connect(f.user2).deposit(ethers.parseEther("50000"), f.user2.address);
+
+    await smusd.grantRole(await smusd.INTEREST_ROUTER_ROLE(), await f.borrowModule.getAddress());
+    await timelockSetSMUSD(f.borrowModule, f.owner, await smusd.getAddress());
+    await timelockSetInterestRate(f.borrowModule, f.owner, 500); // 5% APR
+
+    // 3) Open a healthy debt position to generate future interest.
+    await f.collateralVault.connect(f.user2).deposit(await f.weth.getAddress(), ethers.parseEther("20"));
+    await f.borrowModule.connect(f.user2).borrow(ethers.parseEther("10000"));
+
+    const borrowsBefore = await f.borrowModule.totalBorrows();
+    const reservesBefore = await f.borrowModule.protocolReserves();
+    const absorbedBefore = await f.borrowModule.totalBadDebtAbsorbedBySuppliers();
+    const smusdInterestBefore = await smusd.totalInterestReceived();
+
+    await time.increase(30 * 24 * 60 * 60);
+    await f.borrowModule.accrueInterest(f.user2.address);
+
+    const borrowsAfter = await f.borrowModule.totalBorrows();
+    const reservesAfter = await f.borrowModule.protocolReserves();
+    const absorbedAfter = await f.borrowModule.totalBadDebtAbsorbedBySuppliers();
+    const smusdInterestAfter = await smusd.totalInterestReceived();
+    const queuedAfter = await f.borrowModule.badDebtQueuedForSuppliers();
+
+    const interestAccrued = borrowsAfter - borrowsBefore;
+    const reserveIncrease = reservesAfter - reservesBefore;
+    const grossSupplierInterest = interestAccrued - reserveIncrease;
+    const supplierAbsorbed = absorbedAfter - absorbedBefore;
+    const routedToSuppliers = smusdInterestAfter - smusdInterestBefore;
+
+    expect(supplierAbsorbed).to.be.gt(0);
+    const queuedRealization = queuedBefore - queuedAfter;
+    const realizationDrift =
+      supplierAbsorbed > queuedRealization
+        ? supplierAbsorbed - queuedRealization
+        : queuedRealization - supplierAbsorbed;
+    expect(realizationDrift).to.be.lte(1_000_000n);
+    const reconciledSupplierFlow = routedToSuppliers + supplierAbsorbed;
+    const drift =
+      reconciledSupplierFlow > grossSupplierInterest
+        ? reconciledSupplierFlow - grossSupplierInterest
+        : grossSupplierInterest - reconciledSupplierFlow;
+    // Tiny rounding drift is acceptable across split + accrual math paths.
+    expect(drift).to.be.lte(1_000_000n);
   });
 
   it("should reject socializeBadDebt from non-timelock address", async function () {
