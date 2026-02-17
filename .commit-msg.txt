@@ -1,16 +1,29 @@
-fix: resolve CRITICAL/HIGH/MEDIUM audit findings across 8 contracts
+fix: align SDK 2.x artifacts to Daml 3.4.10 + migrate v1 to v2 JSON API
 
-HIGH findings fixed:
-- H-01: SMUSD setTreasury -> TIMELOCK_ROLE (was DEFAULT_ADMIN_ROLE)
-- H-02: RedemptionQueue setMaxDailyRedemption/setMinRequestAge -> TIMELOCK_ROLE
-- H-03: LiquidationEngine/TreasuryV2/LeverageVault unpause -> TIMELOCK_ROLE
-- H-03: BLEBridgeV9 setBridgeOutMinAmount -> TIMELOCK_ROLE
-- H-10: BLEBridgeV9 migrateUsedAttestations: MAX_MIGRATION_BATCH=200
+BREAKING: Canton JSON API v1 endpoints removed across all layers.
 
-MEDIUM findings fixed:
-- M-02: BorrowModule lastKnownTotalSupply cache (replaces 2x fallback)
-- M-19: MUSD setLocalCapBps -> TIMELOCK_ROLE
-- M-21: LiquidationEngine socializeBadDebt -> TIMELOCK_ROLE
+CI (.github/workflows/ci.yml):
+- DAML_SDK_VERSION: 2.10.3 to 3.4.10 (matches daml/daml.yaml)
 
-LiquidationEngine constructor now requires _timelockController param.
-Updated 11 test/deploy files. All 1717 tests passing.
+K8s (participant-deployment.yaml):
+- Canton image: daml-sdk:2.9.3 to canton-community:3.4.10
+- Remove standalone json-api sidecar (v2 API built into participant)
+
+K8s (nginx-configmap.yaml):
+- /v1/query to /v2/state/active-contracts + /v2/state/ledger-end
+- /v1/fetch to /v2/version
+- /v1/create + /v1/exercise to /v2/commands/submit-and-wait (unified)
+- /v1/parties,packages to /v2/users,packages (blocked)
+- Add /v1/ catch-all returning 410 Gone
+
+Frontend (useCanton.ts):
+- Full v1 to v2 API migration matching relay/canton-client.ts
+- query: POST /v2/state/active-contracts with filtersByParty
+- exercise/create: POST /v2/commands/submit-and-wait with commandId
+- Add TemplateId parsing, userId/party tracking
+- Remove @daml/ledger and @daml/types 2.x from deps
+- Default port: 6865 to 7575
+
+Agent docs: @daml/ledger to canton-client.ts / useCanton v2 refs
+
+1717/1717 Hardhat tests passing, frontend tsc clean

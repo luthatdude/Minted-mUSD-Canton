@@ -29,7 +29,7 @@ You are a senior frontend engineer specializing in DeFi protocol UIs. You build 
 - **React 18** with hooks-based architecture
 - **TailwindCSS 3.4** for styling
 - **ethers.js 6** for Ethereum interactions
-- **@daml/ledger 2.10.3** for Canton JSON API
+- **useCanton hook** — Custom Canton v2 HTTP JSON API client (SDK 3.4.10)
 - **@metamask/sdk** and **@reown/appkit** for wallet connections
 - **@solana/web3.js** for Solana wallet support
 - **@tanstack/react-query 5** for async state management

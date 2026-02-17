@@ -143,8 +143,8 @@ data:
             #  READ ENDPOINTS — 10 req/s per IP, burst 20
             # --------------------------------------------------------
 
-            # Query contracts (read-only)
-            location /v1/query {
+            # Query active contracts (read-only) — Canton v2 API
+            location /v2/state/active-contracts {
                 limit_req zone=api_read burst=20 nodelay;
                 limit_req zone=api_global burst=50 nodelay;
 
@@ -166,8 +166,30 @@ data:
                 proxy_send_timeout 5s;
             }
 
-            # Fetch contract by ID (read-only)
-            location /v1/fetch {
+            # Get ledger end offset (read-only) — Canton v2 API
+            location /v2/state/ledger-end {
+                limit_req zone=api_read burst=20 nodelay;
+                limit_req zone=api_global burst=50 nodelay;
+
+                proxy_pass http://json_api;
+                proxy_http_version 1.1;
+                proxy_set_header Connection "";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+
+                limit_except GET {
+                    deny all;
+                }
+
+                proxy_connect_timeout 5s;
+                proxy_read_timeout 30s;
+                proxy_send_timeout 5s;
+            }
+
+            # Version endpoint (read-only) — Canton v2 API
+            location /v2/version {
                 limit_req zone=api_read burst=15 delay=10;
                 limit_req zone=api_global burst=30 nodelay;
 
@@ -179,7 +201,7 @@ data:
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
 
-                limit_except POST {
+                limit_except GET {
                     deny all;
                 }
 
@@ -192,8 +214,9 @@ data:
             #  WRITE ENDPOINTS — 2 req/s per IP, burst 5
             # --------------------------------------------------------
 
-            # Create contract (write)
-            location /v1/create {
+            # Submit commands — create / exercise (write) — Canton v2 API
+            # v2 unifies create and exercise into a single endpoint
+            location /v2/commands/submit-and-wait {
                 # INFRA-H-04: Tighter write limits — burst=3, delay=1 to smooth spikes
                 limit_req zone=api_write burst=3 delay=1;
                 limit_req zone=api_global burst=30 nodelay;
@@ -212,29 +235,6 @@ data:
 
                 proxy_connect_timeout 5s;
                 proxy_read_timeout 60s;  # Writes may take longer (consensus)
-                proxy_send_timeout 10s;
-            }
-
-            # Exercise choice (write)
-            location /v1/exercise {
-                # INFRA-H-04: Tighter write limits — burst=3, delay=1 to smooth spikes
-                limit_req zone=api_write burst=3 delay=1;
-                limit_req zone=api_global burst=30 nodelay;
-
-                proxy_pass http://json_api;
-                proxy_http_version 1.1;
-                proxy_set_header Connection "";
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-
-                limit_except POST {
-                    deny all;
-                }
-
-                proxy_connect_timeout 5s;
-                proxy_read_timeout 60s;
                 proxy_send_timeout 10s;
             }
 
@@ -286,13 +286,18 @@ data:
             #  DENY EVERYTHING ELSE
             # --------------------------------------------------------
 
-            # Block admin/party endpoints — these should never be exposed
-            location /v1/parties {
+            # Block admin endpoints — these should never be exposed
+            location /v2/users {
                 return 403;
             }
 
-            location /v1/packages {
+            location /v2/packages {
                 return 403;
+            }
+
+            # Block deprecated v1 endpoints entirely
+            location /v1/ {
+                return 410;  # Gone — v1 API is deprecated in Canton 3.x
             }
 
             # Catch-all — deny unknown paths
