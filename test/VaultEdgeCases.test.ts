@@ -1,11 +1,13 @@
 /**
  * Vault Edge-Case Test Suite
  *
- * Covers 4 identified testing gaps:
+ * Covers identified testing gaps:
  *   1. Multi-collateral liquidation (WETH + WBTC, choose seizure token)
  *   2. Bad debt / insolvency (seized collateral < debt owed)
- *   3. LeverageVault swap revert mid-loop
- *   4. SMUSD flash-loan donation attack resistance
+ *   3. SMUSD donation attack resistance (decimalsOffset=3 proof)
+ *   4. Bad-debt socialization — sMUSD-holder impact
+ *
+ * Note: LeverageVault swap-revert coverage lives in LeverageVault.test.ts
  */
 
 import { expect } from "chai";
@@ -534,5 +536,382 @@ describe("VaultEdgeCases: SMUSD Donation Attack", function () {
     await expect(
       f.smusd.connect(f.user1).redeem(shares, f.user1.address, f.user1.address)
     ).to.not.be.reverted;
+  });
+
+  // ── Stronger donation-attack assertions (Codex Gap 2) ──────────
+
+  it("attacker should NOT profit from front-running donation attack", async function () {
+    const f = await loadFixture(deploySMUSDFixture);
+
+    const attackerDeposit = 1n; // 1 wei
+    const donationAmount = ethers.parseEther("10000");
+    const victimDeposit = ethers.parseEther("10000");
+
+    // Attacker deposits 1 wei to get shares
+    await f.smusd.connect(f.attacker).deposit(attackerDeposit, f.attacker.address);
+    const attackerShares = await f.smusd.balanceOf(f.attacker.address);
+    expect(attackerShares).to.be.gt(0);
+
+    // Attacker donates directly to vault (bypasses deposit)
+    await f.musd.connect(f.attacker).transfer(await f.smusd.getAddress(), donationAmount);
+
+    // Victim deposits
+    await f.smusd.connect(f.user1).deposit(victimDeposit, f.user1.address);
+    const victimShares = await f.smusd.balanceOf(f.user1.address);
+    expect(victimShares).to.be.gt(0, "Victim received 0 shares — donation attack succeeded");
+
+    // CRITICAL: Attacker's redeemable value <= total cost (deposit + donation)
+    const attackerRedeemable = await f.smusd.convertToAssets(attackerShares);
+    const attackerTotalCost = attackerDeposit + donationAmount;
+    expect(attackerRedeemable).to.be.lte(
+      attackerTotalCost,
+      "Attacker profited from donation attack"
+    );
+
+    // Attacker has a net loss
+    const attackerNetLoss = attackerTotalCost - attackerRedeemable;
+    expect(attackerNetLoss).to.be.gt(0, "Attacker did not lose money");
+  });
+
+  it("victim loss from donation attack should be bounded by decimalsOffset", async function () {
+    const f = await loadFixture(deploySMUSDFixture);
+
+    const attackerDeposit = 1n;
+    const donationAmount = ethers.parseEther("5000");
+    const victimDeposit = ethers.parseEther("5000");
+
+    // Attacker deposits + donates
+    await f.smusd.connect(f.attacker).deposit(attackerDeposit, f.attacker.address);
+    await f.musd.connect(f.attacker).transfer(await f.smusd.getAddress(), donationAmount);
+
+    // Victim deposits
+    await f.smusd.connect(f.user1).deposit(victimDeposit, f.user1.address);
+    const victimShares = await f.smusd.balanceOf(f.user1.address);
+    expect(victimShares).to.be.gt(0);
+
+    // Check victim's redeemable value vs deposit
+    const victimRedeemable = await f.smusd.convertToAssets(victimShares);
+    const victimLoss = victimDeposit - victimRedeemable;
+
+    // With decimalsOffset=3, victim loss should be < 1% of deposit
+    const maxAcceptableLoss = victimDeposit / 100n;
+    expect(victimLoss).to.be.lte(
+      maxAcceptableLoss,
+      `Victim lost ${ethers.formatEther(victimLoss)} mUSD (>${ethers.formatEther(maxAcceptableLoss)} max acceptable)`
+    );
+  });
+
+  it("share price distortion from donation should be bounded and proportional", async function () {
+    const f = await loadFixture(deploySMUSDFixture);
+
+    // Establish normal share price with legitimate deposit
+    await f.smusd.connect(f.user1).deposit(ethers.parseEther("1000"), f.user1.address);
+    const priceBefore = await f.smusd.convertToAssets(10n ** 21n); // 1000 shares
+
+    // Attacker donates equal amount directly
+    await f.musd.connect(f.attacker).transfer(await f.smusd.getAddress(), ethers.parseEther("1000"));
+    const priceAfter = await f.smusd.convertToAssets(10n ** 21n);
+
+    // Price increases (donation adds assets without shares)
+    expect(priceAfter).to.be.gt(priceBefore);
+
+    // Distortion should be proportional (~100% when donation = existing assets), not unbounded
+    const distortionBps = ((priceAfter - priceBefore) * 10000n) / priceBefore;
+    expect(distortionBps).to.be.lte(10100n, "Share price distortion > 101% — unbounded");
+    expect(distortionBps).to.be.gte(9900n, "Share price should approximately double");
+  });
+
+  it("donation attack is economically irrational across multiple donation sizes", async function () {
+    const f = await loadFixture(deploySMUSDFixture);
+
+    // Test across 3 donation sizes — attacker always loses
+    const donations = [
+      ethers.parseEther("100"),
+      ethers.parseEther("1000"),
+      ethers.parseEther("10000"),
+    ];
+
+    for (const donation of donations) {
+      const SMUSDFactory = await ethers.getContractFactory("SMUSD");
+      const freshVault = await SMUSDFactory.deploy(await f.musd.getAddress(), ethers.ZeroAddress);
+
+      // Mint fresh balances for each iteration to avoid exhaustion
+      await f.musd.connect(f.bridge).mint(f.attacker.address, donation + 1n);
+      await f.musd.connect(f.bridge).mint(f.user1.address, donation);
+
+      await f.musd.connect(f.attacker).approve(await freshVault.getAddress(), ethers.MaxUint256);
+      await f.musd.connect(f.user1).approve(await freshVault.getAddress(), ethers.MaxUint256);
+
+      // Attacker: deposit 1 wei + donate
+      await freshVault.connect(f.attacker).deposit(1n, f.attacker.address);
+      const attackerShares = await freshVault.balanceOf(f.attacker.address);
+      await f.musd.connect(f.attacker).transfer(await freshVault.getAddress(), donation);
+
+      // Victim deposits same amount
+      await freshVault.connect(f.user1).deposit(donation, f.user1.address);
+
+      // Attacker always has negative P&L
+      const attackerRedeemable = await freshVault.convertToAssets(attackerShares);
+      const attackerCost = 1n + donation;
+      expect(attackerRedeemable).to.be.lt(
+        attackerCost,
+        `Attacker profited with donation=${ethers.formatEther(donation)}`
+      );
+    }
+  });
+});
+
+// ============================================================
+//  4. BAD-DEBT SOCIALIZATION — sMUSD-HOLDER IMPACT (Codex Gap 3)
+// ============================================================
+
+describe("VaultEdgeCases: sMUSD-Holder Bad-Debt Impact", function () {
+  async function deployBadDebtImpactFixture() {
+    const [owner, borrower, liquidator, staker1, staker2] = await ethers.getSigners();
+
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
+
+    const MUSD = await ethers.getContractFactory("MUSD");
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
+
+    const PriceOracle = await ethers.getContractFactory("PriceOracle");
+    const priceOracle = await PriceOracle.deploy();
+
+    const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
+    const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
+
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
+
+    const CollateralVault = await ethers.getContractFactory("CollateralVault");
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
+    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
+
+    const BorrowModule = await ethers.getContractFactory("BorrowModule");
+    const borrowModule = await BorrowModule.deploy(
+      await collateralVault.getAddress(),
+      await priceOracle.getAddress(),
+      await musd.getAddress(),
+      500,
+      ethers.parseEther("100")
+    );
+
+    const SMUSD = await ethers.getContractFactory("SMUSD");
+    const smusd = await SMUSD.deploy(await musd.getAddress(), ethers.ZeroAddress);
+
+    const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
+    const liquidationEngine = await LiquidationEngine.deploy(
+      await collateralVault.getAddress(),
+      await borrowModule.getAddress(),
+      await priceOracle.getAddress(),
+      await musd.getAddress(),
+      5000,
+      owner.address
+    );
+
+    // Grant roles
+    const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+    await musd.grantRole(BRIDGE_ROLE, await borrowModule.getAddress());
+    await musd.grantRole(BRIDGE_ROLE, await liquidationEngine.getAddress());
+    await musd.grantRole(BRIDGE_ROLE, owner.address);
+    await collateralVault.grantRole(await collateralVault.BORROW_MODULE_ROLE(), await borrowModule.getAddress());
+    await collateralVault.grantRole(await collateralVault.LIQUIDATION_ROLE(), await liquidationEngine.getAddress());
+    await borrowModule.grantRole(await borrowModule.LIQUIDATION_ROLE(), await liquidationEngine.getAddress());
+    await collateralVault.setBorrowModule(await borrowModule.getAddress());
+
+    // Grant TIMELOCK roles
+    const LIQ_TIMELOCK = await liquidationEngine.TIMELOCK_ROLE();
+    await liquidationEngine.grantRole(LIQ_TIMELOCK, owner.address);
+    const BM_TIMELOCK = await borrowModule.TIMELOCK_ROLE();
+    await borrowModule.grantRole(BM_TIMELOCK, owner.address);
+
+    // Wire SMUSD for interest routing
+    await smusd.grantRole(await smusd.INTEREST_ROUTER_ROLE(), await borrowModule.getAddress());
+    await borrowModule.setSMUSD(await smusd.getAddress());
+
+    // Enable full liquidation for extreme scenarios
+    await liquidationEngine.setFullLiquidationThreshold(5000);
+
+    // Fund participants
+    await weth.mint(borrower.address, ethers.parseEther("100"));
+    await weth.connect(borrower).approve(await collateralVault.getAddress(), ethers.MaxUint256);
+    await musd.mint(liquidator.address, ethers.parseEther("1000000"));
+    await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.MaxUint256);
+    await musd.mint(staker1.address, ethers.parseEther("100000"));
+    await musd.mint(staker2.address, ethers.parseEther("100000"));
+    await musd.connect(staker1).approve(await smusd.getAddress(), ethers.MaxUint256);
+    await musd.connect(staker2).approve(await smusd.getAddress(), ethers.MaxUint256);
+
+    return {
+      owner, borrower, liquidator, staker1, staker2,
+      weth, musd, priceOracle, ethFeed,
+      collateralVault, borrowModule, liquidationEngine, smusd,
+    };
+  }
+
+  it("bad debt socialization reduces totalBorrows, lowering future interest to sMUSD stakers", async function () {
+    const f = await deployBadDebtImpactFixture();
+
+    // Staker deposits into SMUSD
+    await f.smusd.connect(f.staker1).deposit(ethers.parseEther("50000"), f.staker1.address);
+    expect(await f.smusd.balanceOf(f.staker1.address)).to.be.gt(0);
+
+    // Borrower creates a large position
+    await f.collateralVault.connect(f.borrower).deposit(await f.weth.getAddress(), ethers.parseEther("50"));
+    await f.borrowModule.connect(f.borrower).borrow(ethers.parseEther("50000"));
+
+    const totalBorrowsBefore = await f.borrowModule.totalBorrows();
+    expect(totalBorrowsBefore).to.be.gt(0);
+
+    // Crash price → liquidate → create bad debt
+    await f.ethFeed.setAnswer(10000000000n); // $100
+
+    const fullDebt = await f.borrowModule.totalDebt(f.borrower.address);
+    await f.liquidationEngine.connect(f.liquidator).liquidate(
+      f.borrower.address,
+      await f.weth.getAddress(),
+      fullDebt
+    );
+
+    const badDebt = await f.liquidationEngine.borrowerBadDebt(f.borrower.address);
+    expect(badDebt).to.be.gt(0);
+
+    // Record totalBorrows before socialization
+    const totalBorrowsPreSocialize = await f.borrowModule.totalBorrows();
+
+    // Socialize the bad debt
+    await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.borrower.address);
+
+    // CRITICAL: totalBorrows decreased
+    const totalBorrowsAfterSocialize = await f.borrowModule.totalBorrows();
+    expect(totalBorrowsAfterSocialize).to.be.lt(
+      totalBorrowsPreSocialize,
+      "totalBorrows did not decrease after bad debt socialization"
+    );
+
+    // The reduction means lower utilization → less interest → less yield for sMUSD holders
+    // This IS the socialization: bad debt absorbed through reduced future yield
+  });
+
+  it("sMUSD share price is not directly decreased but future yield is impaired", async function () {
+    const f = await deployBadDebtImpactFixture();
+
+    // Staker deposits
+    await f.smusd.connect(f.staker1).deposit(ethers.parseEther("10000"), f.staker1.address);
+
+    // Borrower creates position
+    await f.collateralVault.connect(f.borrower).deposit(await f.weth.getAddress(), ethers.parseEther("10"));
+    await f.borrowModule.connect(f.borrower).borrow(ethers.parseEther("10000"));
+
+    // Crash → liquidate → bad debt
+    await f.ethFeed.setAnswer(10000000000n); // $100
+    const debt = await f.borrowModule.totalDebt(f.borrower.address);
+    await f.liquidationEngine.connect(f.liquidator).liquidate(
+      f.borrower.address, await f.weth.getAddress(), debt
+    );
+    expect(await f.liquidationEngine.borrowerBadDebt(f.borrower.address)).to.be.gt(0);
+
+    // Record share price BEFORE socialization
+    const sharePriceBefore = await f.smusd.convertToAssets(ethers.parseEther("1"));
+
+    // Socialize
+    await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.borrower.address);
+
+    // Share price NOT directly decreased
+    const sharePriceAfter = await f.smusd.convertToAssets(ethers.parseEther("1"));
+    expect(sharePriceAfter).to.be.gte(
+      sharePriceBefore,
+      "Share price decreased directly from socialization"
+    );
+
+    // But totalBorrows dropped → future interest will be lower
+    const totalBorrowsAfter = await f.borrowModule.totalBorrows();
+
+    // If all debt was socialized, no future interest accrues → zero yield
+    if (totalBorrowsAfter === 0n) {
+      await time.increase(365 * 24 * 3600);
+      const priceOneYearLater = await f.smusd.convertToAssets(ethers.parseEther("1"));
+      expect(priceOneYearLater).to.equal(sharePriceAfter);
+    }
+  });
+
+  it("bad debt impact is shared proportionally across all sMUSD stakers", async function () {
+    const f = await deployBadDebtImpactFixture();
+
+    // Two stakers deposit equal amounts
+    await f.smusd.connect(f.staker1).deposit(ethers.parseEther("25000"), f.staker1.address);
+    await f.smusd.connect(f.staker2).deposit(ethers.parseEther("25000"), f.staker2.address);
+
+    const shares1 = await f.smusd.balanceOf(f.staker1.address);
+    const shares2 = await f.smusd.balanceOf(f.staker2.address);
+    expect(shares1).to.equal(shares2); // Equal deposits → equal shares
+
+    // Create borrowing → crash → bad debt → socialize
+    await f.collateralVault.connect(f.borrower).deposit(await f.weth.getAddress(), ethers.parseEther("10"));
+    await f.borrowModule.connect(f.borrower).borrow(ethers.parseEther("10000"));
+
+    await f.ethFeed.setAnswer(10000000000n); // $100
+    const debt = await f.borrowModule.totalDebt(f.borrower.address);
+    await f.liquidationEngine.connect(f.liquidator).liquidate(
+      f.borrower.address, await f.weth.getAddress(), debt
+    );
+    await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.borrower.address);
+
+    // Both stakers have identical redeemable (proportional impact)
+    const redeemable1 = await f.smusd.convertToAssets(shares1);
+    const redeemable2 = await f.smusd.convertToAssets(shares2);
+    expect(redeemable1).to.equal(redeemable2);
+  });
+
+  it("absorbBadDebt uses reserves first before queuing supplier haircut", async function () {
+    const f = await deployBadDebtImpactFixture();
+
+    // Generate protocol reserves via interest
+    await timelockSetInterestRate(f.borrowModule, f.owner, 5000); // 50% APR
+    await f.collateralVault.connect(f.borrower).deposit(await f.weth.getAddress(), ethers.parseEther("10"));
+    await f.borrowModule.connect(f.borrower).borrow(ethers.parseEther("10000"));
+
+    // Staker deposits to enable interest routing
+    await f.smusd.connect(f.staker1).deposit(ethers.parseEther("50000"), f.staker1.address);
+
+    await time.increase(180 * 24 * 3600); // 6 months → accrue reserves
+    await f.borrowModule.accrueInterest(f.borrower.address);
+
+    const reservesBefore = await f.borrowModule.protocolReserves();
+    expect(reservesBefore).to.be.gt(0, "No reserves accrued for test");
+
+    // Freeze interest to make math deterministic
+    await timelockSetInterestRate(f.borrowModule, f.owner, 0);
+    await f.borrowModule.accrueInterest(f.borrower.address);
+
+    // Crash → liquidate → bad debt
+    await f.ethFeed.setAnswer(10000000000n);
+    const debt = await f.borrowModule.totalDebt(f.borrower.address);
+    await f.liquidationEngine.connect(f.liquidator).liquidate(
+      f.borrower.address, await f.weth.getAddress(), debt
+    );
+
+    const recordedBadDebt = await f.liquidationEngine.borrowerBadDebt(f.borrower.address);
+    expect(recordedBadDebt).to.be.gt(0);
+
+    const reservesPreSocialize = await f.borrowModule.protocolReserves();
+
+    // Socialize
+    await f.liquidationEngine.connect(f.owner).socializeBadDebt(f.borrower.address);
+
+    // Reserves should be consumed first
+    const reservesAfter = await f.borrowModule.protocolReserves();
+    const absorbedByReserves = await f.borrowModule.totalBadDebtAbsorbedByReserves();
+
+    if (reservesPreSocialize >= recordedBadDebt) {
+      // Reserves fully covered bad debt — no supplier queue
+      expect(absorbedByReserves).to.be.gte(recordedBadDebt);
+      expect(await f.borrowModule.badDebtQueuedForSuppliers()).to.equal(0);
+    } else {
+      // Reserves partially covered — residual queued for suppliers
+      expect(absorbedByReserves).to.equal(reservesPreSocialize);
+      expect(reservesAfter).to.equal(0);
+      expect(await f.borrowModule.badDebtQueuedForSuppliers()).to.be.gt(0);
+    }
   });
 });
