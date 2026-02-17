@@ -8,7 +8,7 @@
 --   5. BridgeService
 --
 -- Usage:
---   daml script --dar .daml/dist/ble-protocol-2.0.0.dar \
+--   daml script --dar .daml/dist/ble-protocol-<VERSION>.dar \
 --     --script-name InitProtocol:initProtocol \
 --     --ledger-host localhost --ledger-port 7575 \
 --     --input-file init-args.json

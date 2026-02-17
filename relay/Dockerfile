@@ -65,5 +65,7 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
   CMD node -e "const http = require('http'); http.get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
+EXPOSE 8080
+
 # Default command (overridden by docker-compose)
 CMD ["node", "dist/relay-service.js"]
