@@ -11,14 +11,12 @@ title = "Minted mUSD — Gitleaks Configuration"
 paths = [
     '''.certora_internal/.*''',
 ]
+commits = [
+    "a7c5cf56ebb35d0405d88e8c0e231a2cfa14a7ee",
+]
 
 # ─── Commit-level allowlist (historical false positives) ────────────
 # test/RelayIntegration.test.ts contains hard-coded 64-char hex strings
 # used as secp256k1 private-key test fixtures in a unit test for a
 # key-validator function.  They are NOT real keys — they are deterministic
 # test constants (e.g. "abcdef1234567890…").
-[[allowlist.commits]]
-  description = "test fixture hex strings for secp256k1 key validator"
-  ids = [
-    "a7c5cf56ebb35d0405d88e8c0e231a2cfa14a7ee",
-  ]
