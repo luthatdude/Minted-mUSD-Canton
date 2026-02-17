@@ -12,7 +12,7 @@ import WalletConnector from "@/components/WalletConnector";
 import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
 import { YieldScanner } from "@/components/YieldScanner";
 
-type AdminSection = "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle";
+type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STRATEGY CATALOG — all deployable yield strategies
@@ -266,6 +266,10 @@ export function AdminPage() {
   const [oracleStale, setOracleStale] = useState("3600");
   const [oracleDecimals, setOracleDecimals] = useState("18");
 
+  // Emergency / Global Pause
+  const [cancelOpId, setCancelOpId] = useState("");
+  const [globalPauseStatus, setGlobalPauseStatus] = useState<{ paused: boolean; lastPausedAt: string; lastUnpausedAt: string; isGuardian: boolean; isAdmin: boolean } | null>(null);
+
   // Vault Admin
   const [vaultData, setVaultData] = useState<Record<string, VaultViewData>>({});
   const [selectedVaultDeploy, setSelectedVaultDeploy] = useState<string>("");
@@ -278,7 +282,7 @@ export function AdminPage() {
   const [addSubCap, setAddSubCap] = useState("0");
   const [addSubVault, setAddSubVault] = useState<string>("");
 
-  const { musd, directMint, treasury, bridge, borrow, oracle, metaVault1, metaVault2, metaVault3 } = contracts as any;
+  const { musd, directMint, treasury, bridge, borrow, oracle, metaVault1, metaVault2, metaVault3, globalPause, timelock } = contracts as any;
 
   // Current values + data-loading state (H-04)
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -331,6 +335,28 @@ export function AdminPage() {
           vals.interestRate = formatBps(await borrow.interestRateBps());
           vals.minDebt = formatUSD(await borrow.minDebt());
         }
+        // Global Pause status
+        if (globalPause && address) {
+          try {
+            const paused = await globalPause.isGloballyPaused();
+            const lastPausedAtRaw = await globalPause.lastPausedAt();
+            const lastUnpausedAtRaw = await globalPause.lastUnpausedAt();
+            const GUARDIAN_ROLE = await globalPause.GUARDIAN_ROLE();
+            const ADMIN_ROLE = await globalPause.DEFAULT_ADMIN_ROLE();
+            const isGuardian = await globalPause.hasRole(GUARDIAN_ROLE, address);
+            const isAdmin = await globalPause.hasRole(ADMIN_ROLE, address);
+            const fmtTs = (ts: bigint) => ts > 0n ? new Date(Number(ts) * 1000).toLocaleString() : "Never";
+            if (!cancelled) setGlobalPauseStatus({
+              paused,
+              lastPausedAt: fmtTs(lastPausedAtRaw),
+              lastUnpausedAt: fmtTs(lastUnpausedAtRaw),
+              isGuardian,
+              isAdmin,
+            });
+          } catch (err) {
+            console.error("[AdminPage] GlobalPause load failed:", err);
+          }
+        }
       } catch (err) {
         console.error("[AdminPage] Failed to load protocol data:", err);
         if (!cancelled) setLoadError("Failed to load protocol data. Check RPC connection.");
@@ -339,7 +365,7 @@ export function AdminPage() {
     }
     loadCurrentValues();
     return () => { cancelled = true; };
-  }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
+  }, [musd, directMint, treasury, bridge, borrow, globalPause, address, tx.success]);
 
   // ── Load MetaVault data ──
   useEffect(() => {
@@ -430,6 +456,7 @@ export function AdminPage() {
   }
 
   const sections: { key: AdminSection; label: string }[] = [
+    { key: "emergency", label: "🚨 Emergency" },
     { key: "musd", label: "mUSD" },
     { key: "directmint", label: "DirectMint" },
     { key: "treasury", label: "Treasury" },
@@ -471,6 +498,107 @@ export function AdminPage() {
       {loadError && (
         <div className="rounded-lg border border-amber-800 bg-amber-900/20 p-4 text-sm text-amber-400">
           ⚠️ {loadError}
+        </div>
+      )}
+
+      {/* ===== Emergency Section ===== */}
+      {section === "emergency" && (
+        <div className="space-y-4">
+          {/* Global Pause Status */}
+          <div className={`card border-2 ${
+            globalPauseStatus?.paused
+              ? "border-red-500 bg-red-950/30"
+              : "border-green-800 bg-green-950/20"
+          }`}>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              {globalPauseStatus?.paused ? "🔴" : "🟢"} Global Protocol Status
+            </h3>
+            <div className="mt-3 grid gap-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Status</span>
+                <span className={globalPauseStatus?.paused ? "text-red-400 font-bold" : "text-green-400 font-bold"}>
+                  {globalPauseStatus?.paused ? "⛔ PAUSED" : "✅ ACTIVE"}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Last Paused</span>
+                <span className="text-gray-300">{globalPauseStatus?.lastPausedAt || "..."}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Last Unpaused</span>
+                <span className="text-gray-300">{globalPauseStatus?.lastUnpausedAt || "..."}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Your Roles</span>
+                <span className="text-gray-300">
+                  {globalPauseStatus?.isGuardian ? "✅ GUARDIAN" : "❌ GUARDIAN"}
+                  {" · "}
+                  {globalPauseStatus?.isAdmin ? "✅ ADMIN" : "❌ ADMIN"}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-3">
+              <TxButton
+                className="flex-1 !bg-red-700 hover:!bg-red-600"
+                onClick={() => tx.send(() => globalPause!.pauseGlobal())}
+                loading={tx.loading}
+                disabled={!globalPause || !globalPauseStatus?.isGuardian || globalPauseStatus?.paused}
+              >
+                🛑 Pause Entire Protocol
+              </TxButton>
+              <TxButton
+                className="flex-1 !bg-green-700 hover:!bg-green-600"
+                onClick={() => tx.send(() => globalPause!.unpauseGlobal())}
+                loading={tx.loading}
+                disabled={!globalPause || !globalPauseStatus?.isAdmin || !globalPauseStatus?.paused}
+              >
+                ▶️ Unpause Protocol
+              </TxButton>
+            </div>
+
+            {!globalPauseStatus?.isGuardian && (
+              <p className="mt-2 text-xs text-amber-400">
+                ⚠️ Your wallet does not have GUARDIAN_ROLE — you cannot trigger the global pause.
+              </p>
+            )}
+          </div>
+
+          {/* Timelock Cancel */}
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Cancel Pending Timelock Operation</h3>
+            <p className="mb-3 text-sm text-gray-500">
+              If a malicious or incorrect operation was scheduled on the MintedTimelockController,
+              paste the operation ID below to cancel it before it becomes executable.
+              Requires CANCELLER_ROLE.
+            </p>
+            <label className="label">Operation ID (bytes32)</label>
+            <input
+              className="input font-mono text-xs"
+              type="text"
+              placeholder="0xb2693f1d561b08b889b568927f2930793111ee06eafe82142d40fed18b11afe4"
+              value={cancelOpId}
+              onChange={(e) => setCancelOpId(e.target.value)}
+            />
+            <TxButton
+              className="mt-3 w-full !bg-amber-700 hover:!bg-amber-600"
+              onClick={() => tx.send(() => timelock!.cancel(cancelOpId))}
+              loading={tx.loading}
+              disabled={!timelock || !cancelOpId || cancelOpId.length !== 66}
+            >
+              ⚠️ Cancel Timelock Operation
+            </TxButton>
+          </div>
+
+          {/* Info Card */}
+          <div className="card border border-gray-700">
+            <h3 className="mb-2 font-semibold text-gray-300">Emergency Response Guide</h3>
+            <ul className="space-y-2 text-sm text-gray-400">
+              <li><span className="text-red-400 font-mono">pauseGlobal()</span> — Instantly halts all deposits, withdrawals, mints, borrows, and liquidations across the entire protocol. Use during active exploits.</li>
+              <li><span className="text-amber-400 font-mono">cancel(id)</span> — Cancels a scheduled timelock operation before it executes. Use if a PROPOSER key is compromised and a malicious upgrade is queued.</li>
+              <li><span className="text-green-400 font-mono">unpauseGlobal()</span> — Resumes protocol after root cause is resolved. Requires DEFAULT_ADMIN_ROLE (higher authority than GUARDIAN).</li>
+            </ul>
+          </div>
         </div>
       )}
 
