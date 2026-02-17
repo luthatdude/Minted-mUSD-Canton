@@ -233,3 +233,128 @@ dataSources:
         - event: LeverageClosed(indexed address,indexed address,uint256,uint256,uint256)
           handler: handleLeverageClosed
       file: ./src/leverage-vault.ts
+
+  # ── Timelock Governance ────────────────────────────────────────
+  - kind: ethereum
+    name: MintedTimelockController
+    network: sepolia
+    source:
+      address: "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410"
+      abi: MintedTimelockController
+      startBlock: 10276940
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - TimelockOperation
+        - TimelockDelayChange
+        - RoleChange
+      abis:
+        - name: MintedTimelockController
+          file: ../artifacts/contracts/MintedTimelockController.sol/MintedTimelockController.json
+      eventHandlers:
+        - event: CallScheduled(indexed bytes32,uint256,address,uint256,bytes,bytes32,uint256)
+          handler: handleCallScheduled
+        - event: CallExecuted(indexed bytes32,uint256,address,uint256,bytes)
+          handler: handleCallExecuted
+        - event: Cancelled(indexed bytes32)
+          handler: handleCancelled
+        - event: MinDelayChange(uint256,uint256)
+          handler: handleMinDelayChange
+        - event: RoleGranted(indexed bytes32,indexed address,indexed address)
+          handler: handleRoleGranted
+        - event: RoleRevoked(indexed bytes32,indexed address,indexed address)
+          handler: handleRoleRevoked
+      file: ./src/timelock.ts
+
+  # ── Global Pause Registry ──────────────────────────────────────
+  - kind: ethereum
+    name: GlobalPauseRegistry
+    network: sepolia
+    source:
+      address: "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F"
+      abi: GlobalPauseRegistry
+      startBlock: 10276940
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - GlobalPauseEvent
+      abis:
+        - name: GlobalPauseRegistry
+          file: ../artifacts/contracts/GlobalPauseRegistry.sol/GlobalPauseRegistry.json
+      eventHandlers:
+        - event: GlobalPauseStateChanged(bool,indexed address)
+          handler: handleGlobalPauseStateChanged
+      file: ./src/global-pause.ts
+
+  # ── Price Oracle ───────────────────────────────────────────────
+  - kind: ethereum
+    name: PriceOracle
+    network: sepolia
+    source:
+      address: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025"
+      abi: PriceOracle
+      startBlock: 10276940
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - FeedUpdate
+        - CircuitBreakerEvent
+        - CircuitBreakerRecovery
+      abis:
+        - name: PriceOracle
+          file: ../artifacts/contracts/PriceOracle.sol/PriceOracle.json
+      eventHandlers:
+        - event: FeedUpdated(indexed address,address,uint256,uint8)
+          handler: handleFeedUpdated
+        - event: FeedRemoved(indexed address)
+          handler: handleFeedRemoved
+        - event: CircuitBreakerTriggered(indexed address,uint256,uint256,uint256)
+          handler: handleCircuitBreakerTriggered
+        - event: CircuitBreakerAutoRecovered(indexed address,uint256)
+          handler: handleCircuitBreakerAutoRecovered
+        - event: KeeperRecovery(indexed address,indexed address,uint256)
+          handler: handleKeeperRecovery
+      file: ./src/price-oracle.ts
+
+  # ── Treasury V2 ────────────────────────────────────────────────
+  - kind: ethereum
+    name: TreasuryV2
+    network: sepolia
+    source:
+      address: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513"
+      abi: TreasuryV2
+      startBlock: 10276940
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - TreasuryDeposit
+        - TreasuryWithdrawal
+        - StrategyChange
+        - TreasuryRebalance
+      abis:
+        - name: TreasuryV2
+          file: ../artifacts/contracts/TreasuryV2.sol/TreasuryV2.json
+      eventHandlers:
+        - event: Deposited(indexed address,uint256,uint256[])
+          handler: handleTreasuryDeposited
+        - event: Withdrawn(indexed address,uint256)
+          handler: handleTreasuryWithdrawn
+        - event: StrategyAdded(indexed address,uint256)
+          handler: handleStrategyAdded
+        - event: StrategyRemoved(indexed address)
+          handler: handleStrategyRemoved
+        - event: StrategyUpdated(indexed address,uint256)
+          handler: handleStrategyUpdated
+        - event: Rebalanced(uint256)
+          handler: handleRebalanced
+        - event: EmergencyWithdraw(uint256)
+          handler: handleEmergencyWithdraw
+      file: ./src/treasury.ts

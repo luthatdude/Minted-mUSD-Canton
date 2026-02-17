@@ -236,3 +236,123 @@ type ProtocolStats @entity {
   lastAttestationTimestamp: BigInt!
   lastUpdatedBlock: BigInt!
 }
+
+# ── Timelock Governance Events ──────────────────────────────────
+
+type TimelockOperation @entity {
+  id: ID!
+  operationId: Bytes!
+  index: BigInt!
+  target: Bytes!
+  value: BigInt!
+  data: Bytes!
+  predecessor: Bytes!
+  delay: BigInt!
+  status: String!  # "scheduled" | "executed" | "cancelled"
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TimelockDelayChange @entity {
+  id: ID!
+  oldDuration: BigInt!
+  newDuration: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type RoleChange @entity {
+  id: ID!
+  role: Bytes!
+  account: Bytes!
+  sender: Bytes!
+  granted: Boolean!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Global Pause Events ─────────────────────────────────────────
+
+type GlobalPauseEvent @entity {
+  id: ID!
+  paused: Boolean!
+  caller: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Price Oracle Events ──────────────────────────────────────────
+
+type FeedUpdate @entity {
+  id: ID!
+  token: Bytes!
+  feed: Bytes!
+  stalePeriod: BigInt!
+  tokenDecimals: Int!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CircuitBreakerEvent @entity {
+  id: ID!
+  token: Bytes!
+  oldPrice: BigInt!
+  newPrice: BigInt!
+  deviationBps: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CircuitBreakerRecovery @entity {
+  id: ID!
+  token: Bytes!
+  newPrice: BigInt!
+  keeper: Bytes
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Treasury Events ──────────────────────────────────────────────
+
+type TreasuryDeposit @entity {
+  id: ID!
+  from: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TreasuryWithdrawal @entity {
+  id: ID!
+  to: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type StrategyChange @entity {
+  id: ID!
+  strategy: Bytes!
+  action: String!  # "added" | "removed" | "updated"
+  targetBps: BigInt
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TreasuryRebalance @entity {
+  id: ID!
+  totalValue: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
