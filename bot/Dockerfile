@@ -49,9 +49,9 @@ COPY --from=builder /app/dist ./dist
 # Switch to non-root user
 USER appuser
 
-# Health check — hits the bot's /health endpoint
+# Health check — LOW-01 FIX: Use 127.0.0.1 to avoid IPv6 resolution on Alpine
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD node -e "const http = require('http'); const port = process.env.BOT_PORT || 8080; http.get('http://localhost:' + port + '/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+  CMD node -e "const http = require('http'); const port = process.env.BOT_PORT || 8080; http.get('http://127.0.0.1:' + port + '/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 EXPOSE 8080
 

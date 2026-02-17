@@ -70,14 +70,31 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   templePassword: readSecret("temple_password", "TEMPLE_PASSWORD"),
 
   pollIntervalMs: parseInt(process.env.PRICE_POLL_MS || "30000", 10),  // 30s default
-  divergenceThresholdPct: parseFloat(process.env.DIVERGENCE_THRESHOLD || "5.0"),
+  // TS-H-01: Use Number() + validation instead of parseFloat for financial config values
+  divergenceThresholdPct: (() => {
+    const v = Number(process.env.DIVERGENCE_THRESHOLD || "5.0");
+    if (Number.isNaN(v) || v < 0 || v > 100) throw new Error("DIVERGENCE_THRESHOLD must be 0-100");
+    return v;
+  })(),
   maxConsecutiveFailures: parseInt(process.env.MAX_FAILURES || "10", 10),
   stablecoinPrice: 1.0,
 
   // Off-chain price sanity bounds
-  minPriceUsd: parseFloat(process.env.MIN_PRICE_USD || "0.001"),
-  maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
-  maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
+  minPriceUsd: (() => {
+    const v = Number(process.env.MIN_PRICE_USD || "0.001");
+    if (Number.isNaN(v) || v <= 0) throw new Error("MIN_PRICE_USD must be positive");
+    return v;
+  })(),
+  maxPriceUsd: (() => {
+    const v = Number(process.env.MAX_PRICE_USD || "1000.0");
+    if (Number.isNaN(v) || v <= 0) throw new Error("MAX_PRICE_USD must be positive");
+    return v;
+  })(),
+  maxChangePerUpdatePct: (() => {
+    const v = Number(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0");
+    if (Number.isNaN(v) || v < 0 || v > 100) throw new Error("MAX_CHANGE_PER_UPDATE_PCT must be 0-100");
+    return v;
+  })(),
 };
 
 // INFRA-H-06: Enforce HTTPS for all external API endpoints in production
