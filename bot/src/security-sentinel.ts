@@ -94,6 +94,9 @@ const LARGE_MINT_THRESHOLD = ethers.parseUnits(
 let guardianWallet: ethers.Wallet | null = null;
 let rpcProvider: ethers.Provider;
 
+// Timelock ops the owner has reviewed and marked safe — no further alerts for these
+const acknowledgedOps = new Set<string>();
+
 // ═══════════════════════════════════════════════════════════════════════════
 // EVENT ABIs (read-only for monitoring)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -258,9 +261,12 @@ function pauseButtons(): InlineKeyboard {
   ];
 }
 
-/** Cancel + pause buttons for timelock alerts */
+/** Cancel + pause + acknowledge buttons for timelock alerts */
 function timelockButtons(operationId: string): InlineKeyboard {
   return [
+    [
+      { text: "✅ SAFE — I approve", callback_data: `ack_op:${operationId}` },
+    ],
     [
       { text: "🔴 PAUSE PROTOCOL", callback_data: "pause_confirm" },
       { text: "❌ CANCEL THIS OP", callback_data: `cancel_confirm:${operationId}` },
@@ -638,6 +644,25 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     });
     return;
   }
+
+  // ── ACKNOWLEDGE TIMELOCK OP AS SAFE ──
+  if (data.startsWith("ack_op:")) {
+    const operationId = data.split(":")[1];
+    acknowledgedOps.add(operationId);
+    console.log(`\x1b[32m[ACK]\x1b[0m Timelock op ${operationId} marked safe by owner`);
+    await telegramAPI("sendMessage", {
+      chat_id: chatId,
+      text: [
+        "✅ Acknowledged — timelock operation marked SAFE",
+        "",
+        `Operation: ${operationId.slice(0, 18)}...`,
+        "",
+        "You will not receive further alerts for this operation.",
+        "It will auto-clear when executed or cancelled on-chain.",
+      ].join("\n"),
+    });
+    return;
+  }
 }
 
 async function handleCommand(message: any): Promise<void> {
@@ -824,32 +849,46 @@ function setupTimelockMonitor(provider: ethers.Provider): void {
     }
 
     const executeAfter = new Date((blockTimestamp + Number(delay)) * 1000).toISOString();
+
+    // Skip if already acknowledged as safe
+    if (acknowledgedOps.has(operationId)) {
+      console.log(`\x1b[36m[INFO]\x1b[0m Timelock event for acknowledged op ${operationId} — skipping`);
+      return;
+    }
+
     const severity: Severity = proposerTrusted ? "HIGH" : "CRITICAL";
+    const proposerLabel = proposerTrusted
+      ? `${shortAddr(proposer)} (trusted)`
+      : `${proposer} ⚠️ UNKNOWN/UNVERIFIED`;
 
     await sendAlert(severity, "Timelock Operation Scheduled", [
       `Operation ID: ${operationId}`,
       `Target: ${contractName(target)} (${target})`,
-      `Proposer: ${proposer} ${proposerTrusted ? "(trusted)" : "⚠️ UNKNOWN/UNVERIFIED"}`,
+      `Proposer: ${proposerLabel}`,
       `Delay: ${Number(delay)}s (${(Number(delay) / 3600).toFixed(1)}h)`,
       `Value: ${ethers.formatEther(value)} ETH`,
       `Data: ${dataStr.length > 42 ? `${dataStr.slice(0, 42)}…` : dataStr}`,
       `Tx: ${txHash || "unknown"}`,
       "",
       `Executable after: ${executeAfter}`,
-    ].join("\n"), proposerTrusted ? undefined : timelockButtons(operationId));
+      "",
+      proposerTrusted
+        ? "Tap \"SAFE\" to acknowledge and silence further alerts for this op."
+        : "⚠️ Unknown proposer — review carefully before acknowledging.",
+    ].join("\n"), timelockButtons(operationId));
   });
 
-  // ℹ️ INFO: Operation executed
-  timelock.on("CallExecuted", async (id, index, target, value, data) => {
-    await sendAlert("INFO", "Timelock Operation Executed", [
-      `Operation ID: \`${id}\``,
-      `Target: ${contractName(target)}`,
-    ].join("\n"));
+  // Auto-clean acknowledged ops on execution / cancellation
+  timelock.on("CallExecuted", async (id, index, target) => {
+    const opId = String(id);
+    acknowledgedOps.delete(opId);
+    console.log(`\x1b[36m[INFO]\x1b[0m Timelock executed: op=${opId} target=${contractName(target)}`);
   });
 
-  // ℹ️ INFO: Operation cancelled
   timelock.on("Cancelled", async (id) => {
-    await sendAlert("INFO", "Timelock Operation Cancelled", `Operation ID: \`${id}\``);
+    const opId = String(id);
+    acknowledgedOps.delete(opId);
+    console.log(`\x1b[36m[INFO]\x1b[0m Timelock cancelled: op=${opId}`);
   });
 
   // 🔴 CRITICAL: Delay changed — show PAUSE button
@@ -881,21 +920,29 @@ function setupAccessControlMonitor(provider: ethers.Provider): void {
 
     contract.on("RoleGranted", async (role, account, sender) => {
       const isTrusted = isTrustedAddress(sender);
-      const severity: Severity = isTrusted ? "HIGH" : "CRITICAL";
-
-      await sendAlert(severity, `Role Granted on ${name}`, [
-        `Role: ${roleName(role)}`,
-        `Account: \`${account}\``,
-        `Granted by: \`${sender}\` ${isTrusted ? "(trusted)" : "⚠️ UNKNOWN SENDER"}`,
-      ].join("\n"), isTrusted ? undefined : pauseButtons());
+      if (isTrusted) {
+        // Trusted sender → console-only, no Telegram ping
+        console.log(`\x1b[36m[INFO]\x1b[0m Role Granted on ${name}: ${roleName(role)} → ${shortAddr(account)} by ${shortAddr(sender)} (trusted)`);
+      } else {
+        await sendAlert("CRITICAL", `Role Granted on ${name}`, [
+          `Role: ${roleName(role)}`,
+          `Account: \`${account}\``,
+          `Granted by: \`${sender}\` ⚠️ UNKNOWN SENDER`,
+        ].join("\n"), pauseButtons());
+      }
     });
 
     contract.on("RoleRevoked", async (role, account, sender) => {
-      await sendAlert("HIGH", `Role Revoked on ${name}`, [
-        `Role: ${roleName(role)}`,
-        `Account: \`${account}\``,
-        `Revoked by: \`${sender}\``,
-      ].join("\n"));
+      const isTrusted = isTrustedAddress(sender);
+      if (isTrusted) {
+        console.log(`\x1b[36m[INFO]\x1b[0m Role Revoked on ${name}: ${roleName(role)} from ${shortAddr(account)} by ${shortAddr(sender)} (trusted)`);
+      } else {
+        await sendAlert("CRITICAL", `Role Revoked on ${name}`, [
+          `Role: ${roleName(role)}`,
+          `Account: \`${account}\``,
+          `Revoked by: \`${sender}\` ⚠️ UNKNOWN SENDER`,
+        ].join("\n"), pauseButtons());
+      }
     });
   }
 
@@ -1018,8 +1065,11 @@ async function main(): Promise<void> {
     rpcProvider = new ethers.WebSocketProvider(wsUrl);
     console.log(`[Provider] WebSocket: ${wsUrl.replace(/\/[^/]+$/, "/***")}`);
   } else {
-    rpcProvider = new ethers.JsonRpcProvider(RPC_URL);
-    console.log(`[Provider] HTTP (polling): ${RPC_URL.replace(/\/[^/]+$/, "/***")}`);
+    rpcProvider = new ethers.JsonRpcProvider(RPC_URL, undefined, {
+      pollingInterval: 15_000,          // 15s — gentler on free RPCs, avoids filter expiry
+      batchMaxCount: 1,                  // no batch — some public RPCs reject batches
+    });
+    console.log(`[Provider] HTTP (polling 15s): ${RPC_URL.replace(/\/[^/]+$/, "/***")}`);
     console.log(`  ⚠️  For real-time alerts, set WS_RPC_URL to a WebSocket endpoint`);
   }
 
