@@ -54,10 +54,10 @@ template BoostPoolLP
 
     -- | Update observers from user's privacy settings
     choice BPLP_UpdateObservers : ContractId BoostPoolLP
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
       with newOwner : Party

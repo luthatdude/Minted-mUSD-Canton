@@ -696,6 +696,10 @@ template Vault
       controller owner
       do
         assertMsg "MAX_LOOPS_10" (loops <= 10 && loops >= 0)
+        assertMsg "DEPOSIT_AMOUNT_NON_NEGATIVE" (depositAmount >= 0.0)
+        -- Direct collateral credits are disabled until a proof-backed collateral path
+        -- is passed into AdjustLeverage. This prevents phantom collateral accounting.
+        assertMsg "DIRECT_DEPOSIT_DISABLED" (depositAmount == 0.0)
 
         -- DAML-M-04: Accrue interest before reading current debt to prevent stale calculations
         now <- getTime
@@ -829,16 +833,25 @@ template Vault
       do
         assertMsg "INSUFFICIENT_COLLATERAL" (collateralAmount >= withdrawAmount)
         let newCollateral = collateralAmount - withdrawAmount
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastInterestUpdate)
+        let secondsElapsed = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = principalDebt * intToNumeric config.interestRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        let updatedAccrued = accruedInterest + newInterest
         
         -- Health check
         price <- exercise oracleCid Oracle_GetPrice with 
           requester = owner
           maxStaleness = hours 1
         let newValue = newCollateral * price
-        let totalDebt = principalDebt + accruedInterest
+        let totalDebt = principalDebt + updatedAccrued
         assertMsg "UNHEALTHY_AFTER_WITHDRAW" (totalDebt == 0.0 || newValue >= totalDebt * config.liquidationThreshold)
         
-        create this with collateralAmount = newCollateral
+        create this with
+          collateralAmount = newCollateral
+          accruedInterest = updatedAccrued
+          lastInterestUpdate = now
 
     -- | Liquidate - Called by keepers when vault is undercollateralized
     -- DAML-H-01: Added supplyServiceCid to decrement global supply on liquidation
@@ -1607,8 +1620,8 @@ template BridgeService
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
 
-        -- DAML-H-02: Nonce monotonicity check
-        assertMsg "NONCE_NOT_MONOTONIC" (attestation.payload.nonce > lastNonce)
+        -- DAML-L-26: Require strict sequential nonce progression
+        assertMsg "NONCE_NOT_SEQUENTIAL" (attestation.payload.nonce == lastNonce + 1)
 
         -- DAML-H-03: Attestation expiration check
         now <- getTime

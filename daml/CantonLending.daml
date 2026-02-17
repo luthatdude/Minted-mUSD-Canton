@@ -34,7 +34,7 @@ import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(.
 import CantonSMUSD (CantonSMUSD(..))
 import CantonETHPool (CantonSMUSD_E(..), TimeLockTier(..))
 import CantonCoinToken (CantonCoin(..))
-import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
+import Compliance (ComplianceRegistry(..), IsCompliant(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
 
@@ -217,10 +217,10 @@ template EscrowedCollateral
 
     -- | Update observers from user's privacy settings
     choice Escrow_UpdateObservers : ContractId EscrowedCollateral
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers operator owner
+        create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
     -- DAML-CRIT-01: Added caller validation for on-ledger audit trail
@@ -305,10 +305,10 @@ template CantonDebtPosition
 
     -- | Update observers from user's privacy settings
     choice Debt_UpdateObservers : ContractId CantonDebtPosition
-      with
-        newObservers : [Party]
       controller borrower
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers operator borrower
+        create this with privacyObservers = newObservers
 
     -- | Calculate total debt (principal + accrued + new interest)
     nonconsuming choice Debt_GetTotalDebt : Money
@@ -539,6 +539,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
         let cfg = getConfig CTN_Coin configs
@@ -596,6 +597,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
         let cfg = getConfig CTN_SMUSD configs
@@ -652,6 +654,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         smusde <- fetch smusdeCid
         assertMsg "NOT_OWNER" (smusde.owner == user)
         let cfg = getConfig CTN_SMUSDE configs
@@ -714,6 +717,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
@@ -733,9 +737,6 @@ template CantonLendingService
           -- global mint cap against lending supply alone. Previously this was `pure ()`,
           -- skipping the global cap entirely and relying only on the module-level cap.
           None -> assertMsg "EXCEEDS_GLOBAL_MINT_CAP" (cantonCurrentSupply + borrowAmount <= globalMintCap)
-
-        -- DAML-H-04: Mandatory compliance check — borrower must not be blacklisted
-        exercise complianceRegistryCid ValidateMint with minter = user
 
         -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
         assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
@@ -800,6 +801,7 @@ template CantonLendingService
         debtCid   : ContractId CantonDebtPosition
       controller user
       do
+        assertPartyCompliant complianceRegistryCid operator user
         -- Verify ownership
         musd <- fetch musdCid
         assertMsg "NOT_MUSD_OWNER" (musd.owner == user)
@@ -846,6 +848,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
@@ -915,6 +918,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
@@ -983,6 +987,7 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSDE)
@@ -1061,6 +1066,7 @@ template CantonLendingService
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
+        assertPartyCompliant complianceRegistryCid operator liquidator
 
         -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
         assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
@@ -1328,6 +1334,16 @@ template CantonLiquidationReceipt
 -- ============================================================
 --                     HELPER FUNCTIONS
 -- ============================================================
+
+-- | Ensure a party passes blacklist/freeze checks in the configured registry.
+assertPartyCompliant : ContractId ComplianceRegistry -> Party -> Party -> Update ()
+assertPartyCompliant complianceRegistryCid expectedOperator party = do
+  registry <- fetch complianceRegistryCid
+  assertMsg "COMPLIANCE_OPERATOR_MISMATCH" (registry.operator == expectedOperator)
+  ok <- exercise complianceRegistryCid IsCompliant with
+    party = party
+    caller = expectedOperator
+  assertMsg "USER_NOT_COMPLIANT" ok
 
 -- | Look up config for a given collateral type
 getConfig : CollateralType -> [CollateralConfig] -> CollateralConfig
