@@ -1,4 +1,4 @@
--- | Canton Protocol Initialization Script
+-- | Canton Protocol Initialization Script (Idempotent)
 --
 -- Creates the initial protocol contracts on Canton Devnet:
 --   1. ComplianceRegistry
@@ -7,92 +7,142 @@
 --   4. VaultManager
 --   5. BridgeService
 --
+-- Safe to re-run: looks up existing parties (Canton 3.4+),
+-- skips contracts that already exist.
+--
 -- Usage:
 --   daml script --dar .daml/dist/ble-protocol-<VERSION>.dar \
 --     --script-name InitProtocol:initProtocol \
---     --ledger-host localhost --ledger-port 7575 \
---     --input-file init-args.json
+--     --ledger-host 127.0.0.1 --ledger-port 5001
 
 module InitProtocol where
 
 import Daml.Script
 import DA.Time
+import DA.List (head)
+import DA.Optional (fromSome)
 import DA.Set qualified as Set
+import DA.Text (isPrefixOf)
 import Minted.Protocol.V3
 import Compliance
 
--- | Initialize all core protocol contracts
+-- | Look up an existing party by hint prefix, or allocate a new one.
+-- Canton 3.4+ does not allow re-allocating a party that already exists,
+-- so we must check first.
+getOrAllocateParty : Text -> Script Party
+getOrAllocateParty hint = do
+  allParties <- listKnownParties
+  let matching = filter (\pd -> hint `isPrefixOf` partyToText pd.party) allParties
+  case matching of
+    (pd :: _) -> do
+      debug $ "Found existing party: " <> hint <> " -> " <> partyToText pd.party
+      pure pd.party
+    [] -> do
+      debug $ "Allocating new party: " <> hint
+      allocatePartyWithHint hint (PartyIdHint hint)
+
+-- | Initialize all core protocol contracts (idempotent)
 initProtocol : Script ()
 initProtocol = do
-  -- Allocate parties
-  operator <- allocatePartyWithHint "minted-operator" (PartyIdHint "minted-operator")
-  governance <- allocatePartyWithHint "minted-governance" (PartyIdHint "minted-governance")
-  regulator <- allocatePartyWithHint "regulator" (PartyIdHint "regulator")
-  validator1 <- allocatePartyWithHint "validator-1" (PartyIdHint "validator-1")
+  -- Look up or allocate parties
+  operator <- getOrAllocateParty "minted-operator"
+  governance <- getOrAllocateParty "minted-governance"
+  regulator <- getOrAllocateParty "regulator"
+  validator1 <- getOrAllocateParty "validator-1"
 
   now <- getTime
 
-  -- 1. ComplianceRegistry
-  debug "Creating ComplianceRegistry..."
-  complianceCid <- submit regulator do
-    createCmd ComplianceRegistry with
-      regulator
-      operator
-      blacklisted = Set.empty
-      frozen = Set.empty
-      lastUpdated = now
+  -- 1. ComplianceRegistry (skip if exists)
+  existingCompliance <- query @ComplianceRegistry regulator
+  complianceCid <- case existingCompliance of
+    ((cid, _) :: _) -> do
+      debug "ComplianceRegistry already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating ComplianceRegistry..."
+      submit regulator do
+        createCmd ComplianceRegistry with
+          regulator
+          operator
+          blacklisted = Set.empty
+          frozen = Set.empty
+          lastUpdated = now
 
-  -- 2. MUSDSupplyService (10M cap)
-  debug "Creating MUSDSupplyService..."
-  supplyServiceCid <- submitMulti [operator, governance] [] do
-    createCmd MUSDSupplyService with
-      operator
-      governance
-      supplyCap = 10_000_000.0       -- 10M mUSD
-      currentSupply = 0.0
-      largeMintThreshold = 100_000.0 -- 100K mUSD
-      pendingLargeMints = []
-      observers = [validator1]
+  -- 2. MUSDSupplyService (skip if exists)
+  existingSupply <- query @MUSDSupplyService operator
+  supplyServiceCid <- case existingSupply of
+    ((cid, _) :: _) -> do
+      debug "MUSDSupplyService already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating MUSDSupplyService..."
+      submitMulti [operator, governance] [] do
+        createCmd MUSDSupplyService with
+          operator
+          governance
+          supplyCap = 10_000_000.0       -- 10M mUSD
+          currentSupply = 0.0
+          largeMintThreshold = 100_000.0 -- 100K mUSD
+          pendingLargeMints = []
+          observers = [validator1]
 
-  -- 3. PriceOracle (ETH/USD)
-  debug "Creating PriceOracle (ETH/USD)..."
-  oracleCid <- submit operator do
-    createCmd PriceOracle with
-      provider = operator
-      symbol = "ETH/USD"
-      price = 3000.0                 -- Initial price
-      lastUpdated = now
-      observers = [governance, validator1]
+  -- 3. PriceOracle (skip if exists)
+  existingOracle <- query @PriceOracle operator
+  oracleCid <- case existingOracle of
+    ((cid, _) :: _) -> do
+      debug "PriceOracle already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating PriceOracle (ETH/USD)..."
+      submit operator do
+        createCmd PriceOracle with
+          provider = operator
+          symbol = "ETH/USD"
+          price = 3000.0                 -- Initial price
+          lastUpdated = now
+          observers = [governance, validator1]
 
-  -- 4. VaultManager
-  debug "Creating VaultManager..."
-  vaultManagerCid <- submit operator do
-    createCmd VaultManager with
-      operator
-      defaultConfig = VaultConfig with
-        liquidationThreshold = 1.5   -- 150%
-        interestRateBps = 500        -- 5% APR
-        liquidationPenaltyBps = 500  -- 5%
-        liquidationBonusBps = 100    -- 1% keeper bonus
-        closeFactorBps = 5000        -- 50% per liquidation
-        dustThreshold = 50.0         -- Force full liq below 50 mUSD
-      allowedCollaterals = ["ETH", "WBTC", "USDC"]
-      complianceRegistryCid = complianceCid
-      observers = [governance, validator1]
+  -- 4. VaultManager (skip if exists)
+  existingVaultMgr <- query @VaultManager operator
+  vaultManagerCid <- case existingVaultMgr of
+    ((cid, _) :: _) -> do
+      debug "VaultManager already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating VaultManager..."
+      submit operator do
+        createCmd VaultManager with
+          operator
+          defaultConfig = VaultConfig with
+            liquidationThreshold = 1.5   -- 150%
+            interestRateBps = 500        -- 5% APR
+            liquidationPenaltyBps = 500  -- 5%
+            liquidationBonusBps = 100    -- 1% keeper bonus
+            closeFactorBps = 5000        -- 50% per liquidation
+            dustThreshold = 50.0         -- Force full liq below 50 mUSD
+          allowedCollaterals = ["ETH", "WBTC", "USDC"]
+          complianceRegistryCid = complianceCid
+          observers = [governance, validator1]
 
-  -- 5. BridgeService
-  debug "Creating BridgeService..."
-  bridgeServiceCid <- submitMulti [operator, governance] [] do
-    createCmd BridgeService with
-      operator
-      governance
-      validators = [validator1]
-      requiredSignatures = 1         -- Devnet: single validator
-      totalBridgedIn = 0.0
-      totalBridgedOut = 0.0
-      lastNonce = 0
-      paused = False
-      observers = [validator1]
+  -- 5. BridgeService (skip if exists)
+  existingBridge <- query @BridgeService operator
+  bridgeServiceCid <- case existingBridge of
+    ((cid, _) :: _) -> do
+      debug "BridgeService already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating BridgeService..."
+      submitMulti [operator, governance] [] do
+        createCmd BridgeService with
+          operator
+          governance
+          validators = [validator1]
+          requiredSignatures = 1         -- Devnet: single validator
+          totalBridgedIn = 0.0
+          totalBridgedOut = 0.0
+          lastNonce = 0
+          paused = False
+          observers = [validator1]
 
   debug "=========================================="
   debug "Canton Protocol Initialized!"
