@@ -259,6 +259,36 @@ const BRIDGE_ABI = [
     "outputs": [{ "type": "uint256" }],
     "stateMutability": "view",
     "type": "function"
+  },
+  // H-2: Pause guardian support
+  {
+    "inputs": [],
+    "name": "paused",
+    "outputs": [{ "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pause",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  // H-2: Read attested assets for anomaly detection
+  {
+    "inputs": [],
+    "name": "attestedCantonAssets",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getCurrentSupplyCap",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
   }
 ];
 
@@ -296,6 +326,42 @@ class RelayService {
   private activeProviderIndex: number = 0;
   private consecutiveFailures: number = 0;
   private readonly MAX_CONSECUTIVE_FAILURES = 3;
+
+  // ── H-1: Rate limiting ──────────────────────────────────────────────
+  // Per-block and per-minute caps to prevent relay DoS / spam
+  private rateLimiter = {
+    // Per-minute cap
+    txThisMinute: 0,
+    minuteWindowStart: Date.now(),
+    maxTxPerMinute: parseInt(process.env.RATE_LIMIT_TX_PER_MINUTE || "10", 10),
+    // Per-block cap (prevent submitting multiple attestations in the same block)
+    lastSubmittedBlock: 0,
+    txThisBlock: 0,
+    maxTxPerBlock: parseInt(process.env.RATE_LIMIT_TX_PER_BLOCK || "1", 10),
+    // Hourly cap (defense-in-depth)
+    txThisHour: 0,
+    hourWindowStart: Date.now(),
+    maxTxPerHour: parseInt(process.env.RATE_LIMIT_TX_PER_HOUR || "60", 10),
+  };
+
+  // ── H-2: Pause guardian — anomaly detection thresholds ──────────────
+  private anomalyDetector = {
+    // Supply cap change threshold: auto-pause if single attestation changes cap by > X%
+    maxCapChangePct: parseInt(process.env.PAUSE_CAP_CHANGE_PCT || "20", 10),
+    // Consecutive revert threshold: auto-pause if N consecutive tx reverts
+    consecutiveReverts: 0,
+    maxConsecutiveReverts: parseInt(process.env.PAUSE_MAX_REVERTS || "5", 10),
+    // Track last known supply cap for anomaly comparison
+    lastKnownSupplyCap: 0n,
+    // Whether we've triggered a pause (prevent repeated pause attempts)
+    pauseTriggered: false,
+  };
+
+  // ── H-3: Nonce replay tracking (relay-side dedup) ───────────────────
+  // Track nonces we've submitted to prevent relay-level replay
+  private submittedNonces: Set<number> = new Set();
+  // Track attestation IDs submitted (distinct from on-chain check — catches in-flight dupes)
+  private inFlightAttestations: Set<string> = new Set();
 
   constructor(config: RelayConfig) {
     this.config = config;
@@ -480,6 +546,246 @@ class RelayService {
     this.isRunning = false;
   }
 
+  // ============================================================
+  //  H-1: RATE LIMITING
+  // ============================================================
+
+  /**
+   * Check if a transaction is allowed under rate limits.
+   * Returns true if allowed, false if rate-limited.
+   */
+  private async checkRateLimit(): Promise<boolean> {
+    const now = Date.now();
+    const rl = this.rateLimiter;
+
+    // Reset minute window
+    if (now - rl.minuteWindowStart > 60_000) {
+      rl.txThisMinute = 0;
+      rl.minuteWindowStart = now;
+    }
+
+    // Reset hour window
+    if (now - rl.hourWindowStart > 3_600_000) {
+      rl.txThisHour = 0;
+      rl.hourWindowStart = now;
+    }
+
+    // Check per-minute cap
+    if (rl.txThisMinute >= rl.maxTxPerMinute) {
+      console.warn(`[RateLimit] Per-minute cap reached (${rl.maxTxPerMinute}/min). Skipping.`);
+      return false;
+    }
+
+    // Check per-hour cap
+    if (rl.txThisHour >= rl.maxTxPerHour) {
+      console.warn(`[RateLimit] Per-hour cap reached (${rl.maxTxPerHour}/hr). Skipping.`);
+      return false;
+    }
+
+    // Check per-block cap
+    try {
+      const currentBlock = await this.provider.getBlockNumber();
+      if (currentBlock === rl.lastSubmittedBlock) {
+        if (rl.txThisBlock >= rl.maxTxPerBlock) {
+          console.warn(`[RateLimit] Per-block cap reached (${rl.maxTxPerBlock}/block). Waiting for next block.`);
+          return false;
+        }
+      } else {
+        rl.lastSubmittedBlock = currentBlock;
+        rl.txThisBlock = 0;
+      }
+    } catch {
+      // If block number check fails, still allow (don't block on RPC hiccup)
+    }
+
+    return true;
+  }
+
+  /**
+   * Record a successful transaction submission for rate limiting
+   */
+  private recordTxSubmission(): void {
+    this.rateLimiter.txThisMinute++;
+    this.rateLimiter.txThisHour++;
+    this.rateLimiter.txThisBlock++;
+  }
+
+  // ============================================================
+  //  H-2: PAUSE GUARDIAN — Anomaly Detection
+  // ============================================================
+
+  /**
+   * Check for anomalies and auto-pause the bridge if thresholds are exceeded.
+   * Called before each attestation submission.
+   *
+   * Anomaly triggers:
+   *   1. Supply cap change > maxCapChangePct% in a single attestation
+   *   2. Too many consecutive tx reverts (possible attack or contract issue)
+   */
+  private async checkForAnomalies(proposedCantonAssets: bigint): Promise<boolean> {
+    if (this.anomalyDetector.pauseTriggered) {
+      console.error("[PauseGuardian] Bridge already paused by relay. Waiting for manual review.");
+      return false; // Block all submissions
+    }
+
+    // Check supply cap change magnitude
+    try {
+      if (this.anomalyDetector.lastKnownSupplyCap === 0n) {
+        // First attestation — initialize baseline
+        const currentCap = await this.bridgeContract.getCurrentSupplyCap();
+        this.anomalyDetector.lastKnownSupplyCap = BigInt(currentCap);
+      }
+
+      const currentCap = this.anomalyDetector.lastKnownSupplyCap;
+      if (currentCap > 0n) {
+        // Rough estimate of new cap: proposedAssets * 10000 / collateralRatio
+        // We don't know exact ratio here, so compare asset change instead
+        const lastAssets = await this.bridgeContract.attestedCantonAssets();
+        const lastAssetsBn = BigInt(lastAssets);
+
+        if (lastAssetsBn > 0n) {
+          const changeBps = lastAssetsBn > proposedCantonAssets
+            ? ((lastAssetsBn - proposedCantonAssets) * 10000n) / lastAssetsBn
+            : ((proposedCantonAssets - lastAssetsBn) * 10000n) / lastAssetsBn;
+
+          const thresholdBps = BigInt(this.anomalyDetector.maxCapChangePct * 100);
+
+          if (changeBps > thresholdBps) {
+            console.error(
+              `[PauseGuardian] ANOMALY: Canton assets change ${Number(changeBps) / 100}% exceeds ` +
+              `${this.anomalyDetector.maxCapChangePct}% threshold. Auto-pausing bridge.`
+            );
+            await this.triggerEmergencyPause(
+              `Anomalous asset change: ${Number(changeBps) / 100}% (threshold: ${this.anomalyDetector.maxCapChangePct}%)`
+            );
+            return false;
+          }
+        }
+      }
+    } catch (err: any) {
+      // Don't block on anomaly check failure — log and continue
+      console.warn(`[PauseGuardian] Anomaly check failed (non-blocking): ${err.message}`);
+    }
+
+    return true;
+  }
+
+  /**
+   * Record a transaction revert and check consecutive revert threshold
+   */
+  private async recordRevert(): Promise<void> {
+    this.anomalyDetector.consecutiveReverts++;
+    if (this.anomalyDetector.consecutiveReverts >= this.anomalyDetector.maxConsecutiveReverts) {
+      console.error(
+        `[PauseGuardian] ${this.anomalyDetector.consecutiveReverts} consecutive reverts — auto-pausing bridge.`
+      );
+      await this.triggerEmergencyPause(
+        `${this.anomalyDetector.consecutiveReverts} consecutive transaction reverts`
+      );
+    }
+  }
+
+  /**
+   * Reset consecutive revert counter on successful transaction
+   */
+  private recordSuccess(): void {
+    this.anomalyDetector.consecutiveReverts = 0;
+  }
+
+  /**
+   * Trigger emergency pause on the bridge contract.
+   * Requires the relay signer to hold EMERGENCY_ROLE.
+   */
+  private async triggerEmergencyPause(reason: string): Promise<void> {
+    if (this.anomalyDetector.pauseTriggered) return;
+    this.anomalyDetector.pauseTriggered = true;
+
+    console.error(`[PauseGuardian] ⚠️  EMERGENCY PAUSE TRIGGERED: ${reason}`);
+
+    try {
+      // Check if already paused
+      const PAUSE_ABI = [
+        { inputs: [], name: "paused", outputs: [{ type: "bool" }], stateMutability: "view", type: "function" },
+        { inputs: [], name: "pause", outputs: [], stateMutability: "nonpayable", type: "function" },
+      ];
+      const pausable = new ethers.Contract(
+        this.config.bridgeContractAddress,
+        PAUSE_ABI,
+        this.wallet
+      );
+
+      const isPaused = await pausable.paused();
+      if (isPaused) {
+        console.warn("[PauseGuardian] Bridge is already paused.");
+        return;
+      }
+
+      const tx = await pausable.pause();
+      console.error(`[PauseGuardian] Pause tx: ${tx.hash}`);
+      await tx.wait(1);
+      console.error(`[PauseGuardian] ✓ Bridge paused successfully. Manual review required.`);
+    } catch (err: any) {
+      console.error(`[PauseGuardian] FAILED to pause bridge: ${err.message}`);
+      console.error(`[PauseGuardian] The relay signer may not hold EMERGENCY_ROLE. Stopping relay as fallback.`);
+      this.isRunning = false;
+    }
+  }
+
+  // ============================================================
+  //  H-3: NONCE REPLAY CHECK (relay-side dedup)
+  // ============================================================
+
+  /**
+   * Check if a nonce has already been submitted by this relay instance.
+   * Complements the on-chain `currentNonce + 1` check with in-flight dedup.
+   */
+  private checkNonceReplay(nonce: number, attestationId: string): boolean {
+    if (this.submittedNonces.has(nonce)) {
+      console.warn(`[NonceGuard] Nonce ${nonce} already submitted by this relay. Skipping duplicate.`);
+      return false;
+    }
+    if (this.inFlightAttestations.has(attestationId)) {
+      console.warn(`[NonceGuard] Attestation ${attestationId} already in-flight. Skipping duplicate.`);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Mark a nonce and attestation as submitted (in-flight)
+   */
+  private markNonceSubmitted(nonce: number, attestationId: string): void {
+    this.submittedNonces.add(nonce);
+    this.inFlightAttestations.add(attestationId);
+    // Evict old nonces if set grows too large
+    if (this.submittedNonces.size > 1000) {
+      const toEvict = Array.from(this.submittedNonces).slice(0, 100);
+      toEvict.forEach(n => this.submittedNonces.delete(n));
+    }
+    if (this.inFlightAttestations.size > 1000) {
+      const toEvict = Array.from(this.inFlightAttestations).slice(0, 100);
+      toEvict.forEach(id => this.inFlightAttestations.delete(id));
+    }
+  }
+
+  // ============================================================
+  //  M-3: LOG REDACTION
+  // ============================================================
+
+  /**
+   * Redact sensitive data from log output.
+   * Masks private keys, API keys, and bearer tokens.
+   */
+  private static redact(msg: string): string {
+    return msg
+      // Private keys (64 hex chars)
+      .replace(/\b(0x)?[0-9a-fA-F]{64}\b/g, "[REDACTED_KEY]")
+      // Bearer tokens
+      .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+      // Alchemy/Infura API keys in URLs
+      .replace(/(\/v2\/|\/v3\/)[a-zA-Z0-9_-]{20,}/g, "$1[REDACTED_API_KEY]");
+  }
+
   /**
    * Load attestation IDs that have already been processed on-chain
    */
@@ -576,6 +882,23 @@ class RelayService {
       if (Number(payload.nonce) !== expectedNonce) {
         console.log(`[Relay] Attestation ${attestationId}: nonce mismatch (got ${payload.nonce}, expected ${expectedNonce})`);
         continue;
+      }
+
+      // H-3: Relay-side nonce replay check (catches in-flight duplicates)
+      if (!this.checkNonceReplay(Number(payload.nonce), attestationId)) {
+        continue;
+      }
+
+      // H-1: Rate limit check before fetching signatures (avoid unnecessary work)
+      if (!(await this.checkRateLimit())) {
+        console.warn(`[Relay] Rate-limited — deferring attestation ${attestationId} to next cycle`);
+        break; // Stop processing this cycle entirely
+      }
+
+      // H-2: Anomaly detection — check proposed asset change magnitude
+      const proposedAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
+      if (!(await this.checkForAnomalies(proposedAssets))) {
+        break; // Pause triggered — stop processing
       }
 
       // Fetch validator signatures
@@ -854,6 +1177,9 @@ class RelayService {
       //   griefing attacks where adversaries submit invalid signature sets to burn gas.
       console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
 
+      // H-3: Mark nonce as submitted before tx (in-flight dedup)
+      this.markNonceSubmitted(Number(nonce), attestationId);
+
       const tx = await this.bridgeContract.processAttestation(
         attestation,
         sortedSigs,
@@ -870,6 +1196,14 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+        // H-1: Record successful submission for rate limiting
+        this.recordTxSubmission();
+        // H-2: Reset consecutive revert counter and update cap baseline
+        this.recordSuccess();
+        try {
+          const newCap = await this.bridgeContract.getCurrentSupplyCap();
+          this.anomalyDetector.lastKnownSupplyCap = BigInt(newCap);
+        } catch { /* non-blocking */ }
 
         // BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
         // the attestation request. Without this, stale attestation contracts remain on
@@ -906,15 +1240,21 @@ class RelayService {
         }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
+        // H-2: Track consecutive reverts for pause guardian
+        await this.recordRevert();
       }
 
     } catch (error: any) {
-      console.error(`[Relay] Failed to bridge attestation ${attestationId}:`, error.message);
+      // M-3: Redact sensitive data from error logs
+      console.error(`[Relay] Failed to bridge attestation ${attestationId}:`, RelayService.redact(error.message));
 
       // Check if it's a revert with reason
       if (error.reason) {
         console.error(`[Relay] Revert reason: ${error.reason}`);
       }
+
+      // H-2: Track consecutive reverts for pause guardian
+      await this.recordRevert();
 
       // Don't mark as processed so we can retry
       throw error;
@@ -1144,6 +1484,26 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
         lastScannedBlock: (relay as any).lastScannedBlock,
         activeProviderIndex: (relay as any).activeProviderIndex,
         consecutiveFailures: (relay as any).consecutiveFailures,
+        // H-1: Rate limiter state
+        rateLimiter: {
+          txThisMinute: (relay as any).rateLimiter.txThisMinute,
+          txThisHour: (relay as any).rateLimiter.txThisHour,
+          maxTxPerMinute: (relay as any).rateLimiter.maxTxPerMinute,
+          maxTxPerHour: (relay as any).rateLimiter.maxTxPerHour,
+        },
+        // H-2: Anomaly detector state
+        anomalyDetector: {
+          consecutiveReverts: (relay as any).anomalyDetector.consecutiveReverts,
+          maxConsecutiveReverts: (relay as any).anomalyDetector.maxConsecutiveReverts,
+          pauseTriggered: (relay as any).anomalyDetector.pauseTriggered,
+          maxCapChangePct: (relay as any).anomalyDetector.maxCapChangePct,
+        },
+        // H-3: Nonce tracking
+        submittedNonces: (relay as any).submittedNonces.size,
+        inFlightAttestations: (relay as any).inFlightAttestations.size,
+        // M-1: Uptime
+        uptimeSeconds: Math.floor(process.uptime()),
+        memoryMB: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024),
       }));
     } else {
       res.writeHead(404);
@@ -1206,11 +1566,48 @@ async function main(): Promise<void> {
   const healthPort = parseInt(process.env.HEALTH_PORT || "8080", 10);
   const healthServer = startHealthServer(healthPort, relay);
 
-  // Handle shutdown
-  const shutdown = () => {
-    console.log("\n[Main] Shutting down...");
+  // Handle shutdown — M-4: Graceful shutdown with drain
+  const shutdown = async () => {
+    console.log("\n[Main] Graceful shutdown initiated...");
     relay.stop();
-    healthServer.close();
+
+    // M-4: Wait for in-flight operations to complete (max 30s)
+    const drainTimeout = parseInt(process.env.SHUTDOWN_DRAIN_TIMEOUT_MS || "30000", 10);
+    const drainStart = Date.now();
+    const checkInterval = 500;
+
+    while (Date.now() - drainStart < drainTimeout) {
+      // Check if relay has drained (no in-flight attestations)
+      const inFlight = (relay as any).inFlightAttestations?.size || 0;
+      if (inFlight === 0) {
+        console.log("[Main] All in-flight operations drained.");
+        break;
+      }
+      console.log(`[Main] Waiting for ${inFlight} in-flight operations to complete...`);
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    // Close health server
+    healthServer.close(() => {
+      console.log("[Main] Health server closed.");
+    });
+
+    // M-1: Log final metrics on shutdown
+    console.log("[Main] Final metrics:", JSON.stringify({
+      processedAttestations: (relay as any).processedAttestations.size,
+      bridgeOutsRelayed: (relay as any).processedBridgeOuts.size,
+      lastScannedBlock: (relay as any).lastScannedBlock,
+      consecutiveFailures: (relay as any).consecutiveFailures,
+      rateLimiter: {
+        txThisMinute: (relay as any).rateLimiter.txThisMinute,
+        txThisHour: (relay as any).rateLimiter.txThisHour,
+      },
+      anomalyDetector: {
+        consecutiveReverts: (relay as any).anomalyDetector.consecutiveReverts,
+        pauseTriggered: (relay as any).anomalyDetector.pauseTriggered,
+      },
+    }));
+
     process.exit(0);
   };
 

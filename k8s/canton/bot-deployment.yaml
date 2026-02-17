@@ -17,6 +17,8 @@ metadata:
   labels:
     app.kubernetes.io/name: liquidation-bot
     app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "0.0.0"  # L-1: Replaced by CI with git SHA
+    app.kubernetes.io/managed-by: kubectl
 data:
   # Sepolia testnet — update for mainnet deployment
   BORROW_MODULE_ADDRESS: "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8"
