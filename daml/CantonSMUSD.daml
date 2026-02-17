@@ -1,4 +1,8 @@
 -- | CantonSMUSD
+-- Canton-native staked mUSD (smUSD) with global share price model and cooldown enforcement.
+-- For the V3 bridge-integrated yield vault, see Minted.Protocol.V3 (CantonSMUSD template).
+-- This standalone module is the authoritative Canton-native staking implementation.
+--
 -- Canton-side staked mUSD (smUSD) with UNIFIED yield from Ethereum
 --
 -- Architecture:
@@ -19,6 +23,7 @@ module CantonSMUSD where
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money)
 import UserPrivacySettings (lookupUserObservers)
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 
 -- ============================================================
 --                     SECTION 1: STAKED mUSD POSITION
@@ -35,6 +40,7 @@ template CantonSMUSD
     shares : Money          -- Number of shares (not mUSD amount)
     entrySharePrice : Money -- Share price when staked (for tracking)
     stakedAt : Time         -- FIX D-M01: Timestamp when staked (for cooldown)
+    complianceRegistryCid : ContractId ComplianceRegistry  -- HIGH-01: mandatory compliance
     privacyObservers : [Party]  -- Opt-in transparency (from UserPrivacySettings)
   where
     signatory issuer, owner
@@ -50,11 +56,15 @@ template CantonSMUSD
       do create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
+    -- HIGH-01: Enforce compliance validation on transfers
     choice SMUSD_Transfer : ContractId CantonSMUSDTransferProposal
       with
         newOwner : Party
       controller owner
       do
+        -- HIGH-01: Validate both sender and receiver against blacklist/freeze
+        exercise complianceRegistryCid ValidateTransfer
+          with sender = owner; receiver = newOwner
         create CantonSMUSDTransferProposal with
           smusd = this
           newOwner
@@ -112,6 +122,7 @@ template CantonSMUSDTransferProposal
 template CantonStakingService
   with
     operator : Party
+    governance : Party          -- FIX HIGH-07: Governance co-signer for critical operations
     totalShares : Money         -- Total smUSD shares on Canton
     -- UNIFIED YIELD: Global share price from Ethereum (includes all chains)
     globalSharePrice : Money    -- Synced from Ethereum: globalAssets / globalShares
@@ -120,7 +131,14 @@ template CantonStakingService
     lastSyncEpoch : Int         -- Last synced epoch from Ethereum
     cooldownSeconds : Int       -- Minimum stake duration before unstake
     minDeposit : Money          -- Minimum mUSD deposit
+    -- SECURITY FIX DAML-H-03: Supply cap tracking for mUSD minted on unstake.
+    -- Yield accrual means unstake can mint MORE mUSD than was originally staked.
+    -- Without a cap, the staking service could mint unbounded mUSD.
+    musdMintCap : Money         -- Maximum total mUSD mintable through unstake
+    currentUnstakeMinted : Money -- Running total of mUSD minted via unstake
     paused : Bool
+    -- DAML-H-04: Mandatory compliance — all stakers must pass blacklist/freeze checks
+    complianceRegistryCid : ContractId ComplianceRegistry
     -- Master Participation Agreement (passed through to minted CantonMUSD on unstake)
     mpaHash : Text
     mpaUri : Text
@@ -130,6 +148,7 @@ template CantonStakingService
     observer observers
 
     ensure totalShares >= 0.0 && globalSharePrice > 0.0
+        && musdMintCap > 0.0 && currentUnstakeMinted >= 0.0
 
     -- | Current share price: uses GLOBAL share price for unified yield
     nonconsuming choice GetSharePrice : Money
@@ -146,6 +165,9 @@ template CantonStakingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
+
+        -- DAML-H-04: Mandatory compliance check — staker must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
 
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
@@ -168,10 +190,8 @@ template CantonStakingService
           shares = newShares
           entrySharePrice = globalSharePrice
           stakedAt = now
+          complianceRegistryCid = complianceRegistryCid
           privacyObservers = userObs
-
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
 
         -- Update pool state (local shares only - global sync happens via bridge)
         newService <- create this with
@@ -190,6 +210,9 @@ template CantonStakingService
       do
         assertMsg "SERVICE_PAUSED" (not paused)
 
+        -- DAML-H-04: Mandatory compliance check — unstaker must not be blacklisted/frozen
+        exercise complianceRegistryCid ValidateRedemption with redeemer = user
+
         smusd <- fetch smusdCid
         assertMsg "OWNER_MISMATCH" (smusd.owner == user)
 
@@ -201,6 +224,10 @@ template CantonStakingService
 
         -- Calculate mUSD value using GLOBAL share price
         let musdAmount = smusd.shares * globalSharePrice
+
+        -- SECURITY FIX DAML-H-03: Enforce supply cap on unstake minting.
+        -- Yield means unstake mints more than was staked, creating net new mUSD.
+        assertMsg "UNSTAKE_EXCEEDS_MUSD_MINT_CAP" (currentUnstakeMinted + musdAmount <= musdMintCap)
 
         -- Burn smUSD shares
         archive smusdCid
@@ -215,33 +242,37 @@ template CantonStakingService
           agreementUri = mpaUri
           privacyObservers = userObs
 
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
-
-        -- Update pool state
+        -- Update pool state (DAML-H-03: track minted amount)
         newService <- create this with
           totalShares = totalShares - smusd.shares
+          currentUnstakeMinted = currentUnstakeMinted + musdAmount
 
         return (newService, musdCid)
 
     -- | Sync global share price from Ethereum (replaces old SyncYield)
     -- Called by operator after YieldSyncService calculates global share price
+    -- FIX HIGH-07: Requires governance co-approval — prevents unilateral operator manipulation
     choice SyncGlobalSharePrice : ContractId CantonStakingService
       with
         newGlobalSharePrice : Money   -- Global share price from Ethereum
         newGlobalTotalAssets : Money  -- Total assets across both chains
         newGlobalTotalShares : Money  -- Total shares across both chains
         epochNumber : Int             -- Must be sequential
-      controller operator
+        attestationHash : Text        -- FIX D-M-02: Validator attestation hash (SHA-256 of price data)
+        validatorCount : Int          -- FIX D-M-02: Number of validators who signed this attestation
+      controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         assertMsg "SHARE_PRICE_MUST_BE_POSITIVE" (newGlobalSharePrice > 0.0)
+        -- FIX D-M-02: Require BFT supermajority attestation (at least 3 validators)
+        assertMsg "ATTESTATION_HASH_REQUIRED" (attestationHash /= "")
+        assertMsg "INSUFFICIENT_VALIDATOR_ATTESTATION" (validatorCount >= 3)
         -- FIX D-M05: Allow share price decrease for slashing/loss events, but cap at 10% max decrease
         let minAllowedPrice = globalSharePrice * 0.9
         assertMsg "SHARE_PRICE_DECREASE_TOO_LARGE" (newGlobalSharePrice >= minAllowedPrice)
-
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
+        -- FIX D-M09: Cap share price increase at 10% per epoch to prevent manipulation
+        let maxAllowedPrice = globalSharePrice * 1.1
+        assertMsg "SHARE_PRICE_INCREASE_TOO_LARGE" (newGlobalSharePrice <= maxAllowedPrice)
 
         create this with
           globalSharePrice = newGlobalSharePrice
@@ -250,20 +281,26 @@ template CantonStakingService
           lastSyncEpoch = epochNumber
 
     -- | Legacy SyncYield for backwards compatibility (deprecated)
+    -- FIX C-DAML-03: Require governance co-signature (matches SyncGlobalSharePrice)
     choice SyncYield : ContractId CantonStakingService
       with
         newTotalTreasuryAssets : Money
         yieldAccrued : Money
         epochNumber : Int
-      controller operator
+      controller operator, governance
       do
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastSyncEpoch)
         -- Convert to global share price model
         let newSharePrice = if globalTotalShares > 0.0
               then newTotalTreasuryAssets / globalTotalShares
               else globalSharePrice
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
+        -- SECURITY FIX DAML-H-04: Apply same share price bounds as SyncGlobalSharePrice.
+        -- Without bounds, a malicious or buggy oracle could set an extreme value,
+        -- causing massive over/under-payments on unstake.
+        let minAllowedPrice = globalSharePrice * 0.9
+        let maxAllowedPrice = globalSharePrice * 1.1
+        assertMsg "SYNC_YIELD_PRICE_DECREASE_TOO_LARGE" (newSharePrice >= minAllowedPrice)
+        assertMsg "SYNC_YIELD_PRICE_INCREASE_TOO_LARGE" (newSharePrice <= maxAllowedPrice)
         create this with
           globalSharePrice = newSharePrice
           globalTotalAssets = newTotalTreasuryAssets
@@ -275,6 +312,4 @@ template CantonStakingService
         newPaused : Bool
       controller operator
       do
-        -- FIX CRITICAL: Archive old service before creating new one
-        archive self
         create this with paused = newPaused

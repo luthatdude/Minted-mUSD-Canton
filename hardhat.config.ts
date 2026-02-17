@@ -5,16 +5,40 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000001";
+// Changed from well-known private key (0x...001 = known address 0x7E5F...) to empty string.
+// The old default loaded a real private key into memory even when not deploying.
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 const RPC_URL = process.env.RPC_URL || "";
+
+// solidity-coverage sets SOLIDITY_COVERAGE=true during instrumented compilation.
+// viaIR is needed to avoid "Stack too deep" errors from the extra instrumentation
+// variables, but it slows compilation ~3x so we only enable it for coverage runs.
+const isCoverage = process.env.SOLIDITY_COVERAGE === "true";
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: "0.8.26",
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
+    compilers: [
+      {
+        version: "0.8.26",
+        settings: {
+          viaIR: isCoverage,
+          optimizer: {
+            enabled: true,
+            runs: isCoverage ? 1 : 200, // low runs + viaIR avoids stack-too-deep
+          },
+        },
+      },
+    ],
+    overrides: {
+      "contracts/strategies/PendleStrategyV2.sol": {
+        version: "0.8.26",
+        settings: {
+          viaIR: isCoverage,
+          optimizer: {
+            enabled: true,
+            runs: 1,
+          },
+        },
       },
     },
   },
@@ -25,17 +49,9 @@ const config: HardhatUserConfig = {
     sepolia: {
       url: RPC_URL || "https://eth-sepolia.g.alchemy.com/v2/demo",
       chainId: 11155111,
-      accounts: DEPLOYER_PRIVATE_KEY !== "0x0000000000000000000000000000000000000000000000000000000000000001" 
-        ? [DEPLOYER_PRIVATE_KEY] 
-        : [],
+      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
-    goerli: {
-      url: RPC_URL || "https://eth-goerli.g.alchemy.com/v2/demo",
-      chainId: 5,
-      accounts: DEPLOYER_PRIVATE_KEY !== "0x0000000000000000000000000000000000000000000000000000000000000001" 
-        ? [DEPLOYER_PRIVATE_KEY] 
-        : [],
-    },
+    // Removed deprecated Goerli (shut down). Keeping stale testnets creates confusion.
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY || "",

@@ -14,41 +14,43 @@ echo ""
 command -v node >/dev/null 2>&1 || { echo "❌ Node.js required"; exit 1; }
 command -v npx >/dev/null 2>&1 || { echo "❌ npx required"; exit 1; }
 
-# Check environment
-if [ ! -f ".env" ]; then
-    echo "Creating .env from template..."
-    cp .env.example .env 2>/dev/null || cat > .env << 'EOF'
-# Ethereum Testnet (Sepolia)
-RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
-CHAIN_ID=11155111
-DEPLOYER_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
-
-# Chainlink Price Feeds (Sepolia)
-CHAINLINK_ETH_USD=0x694AA1769357215DE4FAC081bf1f309aDC325306
-CHAINLINK_BTC_USD=0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43
-
-# Bridge Config (no Canton for now)
-BRIDGE_MODE=mock
-VALIDATOR_THRESHOLD=2
-
-# Frontend
-NEXT_PUBLIC_CHAIN_ID=11155111
-EOF
-    echo "⚠️  Please edit .env with your Alchemy API key and deployer private key"
-    echo "   Then run this script again."
+# FIX HIGH-CRED: Never write private keys to .env files on disk.
+# Credentials must be provided via environment variables or a secrets manager.
+# DO NOT source .env files containing private keys.
+if [ -z "${RPC_URL:-}" ] || [ -z "${DEPLOYER_PRIVATE_KEY:-}" ]; then
+    echo "╔════════════════════════════════════════════════════════════════╗"
+    echo "║  Missing required environment variables!                      ║"
+    echo "╚════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Set the following env vars before running this script:"
+    echo ""
+    echo "  export RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY"
+    echo "  export CHAIN_ID=11155111"
+    echo "  export DEPLOYER_PRIVATE_KEY=0x...  (or use hardware wallet)"
+    echo "  export CHAINLINK_ETH_USD=0x694AA1769357215DE4FAC081bf1f309aDC325306"
+    echo "  export CHAINLINK_BTC_USD=0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43"
+    echo ""
+    echo "For production, use a secrets manager (Vault, AWS SM, GCP SM)"
+    echo "or a hardware wallet signer (--ledger flag)."
+    echo ""
+    echo "⚠️  NEVER store private keys in .env files on disk."
     exit 1
 fi
 
-source .env
+# Warn if .env file exists (potential credential leak)
+if [ -f ".env" ]; then
+    echo "⚠️  WARNING: .env file detected. Ensure it does NOT contain private keys."
+    echo "   Private keys should be set via env vars or a secrets manager."
+fi
 
-# Validate required env vars
-if [ "$RPC_URL" == "https://eth-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_KEY" ]; then
-    echo "❌ Please set RPC_URL in .env"
+# Validate required env vars (already checked above, but double-check values)
+if echo "$RPC_URL" | grep -q "YOUR_ALCHEMY_KEY"; then
+    echo "❌ RPC_URL still contains placeholder — set a real Alchemy/Infura URL"
     exit 1
 fi
 
-if [ "$DEPLOYER_PRIVATE_KEY" == "0xYOUR_PRIVATE_KEY_HERE" ]; then
-    echo "❌ Please set DEPLOYER_PRIVATE_KEY in .env"
+if echo "$DEPLOYER_PRIVATE_KEY" | grep -q "YOUR_PRIVATE_KEY_HERE"; then
+    echo "❌ DEPLOYER_PRIVATE_KEY still contains placeholder"
     exit 1
 fi
 

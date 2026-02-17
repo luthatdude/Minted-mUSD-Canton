@@ -1,24 +1,39 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
 interface LeverageSliderProps {
-  value: number; // 10-30 (1.0x - 3.0x)
+  value: number; // leverage × 10  (e.g. 20 = 2.0x)
   onChange: (value: number) => void;
-  maxLeverage?: number; // Max allowed (default 30)
+  maxLeverage?: number; // Max allowed × 10 (default 41 ≈ 4.1x)
   disabled?: boolean;
 }
 
-const LEVERAGE_PRESETS = [
-  { value: 10, label: '1x', description: 'No leverage' },
-  { value: 15, label: '1.5x', description: 'Conservative' },
-  { value: 20, label: '2x', description: 'Moderate' },
-  { value: 25, label: '2.5x', description: 'Aggressive' },
-  { value: 30, label: '3x', description: 'Maximum' },
-];
+/** Generate evenly-spaced preset buttons for the current max */
+function buildPresets(max: number): { value: number; label: string; description: string }[] {
+  // Always start at 10 (1.0x) and end at max
+  if (max <= 10) return [{ value: 10, label: '1x', description: 'No leverage' }];
+
+  const steps = Math.min(5, Math.floor((max - 10) / 5) + 1);
+  const interval = Math.round((max - 10) / (steps - 1));
+  const presets: { value: number; label: string; description: string }[] = [];
+
+  for (let i = 0; i < steps; i++) {
+    const v = i === steps - 1 ? max : 10 + interval * i;
+    const lev = v / 10;
+    const desc =
+      lev <= 1 ? 'No leverage' :
+      lev <= 1.5 ? 'Conservative' :
+      lev <= 2.5 ? 'Moderate' :
+      lev <= 3.5 ? 'Aggressive' : 'Maximum';
+    presets.push({ value: v, label: `${lev.toFixed(1)}x`, description: desc });
+  }
+
+  return presets;
+}
 
 export function LeverageSlider({ 
   value, 
   onChange, 
-  maxLeverage = 30,
+  maxLeverage = 41,
   disabled = false 
 }: LeverageSliderProps) {
   const [sliderValue, setSliderValue] = useState(value);
@@ -26,6 +41,8 @@ export function LeverageSlider({
   useEffect(() => {
     setSliderValue(value);
   }, [value]);
+
+  const presets = useMemo(() => buildPresets(maxLeverage), [maxLeverage]);
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = parseInt(e.target.value);
@@ -41,7 +58,8 @@ export function LeverageSlider({
   };
 
   const displayLeverage = (sliderValue / 10).toFixed(1);
-  const riskLevel = sliderValue <= 15 ? 'low' : sliderValue <= 20 ? 'medium' : 'high';
+  const pct = maxLeverage > 10 ? (sliderValue - 10) / (maxLeverage - 10) : 0;
+  const riskLevel = pct <= 0.33 ? 'low' : pct <= 0.66 ? 'medium' : 'high';
   const riskColor = riskLevel === 'low' ? 'text-green-400' : riskLevel === 'medium' ? 'text-yellow-400' : 'text-red-400';
   const riskBgColor = riskLevel === 'low' ? 'bg-green-500' : riskLevel === 'medium' ? 'bg-yellow-500' : 'bg-red-500';
 
@@ -71,23 +89,21 @@ export function LeverageSlider({
           style={{
             background: `linear-gradient(to right, 
               #22c55e 0%, 
-              #22c55e ${((15 - 10) / (maxLeverage - 10)) * 100}%, 
-              #eab308 ${((20 - 10) / (maxLeverage - 10)) * 100}%, 
+              #22c55e 33%, 
+              #eab308 66%, 
               #ef4444 100%)`
           }}
         />
         <div className="flex justify-between text-xs text-gray-500 mt-1">
-          <span>1x</span>
-          <span>1.5x</span>
-          <span>2x</span>
-          <span>2.5x</span>
-          <span>3x</span>
+          {presets.map((p) => (
+            <span key={p.value}>{p.label}</span>
+          ))}
         </div>
       </div>
 
       {/* Preset Buttons */}
-      <div className="grid grid-cols-5 gap-2 mb-4">
-        {LEVERAGE_PRESETS.map((preset) => (
+      <div className={`grid gap-2 mb-4`} style={{ gridTemplateColumns: `repeat(${presets.length}, minmax(0, 1fr))` }}>
+        {presets.map((preset) => (
           <button
             key={preset.value}
             onClick={() => handlePresetClick(preset.value)}
@@ -123,7 +139,7 @@ export function LeverageSlider({
               {riskLevel === 'medium' && 'Moderate risk. Monitor your position regularly.'}
               {riskLevel === 'high' && 'High liquidation risk! Small price moves can trigger liquidation.'}
             </p>
-            {sliderValue > 20 && (
+            {sliderValue > 10 && pct > 0.5 && (
               <p className="text-gray-400 mt-1">
                 Liquidation at ~{Math.round((1 - 1/((sliderValue/10) * 0.8)) * 100)}% price drop
               </p>

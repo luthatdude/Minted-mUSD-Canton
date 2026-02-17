@@ -1,0 +1,61 @@
+[4;1m
+Test Summary[m
+
+CantonBoostPoolTest.daml:test_ObserverUpdate: ok, 2 active contracts, 3 transactions.
+CantonBoostPoolTest.daml:test_CantonPriceSync: ok, 6 active contracts, 10 transactions.
+CantonBoostPoolTest.daml:test_CapRatioUpdate: ok, 4 active contracts, 8 transactions.
+CantonBoostPoolTest.daml:test_FeeUpdate: ok, 4 active contracts, 10 transactions.
+CantonBoostPoolTest.daml:test_InvalidReward: ok, 3 active contracts, 4 transactions.
+CantonBoostPoolTest.daml:test_NonOperatorAdmin: ok, 3 active contracts, 9 transactions.
+CantonBoostPoolTest.daml:test_RewardEpochSequential: ok, 5 active contracts, 8 transactions.
+CantonBoostPoolTest.daml:test_SharePriceSync: ok, 6 active contracts, 10 transactions.
+CantonBoostPoolTest.daml:test_CantonCoinSplit: ok, 3 active contracts, 4 transactions.
+CantonBoostPoolTest.daml:test_CantonCoinTransferReject: ok, 2 active contracts, 4 transactions.
+CantonBoostPoolTest.daml:test_CantonCoinTransfer: ok, 2 active contracts, 4 transactions.
+CantonBoostPoolTest.daml:test_CapScalesWithSharePrice: ok, 6 active contracts, 7 transactions.
+CantonBoostPoolTest.daml:test_CooldownEnforcement: ok, 6 active contracts, 9 transactions.
+CantonBoostPoolTest.daml:test_DepositCapEnforcement: ok, 5 active contracts, 7 transactions.
+CantonBoostPoolTest.daml:test_FullLifecycle: ok, 13 active contracts, 21 transactions.
+CantonBoostPoolTest.daml:test_MultipleDepositors: ok, 11 active contracts, 16 transactions.
+CantonBoostPoolTest.daml:test_PauseUnpause: ok, 9 active contracts, 16 transactions.
+CantonBoostPoolTest.daml:test_ProtocolRewardWithdraw: ok, 12 active contracts, 15 transactions.
+CantonBoostPoolTest.daml:test_RewardDistribution: ok, 8 active contracts, 13 transactions.
+CantonBoostPoolTest.daml:test_UnauthorizedDeposit: ok, 5 active contracts, 7 transactions.
+CantonBoostPoolTest.daml:test_UnauthorizedWithdraw: ok, 6 active contracts, 9 transactions.
+CantonBoostPoolTest.daml:test_WithdrawFlow: ok, 6 active contracts, 9 transactions.
+CantonBoostPoolTest.daml:test_LPSplit: ok, 7 active contracts, 11 transactions.
+CantonBoostPoolTest.daml:test_BasicDeposit: ok, 6 active contracts, 7 transactions.
+CantonBoostPoolTest.daml:test_LPTransfer: failed
+Modules internal to this package:
+- Internal templates
+  38 defined
+  8 ( 21.1%) created
+- Internal template choices
+  200 defined
+  21 ( 10.5%) exercised
+- Internal interface implementations
+  0 defined
+    0 internal interfaces
+    0 external interfaces
+- Internal interface choices
+  0 defined
+  0 (100.0%) exercised
+Modules external to this package:
+- External templates
+  0 defined
+  0 (100.0%) created in any tests
+  0 (100.0%) created in internal tests
+  0 (100.0%) created in external tests
+- External template choices
+  0 defined
+  0 (100.0%) exercised in any tests
+  0 (100.0%) exercised in internal tests
+  0 (100.0%) exercised in external tests
+- External interface implementations
+  0 defined
+- External interface choices
+  0 defined
+  0 (100.0%) exercised in any tests
+  0 (100.0%) exercised in internal tests
+  0 (100.0%) exercised in external tests
+

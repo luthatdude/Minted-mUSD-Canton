@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -8,29 +8,36 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./interfaces/IStrategy.sol";
+import "./TimelockGoverned.sol";
+import "./Errors.sol";
 
 /**
  * @title TreasuryV2
  * @notice Auto-allocating treasury that distributes deposits across strategies on mint
- * @dev When USDC comes in, it's automatically split according to target allocations
+ * @dev When USDC comes in, it's automatically split according to target allocations.
+ *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
  *
- * Default Allocation:
- *   Pendle Multi-Pool:  40% (11.7% APY)
- *   Morpho Loop:        30% (11.5% APY)
- *   Sky sUSDS:          20% (8% APY)
- *   USDC Reserve:       10% (0% APY)
- *   ────────────────────────────────────
- *   Blended:            ~10% gross APY
+ * Available Strategies (contracts/strategies/):
+ *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping (RLUSD/USDC)
+ *   EulerV2LoopStrategy            — Euler V2 same-asset leverage looping
+ *   PendleStrategyV2               — Pendle PT yield (multi-pool, top pools only)
+ *   FluidLoopStrategy              — Fluid leverage looping (cross-borrow capable)
+ *   FluidETHStrategy               — USDC→WETH→Fluid T2/T4 ETH vaults
+ *   MetaVault                      — Vault-of-vaults aggregating up to 4 sub-strategies
+ *
+ * Allocations are configured per-deployment via addStrategy(targetBps, minBps, maxBps).
+ * Reserve buffer (reserveBps) is held in USDC for emergency liquidity.
  *
  * Revenue Split:
- *   smUSD Holders:      60% (~6% net APY target)
- *   Protocol:           40% (spread above 6%)
+ *   smUSD Holders:      80% (net APY depends on strategy mix)
+ *   Protocol:           20% (performance fee on yield)
  */
 contract TreasuryV2 is
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
     PausableUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    TimelockGoverned
 {
     using SafeERC20 for IERC20;
 
@@ -41,7 +48,6 @@ contract TreasuryV2 is
     uint256 public constant BPS = 10000;
     uint256 public constant MAX_STRATEGIES = 10;
     
-    // FIX H-2: Minimum time between fee accruals to prevent flash loan manipulation
     uint256 public constant MIN_ACCRUAL_INTERVAL = 1 hours;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -52,6 +58,7 @@ contract TreasuryV2 is
     bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
     bytes32 public constant GUARDIAN_ROLE = keccak256("GUARDIAN_ROLE");
     bytes32 public constant VAULT_ROLE = keccak256("VAULT_ROLE");
+    // TIMELOCK_ROLE replaced by TimelockGoverned — all admin ops go through MintedTimelockController
 
     // ═══════════════════════════════════════════════════════════════════════
     // STRUCTS
@@ -67,7 +74,7 @@ contract TreasuryV2 is
     }
 
     struct ProtocolFees {
-        uint256 performanceFeeBps;  // Fee on yield (default 4000 = 40%)
+        uint256 performanceFeeBps;  // Fee on yield (default 2000 = 20%)
         uint256 accruedFees;        // Accumulated protocol fees
         address feeRecipient;       // Where fees go
     }
@@ -106,8 +113,13 @@ contract TreasuryV2 is
     /// @notice Minimum deposit to trigger auto-allocation
     uint256 public minAutoAllocateAmount;
 
-    /// @dev Storage gap for future upgrades
-    uint256[40] private __gap;
+    /// @notice High-water mark for fee accrual. Fees only accrue when
+    ///         totalValue exceeds this peak, preventing fee charging on principal recovery
+    ///         after transient strategy failures.
+    uint256 public peakRecordedValue;
+
+    /// @dev Storage gap for future upgrades (reduced by 1 for peakRecordedValue)
+    uint256[39] private __gap;
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -118,29 +130,24 @@ contract TreasuryV2 is
     event StrategyAdded(address indexed strategy, uint256 targetBps);
     event StrategyRemoved(address indexed strategy);
     event StrategyUpdated(address indexed strategy, uint256 newTargetBps);
-    event StrategyWithdrawn(address indexed strategy, uint256 amount); // FIX H-3: Event for withdrawal tracking
+    event StrategyWithdrawn(address indexed strategy, uint256 amount);
     event FeesAccrued(uint256 yield_, uint256 protocolFee);
     event FeesClaimed(address indexed recipient, uint256 amount);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
-    /// FIX H-4 + M-7: Emit events on strategy failures for monitoring
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
     event StrategyWithdrawFailed(address indexed strategy, uint256 amount, bytes reason);
-    /// FIX CRITICAL: Events for rebalance failures
     event RebalanceWithdrawFailed(address indexed strategy, uint256 amount);
     event RebalanceDepositFailed(address indexed strategy, uint256 amount);
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ERRORS
+    // ERRORS (shared errors imported from Errors.sol)
     // ═══════════════════════════════════════════════════════════════════════
 
-    error ZeroAddress();
-    error ZeroAmount();
     error StrategyExists();
     error StrategyNotFound();
     error AllocationExceedsLimit();
     error TotalAllocationInvalid();
-    error InsufficientBalance();
     error OnlyVault();
     error MaxStrategiesReached();
 
@@ -164,23 +171,26 @@ contract TreasuryV2 is
         address _asset,
         address _vault,
         address _admin,
-        address _feeRecipient
+        address _feeRecipient,
+        address _timelock
     ) external initializer {
         if (_asset == address(0) || _vault == address(0) || _admin == address(0)) {
             revert ZeroAddress();
         }
+        if (_timelock == address(0)) revert ZeroAddress();
 
         __AccessControl_init();
         __ReentrancyGuard_init();
         __Pausable_init();
         __UUPSUpgradeable_init();
+        _setTimelock(_timelock);
 
         asset = IERC20(_asset);
         vault = _vault;
 
         // Default fee configuration
         fees = ProtocolFees({
-            performanceFeeBps: 4000,  // 40% of yield → stakers get ~6% on 10% gross
+            performanceFeeBps: 2000,  // 20% of yield → stakers keep 80% of gross
             accruedFees: 0,
             feeRecipient: _feeRecipient
         });
@@ -197,6 +207,7 @@ contract TreasuryV2 is
         _grantRole(STRATEGIST_ROLE, _admin);
         _grantRole(GUARDIAN_ROLE, _admin);
         _grantRole(VAULT_ROLE, _vault);
+        // TimelockGoverned replaces TIMELOCK_ROLE — admin ops go through MintedTimelockController
 
         lastFeeAccrual = block.timestamp;
     }
@@ -237,10 +248,16 @@ contract TreasuryV2 is
     /**
      * @notice Total value minus accrued protocol fees
      */
+    /// @dev GAS-H-04: Inlined pending fee calculation to avoid calling totalValue() twice
     function totalValueNet() public view returns (uint256) {
-        uint256 total = totalValue();
-        uint256 pending = _calculatePendingFees();
-        return total > pending ? total - pending : 0;
+        uint256 currentValue = totalValue();
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+        uint256 pending = fees.accruedFees;
+        if (currentValue > peak) {
+            uint256 yield_ = currentValue - peak;
+            pending += (yield_ * fees.performanceFeeBps) / BPS;
+        }
+        return currentValue > pending ? currentValue - pending : 0;
     }
 
     /**
@@ -292,7 +309,6 @@ contract TreasuryV2 is
 
             if (total > 0 && strategies[i].active) {
                 // slither-disable-next-line calls-loop
-                // FIX M-02 (Final Audit): Wrap in try/catch so a reverting strategy
                 // doesn't DoS this view function. Defaults to 0 bps on failure.
                 try IStrategy(strategies[i].strategy).totalValue() returns (uint256 stratValue) {
                     currentBps[i] = (stratValue * BPS) / total;
@@ -304,13 +320,15 @@ contract TreasuryV2 is
     }
 
     /**
-     * @notice Calculate pending protocol fees
+     * @notice Calculate pending protocol fees using high-water mark
+     * @dev Mirrors _accrueFees() logic: only yield above peakRecordedValue is subject to fees
      */
     function _calculatePendingFees() internal view returns (uint256) {
         uint256 currentValue = totalValue();
-        if (currentValue <= lastRecordedValue) return fees.accruedFees;
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+        if (currentValue <= peak) return fees.accruedFees;
 
-        uint256 yield_ = currentValue - lastRecordedValue;
+        uint256 yield_ = currentValue - peak;
         uint256 newFees = (yield_ * fees.performanceFeeBps) / BPS;
 
         return fees.accruedFees + newFees;
@@ -355,7 +373,6 @@ contract TreasuryV2 is
             allocations = new uint256[](strategies.length);
         }
 
-        // FIX H-04: Update lastRecordedValue AFTER deposit
         lastRecordedValue = totalValue();
 
         emit Deposited(msg.sender, amount, allocations);
@@ -389,19 +406,21 @@ contract TreasuryV2 is
         } else {
             // Need to pull from strategies
             uint256 needed = amount - reserve;
+            // slither-disable-next-line reentrancy-vulnerabilities
             uint256 withdrawn = _withdrawFromStrategies(needed);
 
             actualAmount = reserve + withdrawn;
             if (actualAmount > amount) actualAmount = amount;
 
-            // FIX H-01: Revert if we can't fulfill the full requested amount
             // Silent partial withdrawals can leave protocol in inconsistent state
             if (actualAmount < amount) {
-                revert("INSUFFICIENT_LIQUIDITY");
+                revert InsufficientLiquidity();
             }
 
             asset.safeTransfer(vault, actualAmount);
         }
+
+        lastRecordedValue = totalValue();
 
         emit Withdrawn(vault, actualAmount);
         return actualAmount;
@@ -431,20 +450,23 @@ contract TreasuryV2 is
      * @notice Deposit USDC from DirectMint (legacy interface)
      * @param from Address to pull USDC from
      * @param amount Amount of USDC to deposit
+     *      Even though VAULT_ROLE is required, a compromised vault could drain
+     *      any address that has approved this contract.
      */
     function deposit(address from, uint256 amount) external nonReentrant whenNotPaused onlyRole(VAULT_ROLE) {
         if (amount == 0) revert ZeroAmount();
+        if (from != msg.sender) revert MustDepositOwnFunds();
 
         _accrueFees();
 
-        asset.safeTransferFrom(from, address(this), amount);
+        // Pull funds from caller only. `from` is retained for legacy interface compatibility.
+        asset.safeTransferFrom(msg.sender, address(this), amount);
 
         // Auto-allocate if above minimum
         if (amount >= minAutoAllocateAmount) {
             _autoAllocate(amount);
         }
 
-        // FIX H-04: Update lastRecordedValue AFTER deposit so the new deposit
         // is not mistaken for yield on the next _accrueFees() call.
         lastRecordedValue = totalValue();
 
@@ -469,7 +491,7 @@ contract TreasuryV2 is
         }
 
         uint256 available = reserveBalance();
-        require(available >= amount, "INSUFFICIENT_RESERVES");
+        if (available < amount) revert InsufficientReserves();
 
         asset.safeTransfer(to, amount);
 
@@ -502,7 +524,6 @@ contract TreasuryV2 is
 
         if (totalTargetBps == 0) return allocations;
 
-        // FIX C-01: Track shares approved (not deposited) for remainder calculation.
         // This prevents the last strategy from receiving an incorrect amount when
         // prior strategies deposit less than approved due to slippage.
         uint256 sharesApproved = 0;
@@ -537,10 +558,8 @@ contract TreasuryV2 is
                 // slither-disable-next-line calls-loop
                 try IStrategy(strat).deposit(share) returns (uint256 deposited) {
                     allocations[i] = deposited;
-                    // FIX H-04: Clear approval after successful deposit to prevent dangling approvals
                     asset.forceApprove(strat, 0);
                 } catch (bytes memory reason) {
-                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
                     allocations[i] = 0;
                     asset.forceApprove(strat, 0);
                     emit StrategyDepositFailed(strat, share, reason);
@@ -575,7 +594,6 @@ contract TreasuryV2 is
 
         if (totalStratValue == 0) return 0;
 
-        // FIX M-07: Withdraw proportionally, give last strategy the remainder
         // to avoid rounding dust leaving funds stranded across strategies.
         for (uint256 i = 0; i < strategies.length && remaining > 0; i++) {
             if (!strategies[i].active) continue;
@@ -608,7 +626,6 @@ contract TreasuryV2 is
                     totalWithdrawn += withdrawn;
                     remaining = remaining > withdrawn ? remaining - withdrawn : 0;
                 } catch (bytes memory reason) {
-                    // FIX H-4: Emit event on failure for monitoring instead of silent catch
                     emit StrategyWithdrawFailed(strat, toWithdraw, reason);
                 }
             }
@@ -623,22 +640,28 @@ contract TreasuryV2 is
 
     /**
      * @notice Accrue protocol fees on yield
-     * FIX H-2: Added minimum time interval between accruals to prevent flash loan manipulation.
      * Attacker cannot inflate totalValue() temporarily and immediately accrue fees.
      */
+    /// @dev Track peak value to prevent charging fees on principal recovery.
+    ///      Uses peakRecordedValue: fees only accrue when totalValue exceeds the all-time
+    ///      high-water mark, ensuring only genuine yield is subject to performance fees.
     function _accrueFees() internal {
-        // FIX H-2: Skip fee accrual if called too soon (prevents flash loan manipulation)
         if (block.timestamp < lastFeeAccrual + MIN_ACCRUAL_INTERVAL) {
             return;
         }
-        
+
         uint256 currentValue = totalValue();
 
-        if (currentValue > lastRecordedValue) {
-            uint256 yield_ = currentValue - lastRecordedValue;
+        // Only charge fees on genuine yield above the high-water mark.
+        // peakRecordedValue tracks the highest legitimate totalValue observed.
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+
+        if (currentValue > peak) {
+            uint256 yield_ = currentValue - peak;
             uint256 protocolFee = (yield_ * fees.performanceFeeBps) / BPS;
 
             fees.accruedFees += protocolFee;
+            peakRecordedValue = currentValue;
 
             emit FeesAccrued(yield_, protocolFee);
         }
@@ -664,7 +687,6 @@ contract TreasuryV2 is
         // slither-disable-next-line incorrect-equality
         if (toClaim == 0) return;
 
-        // FIX I-05: Only deduct what is actually sent, not the full claim amount.
         // This prevents loss if reserve + strategies can't cover the full amount.
 
         // Withdraw from strategies if needed
@@ -727,7 +749,6 @@ contract TreasuryV2 is
         strategyIndex[strategy] = strategies.length - 1;
         isStrategy[strategy] = true;
 
-        // FIX H-03: Do NOT grant unlimited approval at add-time.
         // Approvals are granted per-operation in _autoAllocate and rebalance.
 
         emit StrategyAdded(strategy, targetBps);
@@ -735,8 +756,6 @@ contract TreasuryV2 is
 
     /**
      * @notice Remove a strategy (withdraws all funds first)
-     * FIX H-3: Revert on withdrawal failure to prevent fund loss
-     * FIX S-C03: Verify full withdrawal amount with 5% slippage tolerance
      */
     /// @dev Emitted when strategy force-deactivated due to failed withdrawal
     event StrategyForceDeactivated(address indexed strategy, uint256 strandedValue, bytes reason);
@@ -779,7 +798,6 @@ contract TreasuryV2 is
         strategies[idx].active = false;
         strategies[idx].targetBps = 0;
         isStrategy[strategy] = false;
-        // FIX M-09: Clean up stale strategyIndex mapping
         delete strategyIndex[strategy];
 
         // Revoke approval
@@ -845,14 +863,12 @@ contract TreasuryV2 is
             if (currentValue > targetValue) {
                 uint256 excess = currentValue - targetValue;
                 // slither-disable-next-line calls-loop
-                // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).withdraw(excess) {} catch {
                     emit RebalanceWithdrawFailed(strat, excess);
                 }
             }
         }
 
-        // FIX TV-M01 (Final Audit): Re-read totalValue() after withdrawals.
         // Pass 1 withdrawals change strategy values, so using the stale `total`
         // for pass 2 would systematically over-allocate to under-funded strategies.
         total = totalValue();
@@ -876,7 +892,6 @@ contract TreasuryV2 is
 
                 asset.forceApprove(strat, toDeposit);
                 // slither-disable-next-line calls-loop
-                // FIX: Add error event instead of silent swallow
                 try IStrategy(strat).deposit(toDeposit) returns (uint256 deposited) {
                     available -= deposited;
                     // Clear temporary allowance after use (defense in depth).
@@ -892,6 +907,63 @@ contract TreasuryV2 is
         emit Rebalanced(lastRecordedValue);
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // MANUAL DEPLOY / WITHDRAW PER-STRATEGY
+    // ═════════════════════════════════════════════════════════════════════
+
+    event StrategyManualDeposit(address indexed strategy, uint256 amount, uint256 deposited);
+    event StrategyManualWithdraw(address indexed strategy, uint256 amount, uint256 withdrawn);
+
+    /**
+     * @notice Manually deploy idle USDC from reserve into a specific strategy
+     * @param strategy Strategy address (must be registered and active)
+     * @param amount USDC amount to deploy
+     */
+    function deployToStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 idx = strategyIndex[strategy];
+        if (!strategies[idx].active) revert StrategyNotFound();
+
+        uint256 reserve = reserveBalance();
+        if (reserve < amount) revert InsufficientReserves();
+
+        _accrueFees();
+
+        asset.forceApprove(strategy, amount);
+        uint256 deposited = IStrategy(strategy).deposit(amount);
+        asset.forceApprove(strategy, 0);
+
+        lastRecordedValue = totalValue();
+
+        emit StrategyManualDeposit(strategy, amount, deposited);
+    }
+
+    /**
+     * @notice Manually withdraw USDC from a specific strategy back to reserve
+     * @param strategy Strategy address (must be registered)
+     * @param amount USDC amount to withdraw
+     */
+    function withdrawFromStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant onlyRole(ALLOCATOR_ROLE) {
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+        if (amount == 0) revert ZeroAmount();
+
+        _accrueFees();
+
+        uint256 withdrawn = IStrategy(strategy).withdraw(amount);
+
+        lastRecordedValue = totalValue();
+
+        emit StrategyManualWithdraw(strategy, amount, withdrawn);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // EMERGENCY
     // ═══════════════════════════════════════════════════════════════════════
@@ -899,7 +971,6 @@ contract TreasuryV2 is
     /**
      * @notice Emergency withdraw all from all strategies
      * @dev Loops over bounded, admin-controlled strategies array
-     *      FIX H-01: Emits StrategyWithdrawFailed on failures instead of silent catch
      */
     function emergencyWithdrawAll() external onlyRole(GUARDIAN_ROLE) {
         for (uint256 i = 0; i < strategies.length; i++) {
@@ -908,11 +979,13 @@ contract TreasuryV2 is
                 // slither-disable-next-line calls-loop
                 try IStrategy(strategyAddr).withdrawAll() {} 
                 catch (bytes memory reason) {
-                    // FIX H-01: Emit failure event instead of silent catch
                     emit StrategyWithdrawFailed(strategyAddr, 0, reason);
                 }
             }
         }
+
+        // on next _accrueFees() call after emergency withdrawal
+        lastRecordedValue = totalValue();
 
         emit EmergencyWithdraw(reserveBalance());
     }
@@ -932,15 +1005,15 @@ contract TreasuryV2 is
     /**
      * @notice Update fee configuration
      */
-    /// FIX S-M09: Added event for fee config changes
     event FeeConfigUpdated(uint256 performanceFeeBps, address feeRecipient);
 
+    /// @notice Fee config changes require timelock delay via TimelockGoverned
     function setFeeConfig(
         uint256 _performanceFeeBps,
         address _feeRecipient
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_performanceFeeBps <= 5000, "Fee too high"); // Max 50%
-        require(_feeRecipient != address(0), "Invalid recipient");
+    ) external onlyTimelock {
+        if (_performanceFeeBps > 5000) revert FeeTooHigh();
+        if (_feeRecipient == address(0)) revert InvalidRecipient();
 
         _accrueFees(); // Accrue with old rate first
 
@@ -950,27 +1023,25 @@ contract TreasuryV2 is
         emit FeeConfigUpdated(_performanceFeeBps, _feeRecipient);
     }
 
-    /// FIX S-M10: Added event for reserve BPS changes
     event ReserveBpsUpdated(uint256 oldReserveBps, uint256 newReserveBps);
 
     /**
      * @notice Update reserve percentage
      */
-    function setReserveBps(uint256 _reserveBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_reserveBps <= 3000, "Reserve too high"); // Max 30%
+    function setReserveBps(uint256 _reserveBps) external onlyTimelock {
+        if (_reserveBps > 3000) revert ReserveTooHigh();
         uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
         emit ReserveBpsUpdated(oldBps, _reserveBps);
     }
 
-    /// FIX S-M11: Added event and validation for min auto-allocate changes
     event MinAutoAllocateUpdated(uint256 oldAmount, uint256 newAmount);
 
     /**
      * @notice Update minimum auto-allocate amount
      */
-    function setMinAutoAllocate(uint256 _minAmount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_minAmount > 0, "ZERO_MIN_AMOUNT");
+    function setMinAutoAllocate(uint256 _minAmount) external onlyTimelock {
+        if (_minAmount == 0) revert ZeroAmount();
         uint256 oldAmount = minAutoAllocateAmount;
         minAutoAllocateAmount = _minAmount;
         emit MinAutoAllocateUpdated(oldAmount, _minAmount);
@@ -979,7 +1050,8 @@ contract TreasuryV2 is
     /**
      * @notice Update vault address
      */
-    function setVault(address _vault) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Vault address changes require timelock delay via TimelockGoverned
+    function setVault(address _vault) external onlyTimelock {
         if (_vault == address(0)) revert ZeroAddress();
 
         _revokeRole(VAULT_ROLE, vault);
@@ -990,13 +1062,15 @@ contract TreasuryV2 is
     /**
      * @notice Emergency token recovery (not the primary asset)
      */
-    function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(token != address(asset), "CANNOT_RECOVER_ASSET");
+    /// @notice Token recovery requires timelock delay via TimelockGoverned
+    function recoverToken(address token, uint256 amount) external onlyTimelock {
+        if (token == address(asset)) revert CannotRecoverAsset();
         IERC20(token).safeTransfer(msg.sender, amount);
     }
 
     /**
      * @notice UUPS upgrade authorization
      */
-    function _authorizeUpgrade(address) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @notice Only MintedTimelockController can authorize upgrades (48h delay enforced)
+    function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

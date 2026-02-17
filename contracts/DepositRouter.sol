@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -42,7 +42,6 @@ interface IWormholeTokenBridge {
     ) external payable returns (uint64 sequence);
 
     /// @notice Transfer tokens with an arbitrary payload (for recipient data)
-    /// @dev FIX P0: Required to pass recipient address to TreasuryReceiver
     function transferTokensWithPayload(
         address token,
         uint256 amount,
@@ -59,7 +58,6 @@ interface IWormholeTokenBridge {
  * @title DepositRouter
  * @notice Routes USDC deposits from L2 chains to Ethereum Treasury via Wormhole
  * @dev Deploy this on Base, Arbitrum, and other L2s to accept deposits
- * @dev FIX SC-H01: Migrated from Ownable to AccessControl for role separation
  */
 contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -71,6 +69,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Role for administrative functions (config changes)
     bytes32 public constant ROUTER_ADMIN_ROLE = keccak256("ROUTER_ADMIN_ROLE");
+    
+    /// @notice TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ============ Constants ============
     
@@ -138,6 +139,9 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event FeeUpdated(uint256 oldFee, uint256 newFee);
     event FeesWithdrawn(address indexed to, uint256 amount);
+    event EmergencyWithdrawn(address indexed token, address indexed to, uint256 amount, address indexed executor);
+    /// @dev Dedicated event for failed native token refunds.
+    event RefundFailed(address indexed recipient, uint256 amount);
 
     // ============ Errors ============
     
@@ -148,6 +152,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     error InsufficientNativeToken();
     error TransferFailed();
     error FeeTooHigh();
+    error DepositNotFound();
+    error AlreadyCompleted();
 
     // ============ Constructor ============
     
@@ -158,7 +164,8 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         address _treasuryAddress,
         address _directMintAddress,
         uint256 _feeBps,
-        address _admin
+        address _admin,
+        address _timelockController
     ) {
         if (_usdc == address(0)) revert InvalidAddress();
         if (_wormholeRelayer == address(0)) revert InvalidAddress();
@@ -166,6 +173,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         if (_treasuryAddress == address(0)) revert InvalidAddress();
         if (_directMintAddress == address(0)) revert InvalidAddress();
         if (_admin == address(0)) revert InvalidAddress();
+        if (_timelockController == address(0)) revert InvalidAddress();
         if (_feeBps > 500) revert FeeTooHigh(); // Max 5%
         
         usdc = IERC20(_usdc);
@@ -175,10 +183,12 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         directMintAddress = _directMintAddress;
         feeBps = _feeBps;
         
-        // FIX SC-H01: Set up role hierarchy
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(ROUTER_ADMIN_ROLE, _admin);
         _grantRole(PAUSER_ROLE, _admin);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     // ============ External Functions ============
@@ -247,14 +257,12 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     /**
      * @notice Mark a deposit as completed after cross-chain confirmation
      * @param sequence Wormhole sequence number of the completed deposit
-     * @dev FIX M-01: The completed flag was never set. This admin function
      *      allows marking deposits as completed after TreasuryReceiver processes them.
      */
     function markDepositComplete(uint64 sequence) external onlyRole(ROUTER_ADMIN_ROLE) {
-        // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
         PendingDeposit storage pendingDep = pendingDeposits[sequence];
-        require(pendingDep.depositor != address(0), "DEPOSIT_NOT_FOUND");
-        require(!pendingDep.completed, "ALREADY_COMPLETED");
+        if (pendingDep.depositor == address(0)) revert DepositNotFound();
+        if (pendingDep.completed) revert AlreadyCompleted();
         pendingDep.completed = true;
         emit DepositCompleted(sequence, pendingDep.depositor, pendingDep.amount);
     }
@@ -265,7 +273,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      */
     function markDepositsComplete(uint64[] calldata sequences) external onlyRole(ROUTER_ADMIN_ROLE) {
         for (uint256 i = 0; i < sequences.length; i++) {
-            // FIX: Renamed from 'deposit' to avoid shadowing the deposit() function
             PendingDeposit storage pendingDep = pendingDeposits[sequences[i]];
             if (pendingDep.depositor != address(0) && !pendingDep.completed) {
                 pendingDep.completed = true;
@@ -280,7 +287,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the treasury address
      * @param newTreasury New treasury address on Ethereum
      */
-    function setTreasury(address newTreasury) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setTreasury(address newTreasury) external onlyRole(TIMELOCK_ROLE) {
         if (newTreasury == address(0)) revert InvalidAddress();
         address old = treasuryAddress;
         treasuryAddress = newTreasury;
@@ -291,7 +298,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the DirectMint address
      * @param newDirectMint New DirectMint address on Ethereum
      */
-    function setDirectMint(address newDirectMint) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setDirectMint(address newDirectMint) external onlyRole(TIMELOCK_ROLE) {
         if (newDirectMint == address(0)) revert InvalidAddress();
         address old = directMintAddress;
         directMintAddress = newDirectMint;
@@ -302,7 +309,7 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
      * @notice Update the protocol fee
      * @param newFeeBps New fee in basis points
      */
-    function setFee(uint256 newFeeBps) external onlyRole(ROUTER_ADMIN_ROLE) {
+    function setFee(uint256 newFeeBps) external onlyRole(TIMELOCK_ROLE) {
         if (newFeeBps > 500) revert FeeTooHigh();
         uint256 old = feeBps;
         feeBps = newFeeBps;
@@ -322,33 +329,35 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Pause deposits (FIX SC-H01: Requires PAUSER_ROLE)
+     * @notice Pause deposits
      */
     function pause() external onlyRole(PAUSER_ROLE) {
         _pause();
     }
     
     /**
-     * @notice Unpause deposits (FIX SC-H01: Requires DEFAULT_ADMIN_ROLE for separation of duties)
+     * @notice Unpause deposits
+     * @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
      */
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
     
     /**
-     * @notice Emergency withdrawal
+     * @notice Emergency withdrawal to treasury (paused-only, timelock-gated)
      * @param token Token to withdraw (use address(0) for native)
-     * @param to Recipient address
      * @param amount Amount to withdraw
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (to == address(0)) revert InvalidAddress();
+    function emergencyWithdraw(address token, uint256 amount) external onlyRole(TIMELOCK_ROLE) whenPaused {
+        if (amount == 0) revert InvalidAmount();
+        address to = treasuryAddress;
         if (token == address(0)) {
             (bool success, ) = to.call{value: amount}("");
             if (!success) revert TransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
+        emit EmergencyWithdrawn(token, to, amount, msg.sender);
     }
 
     // ============ Internal Functions ============
@@ -373,7 +382,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         // Accumulate fees
         accumulatedFees += fee;
         
-        // FIX H-7: Use forceApprove for USDT-safe approval
         usdc.forceApprove(address(tokenBridge), netAmount);
         
         // Increment nonce
@@ -382,7 +390,6 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         // Convert treasury address to bytes32 (receiver contract)
         bytes32 treasuryReceiverBytes = bytes32(uint256(uint160(treasuryAddress)));
         
-        // FIX P0: Encode the actual depositor as payload so TreasuryReceiver
         // knows who to mint mUSD for. Without this, TreasuryReceiver's
         // abi.decode(vm.payload, (address)) would fail on empty payload.
         bytes memory recipientPayload = abi.encode(depositor);
@@ -410,9 +417,16 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
         emit DepositInitiated(depositor, netAmount, fee, sequence, block.timestamp);
         
         // Refund excess native token
+        // depositors from being blocked if they can't receive native token refunds
         if (msg.value > bridgeCost) {
             (bool success, ) = msg.sender.call{value: msg.value - bridgeCost}("");
-            if (!success) revert TransferFailed();
+            // If refund fails, excess stays in contract for admin recovery
+            // via emergencyWithdraw() rather than reverting the entire deposit
+            if (!success) {
+                // Emit dedicated RefundFailed event with amount
+                // so monitoring can detect stuck native tokens for admin recovery
+                emit RefundFailed(msg.sender, msg.value - bridgeCost);
+            }
         }
     }
     

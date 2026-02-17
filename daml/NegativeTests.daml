@@ -58,7 +58,7 @@ test_UnauthorizedMint = do
 
   -- Attacker tries to mint via SupplyService_VaultMint
   -- This should fail because attacker is not the operator
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd supplyServiceCid SupplyService_VaultMint with
       borrower = attacker
       borrowAmount = 1000.0
@@ -85,7 +85,7 @@ test_UnauthorizedLargeMintApproval = do
       observers = []
 
   -- Attacker tries to approve a large mint for themselves
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd supplyServiceCid SupplyService_ApproveLargeMint with
       borrower = attacker
       maxAmount = 500000.0
@@ -111,9 +111,21 @@ test_UnauthorizedTransfer = do
       observers = []
 
   -- Attacker tries to initiate transfer (not the owner)
-  submitMustFail attacker do
+  -- Note: MUSD_Transfer requires complianceRegistryCid but test expects auth failure
+  -- Create a compliance registry for the transfer call
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = attacker
+      complianceRegistryCid = complianceCid
 
   return ()
 
@@ -140,9 +152,19 @@ test_BlacklistedCannotTransfer = do
       observers = []
 
   -- Owner tries to transfer blacklisted token
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver
+      complianceRegistryCid = complianceCid
 
   return ()
 
@@ -215,6 +237,7 @@ test_InvalidSplitRejected = do
   submitMustFail owner do
     exerciseCmd musdCid MUSD_Split with
       splitAmount = 150.0  -- INVALID: more than 100.0
+      operator = operator
 
   return ()
 
@@ -267,6 +290,7 @@ test_InsufficientApprovalsRejected = do
       proposer = gov1
       governors = [gov1, gov2, gov3]
       actionType = Gov.ParameterUpdate
+      targetModule = "NegativeTest"
       description = "Update fee to 1%"
       payload = "{\"newFee\": 100}"
       payloadHash = hash64
@@ -276,6 +300,7 @@ test_InsufficientApprovalsRejected = do
       proposedAt = now
       expiresAt = addRelTime now (days 7)
       timelockEndsAt = None
+      timelockDuration = hours 24
       status = Gov.Pending
       observers = []
 
@@ -307,6 +332,7 @@ test_NonGovernorCannotApprove = do
       proposer = gov1
       governors = [gov1]  -- Only gov1 is a governor
       actionType = Gov.ParameterUpdate
+      targetModule = "NegativeTest"
       description = "Test proposal"
       payload = "{}"
       payloadHash = hash64
@@ -316,11 +342,12 @@ test_NonGovernorCannotApprove = do
       proposedAt = now
       expiresAt = addRelTime now (days 7)
       timelockEndsAt = None
+      timelockDuration = hours 24
       status = Gov.Pending
       observers = []
 
   -- Attacker (not a governor) tries to approve
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd proposalCid Gov.Proposal_Approve with
       approver = attacker
 
@@ -357,7 +384,7 @@ test_UnauthorizedUpgradeApproval = do
       status = Proposed
 
   -- Attacker (not in governance) tries to approve
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [operator] do
     exerciseCmd proposalCid UpgradeProposal_Approve with
       approver = attacker
 
@@ -418,15 +445,26 @@ test_DoubleSpendPrevented = do
       observers = []
 
   -- First transfer (valid)
-  proposalCid <- submit owner do
+  regulator <- allocateParty "Regulator"
+  now <- getTime
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+  proposalCid <- submitMulti [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
+      complianceRegistryCid = complianceCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
-  submitMustFail owner do
+  submitMultiMustFail [owner] [operator] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
+      complianceRegistryCid = complianceCid
 
   return ()
 

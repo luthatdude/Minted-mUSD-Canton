@@ -21,8 +21,11 @@
  *   - Circuit breaker: pauses on repeated API failures
  */
 
-import Ledger from "@daml/ledger";
-import { readSecret } from "./utils";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -49,7 +52,7 @@ interface PriceOracleConfig {
   maxConsecutiveFailures: number; // Circuit breaker threshold
   stablecoinPrice: number;      // Hardcoded USDC/USDCx price
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: number;          // Absolute floor (reject below)
   maxPriceUsd: number;          // Absolute ceiling (reject above)
   maxChangePerUpdatePct: number; // Max % change from last known price
@@ -71,11 +74,15 @@ const DEFAULT_CONFIG: PriceOracleConfig = {
   maxConsecutiveFailures: parseInt(process.env.MAX_FAILURES || "10", 10),
   stablecoinPrice: 1.0,
 
-  // FIX PO-04: Off-chain price sanity bounds
+  // Off-chain price sanity bounds
   minPriceUsd: parseFloat(process.env.MIN_PRICE_USD || "0.001"),
   maxPriceUsd: parseFloat(process.env.MAX_PRICE_USD || "1000.0"),
   maxChangePerUpdatePct: parseFloat(process.env.MAX_CHANGE_PER_UPDATE_PCT || "25.0"),
 };
+
+// INFRA-H-06: Enforce HTTPS for all external API endpoints in production
+requireHTTPS(DEFAULT_CONFIG.tradecraftBaseUrl, "TRADECRAFT_URL");
+requireHTTPS(DEFAULT_CONFIG.templeBaseUrl, "TEMPLE_URL");
 
 // ============================================================
 //                     PRICE SOURCE TYPES
@@ -294,7 +301,7 @@ async function fetchTemplePrice(config: PriceOracleConfig): Promise<PriceResult>
 
 export class PriceOracleService {
   private config: PriceOracleConfig;
-  private ledger: Ledger | null = null;
+  private canton: CantonClient | null = null;
   private running = false;
   private health: HealthStatus;
   private lastCtnPrice: number = 0;
@@ -313,16 +320,28 @@ export class PriceOracleService {
    * Connect to Canton ledger via JSON API
    */
   private async connectLedger(): Promise<void> {
-    if (this.ledger) return;
+    if (this.canton) return;
 
     if (!this.config.cantonParty) {
       throw new Error("CANTON_PARTY not configured");
     }
 
-    this.ledger = new Ledger({
+    // INFRA-H-01 / INF-01: TLS by default for Canton ledger connection
+    // INF-01: Reject cleartext HTTP in production — matches relay-service.ts TLS pattern
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SECURITY: CANTON_USE_TLS=false is FORBIDDEN in production. " +
+        "Canton ledger connections must use TLS. Remove CANTON_USE_TLS or set to 'true'."
+      );
+    }
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
       token: this.config.cantonToken,
-      httpBaseUrl: `http://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `ws://${this.config.cantonHost}:${this.config.cantonPort}`,
+      userId: "administrator",
+      actAs: this.config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log(`[PriceOracle] Connected to Canton ledger at ${this.config.cantonHost}:${this.config.cantonPort}`);
@@ -367,7 +386,7 @@ export class PriceOracleService {
     }
 
     // Cross-validation: block update if both sources available but diverge
-    // FIX PO-01: Divergence now blocks updates instead of just logging
+    // Divergence now blocks updates instead of just logging
     if (tradecraftResult && templeResult) {
       const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
       const divergencePct = Math.abs(tradecraftResult.price - templeResult.price) / avgPrice * 100;
@@ -385,8 +404,31 @@ export class PriceOracleService {
       }
     }
 
-    // Pick result: Tradecraft > Temple > error
+    // Multi-provider averaging for robustness
+    // When both sources are available and within divergence threshold, use their
+    // average instead of preferring a single source. This prevents manipulation
+    // of any single DEX from fully controlling the oracle price.
+    if (tradecraftResult && templeResult) {
+      const avgPrice = (tradecraftResult.price + templeResult.price) / 2;
+      console.log(
+        `[PriceOracle] 🔀 Multi-provider average: $${avgPrice.toFixed(6)} ` +
+        `(Tradecraft: $${tradecraftResult.price.toFixed(6)}, Temple: $${templeResult.price.toFixed(6)})`
+      );
+      return {
+        price: avgPrice,
+        source: "multi-provider-avg(tradecraft+temple)",
+        timestamp: new Date(),
+      };
+    }
+
+    // Single-source fallback: Tradecraft > Temple > error
     const result = tradecraftResult || templeResult;
+    if (result) {
+      console.warn(
+        `[PriceOracle] ⚠️  Single-source price from ${result.source}. ` +
+        `Multi-provider averaging unavailable — other source down.`
+      );
+    }
     if (!result) {
       // Circuit breaker check
       const totalFailures =
@@ -404,7 +446,7 @@ export class PriceOracleService {
       throw new Error("All price sources unavailable");
     }
 
-    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass (FIX NEW-PO-01)
+    // NOTE: lastCtnPrice is updated in the poll loop AFTER sanity checks pass
     return result;
   }
 
@@ -415,25 +457,29 @@ export class PriceOracleService {
   async pushPriceUpdate(symbol: string, price: number, source: string): Promise<void> {
     await this.connectLedger();
 
-    if (!this.ledger) {
+    if (!this.canton) {
       throw new Error("Ledger not connected");
     }
 
     try {
-      // Exercise PriceFeed_Update on the keyed contract (operator, symbol)
-      // Using DAML JSON API exerciseByKey
-      await this.ledger.exerciseByKey(
-        // Template ID — must match codegen
-        "CantonLending:CantonPriceFeed" as any,
-        // Key: (operator, symbol)
-        { _1: this.config.cantonParty, _2: symbol } as any,
-        // Choice name
-        "PriceFeed_Update" as any,
-        // Choice arguments
+      // Query the price feed contract by (operator, symbol), then exercise on it
+      const feeds = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonPriceFeed"),
+        (p: any) => p.operator === this.config.cantonParty && p.symbol === symbol
+      );
+
+      if (feeds.length === 0) {
+        throw new Error(`No CantonPriceFeed found for operator=${this.config.cantonParty}, symbol=${symbol}`);
+      }
+
+      await this.canton.exerciseChoice(
+        parseTemplateId("CantonLending:CantonPriceFeed"),
+        feeds[0].contractId,
+        "PriceFeed_Update",
         {
           newPriceUsd: price.toFixed(18), // Money is Numeric 18
           newSource: source,
-        } as any
+        }
       );
 
       this.health.lastUpdate = new Date();
@@ -456,21 +502,12 @@ export class PriceOracleService {
   }
 
   /**
-   * Initialize stable feeds (USDC, USDCx) — called once on startup.
-   * These don't change, but we refresh the timestamp to prevent staleness.
+   * Initialize stable feeds — no longer needed for lending collateral.
+   * USDC/USDCx removed as lending collateral types (economically redundant with DirectMint).
    */
   async refreshStableFeeds(): Promise<void> {
-    const stableSymbols = ["USDC", "USDCx"];
-
-    for (const symbol of stableSymbols) {
-      try {
-        await this.pushPriceUpdate(symbol, this.config.stablecoinPrice, "hardcoded-stable");
-        console.log(`[PriceOracle] Refreshed ${symbol} feed (${this.config.stablecoinPrice})`);
-      } catch (err) {
-        // Feed might not exist yet — that's OK on first run
-        console.warn(`[PriceOracle] Could not refresh ${symbol} feed:`, (err as Error).message);
-      }
-    }
+    // No stable feeds to refresh — USDC/USDCx only used by DirectMint (not lending)
+    return;
   }
 
   /**
@@ -491,15 +528,15 @@ export class PriceOracleService {
     this.running = true;
 
     let boundsViolationCount = 0;
-    const MAX_BOUNDS_VIOLATIONS = 5; // FIX NEW-PO-02: After N consecutive rejections, reset lastCtnPrice to allow recovery
+    const MAX_BOUNDS_VIOLATIONS = 5; // After N consecutive rejections, reset lastCtnPrice to allow recovery
 
     while (this.running) {
       if (!this.health.paused) {
         try {
           const result = await this.fetchCTNPrice();
 
-          // FIX PO-04: Off-chain price sanity check (absolute range + rate-of-change)
-          // FIX NEW-PO-01: Compare against lastCtnPrice BEFORE updating it
+          // Off-chain price sanity check (absolute range + rate-of-change)
+          // Compare against lastCtnPrice BEFORE updating it
           if (result.price < this.config.minPriceUsd || result.price > this.config.maxPriceUsd) {
             boundsViolationCount++;
             console.error(
@@ -517,11 +554,11 @@ export class PriceOracleService {
             );
           } else {
             await this.pushPriceUpdate("CTN", result.price, result.source);
-            this.lastCtnPrice = result.price; // FIX NEW-PO-01: Only update AFTER successful push
+            this.lastCtnPrice = result.price; // Only update AFTER successful push
             boundsViolationCount = 0; // Reset on success
           }
 
-          // FIX NEW-PO-02: If too many consecutive bounds violations, reset baseline to allow recovery
+          // If too many consecutive bounds violations, reset baseline to allow recovery
           if (boundsViolationCount >= MAX_BOUNDS_VIOLATIONS) {
             console.warn(
               `[PriceOracle] ⚠️ ${MAX_BOUNDS_VIOLATIONS} consecutive bounds violations. ` +

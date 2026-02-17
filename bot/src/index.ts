@@ -2,38 +2,115 @@
 // Monitors positions and executes profitable liquidations
 
 import { ethers } from "ethers";
-import * as dotenv from "dotenv";
+import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 
-dotenv.config();
+// INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
+// Prevents NODE_TLS_REJECT_UNAUTHORIZED=0 from disabling cert validation in production
+if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+  }
+}
+
+// Never load .env files containing private keys via dotenv.
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch { /* fall through to env var */ }
+  return process.env[envVar] || "";
+}
+
+// secp256k1 curve order — private keys must be in range [1, n-1]
+const SECP256K1_N = BigInt(
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+);
+
+function readAndValidatePrivateKey(secretName: string, envVar: string): string {
+  const key = readSecret(secretName, envVar);
+  if (!key) {
+    throw new Error(`FATAL: ${envVar} not set. Use Docker secrets or env vars — never .env files.`);
+  }
+  const normalized = key.startsWith("0x") ? key.slice(2) : key;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`SECURITY: ${envVar} is not a valid private key (expected 64 hex chars)`);
+  }
+  const keyValue = BigInt("0x" + normalized);
+  if (keyValue === 0n || keyValue >= SECP256K1_N) {
+    throw new Error(`SECURITY: ${envVar} is out of valid secp256k1 range [1, n-1]`);
+  }
+  return key;
+}
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] Unhandled rejection at:", promise, "reason:", reason);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[FATAL] Uncaught exception:", error);
+  process.exit(1);
+});
 
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
 
-const config = {
-  rpcUrl: process.env.RPC_URL!,
-  chainId: parseInt(process.env.CHAIN_ID || "1"),
-  privateKey: process.env.PRIVATE_KEY!,
-  
-  // Contract addresses
-  borrowModule: process.env.BORROW_MODULE_ADDRESS!,
-  liquidationEngine: process.env.LIQUIDATION_ENGINE_ADDRESS!,
-  collateralVault: process.env.COLLATERAL_VAULT_ADDRESS!,
-  priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
-  musd: process.env.MUSD_ADDRESS!,
-  
-  // Bot settings
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000"),
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "50"),
-  gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20"),
-  maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100"),
-  
-  // Flashbots
-  useFlashbots: process.env.USE_FLASHBOTS === "true",
-  flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
-};
+// Private key loaded via Docker secrets / env — never from .env file.
+function loadConfig() {
+  const privateKey = readAndValidatePrivateKey("bot_private_key", "PRIVATE_KEY");
+
+  const rpcUrl = process.env.RPC_URL;
+  if (!rpcUrl) throw new Error("FATAL: RPC_URL is required");
+  // INFRA-H-01: Reject insecure HTTP RPC in production
+  if (process.env.NODE_ENV === "production" && !rpcUrl.startsWith("https://") && !rpcUrl.startsWith("wss://")) {
+    throw new Error("FATAL: RPC_URL must use https:// or wss:// in production");
+  }
+  if (!rpcUrl.startsWith("https://") && !rpcUrl.startsWith("wss://") &&
+      !rpcUrl.includes("localhost") && !rpcUrl.includes("127.0.0.1")) {
+    console.warn("WARNING: Using insecure HTTP transport for RPC. Use HTTPS in production.");
+  }
+
+  const requiredAddrs = [
+    "BORROW_MODULE_ADDRESS", "LIQUIDATION_ENGINE_ADDRESS",
+    "COLLATERAL_VAULT_ADDRESS", "PRICE_ORACLE_ADDRESS", "MUSD_ADDRESS",
+  ] as const;
+  for (const name of requiredAddrs) {
+    const val = process.env[name];
+    if (!val || !ethers.isAddress(val)) {
+      throw new Error(`FATAL: ${name} is missing or not a valid Ethereum address`);
+    }
+  }
+
+  return {
+    rpcUrl,
+    chainId: parseInt(process.env.CHAIN_ID || "1", 10),
+    privateKey,
+    borrowModule: process.env.BORROW_MODULE_ADDRESS!,
+    liquidationEngine: process.env.LIQUIDATION_ENGINE_ADDRESS!,
+    collateralVault: process.env.COLLATERAL_VAULT_ADDRESS!,
+    priceOracle: process.env.PRICE_ORACLE_ADDRESS!,
+    musd: process.env.MUSD_ADDRESS!,
+    pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
+    // TS-H-01: Use Number() + validation instead of parseFloat
+    minProfitUsd: (() => {
+      const v = Number(process.env.MIN_PROFIT_USD || "50");
+      if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+      return v;
+    })(),
+    gasPriceBufferPercent: parseInt(process.env.GAS_PRICE_BUFFER_PERCENT || "20", 10),
+    maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "100", 10),
+    useFlashbots: process.env.USE_FLASHBOTS === "true",
+    flashbotsRelayUrl: process.env.FLASHBOTS_RELAY_URL || "https://relay.flashbots.net",
+  };
+}
+
+const config = loadConfig();
 
 // ============================================================
 //                     LOGGER
@@ -130,6 +207,7 @@ class LiquidationBot {
   private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
+  private readonly MAX_BORROWERS = 10000;
   private supportedTokens: string[] = [];
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
@@ -137,9 +215,18 @@ class LiquidationBot {
   private isRunning = false;
   private liquidationCount = 0;
   private totalProfitUsd = 0;
+  private nonceMutex: Promise<void> = Promise.resolve();
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
+    // Guard against raw private key usage in production
+    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
+      throw new Error(
+        "SECURITY: Raw private key usage is forbidden in production. " +
+        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
+        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
+      );
+    }
     this.wallet = new ethers.Wallet(config.privateKey, this.provider);
     
     this.borrowModule = new ethers.Contract(config.borrowModule, BORROW_MODULE_ABI, this.wallet);
@@ -198,6 +285,7 @@ class LiquidationBot {
     this.borrowModule.on("Borrowed", (user: string, amount: bigint, totalDebt: bigint) => {
       logger.info(`New borrower detected: ${user} - Debt: ${ethers.formatEther(totalDebt)} mUSD`);
       this.borrowers.add(user);
+      this.evictOldestBorrowers();
     });
     
     // Listen for deposits (potential new positions)
@@ -219,15 +307,29 @@ class LiquidationBot {
     );
   }
 
-  private async ensureApproval(): Promise<void> {
+  // Approve only the amount needed for the current liquidation + buffer.
+  // This limits exposure if the liquidation engine contract has a vulnerability.
+  private async ensureApproval(requiredAmount?: bigint): Promise<void> {
     const allowance = await this.musd.allowance(this.wallet.address, config.liquidationEngine);
-    const maxApproval = ethers.MaxUint256;
     
-    if (allowance < maxApproval / 2n) {
-      logger.info("Approving mUSD for liquidation engine...");
-      const tx = await this.musd.approve(config.liquidationEngine, maxApproval);
-      await tx.wait();
-      logger.info("Approval complete");
+    if (requiredAmount) {
+      // Per-liquidation approval: approve exactly what's needed + 1% buffer
+      if (allowance < requiredAmount) {
+        const approvalAmount = requiredAmount * 102n / 100n; // 2% buffer
+        logger.info(`Approving ${ethers.formatEther(approvalAmount)} mUSD for liquidation...`);
+        const tx = await this.musd.approve(config.liquidationEngine, approvalAmount);
+        await tx.wait();
+        logger.info("Per-tx approval complete");
+      }
+    } else {
+      // Initial startup: set a reasonable cap (e.g. 1M mUSD)
+      const APPROVAL_CAP = ethers.parseEther("1000000"); // 1M mUSD max
+      if (allowance < APPROVAL_CAP / 2n) {
+        logger.info("Setting bounded mUSD approval for liquidation engine...");
+        const tx = await this.musd.approve(config.liquidationEngine, APPROVAL_CAP);
+        await tx.wait();
+        logger.info(`Approval set to ${ethers.formatEther(APPROVAL_CAP)} mUSD (bounded)`);
+      }
     }
   }
 
@@ -249,6 +351,11 @@ class LiquidationBot {
   stop(): void {
     logger.info("Stopping bot...");
     this.isRunning = false;
+    // TS-H-03: Remove all event listeners to prevent memory leaks on restart
+    this.borrowModule.removeAllListeners();
+    this.collateralVault.removeAllListeners();
+    this.liquidationEngine.removeAllListeners();
+    logger.info("Event listeners removed");
   }
 
   private async checkAndLiquidate(): Promise<void> {
@@ -335,12 +442,12 @@ class LiquidationBot {
           const profitWei = seizeValueUsd - maxRepay;
           const profitUsd = Number(ethers.formatEther(profitWei));
           
-          // Estimate gas cost
+          // Estimate gas cost using live ETH/USD price from oracle
           const gasEstimate = 300000n; // Conservative estimate
           const feeData = await this.provider.getFeeData();
           const gasPrice = feeData.gasPrice || 0n;
           const gasCostWei = gasEstimate * gasPrice;
-          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * 2500; // Assume ETH = $2500
+          const gasCostUsd = Number(ethers.formatEther(gasCostWei)) * await this.getEthPriceUsd();
           
           const netProfitUsd = profitUsd - gasCostUsd;
           
@@ -377,45 +484,54 @@ class LiquidationBot {
         logger.error(`Insufficient mUSD balance: have ${ethers.formatEther(musdBalance)}, need ${ethers.formatEther(opp.debtToRepay)}`);
         return;
       }
+
+      await this.ensureApproval(opp.debtToRepay);
       
       let success = false;
       let txHash: string | undefined;
       
-      // Use Flashbots if enabled for MEV protection
-      if (this.mevExecutor && config.useFlashbots) {
-        logger.info("Executing via Flashbots (MEV protected)...");
-        const result = await this.mevExecutor.executeWithFallback(
-          this.liquidationEngine,
-          opp.borrower,
-          opp.collateralToken,
-          opp.debtToRepay,
-          true // useFlashbots
-        );
-        success = result.success;
-        txHash = result.txHash;
-        logger.info(`Execution method: ${result.method}`);
-      } else {
-        // Regular transaction (public mempool)
-        logger.info("Executing via regular transaction...");
-        const feeData = await this.provider.getFeeData();
-        const gasPrice = feeData.gasPrice || 0n;
-        const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
-        
-        const tx = await this.liquidationEngine.liquidate(
-          opp.borrower,
-          opp.collateralToken,
-          opp.debtToRepay,
-          {
-            gasLimit: 500000n,
-            gasPrice: bufferedGasPrice,
-          }
-        );
-        
-        logger.info(`Transaction submitted: ${tx.hash}`);
-        txHash = tx.hash;
-        
-        const receipt = await tx.wait();
-        success = receipt.status === 1;
+      // Nonce mutex: serialize tx submissions to prevent "nonce too low" errors
+      // when multiple liquidation paths could fire concurrently (e.g., event-driven)
+      const txResult = await this.withNonceLock(async () => {
+        // Use Flashbots if enabled for MEV protection
+        if (this.mevExecutor && config.useFlashbots) {
+          logger.info("Executing via Flashbots (MEV protected)...");
+          const result = await this.mevExecutor.executeWithFallback(
+            this.liquidationEngine,
+            opp.borrower,
+            opp.collateralToken,
+            opp.debtToRepay,
+            true // useFlashbots
+          );
+          return { success: result.success, txHash: result.txHash, method: result.method };
+        } else {
+          // Regular transaction (public mempool)
+          logger.info("Executing via regular transaction...");
+          const feeData = await this.provider.getFeeData();
+          const gasPrice = feeData.gasPrice || 0n;
+          const bufferedGasPrice = (gasPrice * BigInt(100 + config.gasPriceBufferPercent)) / 100n;
+          
+          const tx = await this.liquidationEngine.liquidate(
+            opp.borrower,
+            opp.collateralToken,
+            opp.debtToRepay,
+            {
+              gasLimit: 500000n,
+              gasPrice: bufferedGasPrice,
+            }
+          );
+          
+          logger.info(`Transaction submitted: ${tx.hash}`);
+          
+          const receipt = await tx.wait();
+          return { success: receipt.status === 1, txHash: tx.hash, method: "regular" };
+        }
+      });
+      
+      success = txResult.success;
+      txHash = txResult.txHash;
+      if (txResult.method) {
+        logger.info(`Execution method: ${txResult.method}`);
       }
       
       if (success) {
@@ -463,6 +579,7 @@ class LiquidationBot {
     }
     
     logger.info(`Historical scan complete: ${this.borrowers.size} total borrowers`);
+    this.evictOldestBorrowers();
   }
 
   getStats(): { liquidations: number; profitUsd: number; borrowersTracked: number } {
@@ -475,6 +592,83 @@ class LiquidationBot {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Evict oldest 10% of borrowers when the set exceeds MAX_BORROWERS.
+   * JS Sets maintain insertion order, so iterating gives oldest entries first.
+   * Matches the bounded-cache pattern used in relay-service.ts.
+   */
+  private evictOldestBorrowers(): void {
+    if (this.borrowers.size > this.MAX_BORROWERS) {
+      const toEvict = Math.floor(this.MAX_BORROWERS * 0.1);
+      let evicted = 0;
+      for (const key of this.borrowers) {
+        if (evicted >= toEvict) break;
+        this.borrowers.delete(key);
+        evicted++;
+      }
+      logger.info(`Evicted ${evicted} oldest borrowers (${this.borrowers.size} remaining)`);
+    }
+  }
+
+  /**
+   * Serialize access to nonce-sensitive operations. Prevents concurrent
+   * liquidation transactions from reading the same nonce, which would cause
+   * one tx to be rejected with "nonce too low".
+   */
+  private async withNonceLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const acquired = new Promise<void>((resolve) => { release = resolve; });
+    const prev = this.nonceMutex;
+    this.nonceMutex = acquired;
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
+  /**
+   * Fetch live ETH/USD price from Chainlink oracle on-chain.
+   * Falls back to CoinGecko API, then to a conservative default.
+   */
+  private async getEthPriceUsd(): Promise<number> {
+    try {
+      // Chainlink ETH/USD feed on Ethereum mainnet
+      const CHAINLINK_ETH_USD = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419";
+      const AGGREGATOR_ABI = [
+        "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+      ];
+      const feed = new ethers.Contract(CHAINLINK_ETH_USD, AGGREGATOR_ABI, this.provider);
+      const [, answer, , updatedAt] = await feed.latestRoundData();
+      const staleness = Math.floor(Date.now() / 1000) - Number(updatedAt);
+      if (staleness < 3600 && answer > 0n) {
+        return Number(answer) / 1e8; // Chainlink uses 8 decimals
+      }
+      logger.warn(`Chainlink ETH/USD stale (${staleness}s), falling back to API`);
+    } catch (e) {
+      logger.warn(`Chainlink ETH/USD read failed, falling back to API: ${e}`);
+    }
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const data = await res.json() as { ethereum?: { usd?: number } };
+      if (data.ethereum?.usd && data.ethereum.usd > 100 && data.ethereum.usd < 100_000) {
+        return data.ethereum.usd;
+      }
+      logger.warn(`CoinGecko ETH/USD price out of range: ${data.ethereum?.usd}`);
+    } catch (e) {
+      logger.warn(`CoinGecko ETH/USD fetch failed: ${e}`);
+    }
+    // Conservative fallback — logged so ops can investigate
+    logger.error("All ETH/USD price sources failed, using conservative fallback of $3000");
+    return 3000;
   }
 }
 

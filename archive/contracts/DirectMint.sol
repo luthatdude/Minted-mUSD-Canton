@@ -111,7 +111,6 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         // Transfer USDC from user to this contract
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
 
-        // FIX H-04: Reset approval to 0 first, then set to avoid safeApprove revert
         // safeApprove reverts if current allowance is non-zero (preventing front-running)
         usdc.forceApprove(address(treasury), usdcAfterFee);
         treasury.deposit(address(this), usdcAfterFee);
@@ -235,7 +234,6 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         emit FeesWithdrawn(feeRecipient, fees);
     }
 
-    /// @notice FIX S-H02: Withdraw accumulated redeem fees from Treasury
     /// Redeem fees stay in Treasury during redeem(); this function extracts them.
     function withdrawRedeemFees() external onlyRole(FEE_MANAGER_ROLE) {
         uint256 fees = redeemFees;
@@ -254,14 +252,12 @@ contract DirectMint is AccessControl, ReentrancyGuard, Pausable {
         _pause();
     }
 
-    /// FIX M-5: Unpause requires admin, not pauser (separation of duties)
     /// This prevents a compromised pauser from resuming a malicious unpause
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
     /// @notice Emergency token recovery (not USDC or mUSD)
-    /// FIX 5C-M02: Block recovery of both USDC and mUSD to prevent fund extraction
     function recoverToken(address token, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         require(token != address(usdc), "CANNOT_RECOVER_USDC");
         require(token != address(musd), "CANNOT_RECOVER_MUSD");

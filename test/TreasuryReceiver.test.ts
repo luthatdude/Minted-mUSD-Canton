@@ -39,7 +39,8 @@ describe("TreasuryReceiver", function () {
       await wormhole.getAddress(),
       await tokenBridge.getAddress(),
       await directMint.getAddress(),
-      treasury.address
+      treasury.address,
+      admin.address // timelock = admin for testing
     );
 
     // Grant roles
@@ -78,7 +79,7 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should revert on zero address parameters", async function () {
-      const { usdc, wormhole, tokenBridge, directMint, treasury } = await loadFixture(deployFixture);
+      const { usdc, wormhole, tokenBridge, directMint, treasury, admin } = await loadFixture(deployFixture);
       const TreasuryReceiver = await ethers.getContractFactory("TreasuryReceiver");
 
       await expect(
@@ -87,7 +88,8 @@ describe("TreasuryReceiver", function () {
           await wormhole.getAddress(),
           await tokenBridge.getAddress(),
           await directMint.getAddress(),
-          treasury.address
+          treasury.address,
+          admin.address
         )
       ).to.be.revertedWithCustomError(TreasuryReceiver, "InvalidAddress");
 
@@ -97,7 +99,8 @@ describe("TreasuryReceiver", function () {
           ethers.ZeroAddress,
           await tokenBridge.getAddress(),
           await directMint.getAddress(),
-          treasury.address
+          treasury.address,
+          admin.address
         )
       ).to.be.revertedWithCustomError(TreasuryReceiver, "InvalidAddress");
     });
@@ -105,11 +108,11 @@ describe("TreasuryReceiver", function () {
 
   describe("Router Authorization", function () {
     it("Should authorize router", async function () {
-      const { receiver, bridgeAdmin } = await loadFixture(deployFixture);
+      const { receiver, admin } = await loadFixture(deployFixture);
 
       const routerAddress = ethers.zeroPadValue("0x1234567890123456789012345678901234567890", 32);
 
-      await expect(receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress))
+      await expect(receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress))
         .to.emit(receiver, "RouterAuthorized")
         .withArgs(BASE_CHAIN_ID, routerAddress);
 
@@ -117,12 +120,12 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should revoke router", async function () {
-      const { receiver, bridgeAdmin } = await loadFixture(deployFixture);
+      const { receiver, admin } = await loadFixture(deployFixture);
 
       const routerAddress = ethers.zeroPadValue("0x1234567890123456789012345678901234567890", 32);
-      await receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
+      await receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
 
-      await expect(receiver.connect(bridgeAdmin).revokeRouter(BASE_CHAIN_ID))
+      await expect(receiver.connect(admin).revokeRouter(BASE_CHAIN_ID))
         .to.emit(receiver, "RouterRevoked")
         .withArgs(BASE_CHAIN_ID);
 
@@ -227,10 +230,10 @@ describe("TreasuryReceiver", function () {
     }
 
     async function setupReceiveAndMint(fixture: Awaited<ReturnType<typeof deployFixture>>) {
-      const { receiver, wormhole, tokenBridge, bridgeAdmin, user1 } = fixture;
+      const { receiver, wormhole, tokenBridge, admin, user1 } = fixture;
 
       const routerAddress = ethers.zeroPadValue("0xDEAD", 32);
-      await receiver.connect(bridgeAdmin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
+      await receiver.connect(admin).authorizeRouter(BASE_CHAIN_ID, routerAddress);
 
       const vaaHash = ethers.keccak256(ethers.toUtf8Bytes("unique-vaa-1"));
       const payload = buildTransferPayload(user1.address);
@@ -364,10 +367,13 @@ describe("TreasuryReceiver", function () {
     });
 
     it("Should allow emergency withdrawal", async function () {
-      const { receiver, usdc, admin, user1 } = await loadFixture(deployFixture);
+      const { receiver, usdc, admin, user1, pauser } = await loadFixture(deployFixture);
 
       // Send some USDC to receiver
       await usdc.mint(await receiver.getAddress(), ethers.parseUnits("1000", 6));
+
+      // USDC withdrawal only allowed when paused (true emergency)
+      await receiver.connect(pauser).pause();
 
       await receiver.connect(admin).emergencyWithdraw(
         await usdc.getAddress(),

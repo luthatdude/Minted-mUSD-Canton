@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { CollateralVault, MockERC20 } from "../typechain-types";
+import { timelockAddCollateral, timelockUpdateCollateral, timelockSetBorrowModule } from "./helpers/timelock";
 
 describe("CollateralVault", function () {
   let vault: CollateralVault;
@@ -33,7 +34,7 @@ describe("CollateralVault", function () {
 
     // Deploy vault
     const VaultFactory = await ethers.getContractFactory("CollateralVault");
-    vault = await VaultFactory.deploy();
+    vault = await VaultFactory.deploy(ethers.ZeroAddress);
     await vault.waitForDeployment();
 
     // Grant roles
@@ -42,7 +43,8 @@ describe("CollateralVault", function () {
     await vault.grantRole(await vault.LEVERAGE_VAULT_ROLE(), leverageVault.address);
 
     // Add WETH as collateral
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, deployer,
       await weth.getAddress(),
       WETH_FACTOR,
       WETH_LIQ_THRESHOLD,
@@ -74,31 +76,31 @@ describe("CollateralVault", function () {
     it("should reject duplicate collateral add", async function () {
       await expect(
         vault.addCollateral(await weth.getAddress(), WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
-      ).to.be.revertedWith("ALREADY_ADDED");
+      ).to.be.revertedWithCustomError(vault, "AlreadyAdded");
     });
 
     it("should reject zero address collateral", async function () {
       await expect(
         vault.addCollateral(ethers.ZeroAddress, WETH_FACTOR, WETH_LIQ_THRESHOLD, WETH_LIQ_PENALTY)
-      ).to.be.revertedWith("INVALID_TOKEN");
+      ).to.be.revertedWithCustomError(vault, "InvalidToken");
     });
 
     it("should reject factor >= threshold", async function () {
       await expect(
         vault.addCollateral(await wbtc.getAddress(), 8000n, 8000n, 500n)
-      ).to.be.revertedWith("INVALID_FACTOR");
+      ).to.be.revertedWithCustomError(vault, "InvalidFactor");
     });
 
     it("should reject threshold > 95%", async function () {
       await expect(
         vault.addCollateral(await wbtc.getAddress(), 9000n, 9600n, 500n)
-      ).to.be.revertedWith("THRESHOLD_TOO_HIGH");
+      ).to.be.revertedWithCustomError(vault, "ThresholdTooHigh");
     });
 
     it("should reject penalty > 20%", async function () {
       await expect(
         vault.addCollateral(await wbtc.getAddress(), 7500n, 8000n, 2100n)
-      ).to.be.revertedWith("PENALTY_TOO_HIGH");
+      ).to.be.revertedWithCustomError(vault, "PenaltyTooHigh");
     });
 
     it("should cap at 50 supported tokens", async function () {
@@ -106,12 +108,12 @@ describe("CollateralVault", function () {
       // Already have 1, add 49 more
       for (let i = 0; i < 49; i++) {
         const token = await MockERC20Factory.deploy(`Token${i}`, `T${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 5000n, 6000n, 500n);
+        await timelockAddCollateral(vault, deployer, await token.getAddress(), 5000n, 6000n, 500n);
       }
       const oneMore = await MockERC20Factory.deploy("TooMany", "TM", 18);
       await expect(
         vault.addCollateral(await oneMore.getAddress(), 5000n, 6000n, 500n)
-      ).to.be.revertedWith("TOO_MANY_TOKENS");
+      ).to.be.revertedWithCustomError(vault, "TooManyTokens");
     });
 
     it("should disable and re-enable collateral", async function () {
@@ -129,7 +131,7 @@ describe("CollateralVault", function () {
       await vault.disableCollateral(await weth.getAddress());
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("1"))
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
     });
 
     it("should reject unauthorized config changes", async function () {
@@ -153,13 +155,13 @@ describe("CollateralVault", function () {
     it("should reject zero amount deposits", async function () {
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(vault, "InvalidAmount");
     });
 
     it("should reject deposits for unsupported tokens", async function () {
       await expect(
         vault.connect(user1).deposit(await wbtc.getAddress(), 100000000n)
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
     });
 
     it("should emit Deposited event", async function () {
@@ -202,7 +204,7 @@ describe("CollateralVault", function () {
     it("should reject over-withdrawal", async function () {
       await expect(
         vault.connect(borrowModule).withdraw(await weth.getAddress(), ethers.parseEther("20"), user1.address)
-      ).to.be.revertedWith("INSUFFICIENT_DEPOSIT");
+      ).to.be.revertedWithCustomError(vault, "InsufficientDeposit");
     });
 
     it("should reject unauthorized withdrawal", async function () {
@@ -213,17 +215,17 @@ describe("CollateralVault", function () {
 
     it("withdrawFor: should send collateral to specified recipient", async function () {
       const amount = ethers.parseEther("5");
-      const balBefore = await weth.balanceOf(user2.address);
-      // FIX: Add skipHealthCheck parameter (5th param) - true to skip health check for this test
-      await vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), amount, user2.address, true);
-      expect(await weth.balanceOf(user2.address)).to.equal(balBefore + amount);
+      const balBefore = await weth.balanceOf(leverageVault.address);
+      // skipHealthCheck=true restricts recipient to msg.sender or user
+      await vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), amount, leverageVault.address, true);
+      expect(await weth.balanceOf(leverageVault.address)).to.equal(balBefore + amount);
     });
 
     it("withdrawFor: should reject zero recipient", async function () {
       await expect(
-        // FIX: Add skipHealthCheck parameter (5th param)
+        // Add skipHealthCheck parameter (5th param)
         vault.connect(leverageVault).withdrawFor(user1.address, await weth.getAddress(), ethers.parseEther("1"), ethers.ZeroAddress, true)
-      ).to.be.revertedWith("INVALID_RECIPIENT");
+      ).to.be.revertedWithCustomError(vault, "InvalidRecipient");
     });
   });
 
@@ -247,7 +249,7 @@ describe("CollateralVault", function () {
     it("should reject seize exceeding deposit", async function () {
       await expect(
         vault.connect(liquidator).seize(user1.address, await weth.getAddress(), ethers.parseEther("20"), liquidator.address)
-      ).to.be.revertedWith("INSUFFICIENT_COLLATERAL");
+      ).to.be.revertedWithCustomError(vault, "InsufficientCollateral");
     });
 
     it("should reject seize without LIQUIDATION_ROLE", async function () {
