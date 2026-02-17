@@ -5,12 +5,12 @@ import {
   CircuitBreakerTriggered,
   CircuitBreakerAutoRecovered,
   KeeperRecovery,
-} from "../../generated/PriceOracle/PriceOracle";
+} from "../generated/PriceOracle/PriceOracle";
 import {
   FeedUpdate,
   CircuitBreakerEvent,
   CircuitBreakerRecovery,
-} from "../../generated/schema";
+} from "../generated/schema";
 
 export function handleFeedUpdated(event: FeedUpdated): void {
   let id =
