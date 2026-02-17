@@ -1,0 +1,58 @@
+# ══════════════════════════════════════════════════════════════
+# Kustomize Base — Minted mUSD Canton Protocol
+# ══════════════════════════════════════════════════════════════
+# All common resources shared across dev/staging/prod.
+# Environment-specific config is applied via overlays.
+#
+# Usage:
+#   kustomize build k8s/overlays/dev     | kubectl apply -f -
+#   kustomize build k8s/overlays/staging | kubectl apply -f -
+#   kustomize build k8s/overlays/prod    | kubectl apply -f -
+# ══════════════════════════════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: musd-canton
+
+commonLabels:
+  app.kubernetes.io/part-of: minted-musd
+  app.kubernetes.io/managed-by: kustomize
+
+resources:
+  # Phase 1: Namespace & RBAC
+  - namespace.yaml
+  - ../canton/serviceaccount.yaml
+
+  # Phase 2: Secrets & ConfigMaps
+  - ../canton/secrets.yaml
+  - ../canton/participant-config.yaml
+  - ../canton/nginx-configmap.yaml
+
+  # Phase 3: Database
+  - postgres-statefulset.yaml
+
+  # Phase 4: Canton Participant
+  - ../canton/participant-deployment.yaml
+
+  # Phase 5: NGINX Proxy
+  - ../canton/nginx-deployment.yaml
+
+  # Phase 6: Bridge Relay + Validators
+  - ../canton/relay-deployment.yaml
+
+  # Phase 7: Liquidation Bot
+  - ../canton/bot-deployment.yaml
+
+  # Phase 8: Network Policies & PDBs
+  - ../canton/network-policy.yaml
+  - ../canton/pod-disruption-budget.yaml
+
+  # Phase 9: Monitoring
+  - ../monitoring/canton-health-cronjob.yaml
+  - ../monitoring/prometheus-rules.yaml
+  - ../monitoring/service-monitors.yaml
+  - ../monitoring/grafana-dashboards.yaml
+  - ../monitoring/loki-stack.yaml
+
+  # Phase 10: Backups
+  - ../canton/postgres-backup-cronjob.yaml
