@@ -7,13 +7,13 @@ import {
   StrategyUpdated,
   Rebalanced,
   EmergencyWithdraw,
-} from "../../generated/TreasuryV2/TreasuryV2";
+} from "../generated/TreasuryV2/TreasuryV2";
 import {
   TreasuryDeposit,
   TreasuryWithdrawal,
   StrategyChange,
   TreasuryRebalance,
-} from "../../generated/schema";
+} from "../generated/schema";
 
 export function handleTreasuryDeposited(event: Deposited): void {
   let id =

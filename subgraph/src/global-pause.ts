@@ -1,5 +1,5 @@
-import { GlobalPauseStateChanged } from "../../generated/GlobalPauseRegistry/GlobalPauseRegistry";
-import { GlobalPauseEvent } from "../../generated/schema";
+import { GlobalPauseStateChanged } from "../generated/GlobalPauseRegistry/GlobalPauseRegistry";
+import { GlobalPauseEvent } from "../generated/schema";
 
 export function handleGlobalPauseStateChanged(
   event: GlobalPauseStateChanged

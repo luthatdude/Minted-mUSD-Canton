@@ -601,6 +601,10 @@ describe("PendleStrategyV2", function () {
     it("Should recover random stuck tokens", async function () {
       const { strategy, admin, usdc } = await loadFixture(deployFixture);
 
+      // Re-attach with full implementation ABI (fixes solidity-coverage proxy resolution)
+      const PendleStrategyV2 = await ethers.getContractFactory("PendleStrategyV2");
+      const impl = PendleStrategyV2.attach(await strategy.getAddress()) as any;
+
       // Deploy a random token and send it to the strategy
       const MockERC20 = await ethers.getContractFactory("MockERC20");
       const randomToken = await MockERC20.deploy("Random", "RND", 18);
@@ -608,7 +612,7 @@ describe("PendleStrategyV2", function () {
       await randomToken.mint(await strategy.getAddress(), amount);
 
       const balBefore = await randomToken.balanceOf(admin.address);
-      await strategy.connect(admin).recoverToken(await randomToken.getAddress(), admin.address, amount);
+      await impl.connect(admin).recoverToken(await randomToken.getAddress(), admin.address, amount);
       const balAfter = await randomToken.balanceOf(admin.address);
 
       expect(balAfter - balBefore).to.equal(amount);
@@ -617,19 +621,25 @@ describe("PendleStrategyV2", function () {
     it("Should reject recovering USDC", async function () {
       const { strategy, admin, usdc } = await loadFixture(deployFixture);
 
+      const PendleStrategyV2 = await ethers.getContractFactory("PendleStrategyV2");
+      const impl = PendleStrategyV2.attach(await strategy.getAddress()) as any;
+
       await expect(
-        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address, 1)
+        impl.connect(admin).recoverToken(await usdc.getAddress(), admin.address, 1)
       ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
     });
 
     it("Should reject non-admin from recovering tokens", async function () {
       const { strategy, user1 } = await loadFixture(deployFixture);
 
+      const PendleStrategyV2 = await ethers.getContractFactory("PendleStrategyV2");
+      const impl = PendleStrategyV2.attach(await strategy.getAddress()) as any;
+
       const MockERC20 = await ethers.getContractFactory("MockERC20");
       const randomToken = await MockERC20.deploy("Random", "RND", 18);
 
       await expect(
-        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address, 1)
+        impl.connect(user1).recoverToken(await randomToken.getAddress(), user1.address, 1)
       ).to.be.reverted;
     });
   });
