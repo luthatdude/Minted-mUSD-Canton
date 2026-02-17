@@ -1,0 +1,106 @@
+-- | Canton Protocol Initialization Script
+--
+-- Creates the initial protocol contracts on Canton Devnet:
+--   1. ComplianceRegistry
+--   2. MUSDSupplyService
+--   3. PriceOracle (ETH/USD)
+--   4. VaultManager
+--   5. BridgeService
+--
+-- Usage:
+--   daml script --dar .daml/dist/ble-protocol-2.0.0.dar \
+--     --script-name InitProtocol:initProtocol \
+--     --ledger-host localhost --ledger-port 7575 \
+--     --input-file init-args.json
+
+module InitProtocol where
+
+import Daml.Script
+import DA.Time
+import DA.Set qualified as Set
+import Minted.Protocol.V3
+import Compliance
+
+-- | Initialize all core protocol contracts
+initProtocol : Script ()
+initProtocol = do
+  -- Allocate parties
+  operator <- allocatePartyWithHint "MintedOperator" (PartyIdHint "minted-operator")
+  governance <- allocatePartyWithHint "MintedGovernance" (PartyIdHint "minted-governance")
+  regulator <- allocatePartyWithHint "Regulator" (PartyIdHint "regulator")
+  validator1 <- allocatePartyWithHint "Validator1" (PartyIdHint "validator-1")
+
+  now <- getTime
+
+  -- 1. ComplianceRegistry
+  debug "Creating ComplianceRegistry..."
+  complianceCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.empty
+      frozen = Set.empty
+      lastUpdated = now
+
+  -- 2. MUSDSupplyService (10M cap)
+  debug "Creating MUSDSupplyService..."
+  supplyServiceCid <- submitMulti [operator, governance] [] do
+    createCmd MUSDSupplyService with
+      operator
+      governance
+      supplyCap = 10_000_000.0       -- 10M mUSD
+      currentSupply = 0.0
+      largeMintThreshold = 100_000.0 -- 100K mUSD
+      pendingLargeMints = []
+      observers = [validator1]
+
+  -- 3. PriceOracle (ETH/USD)
+  debug "Creating PriceOracle (ETH/USD)..."
+  oracleCid <- submit operator do
+    createCmd PriceOracle with
+      provider = operator
+      symbol = "ETH/USD"
+      price = 3000.0                 -- Initial price
+      lastUpdated = now
+      observers = [governance, validator1]
+
+  -- 4. VaultManager
+  debug "Creating VaultManager..."
+  vaultManagerCid <- submit operator do
+    createCmd VaultManager with
+      operator
+      defaultConfig = VaultConfig with
+        liquidationThreshold = 1.5   -- 150%
+        interestRateBps = 500        -- 5% APR
+        liquidationPenaltyBps = 500  -- 5%
+        liquidationBonusBps = 100    -- 1% keeper bonus
+        closeFactorBps = 5000        -- 50% per liquidation
+        dustThreshold = 50.0         -- Force full liq below 50 mUSD
+      allowedCollaterals = ["ETH", "WBTC", "USDC"]
+      complianceRegistryCid = complianceCid
+      observers = [governance, validator1]
+
+  -- 5. BridgeService
+  debug "Creating BridgeService..."
+  bridgeServiceCid <- submitMulti [operator, governance] [] do
+    createCmd BridgeService with
+      operator
+      governance
+      validators = [validator1]
+      requiredSignatures = 1         -- Devnet: single validator
+      totalBridgedIn = 0.0
+      totalBridgedOut = 0.0
+      lastNonce = 0
+      paused = False
+      observers = [validator1]
+
+  debug "=========================================="
+  debug "Canton Protocol Initialized!"
+  debug "=========================================="
+  debug $ "ComplianceRegistry: " <> show complianceCid
+  debug $ "MUSDSupplyService:  " <> show supplyServiceCid
+  debug $ "PriceOracle:        " <> show oracleCid
+  debug $ "VaultManager:       " <> show vaultManagerCid
+  debug $ "BridgeService:      " <> show bridgeServiceCid
+
+  pure ()

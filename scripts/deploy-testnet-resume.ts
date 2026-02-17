@@ -1,22 +1,8 @@
 import { ethers, upgrades } from "hardhat";
 
 /**
- * Testnet deployment script for the Minted / BLE Protocol.
- *
- * Deployment order:
- *   0. GlobalPauseRegistry       (needed by MUSD, SMUSD, CollateralVault)
- *   1. MintedTimelockController   (governance primitive)
- *   2. MUSD                       (stablecoin)
- *   3. PriceOracle                (price feeds)
- *   4. InterestRateModel          (rate model)
- *   5. CollateralVault            (vault)
- *   6. BorrowModule               (lending)
- *   7. SMUSD                      (staking vault)
- *   8. LiquidationEngine          (liquidation)
- *   9. DirectMintV2               (direct mint)
- *  10. TreasuryV2                 (UUPS proxy)
- *  11. BLEBridgeV9                (UUPS proxy — Canton bridge)
- *  12. LeverageVault              (leverage)
+ * RESUME deployment from step 6 (BorrowModule).
+ * Steps 0–5 were deployed in the prior run. Addresses hardcoded below.
  */
 async function main() {
   const [deployer] = await ethers.getSigners();
@@ -29,67 +15,28 @@ async function main() {
   const FEE_RECIPIENT = deployer.address;
   const SWAP_ROUTER = deployer.address;
 
-  // ─── 0. GlobalPauseRegistry ───
-  console.log("\n[0/12] Deploying GlobalPauseRegistry...");
-  const GPRFactory = await ethers.getContractFactory("GlobalPauseRegistry");
-  const gpr = await GPRFactory.deploy(deployer.address, deployer.address);
-  await gpr.waitForDeployment();
-  const gprAddress = await gpr.getAddress();
+  // ═══════════════════════════════════════════════════════════════════════
+  // ALREADY DEPLOYED (steps 0–5)
+  // ═══════════════════════════════════════════════════════════════════════
+  const gprAddress      = "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F";
+  const timelockAddress = "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410";
+  const musdAddress     = "0x76AA12B576b72041b91FDE11e33c4eb2fCfa48FA";
+  const oracleAddress   = "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025";
+  const irmAddress      = "0x501265BeF81E6E96e4150661e2b9278272e9177B";
+  const vaultAddress    = "0x155d6618dcdeb2F4145395CA57C80e6931D7941e";
+
+  console.log("=== Resuming from step 6 ===");
   console.log("GlobalPauseRegistry:", gprAddress);
-
-  // ─── 1. MintedTimelockController ───
-  console.log("\n[1/12] Deploying MintedTimelockController...");
-  const MIN_DELAY = 86400;
-  const proposers = [deployer.address];
-  const executors = [deployer.address];
-  const admin = deployer.address;
-
-  const TimelockFactory = await ethers.getContractFactory("MintedTimelockController");
-  const timelock = await TimelockFactory.deploy(MIN_DELAY, proposers, executors, admin);
-  await timelock.waitForDeployment();
-  const timelockAddress = await timelock.getAddress();
   console.log("MintedTimelockController:", timelockAddress);
-
-  // ─────────────────────────────────────────────────────────────────────
-  // 2. MUSD
-  // ─────────────────────────────────────────────────────────────────────
-  const INITIAL_SUPPLY_CAP = ethers.parseEther("10000000"); // 10 M mUSD
-  const MUSDFactory = await ethers.getContractFactory("MUSD");
-  const musd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, gprAddress);
-  await musd.waitForDeployment();
-  const musdAddress = await musd.getAddress();
   console.log("MUSD:", musdAddress);
-
-  // ─────────────────────────────────────────────────────────────────────
-  // 3. PriceOracle
-  // ─────────────────────────────────────────────────────────────────────
-  const OracleFactory = await ethers.getContractFactory("PriceOracle");
-  const oracle = await OracleFactory.deploy();
-  await oracle.waitForDeployment();
-  const oracleAddress = await oracle.getAddress();
   console.log("PriceOracle:", oracleAddress);
-
-  // ─────────────────────────────────────────────────────────────────────
-  // 4. InterestRateModel
-  // ─────────────────────────────────────────────────────────────────────
-  const IRMFactory = await ethers.getContractFactory("InterestRateModel");
-  const irm = await IRMFactory.deploy(deployer.address);
-  await irm.waitForDeployment();
-  const irmAddress = await irm.getAddress();
   console.log("InterestRateModel:", irmAddress);
-
-  // ─────────────────────────────────────────────────────────────────────
-  // 5. CollateralVault
-  // ─────────────────────────────────────────────────────────────────────
-  const VaultFactory = await ethers.getContractFactory("CollateralVault");
-  const vault = await VaultFactory.deploy(gprAddress);
-  await vault.waitForDeployment();
-  const vaultAddress = await vault.getAddress();
   console.log("CollateralVault:", vaultAddress);
 
   // ─────────────────────────────────────────────────────────────────────
   // 6. BorrowModule
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[6/12] Deploying BorrowModule...");
   const INTEREST_RATE_BPS = 500; // 5 %
   const MIN_DEBT = ethers.parseEther("100"); // 100 mUSD minimum
 
@@ -108,6 +55,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 7. SMUSD
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[7/12] Deploying SMUSD...");
   const SMUSDFactory = await ethers.getContractFactory("SMUSD");
   const smusd = await SMUSDFactory.deploy(musdAddress, gprAddress);
   await smusd.waitForDeployment();
@@ -117,6 +65,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 8. LiquidationEngine
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[8/12] Deploying LiquidationEngine...");
   const CLOSE_FACTOR_BPS = 5000; // 50 %
 
   const LiqFactory = await ethers.getContractFactory("LiquidationEngine");
@@ -134,6 +83,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 9. DirectMintV2
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[9/12] Deploying DirectMintV2...");
   const DirectMintFactory = await ethers.getContractFactory("DirectMintV2");
   const directMint = await DirectMintFactory.deploy(
     USDC_ADDRESS,
@@ -148,6 +98,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 10. TreasuryV2 (UUPS proxy)
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[10/12] Deploying TreasuryV2 (UUPS proxy)...");
   const TreasuryImpl = await ethers.getContractFactory("TreasuryV2");
   const treasuryProxy = await upgrades.deployProxy(TreasuryImpl, [
     USDC_ADDRESS, vaultAddress, deployer.address, FEE_RECIPIENT, timelockAddress,
@@ -159,8 +110,9 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 11. BLEBridgeV9 (UUPS proxy)
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[11/12] Deploying BLEBridgeV9 (UUPS proxy)...");
   const BridgeImpl = await ethers.getContractFactory("BLEBridgeV9");
-  const MIN_SIGS = 2; // contract enforces >= 2
+  const MIN_SIGS = 1; // testnet: single validator
   const COLLATERAL_RATIO_BPS = 10000; // 100 %
   const DAILY_CAP_INCREASE = ethers.parseEther("1000000"); // 1 M
 
@@ -174,6 +126,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   // 12. LeverageVault
   // ─────────────────────────────────────────────────────────────────────
+  console.log("\n[12/12] Deploying LeverageVault...");
   const LeverageFactory = await ethers.getContractFactory("LeverageVault");
   const leverage = await LeverageFactory.deploy(
     SWAP_ROUTER,
@@ -192,6 +145,7 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════════
   console.log("\n=== Configuring roles ===");
 
+  const musd = await ethers.getContractAt("MUSD", musdAddress);
   const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
   const LIQUIDATOR_ROLE = await musd.LIQUIDATOR_ROLE();
   await (await musd.grantRole(BRIDGE_ROLE, bridgeAddress)).wait();
@@ -199,6 +153,7 @@ async function main() {
   await (await musd.grantRole(BRIDGE_ROLE, borrowAddress)).wait();
   console.log("MUSD roles configured");
 
+  const vault = await ethers.getContractAt("CollateralVault", vaultAddress);
   const VAULT_ADMIN_ROLE = await vault.VAULT_ADMIN_ROLE();
   await (await vault.grantRole(VAULT_ADMIN_ROLE, borrowAddress)).wait();
   await (await vault.grantRole(VAULT_ADMIN_ROLE, liquidationAddress)).wait();
