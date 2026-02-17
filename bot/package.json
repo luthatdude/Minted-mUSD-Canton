@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "monitor": "ts-node src/monitor.ts",
-    "rebalancer": "ts-node src/fluid-rebalancer.ts"
+    "rebalancer": "ts-node src/fluid-rebalancer.ts",
+    "sentinel": "ts-node src/security-sentinel.ts"
   },
   "dependencies": {
     "ethers": "^6.9.0",

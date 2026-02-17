@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-sentinel
+  namespace: minted
+  labels:
+    app: security-sentinel
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-sentinel
+  template:
+    metadata:
+      labels:
+        app: security-sentinel
+        component: monitoring
+    spec:
+      containers:
+        - name: sentinel
+          image: minted/bot:latest
+          command: ["node", "dist/security-sentinel.js"]
+          env:
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: minted-rpc
+                  key: rpc-url
+            - name: WS_RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: minted-rpc
+                  key: ws-rpc-url
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: minted-telegram
+                  key: bot-token
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minted-telegram
+                  key: chat-id
+            - name: DEPLOYER_ADDRESS
+              value: "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0"
+            - name: LARGE_MINT_THRESHOLD_USD
+              value: "100000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "security-sentinel"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      restartPolicy: Always
