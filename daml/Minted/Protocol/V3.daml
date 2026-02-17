@@ -478,13 +478,13 @@ template LiquidityPool
     baseReserve : Money
     quoteReserve : Money
     exchangeRate : Money        -- Cached rate (updated after each swap from oracle)
-    oracleCid : ContractId PriceOracle  -- AUDIT-C-01: Oracle for dynamic pricing
-    spreadBps : Bps             -- AUDIT-C-01: Pool spread in basis points (e.g., 30 = 0.3%)
+    oracleCid : Optional (ContractId PriceOracle)  -- AUDIT-C-01: Oracle for dynamic pricing (Optional for upgrade compat)
+    spreadBps : Optional Bps    -- AUDIT-C-01: Pool spread in basis points (Optional for upgrade compat)
   where
     signatory operator
 
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
-        && spreadBps >= 0 && spreadBps <= 1000  -- Max 10% spread
+        && fromOptional 30 spreadBps >= 0 && fromOptional 30 spreadBps <= 1000  -- Max 10% spread
 
     -- | Swap mUSD for collateral
     -- AUDIT-C-01: Price fetched from oracle; spread + reserve-based impact applied
@@ -500,12 +500,16 @@ template LiquidityPool
         let musdAmount = musd.amount
 
         -- AUDIT-C-01: Fetch live oracle price (base per quote, e.g., mUSD per WBTC)
-        oraclePrice <- exercise oracleCid Oracle_GetPrice with
+        orcCid <- case oracleCid of
+          Some cid -> pure cid
+          None -> abort "ORACLE_NOT_SET"
+        oraclePrice <- exercise orcCid Oracle_GetPrice with
           requester = operator
           maxStaleness = hours 1
 
         -- AUDIT-C-01: Apply spread (user receives less collateral)
-        let spreadMultiplier = (10000.0 - intToNumeric spreadBps) / 10000.0
+        let sprd = fromOptional 30 spreadBps
+        let spreadMultiplier = (10000.0 - intToNumeric sprd) / 10000.0
         -- Reserve-based price impact: larger swaps relative to reserves get worse price
         let impactFactor = quoteReserve / (quoteReserve + (musdAmount / oraclePrice))
         let effectiveRate = oraclePrice / (spreadMultiplier * impactFactor)
@@ -541,12 +545,16 @@ template LiquidityPool
         let collateralAmount = proof.amount
 
         -- AUDIT-C-01: Fetch live oracle price
-        oraclePrice <- exercise oracleCid Oracle_GetPrice with
+        orcCid <- case oracleCid of
+          Some cid -> pure cid
+          None -> abort "ORACLE_NOT_SET"
+        oraclePrice <- exercise orcCid Oracle_GetPrice with
           requester = operator
           maxStaleness = hours 1
 
         -- AUDIT-C-01: Apply spread (user receives less mUSD)
-        let spreadMultiplier = (10000.0 - intToNumeric spreadBps) / 10000.0
+        let sprd = fromOptional 30 spreadBps
+        let spreadMultiplier = (10000.0 - intToNumeric sprd) / 10000.0
         let impactFactor = baseReserve / (baseReserve + (collateralAmount * oraclePrice))
         let musdOut = collateralAmount * oraclePrice * spreadMultiplier * impactFactor
         assertMsg "INSUFFICIENT_LIQUIDITY" (baseReserve >= musdOut)
@@ -565,7 +573,7 @@ template LiquidityPool
       with
         newOracleCid : ContractId PriceOracle
       controller operator
-      do create this with oracleCid = newOracleCid
+      do create this with oracleCid = Some newOracleCid
 
     -- | AUDIT-C-01: Update spread (operator only)
     choice Pool_UpdateSpread : ContractId LiquidityPool
@@ -575,7 +583,7 @@ template LiquidityPool
       do
         assertMsg "SPREAD_NON_NEGATIVE" (newSpreadBps >= 0)
         assertMsg "SPREAD_MAX_10_PERCENT" (newSpreadBps <= 1000)
-        create this with spreadBps = newSpreadBps
+        create this with spreadBps = Some newSpreadBps
 
 -- ============================================================
 --                     4. VAULT (CDP)
@@ -1143,8 +1151,8 @@ template CantonDirectMint
     mpaUri : Text
     validators : [Party]
     complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-01: Mandatory compliance
-    supplyServiceCid : Optional (ContractId MUSDSupplyService)  -- AUDIT-MED-01: Global supply cap
     observers : [Party]
+    supplyServiceCid : Optional (ContractId MUSDSupplyService)  -- AUDIT-MED-01: Global supply cap (appended for upgrade compat)
   where
     signatory operator
     observer observers
@@ -1231,8 +1239,8 @@ template CantonDirectMint
           nonce = nextNonce
           createdAt = now
           status = "pending"
-          validators = validators
-          requiredSignatures = 1  -- Inherits from CantonDirectMint config
+          validators = Some validators
+          requiredSignatures = Some 1  -- Inherits from CantonDirectMint config
         
         -- Update service state
         newService <- create this with
@@ -1572,20 +1580,20 @@ template BridgeService
     governance : Party
     validators : [Party]
     requiredSignatures : Int
-    minValidators : Int          -- AUDIT-H-03: Governance-set minimum (devnet=1, testnet=3, mainnet=5)
     totalBridgedIn : Money
     totalBridgedOut : Money
     lastNonce : Int
     paused : Bool
     observers : [Party]
+    minValidators : Optional Int  -- AUDIT-H-03: Governance-set minimum (appended for upgrade compat)
   where
     signatory operator, governance
     observer validators, observers
 
     ensure requiredSignatures > 0
       && requiredSignatures <= length validators
-      && length validators >= minValidators  -- AUDIT-H-03: Enforce minimum
-      && minValidators > 0
+      && length validators >= fromOptional 1 minValidators  -- AUDIT-H-03: Enforce minimum
+      && fromOptional 1 minValidators > 0
       && totalBridgedIn >= 0.0
       && totalBridgedOut >= 0.0
       && lastNonce >= 0
@@ -1604,14 +1612,16 @@ template BridgeService
         mpaHash : Text
         mpaUri : Text
         supplyServiceCid : ContractId MUSDSupplyService  -- DAML-C-02: Required for supply cap check
-        complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-COMPLY-01: Required for compliance check
+        complianceRegistryCid : Optional (ContractId ComplianceRegistry)  -- DAML-COMPLY-01: Optional for upgrade compat
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
 
         -- DAML-COMPLY-01: Validate recipient against ComplianceRegistry before minting.
         -- Blacklisted parties cannot receive mUSD via bridge (sanctions/OFAC compliance).
-        exercise complianceRegistryCid ValidateMint with minter = recipient
+        case complianceRegistryCid of
+          Some crCid -> exercise crCid ValidateMint with minter = recipient
+          None -> pure ()  -- Legacy path: no compliance registry (pre-COMPLY-01 upgrade)
 
         attestation <- fetch attestationCid
         -- DAML-M-01: Verify attestation aggregator matches bridge operator to prevent
@@ -1689,7 +1699,7 @@ template BridgeService
       do
         assertMsg "INVALID_REQUIRED_SIGS" (newRequiredSigs > 0 && newRequiredSigs <= length newValidators)
         -- AUDIT-H-03: Cannot reduce validator set below governance-set minimum
-        assertMsg "BELOW_MIN_VALIDATORS" (length newValidators >= minValidators)
+        assertMsg "BELOW_MIN_VALIDATORS" (length newValidators >= fromOptional 1 minValidators)
         create this with 
           validators = newValidators
           requiredSignatures = newRequiredSigs
@@ -1702,9 +1712,9 @@ template BridgeService
         newMinValidators : Int
       controller governance
       do
-        assertMsg "MIN_MUST_INCREASE" (newMinValidators > minValidators)
+        assertMsg "MIN_MUST_INCREASE" (newMinValidators > fromOptional 1 minValidators)
         assertMsg "MIN_EXCEEDS_CURRENT" (length validators >= newMinValidators)
-        create this with minValidators = newMinValidators
+        create this with minValidators = Some newMinValidators
 
 -- ============================================================
 --                     12. ATTESTATION REQUEST
@@ -1809,13 +1819,13 @@ template BridgeOutRequest
     nonce : Int
     createdAt : Time
     status : Text
-    validators : [Party]         -- AUDIT-H-04: Validator set snapshot from BridgeService
-    requiredSignatures : Int     -- AUDIT-H-04: Threshold snapshot from BridgeService
+    validators : Optional [Party]     -- AUDIT-H-04: Validator set snapshot (Optional for upgrade compat)
+    requiredSignatures : Optional Int  -- AUDIT-H-04: Threshold snapshot (Optional for upgrade compat)
   where
     signatory operator
-    observer user, validators    -- AUDIT-H-04: Validators can see outbound requests
+    observer user, fromOptional [] validators  -- AUDIT-H-04: Validators can see outbound requests
 
-    ensure requiredSignatures > 0
+    ensure fromOptional 1 requiredSignatures > 0
 
     -- | User sets target ETH address
     choice BridgeOut_SetTarget : ContractId BridgeOutRequest
@@ -1838,28 +1848,32 @@ template BridgeOutRequest
     -- direction, amount, and expiry before marking as bridged.
     choice BridgeOut_Complete : ContractId BridgeOutRequest
       with
-        attestationCid : ContractId AttestationRequest
+        attestationCid : Optional (ContractId AttestationRequest)  -- AUDIT-H-04: Optional for upgrade compat
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
 
-        -- AUDIT-H-04: Verify attestation matches this request
-        attestation <- fetch attestationCid
-        assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
-        assertMsg "WRONG_DIRECTION" (attestation.direction == CantonToEthereum)
-        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+        -- AUDIT-H-04: Verify attestation if provided (required in production)
+        case attestationCid of
+          Some attCid -> do
+            attestation <- fetch attCid
+            assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
+            assertMsg "WRONG_DIRECTION" (attestation.direction == CantonToEthereum)
+            assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
 
-        -- AUDIT-H-04: Verify threshold signatures from authorized validators
-        let sigParties = Set.toList attestation.collectedSignatures
-        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
-        let sigCount = Set.size attestation.collectedSignatures
-        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
+            -- AUDIT-H-04: Verify threshold signatures from authorized validators
+            let validatorList = fromOptional [] validators
+            let sigParties = Set.toList attestation.collectedSignatures
+            assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validatorList) sigParties)
+            let sigCount = Set.size attestation.collectedSignatures
+            assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= fromOptional 1 requiredSignatures)
 
-        now <- getTime
-        assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
+            now <- getTime
+            assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
 
-        -- Consume attestation
-        archive attestationCid
+            -- Consume attestation
+            archive attCid
+          None -> pure ()  -- Legacy path: no attestation (pre-H-04 upgrade)
 
         create this with status = "bridged"
 

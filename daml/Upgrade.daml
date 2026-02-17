@@ -22,6 +22,7 @@ import DA.Set qualified as Set
 import DA.List (dedup)
 import DA.Optional (isSome, fromSome)
 import DA.Text qualified as T
+import Governance (GovernanceActionLog(..), ActionType(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -190,14 +191,27 @@ template UpgradeRegistry
         create this with status = Completed
 
     -- | Emergency rollback (governance triggered)
+    -- FIX M-8: Require multi-sig governance approval instead of single member.
+    -- The GovernanceActionLog proof ensures M-of-N threshold was met.
     choice UpgradeRegistry_EmergencyRollback : ContractId UpgradeRegistry
       with
         reason : Text
         authorizer : Party
-      controller authorizer
+        governanceProofCid : Optional (ContractId GovernanceActionLog)
+      controller operator
       do
         assertMsg "NOT_GOVERNANCE" (authorizer `elem` governance)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
+        -- FIX M-10: Only Active registries can be rolled back
+        assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
+        -- FIX M-8: Require governance proof for rollback (multi-sig).
+        -- Single-member rollback is blocked — must go through proposal flow.
+        case governanceProofCid of
+          Some proofCid -> do
+            proof <- fetch proofCid
+            assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ContractUpgrade)
+            assertMsg "INSUFFICIENT_APPROVERS" (length proof.approvers >= 2)
+          None -> assertMsg "GOVERNANCE_PROOF_REQUIRED" False
         now <- getTime
         assertMsg "ROLLBACK_WINDOW_CLOSED" (now <= rollbackDeadline)
         create this with status = RolledBack
@@ -232,6 +246,9 @@ template MigrationTicket
       do
         assertMsg "BATCH_TOO_LARGE" (length contractsToMigrate <= batchSize)
         now <- getTime
+        
+        -- FIX M-9: Enforce batchSize limit on contracts per migration transaction
+        assertMsg "BATCH_SIZE_EXCEEDED" (length contractsToMigrate <= batchSize)
         
         -- Verify upgrade is still active
         registry <- fetch registryCid

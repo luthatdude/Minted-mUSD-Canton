@@ -1102,6 +1102,12 @@ template CantonLendingService
 
         -- Seize collateral with penalty
         targetEscrow <- fetch targetEscrowCid
+        -- FIX H-3: Validate targetEscrowCid belongs to the borrower being liquidated.
+        -- Without this, a liquidator could seize a third party's collateral.
+        assertMsg "TARGET_ESCROW_NOT_OWNED_BY_BORROWER" (targetEscrow.owner == borrower)
+        -- FIX H-2: Verify targetEscrowCid is included in the health-check escrowCids list.
+        -- This ensures the target is accounted for in the collateral valuation.
+        assertMsg "TARGET_ESCROW_NOT_IN_LIST" (targetEscrowCid `elem` escrowCids)
         let cfg = getConfig targetEscrow.collateralType configs
         colPrice <- getCtxPriceByType operator targetEscrow.collateralType configs priceFeedCids False
 
