@@ -12,7 +12,10 @@
 methods {
     // ── Storage reads (envfree) ──
     function active()                external returns (bool)    envfree;
-    function paused()                external returns (bool)    envfree;
+    // NOTE: paused() NOT envfree — PausableUpgradeable uses ERC-7201
+    // namespaced storage with assembly slot access. Certora's static
+    // analyzer can't prove env-independence on upgradeable contracts.
+    function paused()                external returns (bool);
     function ptBalance()             external returns (uint256) envfree;
     function slippageBps()           external returns (uint256) envfree;
     function ptDiscountRateBps()     external returns (uint256) envfree;
@@ -56,10 +59,17 @@ methods {
     function TIMELOCK_ROLE()    external returns (bytes32) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
 
+    // ── UUPS upgrade (delegatecall — must be filtered from invariants) ──
+    function upgradeToAndCall(address, bytes) external => NONDET;
+
     // ── External contract summaries ──
-    function _.safeTransferFrom(address, address, uint256) external => NONDET;
-    function _.safeTransfer(address, uint256)               external => NONDET;
-    function _.forceApprove(address, uint256)               external => NONDET;
+    // HAVOC_ECF = Havoc External Contract Fields only.
+    // Only havoces storage of the *callee*, NOT PendleStrategyV2.
+    // NONDET would allow Prover to explore callee == address(this),
+    // havocing slippageBps, ptDiscountRateBps, rolloverThreshold, etc.
+    function _.safeTransferFrom(address, address, uint256) external => HAVOC_ECF;
+    function _.safeTransfer(address, uint256)               external => HAVOC_ECF;
+    function _.forceApprove(address, uint256)               external => HAVOC_ECF;
     function _.balanceOf(address)                           external => PER_CALLEE_CONSTANT;
     function _.selectBestMarket(string) external            => NONDET;
     function _.isValidMarket(address) external              => PER_CALLEE_CONSTANT;
@@ -67,6 +77,10 @@ methods {
     function _.expiry() external                            => PER_CALLEE_CONSTANT;
     function _.isExpired() external                         => PER_CALLEE_CONSTANT;
     function _.decimals() external                          => PER_CALLEE_CONSTANT;
+    // Pendle Router calls — state-modifying, need HAVOC_ECF
+    function _.swapExactTokenForPt(address, address, uint256, IPendleRouter.ApproxParams, IPendleRouter.TokenInput, IPendleRouter.LimitOrderData) external => HAVOC_ECF;
+    function _.redeemPyToToken(address, address, uint256, IPendleRouter.TokenOutput) external => HAVOC_ECF;
+    function _.swapExactPtForToken(address, address, uint256, IPendleRouter.TokenOutput, IPendleRouter.LimitOrderData) external => HAVOC_ECF;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -74,20 +88,27 @@ methods {
 // ═══════════════════════════════════════════════════════════════════
 
 /// @notice slippageBps never exceeds MAX_SLIPPAGE_BPS (100 = 1%)
+///         Pre-initialize: slippageBps == 0 (valid, within bound)
 invariant slippageBounded()
-    slippageBps() <= 100;
+    slippageBps() <= 100
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice ptDiscountRateBps never exceeds 5000 (50%)
+///         Pre-initialize: ptDiscountRateBps == 0 (valid, within bound)
 invariant discountRateBounded()
-    ptDiscountRateBps() <= 5000;
+    ptDiscountRateBps() <= 5000
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
-/// @notice rolloverThreshold is always within [1 day, 30 days]
+/// @notice rolloverThreshold is either 0 (pre-initialize) or within [1 day, 30 days]
+///         Upgradeable contracts start with rolloverThreshold = 0 before initialize()
 invariant rolloverThresholdInRange()
-    rolloverThreshold() >= 86400 && rolloverThreshold() <= 2592000;
+    rolloverThreshold() == 0 || (rolloverThreshold() >= 86400 && rolloverThreshold() <= 2592000)
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 /// @notice positionCount never exceeds MAX_POSITIONS (10)
 invariant positionCountBounded()
-    positionCount() <= 10;
+    positionCount() <= 10
+    filtered { f -> f.selector != sig:upgradeToAndCall(address, bytes).selector }
 
 // ═══════════════════════════════════════════════════════════════════
 // RULES: DEPOSIT
@@ -112,7 +133,8 @@ rule deposit_inactive_reverts(uint256 amount) {
 /// @notice deposit() when paused must revert
 rule deposit_paused_reverts(uint256 amount) {
     env e;
-    require paused();
+    // paused() is not envfree — must use env
+    require paused(e);
     require amount > 0;
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit while paused must revert";
@@ -361,7 +383,8 @@ rule setActive_requires_guardian(bool a) {
 /// @notice deposit() reverts when paused
 rule paused_blocks_deposit(uint256 amount) {
     env e;
-    require paused();
+    // paused() is not envfree — must use env
+    require paused(e);
     require amount > 0;
     deposit@withrevert(e, amount);
     assert lastReverted, "deposit must revert when paused";
@@ -370,7 +393,8 @@ rule paused_blocks_deposit(uint256 amount) {
 /// @notice allocateToMarket() reverts when paused
 rule paused_blocks_allocate(address m, uint256 a) {
     env e;
-    require paused();
+    // paused() is not envfree — must use env
+    require paused(e);
     allocateToMarket@withrevert(e, m, a);
     assert lastReverted, "allocateToMarket must revert when paused";
 }
@@ -395,7 +419,7 @@ rule emergencyWithdraw_pauses() {
     emergencyWithdraw@withrevert(e, recipient);
     bool succeeded = !lastReverted;
 
-    assert succeeded => paused(),
+    assert succeeded => paused(e),
         "emergencyWithdraw must pause the contract";
 }
 

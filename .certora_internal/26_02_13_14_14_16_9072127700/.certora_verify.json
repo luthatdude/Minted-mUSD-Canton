@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "SMUSD",
-    "specfile": "certora/specs/SMUSD.spec",
-    "specfileOrigRelpath": "certora/specs/SMUSD.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}

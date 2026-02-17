@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "LeverageVault",
-    "specfile": "certora/specs/LeverageVault.spec",
-    "specfileOrigRelpath": "certora/specs/LeverageVault.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}

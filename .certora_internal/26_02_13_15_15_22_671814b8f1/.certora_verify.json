@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "DepositRouter",
-    "specfile": "certora/specs/DepositRouter.spec",
-    "specfileOrigRelpath": "certora/specs/DepositRouter.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}
