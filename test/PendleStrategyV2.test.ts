@@ -608,7 +608,7 @@ describe("PendleStrategyV2", function () {
       await randomToken.mint(await strategy.getAddress(), amount);
 
       const balBefore = await randomToken.balanceOf(admin.address);
-      await strategy.connect(admin).recoverToken(await randomToken.getAddress(), admin.address);
+      await strategy.connect(admin).recoverToken(await randomToken.getAddress(), admin.address, amount);
       const balAfter = await randomToken.balanceOf(admin.address);
 
       expect(balAfter - balBefore).to.equal(amount);
@@ -618,7 +618,7 @@ describe("PendleStrategyV2", function () {
       const { strategy, admin, usdc } = await loadFixture(deployFixture);
 
       await expect(
-        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address)
+        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address, 1)
       ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
     });
 
@@ -629,7 +629,7 @@ describe("PendleStrategyV2", function () {
       const randomToken = await MockERC20.deploy("Random", "RND", 18);
 
       await expect(
-        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address)
+        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address, 1)
       ).to.be.reverted;
     });
   });

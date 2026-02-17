@@ -204,6 +204,7 @@ contract MorphoLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════════
 
     event Deposited(uint256 principal, uint256 totalSupplied, uint256 loops);
+    event ActiveUpdated(bool active);
     event Withdrawn(uint256 requested, uint256 returned);
     event Deleveraged(uint256 repaid, uint256 withdrawn);
     event EmergencyDeleverage(uint256 healthFactorBefore, uint256 healthFactorAfter);
@@ -328,7 +329,10 @@ contract MorphoLoopStrategy is
         // Deleverage to free up the requested amount
         withdrawn = _deleverage(principalToWithdraw);
 
-        totalPrincipal -= principalToWithdraw;
+        // H-03: Only reduce totalPrincipal by the amount actually withdrawn,
+        // not the requested amount, to prevent accounting drift.
+        uint256 principalReduction = withdrawn < principalToWithdraw ? withdrawn : principalToWithdraw;
+        totalPrincipal -= principalReduction;
 
         // Transfer USDC back to Treasury
         usdc.safeTransfer(msg.sender, withdrawn);
@@ -459,6 +463,15 @@ contract MorphoLoopStrategy is
         // For collateral-based looping, collateral earns 0%, so we need very low borrow rates
         // or external yield sources (like Morpho rewards) to be profitable
         profitable = currentBorrowRate <= maxBorrowRateForProfit;
+
+        // L-01: Also check minimum supply rate if configured
+        if (profitable && minSupplyRateRequired > 0 && totalSupplyAssets > 0) {
+            // Approximate supply rate: borrowRate * utilization * (1 - fee/1e18)
+            uint256 utilization = (uint256(totalBorrowAssets) * WAD) / uint256(totalSupplyAssets);
+            uint256 effectiveFee = uint256(fee) > WAD ? WAD : uint256(fee);
+            uint256 supplyRate = (currentBorrowRate * utilization * (WAD - effectiveFee)) / (WAD * WAD);
+            profitable = supplyRate >= minSupplyRateRequired;
+        }
     }
 
     /**
@@ -768,6 +781,7 @@ contract MorphoLoopStrategy is
      */
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
+        emit ActiveUpdated(_active);
     }
 
     /**

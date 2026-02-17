@@ -111,6 +111,7 @@ contract MetaVault is
     // ═══════════════════════════════════════════════════════════════════
 
     event Deposited(uint256 totalAmount, uint256[] subAmounts);
+    event ActiveUpdated(bool active);
     event Withdrawn(uint256 totalAmount, uint256[] subAmounts);
     event SubStrategyAdded(uint256 indexed index, address strategy, uint256 weightBps);
     event SubStrategyRemoved(uint256 indexed index, address strategy);
@@ -202,14 +203,23 @@ contract MetaVault is
         uint256[] memory subAmounts = new uint256[](len);
         uint256 remaining = amount;
 
+        // H-01: Find last enabled strategy for remainder allocation
+        uint256 lastEnabled = type(uint256).max;
+        for (uint256 j = len; j > 0; j--) {
+            if (subStrategies[j - 1].enabled) {
+                lastEnabled = j - 1;
+                break;
+            }
+        }
+
         // Distribute according to weights
         for (uint256 i = 0; i < len; i++) {
             SubStrategy storage ss = subStrategies[i];
             if (!ss.enabled) continue;
 
             uint256 share;
-            if (i == len - 1) {
-                // Last strategy gets the remainder (avoids rounding dust)
+            if (i == lastEnabled) {
+                // Last enabled strategy gets the remainder (avoids rounding dust)
                 share = remaining;
             } else {
                 share = (amount * ss.weightBps) / BPS;
@@ -290,7 +300,8 @@ contract MetaVault is
                 }
             }
 
-            // Second pass: if still short due to rounding, pull from any with value
+            // Second pass: if still short due to rounding, pull from any with remaining value
+            // M-01: Re-query totalValue() to avoid double-counting already-withdrawn amounts
             for (uint256 i = 0; i < len && needed > 0; i++) {
                 uint256 subVal = IStrategy(subStrategies[i].strategy).totalValue();
                 if (subVal == 0) continue;
@@ -388,8 +399,8 @@ contract MetaVault is
             enabled: true
         }));
 
-        // Pre-approve USDC to sub-strategy
-        usdc.approve(_strategy, type(uint256).max);
+        // C-01: Per-operation approvals are set in deposit() via forceApprove.
+        // No infinite approval needed — limits exposure if sub-strategy is compromised.
 
         emit SubStrategyAdded(subStrategies.length - 1, _strategy, _weightBps);
     }
@@ -428,9 +439,15 @@ contract MetaVault is
     }
 
     /// @notice Enable/disable a sub-strategy (circuit breaker)
+    /// @dev C-01: Revokes USDC approval when disabling to prevent a compromised
+    ///      sub-strategy from draining MetaVault funds.
     function toggleSubStrategy(uint256 index, bool enabled) external onlyRole(GUARDIAN_ROLE) {
         if (index >= subStrategies.length) revert InvalidIndex();
         subStrategies[index].enabled = enabled;
+        if (!enabled) {
+            // Revoke any residual approval when disabling
+            usdc.forceApprove(subStrategies[index].strategy, 0);
+        }
         emit SubStrategyToggled(index, enabled);
     }
 
@@ -557,6 +574,7 @@ contract MetaVault is
 
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
+        emit ActiveUpdated(_active);
     }
 
     function pause() external onlyRole(GUARDIAN_ROLE) {
@@ -566,6 +584,13 @@ contract MetaVault is
     /// @dev MV-02: Changed from DEFAULT_ADMIN_ROLE to onlyTimelock (governance delay)
     function unpause() external onlyTimelock {
         _unpause();
+    }
+
+    /// @notice L-04: Recover stuck tokens (not USDC when funds are active)
+    function recoverToken(address token, uint256 amount) external onlyTimelock {
+        if (token == address(usdc) && _totalSubValue() > 0) revert CannotRecoverActiveUsdc();
+        if (amount == 0) revert ZeroAmount();
+        IERC20(token).safeTransfer(msg.sender, amount);
     }
 
     // ═══════════════════════════════════════════════════════════════════

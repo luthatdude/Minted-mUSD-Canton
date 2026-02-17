@@ -221,6 +221,7 @@ contract FluidLoopStrategy is
 
     event PositionCreated(uint256 nftId, uint8 vaultMode);
     event Deposited(uint256 principal, uint256 leveragedAmount);
+    event ActiveUpdated(bool active);
     event Withdrawn(uint256 amount, uint256 principalReduced);
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
@@ -622,7 +623,7 @@ contract FluidLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════
 
     function executeOperation(
-        address, /* asset */
+        address asset,
         uint256 amount,
         uint256 premium,
         address initiator,
@@ -630,6 +631,8 @@ contract FluidLoopStrategy is
     ) external override returns (bool) {
         if (msg.sender != address(flashLoanPool)) revert InvalidFlashLoan();
         if (initiator != address(this)) revert InvalidFlashLoan();
+        // M-02: Validate flash-loaned asset matches expected input asset
+        if (asset != address(inputAsset)) revert InvalidFlashLoan();
 
         (uint8 action, uint256 principalAmount) = abi.decode(params, (uint8, uint256));
 
@@ -1132,6 +1135,7 @@ contract FluidLoopStrategy is
 
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
+        emit ActiveUpdated(_active);
     }
 
     function pause() external onlyRole(GUARDIAN_ROLE) {
