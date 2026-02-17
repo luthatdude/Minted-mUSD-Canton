@@ -34,6 +34,9 @@ interface IMUSD {
     function setSupplyCap(uint256 _cap) external;
     function supplyCap() external view returns (uint256);
     function totalSupply() external view returns (uint256);
+    function burn(address from, uint256 amount) external;
+    function balanceOf(address account) external view returns (uint256);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
 contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable, PausableUpgradeable {
@@ -86,7 +89,22 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Mapping of Canton state hashes that have been verified
     mapping(bytes32 => bool) public verifiedStateHashes;
 
+    // ── Bridge-out (ETH → Canton) ────────────────────────────────────────
+    /// @notice Monotonic nonce for bridge-out requests
+    uint256 public bridgeOutNonce;
+    /// @notice Minimum mUSD amount for bridge-out to prevent dust
+    uint256 public bridgeOutMinAmount;
+
     // Events
+    event BridgeToCantonRequested(
+        bytes32 indexed requestId,
+        address indexed sender,
+        uint256 amount,
+        uint256 nonce,
+        string cantonRecipient,
+        uint256 timestamp
+    );
+    event BridgeOutMinAmountUpdated(uint256 oldMin, uint256 newMin);
     event AttestationReceived(
         bytes32 indexed id,
         uint256 cantonAssets,
@@ -382,6 +400,67 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     // ============================================================
+    //                  BRIDGE OUT (ETH → CANTON)
+    // ============================================================
+
+    /// @notice Bridge mUSD from Ethereum to Canton by burning tokens
+    /// @param amount Amount of mUSD to bridge (must be >= bridgeOutMinAmount)
+    /// @param cantonRecipient Canton party identifier to receive on Canton side
+    /// @dev Burns mUSD from caller, emits event for relay pickup.
+    ///      Caller must approve this contract to spend `amount` mUSD first.
+    function bridgeToCanton(
+        uint256 amount,
+        string calldata cantonRecipient
+    ) external nonReentrant whenNotPaused {
+        if (amount == 0) revert ZeroAmount();
+        if (amount < bridgeOutMinAmount) revert BelowMin();
+        if (bytes(cantonRecipient).length == 0) revert InvalidRecipient();
+        // Validate canton recipient format: must contain "::" separator
+        if (!_containsPartyDelimiter(cantonRecipient)) revert InvalidRecipient();
+
+        // Burn mUSD from sender (requires prior approval)
+        // MUSD.burn checks BRIDGE_ROLE and spends allowance if from != msg.sender
+        musdToken.burn(msg.sender, amount);
+
+        // Increment bridge-out nonce
+        bridgeOutNonce++;
+
+        // Compute deterministic request ID
+        bytes32 requestId = keccak256(abi.encodePacked(
+            bridgeOutNonce,
+            msg.sender,
+            amount,
+            block.chainid,
+            address(this)
+        ));
+
+        emit BridgeToCantonRequested(
+            requestId,
+            msg.sender,
+            amount,
+            bridgeOutNonce,
+            cantonRecipient,
+            block.timestamp
+        );
+    }
+
+    /// @notice Set minimum bridge-out amount (prevents dust bridge requests)
+    function setBridgeOutMinAmount(uint256 _min) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        emit BridgeOutMinAmountUpdated(bridgeOutMinAmount, _min);
+        bridgeOutMinAmount = _min;
+    }
+
+    /// @dev Check if a string contains the Canton party delimiter "::"
+    function _containsPartyDelimiter(string calldata s) internal pure returns (bool) {
+        bytes memory b = bytes(s);
+        if (b.length < 3) return false;
+        for (uint256 i = 0; i < b.length - 1; i++) {
+            if (b[i] == 0x3A && b[i + 1] == 0x3A) return true; // "::"
+        }
+        return false;
+    }
+
+    // ============================================================
     //                    INTERNAL FUNCTIONS
     // ============================================================
 
@@ -532,7 +611,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     function _authorizeUpgrade(address) internal override onlyRole(TIMELOCK_ROLE) {}
 
-    // Storage gap for future upgrades — 15 state variables → 50 - 15 = 35
-    // (Added: lastCantonStateHash, verifiedStateHashes)
-    uint256[35] private __gap;
+    // Storage gap for future upgrades — 17 state variables → 50 - 17 = 33
+    // (Added: lastCantonStateHash, verifiedStateHashes, bridgeOutNonce, bridgeOutMinAmount)
+    uint256[33] private __gap;
 }

@@ -392,4 +392,146 @@ describe("BLEBridgeV9", function () {
         .to.be.revertedWithCustomError(bridge, "EnforcedPause");
     });
   });
+
+  describe("Bridge to Canton (ETH → Canton)", function () {
+    const CANTON_RECIPIENT = "minted-user-1::1220abc123";
+    const BRIDGE_AMOUNT = ethers.parseEther("1000"); // 1000 mUSD
+
+    beforeEach(async function () {
+      // Mint some mUSD to user for bridging
+      const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+      await musd.grantRole(BRIDGE_ROLE, deployer.address);
+      await musd.mint(user.address, ethers.parseEther("10000"));
+
+      // Set minimum bridge-out amount
+      await bridge.setBridgeOutMinAmount(ethers.parseEther("10")); // 10 mUSD min
+
+      // User approves bridge to spend mUSD
+      await musd.connect(user).approve(await bridge.getAddress(), ethers.MaxUint256);
+    });
+
+    it("Should bridge mUSD to Canton successfully", async function () {
+      const balanceBefore = await musd.balanceOf(user.address);
+
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT))
+        .to.emit(bridge, "BridgeToCantonRequested")
+        .withArgs(
+          // requestId is computed, just check the event is emitted
+          (v: any) => typeof v === "string", // requestId
+          user.address,
+          BRIDGE_AMOUNT,
+          1n, // first nonce
+          CANTON_RECIPIENT,
+          (v: any) => v > 0n // timestamp
+        );
+
+      // Verify mUSD was burned
+      const balanceAfter = await musd.balanceOf(user.address);
+      expect(balanceBefore - balanceAfter).to.equal(BRIDGE_AMOUNT);
+
+      // Verify nonce incremented
+      expect(await bridge.bridgeOutNonce()).to.equal(1);
+    });
+
+    it("Should increment nonce on each bridge-out", async function () {
+      await bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT);
+      expect(await bridge.bridgeOutNonce()).to.equal(1);
+
+      await bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT);
+      expect(await bridge.bridgeOutNonce()).to.equal(2);
+
+      await bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT);
+      expect(await bridge.bridgeOutNonce()).to.equal(3);
+    });
+
+    it("Should emit unique requestIds for each bridge-out", async function () {
+      const tx1 = await bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT);
+      const receipt1 = await tx1.wait();
+      const event1 = receipt1!.logs.find(
+        (l: any) => l.fragment?.name === "BridgeToCantonRequested"
+      ) as any;
+
+      const tx2 = await bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT);
+      const receipt2 = await tx2.wait();
+      const event2 = receipt2!.logs.find(
+        (l: any) => l.fragment?.name === "BridgeToCantonRequested"
+      ) as any;
+
+      expect(event1.args.requestId).to.not.equal(event2.args.requestId);
+    });
+
+    it("Should reject zero amount", async function () {
+      await expect(bridge.connect(user).bridgeToCanton(0, CANTON_RECIPIENT))
+        .to.be.revertedWithCustomError(bridge, "ZeroAmount");
+    });
+
+    it("Should reject amount below minimum", async function () {
+      await expect(bridge.connect(user).bridgeToCanton(ethers.parseEther("5"), CANTON_RECIPIENT))
+        .to.be.revertedWithCustomError(bridge, "BelowMin");
+    });
+
+    it("Should reject empty canton recipient", async function () {
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, ""))
+        .to.be.revertedWithCustomError(bridge, "InvalidRecipient");
+    });
+
+    it("Should reject canton recipient without :: delimiter", async function () {
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, "invalidpartyformat"))
+        .to.be.revertedWithCustomError(bridge, "InvalidRecipient");
+    });
+
+    it("Should accept canton recipient with valid :: delimiter", async function () {
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, "party::1220fingerprint"))
+        .to.emit(bridge, "BridgeToCantonRequested");
+    });
+
+    it("Should reject when paused", async function () {
+      await bridge.connect(emergency).pause();
+
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT))
+        .to.be.revertedWithCustomError(bridge, "EnforcedPause");
+    });
+
+    it("Should reject when user has insufficient balance", async function () {
+      const hugeAmount = ethers.parseEther("999999");
+
+      await expect(bridge.connect(user).bridgeToCanton(hugeAmount, CANTON_RECIPIENT))
+        .to.be.reverted; // ERC20 insufficient balance
+    });
+
+    it("Should reject when user has not approved bridge", async function () {
+      // Revoke approval
+      await musd.connect(user).approve(await bridge.getAddress(), 0);
+
+      await expect(bridge.connect(user).bridgeToCanton(BRIDGE_AMOUNT, CANTON_RECIPIENT))
+        .to.be.reverted; // ERC20 insufficient allowance
+    });
+
+    it("Should allow admin to update bridge-out minimum", async function () {
+      const newMin = ethers.parseEther("100");
+
+      await expect(bridge.setBridgeOutMinAmount(newMin))
+        .to.emit(bridge, "BridgeOutMinAmountUpdated")
+        .withArgs(ethers.parseEther("10"), newMin);
+
+      expect(await bridge.bridgeOutMinAmount()).to.equal(newMin);
+
+      // Old amount now rejected
+      await expect(bridge.connect(user).bridgeToCanton(ethers.parseEther("50"), CANTON_RECIPIENT))
+        .to.be.revertedWithCustomError(bridge, "BelowMin");
+    });
+
+    it("Should allow zero minimum (no minimum enforcement)", async function () {
+      await bridge.setBridgeOutMinAmount(0);
+
+      // Small amount should work (still rejects zero though)
+      await expect(bridge.connect(user).bridgeToCanton(1n, CANTON_RECIPIENT))
+        .to.emit(bridge, "BridgeToCantonRequested");
+    });
+
+    it("Should restrict setBridgeOutMinAmount to admin", async function () {
+      await expect(bridge.connect(user).setBridgeOutMinAmount(0))
+        .to.be.reverted;
+    });
+  });
 });

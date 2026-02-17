@@ -1,15 +1,15 @@
 /**
- * Minted Protocol - Canton to Ethereum Relay Service
+ * Minted Protocol - Bidirectional Canton-Ethereum Relay Service
  *
- * Watches Canton for finalized attestations and submits them to BLEBridgeV9 on Ethereum.
+ * Direction 1 (Canton → Ethereum):
+ *   1. Poll Canton for finalized AttestationRequest contracts
+ *   2. Verify sufficient ECDSA signatures collected
+ *   3. Submit to BLEBridgeV9.processAttestation() on Ethereum
  *
- * Flow:
- *   1. Subscribe to Canton ledger via gRPC
- *   2. Watch for FinalizeAttestation exercises
- *   3. Fetch associated ValidatorSignature contracts
- *   4. Format signatures for Ethereum (RSV format)
- *   5. Submit to BLEBridgeV9.processAttestation()
- *   6. Track bridged attestations to prevent duplicates
+ * Direction 2 (Ethereum → Canton):
+ *   1. Watch for BridgeToCantonRequested events on BLEBridgeV9
+ *   2. Create BridgeInRequest contract on Canton
+ *   3. Exercise Bridge_ReceiveFromEthereum on BridgeService
  */
 
 import { ethers } from "ethers";
@@ -231,6 +231,28 @@ const BRIDGE_ABI = [
     ],
     "name": "AttestationReceived",
     "type": "event"
+  },
+  // Event: BridgeToCantonRequested (ETH → Canton bridge-out)
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "requestId", "type": "bytes32" },
+      { "indexed": true, "name": "sender", "type": "address" },
+      { "indexed": false, "name": "amount", "type": "uint256" },
+      { "indexed": false, "name": "nonce", "type": "uint256" },
+      { "indexed": false, "name": "cantonRecipient", "type": "string" },
+      { "indexed": false, "name": "timestamp", "type": "uint256" }
+    ],
+    "name": "BridgeToCantonRequested",
+    "type": "event"
+  },
+  // View: bridgeOutNonce
+  {
+    "inputs": [],
+    "name": "bridgeOutNonce",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
   }
 ];
 
@@ -248,6 +270,11 @@ class RelayService {
   private processedAttestations: Set<string> = new Set();
   private readonly MAX_PROCESSED_CACHE = 10000;
   private isRunning: boolean = false;
+
+  // ETH → Canton: Track processed bridge-out request IDs
+  private processedBridgeOuts: Set<string> = new Set();
+  // Last Ethereum block scanned for BridgeToCantonRequested events
+  private lastScannedBlock: number = 0;
 
   // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
   // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
@@ -342,10 +369,16 @@ class RelayService {
     // Load already-processed attestations from chain
     await this.loadProcessedAttestations();
 
-    // Main loop
+    // Load already-processed bridge-out requests from chain
+    await this.loadProcessedBridgeOuts();
+
+    // Main loop — bidirectional
     while (this.isRunning) {
       try {
+        // Direction 1: Canton → Ethereum (attestation relay)
         await this.pollForAttestations();
+        // Direction 2: Ethereum → Canton (bridge-out watcher)
+        await this.watchEthereumBridgeOut();
         // Reset failure counter on success
         this.consecutiveFailures = 0;
       } catch (error) {
@@ -555,6 +588,129 @@ class RelayService {
 
     if (processedThisCycle > 0) {
       console.log(`[Relay] Processed ${processedThisCycle} attestations this cycle`);
+    }
+  }
+
+  // ============================================================
+  //  DIRECTION 2: Ethereum → Canton (Bridge-Out Watcher)
+  // ============================================================
+
+  /**
+   * Load bridge-out request IDs that have already been relayed to Canton
+   */
+  private async loadProcessedBridgeOuts(): Promise<void> {
+    console.log("[Relay] Loading processed bridge-out requests from chain...");
+
+    const filter = this.bridgeContract.filters.BridgeToCantonRequested();
+    const currentBlock = await this.provider.getBlockNumber();
+    const maxRange = 50000;
+    const fromBlock = Math.max(0, currentBlock - maxRange);
+
+    const chunkSize = 10000;
+    let events: ethers.EventLog[] = [];
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const chunk = await this.bridgeContract.queryFilter(filter, start, end);
+      events = events.concat(chunk as ethers.EventLog[]);
+    }
+
+    // Check which ones already have BridgeInRequest on Canton
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (args) {
+        this.processedBridgeOuts.add(args.requestId);
+      }
+    }
+
+    this.lastScannedBlock = currentBlock;
+    console.log(`[Relay] Found ${this.processedBridgeOuts.size} bridge-out requests (scanning from block ${fromBlock})`);
+  }
+
+  /**
+   * Watch Ethereum for BridgeToCantonRequested events and relay to Canton.
+   *
+   * For each new event:
+   *   1. Verify the event hasn't been processed yet
+   *   2. Wait for sufficient confirmations
+   *   3. Create a BridgeInRequest contract on Canton
+   *   4. Exercise Bridge_ReceiveFromEthereum on BridgeService (if attestation exists)
+   */
+  private async watchEthereumBridgeOut(): Promise<void> {
+    const currentBlock = await this.provider.getBlockNumber();
+    // Only scan confirmed blocks
+    const confirmedBlock = currentBlock - this.config.confirmations;
+
+    if (confirmedBlock <= this.lastScannedBlock) {
+      return; // No new confirmed blocks
+    }
+
+    const filter = this.bridgeContract.filters.BridgeToCantonRequested();
+    const events = await this.bridgeContract.queryFilter(
+      filter,
+      this.lastScannedBlock + 1,
+      confirmedBlock
+    );
+
+    this.lastScannedBlock = confirmedBlock;
+
+    if (events.length === 0) return;
+
+    console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (!args) continue;
+
+      const requestId: string = args.requestId;
+      const sender: string = args.sender;
+      const amount: bigint = args.amount;
+      const nonce: bigint = args.nonce;
+      const cantonRecipient: string = args.cantonRecipient;
+      const timestamp: bigint = args.timestamp;
+
+      // Skip if already processed
+      if (this.processedBridgeOuts.has(requestId)) {
+        continue;
+      }
+
+      console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
+
+      try {
+        // Create BridgeInRequest on Canton
+        await this.canton.createContract(
+          TEMPLATES.BridgeInRequest,
+          {
+            operator: this.config.cantonParty,
+            user: cantonRecipient,
+            amount: ethers.formatEther(amount),
+            feeAmount: "0.0",
+            sourceChainId: Number((await this.provider.getNetwork()).chainId),
+            nonce: Number(nonce),
+            createdAt: new Date(Number(timestamp) * 1000).toISOString(),
+            status: "pending",
+          }
+        );
+
+        console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+
+        // Mark as processed
+        this.processedBridgeOuts.add(requestId);
+
+        // Evict oldest entries if cache exceeds limit
+        if (this.processedBridgeOuts.size > this.MAX_PROCESSED_CACHE) {
+          const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
+          let evicted = 0;
+          for (const key of this.processedBridgeOuts) {
+            if (evicted >= toEvict) break;
+            this.processedBridgeOuts.delete(key);
+            evicted++;
+          }
+        }
+
+      } catch (error: any) {
+        console.error(`[Relay] Failed to relay bridge-out #${nonce} to Canton:`, error.message);
+        // Don't mark as processed — will retry next cycle
+      }
     }
   }
 
@@ -978,6 +1134,8 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         processedCount: (relay as any).processedAttestations.size,
+        bridgeOutCount: (relay as any).processedBridgeOuts.size,
+        lastScannedBlock: (relay as any).lastScannedBlock,
         activeProviderIndex: (relay as any).activeProviderIndex,
         consecutiveFailures: (relay as any).consecutiveFailures,
       }));
@@ -1001,9 +1159,10 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
 // ============================================================
 
 async function main(): Promise<void> {
-  console.log("===========================================");
-  console.log("  Minted Protocol - Canton-Ethereum Relay  ");
-  console.log("===========================================");
+  console.log("==============================================");
+  console.log("  Minted Protocol - Bidirectional Bridge Relay");
+  console.log("  Canton ↔ Ethereum                          ");
+  console.log("==============================================");
   console.log("");
 
   // Validate config
