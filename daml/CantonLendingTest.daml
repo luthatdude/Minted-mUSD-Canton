@@ -9,10 +9,13 @@ import Daml.Script
 import DA.Time
 import DA.Date
 import DA.Optional (fromSome)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonUSDC(..), USDCx(..), Money, Bps)
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), Money, Bps, BurnRateLimiter(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLending
+import Compliance (ComplianceRegistry(..))
+import Governance (GovernanceActionLog(..), ActionType(..))
+import DA.Set qualified as Set
 
 -- ============================================================
 --                     TEST HELPERS
@@ -25,20 +28,39 @@ testMpaHash = "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abc"
 testMpaUri : Text
 testMpaUri = "https://minted.app/terms"
 
+-- | Create a governance proof for tests
+createGovProof : Party -> Party -> ActionType -> Text -> Text -> Script (ContractId GovernanceActionLog)
+createGovProof operator governor actionType targetModule desc = do
+  now <- getTime
+  submit operator do
+    createCmd GovernanceActionLog with
+      operator
+      proposalId = "test-" <> desc
+      actionType
+      targetModule
+      description = desc
+      payload = ""
+      payloadHash = ""
+      approvers = [governor]
+      executedBy = governor
+      executedAt = now
+
 -- | Standard test setup: operator, user, liquidator, price feeds, lending service
 data TestSetup = TestSetup with
   operator   : Party
   user       : Party
   liquidator : Party
+  governor   : Party
   serviceCid : ContractId CantonLendingService
   ctnFeedCid : ContractId CantonPriceFeed
-  usdcFeedCid : ContractId CantonPriceFeed
+  complianceCid : ContractId ComplianceRegistry
 
 setupTest : Script TestSetup
 setupTest = do
   operator <- allocateParty "Operator"
   user <- allocateParty "User"
   liquidator <- allocateParty "Liquidator"
+  governor <- allocateParty "Governor"
 
   -- Set ledger time to 2026 so price feeds aren't stale
   setTime (datetime 2026 Feb 6 12 0 0)
@@ -53,21 +75,25 @@ setupTest = do
       source = "tradecraft-amm"
       observers = [user, liquidator]
 
-  usdcFeedCid <- submit operator do
-    createCmd CantonPriceFeed with
+  -- Create compliance registry (governor acts as regulator)
+  complianceCid <- submitMulti [governor] [] do
+    createCmd ComplianceRegistry with
+      regulator = governor
       operator
-      symbol = "USDC"
-      priceUsd = 1.0
+      blacklisted = Set.empty
+      frozen = Set.empty
       lastUpdated = datetime 2026 Feb 6 12 0 0
-      source = "hardcoded"
-      observers = [user, liquidator]
 
   -- Create lending service
   serviceCid <- submit operator do
     createCmd CantonLendingService with
       operator
-      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
+      cantonSupplyCap = 10000000.0  -- 10M mUSD lending cap
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "direct-mint"
+      globalMintCap = 50000000.0
       interestRateBps = 500       -- 5% APR
       reserveFactorBps = 1000    -- 10%
       protocolReserves = 0.0
@@ -76,7 +102,17 @@ setupTest = do
       paused = False
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      complianceRegistryCid = complianceCid
+      serviceName = "lending"
       observers = [user, liquidator]
+
+  -- Create BurnRateLimiter for burn-path tests (repay, liquidation)
+  submit operator do
+    createCmd BurnRateLimiter with
+      operator
+      dailyBurnLimit = 1000000.0
+      dailyBurned = 0.0
+      lastResetTime = datetime 2026 Feb 6 12 0 0
 
   return TestSetup with ..
 
@@ -97,13 +133,15 @@ testPriceFeedCreate = do
 testPriceFeedUpdate : Script ()
 testPriceFeedUpdate = do
   setup <- setupTest
-  -- FIX M-4: Advance time past the 10-second update cooldown
+  -- Advance time past the 10-second update cooldown
   passTime (seconds 15)
   -- Update CTN price to $0.20 (within 50% cap)
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.20
       newSource = "temple-dex-twap"
+      attestationHash = "abc123def456"
+      validatorCount = 3
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Price updated to 0.20" ((fromSome feed).priceUsd == 0.20)
   debug "✅ 2. Price feed update"
@@ -116,18 +154,23 @@ testPriceFeedMovementCap = do
     exerciseCmd setup.ctnFeedCid PriceFeed_Update with
       newPriceUsd = 0.30       -- 76% increase from 0.17 — exceeds 50% cap
       newSource = "temple-dex-twap"
+      attestationHash = "abc123def456"
+      validatorCount = 3
   debug "✅ 3. Price feed movement cap enforced"
 
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
-  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown
+  passTime (minutes 31)
+  -- Create governance proof for emergency update
+  govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-update"
   -- Emergency update bypasses movement cap
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.05       -- 70% drop — would fail normal update
       reason = "Flash crash on Temple DEX"
+      governanceProofCid = govProof
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Emergency price set" ((fromSome feed).priceUsd == 0.05)
   debug "✅ 4. Emergency price override"
@@ -161,7 +204,7 @@ testDepositCTN = do
       privacyObservers = []
 
   -- Deposit as collateral
-  (newServiceCid, escrowCid) <- submit setup.user do
+  (newServiceCid, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -174,27 +217,6 @@ testDepositCTN = do
   assertMsg "Owner is user" (e.owner == setup.user)
   debug "✅ 6. Deposit CantonCoin"
 
-testDepositUSDC : Script ()
-testDepositUSDC = do
-  setup <- setupTest
-  -- Create CantonUSDC
-  usdcCid <- submitMulti [setup.operator, setup.user] [] do
-    createCmd CantonUSDC with
-      issuer = setup.operator
-      owner = setup.user
-      amount = 5000.0
-      privacyObservers = []
-
-  (newServiceCid, escrowCid) <- submit setup.user do
-    exerciseCmd setup.serviceCid Lending_DepositUSDC with
-      user = setup.user
-      usdcCid
-
-  escrow <- queryContractId setup.operator escrowCid
-  assertMsg "Escrowed 5000 USDC" ((fromSome escrow).amount == 5000.0)
-  assertMsg "Type is CTN_USDC" ((fromSome escrow).collateralType == CTN_USDC)
-  debug "✅ 7. Deposit CantonUSDC"
-
 testDepositSMUSD : Script ()
 testDepositSMUSD = do
   setup <- setupTest
@@ -206,6 +228,7 @@ testDepositSMUSD = do
       shares = 1000.0
       entrySharePrice = 1.05
       stakedAt = datetime 2026 Jan 1 0 0 0
+      complianceRegistryCid = setup.complianceCid
       privacyObservers = []
 
   -- Need sMUSD price feed
@@ -218,7 +241,7 @@ testDepositSMUSD = do
       source = "smusd-share-price"
       observers = [setup.user]
 
-  (newServiceCid, escrowCid) <- submit setup.user do
+  (newServiceCid, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositSMUSD with
       user = setup.user
       smusdCid
@@ -233,7 +256,8 @@ testDepositFailsWhenPaused = do
   setup <- setupTest
   -- Pause the service
   pausedServiceCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_SetPaused with newPaused = True
+    exerciseCmd setup.serviceCid Lending_SetPaused with
+      newPaused = True
 
   coinCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonCoin with
@@ -243,7 +267,7 @@ testDepositFailsWhenPaused = do
       privacyObservers = []
 
   -- Deposit should fail
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd pausedServiceCid Lending_DepositCTN with
       user = setup.user
       coinCid
@@ -265,13 +289,13 @@ testBorrowAgainstCTN = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- Borrow 500 mUSD (well under $1105 limit)
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
@@ -299,13 +323,13 @@ testBorrowExceedsLTV = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- Try to borrow 1200 mUSD (exceeds $1105 limit)
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 1200.0
@@ -323,13 +347,13 @@ testBorrowBelowMinimum = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- Try to borrow 5 mUSD (below 10 mUSD minimum)
-  submitMustFail setup.user do
+  submitMultiMustFail [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 5.0
@@ -352,12 +376,12 @@ testRepayDebt = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
@@ -365,7 +389,7 @@ testRepayDebt = do
       priceFeedCids = [setup.ctnFeedCid]
 
   -- Repay with the borrowed mUSD
-  (svc3, newDebtCid) <- submit setup.user do
+  (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Repay with
       user = setup.user
       musdCid
@@ -392,13 +416,13 @@ testWithdrawCollateral = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- Withdraw 5000 CTN (no debt, so no health check needed)
-  (svc2, returnedCoinCid) <- submit setup.user do
+  (svc2, returnedCoinCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_WithdrawCTN with
       user = setup.user
       escrowCid
@@ -427,12 +451,12 @@ testLiquidation = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
-  (svc2, debtCid, _musdCid) <- submit setup.user do
+  (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 1100.0
@@ -443,12 +467,14 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
-  -- FIX M-6: Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  -- Advance time past the 30-minute emergency update cooldown
+  passTime (minutes 31)
+  govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
+      governanceProofCid = govProof
 
   -- Liquidator gets mUSD to repay
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do
@@ -461,7 +487,7 @@ testLiquidation = do
       privacyObservers = []
 
   -- Liquidate (50% close factor → max repay = $550)
-  (svc3, receiptCid) <- submit setup.liquidator do
+  (svc3, receiptCid) <- submitMulti [setup.liquidator] [setup.operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = setup.liquidator
       borrower = setup.user
@@ -491,12 +517,12 @@ testLiquidationHealthyPositionFails = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
-  (svc2, debtCid, _musdCid) <- submit setup.user do
+  (svc2, debtCid, _musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 100.0
@@ -514,7 +540,7 @@ testLiquidationHealthyPositionFails = do
       privacyObservers = []
 
   -- Liquidation should fail — position is healthy
-  submitMustFail setup.liquidator do
+  submitMultiMustFail [setup.liquidator] [setup.operator] do
     exerciseCmd svc2 Lending_Liquidate with
       liquidator = setup.liquidator
       borrower = setup.user
@@ -533,7 +559,7 @@ testLiquidationHealthyPositionFails = do
 testMultiCollateralBorrow : Script ()
 testMultiCollateralBorrow = do
   setup <- setupTest
-  -- Deposit CTN + USDC
+  -- Deposit CTN + sMUSD
   coinCid <- submitMulti [setup.operator, setup.user] [] do
     createCmd CantonCoin with
       issuer = setup.operator
@@ -541,37 +567,50 @@ testMultiCollateralBorrow = do
       amount = 5000.0
       privacyObservers = []
 
-  usdcCid <- submitMulti [setup.operator, setup.user] [] do
-    createCmd CantonUSDC with
+  smusdCid <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonSMUSD with
       issuer = setup.operator
       owner = setup.user
-      amount = 1000.0
+      shares = 1000.0
+      entrySharePrice = 1.05
+      stakedAt = datetime 2026 Jan 1 0 0 0
+      complianceRegistryCid = setup.complianceCid
       privacyObservers = []
 
-  (svc1, ctnEscrowCid) <- submit setup.user do
+  -- Need sMUSD price feed
+  smusdFeedCid <- submit setup.operator do
+    createCmd CantonPriceFeed with
+      operator = setup.operator
+      symbol = "sMUSD"
+      priceUsd = 1.05
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "smusd-share-price"
+      observers = [setup.user]
+
+  (svc1, ctnEscrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
-  (svc2, usdcEscrowCid) <- submit setup.user do
-    exerciseCmd svc1 Lending_DepositUSDC with
+  (svc2, smusdEscrowCid) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd svc1 Lending_DepositSMUSD with
       user = setup.user
-      usdcCid
+      smusdCid
 
   -- CTN: 5000 * $0.17 * 65% = $552.50
-  -- USDC: 1000 * $1.00 * 95% = $950.00
-  -- Total weighted = $1502.50
-  -- Borrow 1400 mUSD (under $1502.50)
-  (svc3, debtCid, musdCid) <- submit setup.user do
+  -- sMUSD: 1000 * $1.05 * 90% = $945.00
+  -- Total weighted = $1497.50
+  -- Borrow 1400 mUSD (under $1497.50)
+  (svc3, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Borrow with
       user = setup.user
       borrowAmount = 1400.0
-      escrowCids = [ctnEscrowCid, usdcEscrowCid]
-      priceFeedCids = [setup.ctnFeedCid, setup.usdcFeedCid]
+      escrowCids = [ctnEscrowCid, smusdEscrowCid]
+      priceFeedCids = [setup.ctnFeedCid, smusdFeedCid]
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 1400" ((fromSome debt).principalDebt == 1400.0)
-  debug "✅ 17. Multi-collateral borrow (CTN + USDC)"
+  debug "✅ 17. Multi-collateral borrow (CTN + sMUSD)"
 
 -- ============================================================
 --                     8. DEBT POSITION TESTS
@@ -645,9 +684,11 @@ testEscrowAddCollateral = do
       lastUpdatedAt = datetime 2026 Feb 6 12 0 0
       privacyObservers = []
 
-  -- FIX H-L3: Escrow_AddCollateral now controlled by operator (token proof required at service level)
+  -- Escrow_AddCollateral now controlled by operator (token proof required at service level)
   newEscrowCid <- submit operator do
-    exerciseCmd escrowCid Escrow_AddCollateral with addAmount = 3000.0
+    exerciseCmd escrowCid Escrow_AddCollateral with
+      addAmount = 3000.0
+      caller = user
 
   escrow <- queryContractId operator newEscrowCid
   assertMsg "Total is 8000" ((fromSome escrow).amount == 8000.0)
@@ -669,7 +710,9 @@ testEscrowPartialWithdraw = do
       privacyObservers = []
 
   (newEscrowCid, withdrawn) <- submit operator do
-    exerciseCmd escrowCid Escrow_WithdrawPartial with withdrawAmount = 2000.0
+    exerciseCmd escrowCid Escrow_WithdrawPartial with
+      withdrawAmount = 2000.0
+      caller = user
 
   assertMsg "Withdrew 2000" (withdrawn == 2000.0)
   escrow <- queryContractId operator newEscrowCid
@@ -734,9 +777,12 @@ testUpdateCollateralConfig : Script ()
 testUpdateCollateralConfig = do
   setup <- setupTest
   -- Update CTN config to lower LTV
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLending" "update-config"
+  let updateConfigChoice = Lending_UpdateConfig with
+        newConfig = defaultCTNConfig with collateralFactorBps = 5000
+        governanceProofCid = govProof
   newServiceCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_UpdateConfig with
-      newConfig = defaultCTNConfig with collateralFactorBps = 5000
+    exerciseCmd setup.serviceCid updateConfigChoice
 
   svc <- queryContractId setup.operator newServiceCid
   let configs = (fromSome svc).configs
@@ -747,8 +793,12 @@ testUpdateCollateralConfig = do
 testUpdateInterestRate : Script ()
 testUpdateInterestRate = do
   setup <- setupTest
+  govProof <- createGovProof setup.operator setup.governor ParameterUpdate "CantonLending" "update-rate"
+  let updateRateChoice = Lending_UpdateRate with
+        newRateBps = 800
+        governanceProofCid = govProof
   newServiceCid <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_UpdateRate with newRateBps = 800
+    exerciseCmd setup.serviceCid updateRateChoice
   svc <- queryContractId setup.operator newServiceCid
   assertMsg "Rate updated to 800" ((fromSome svc).interestRateBps == 800)
   debug "✅ 25. Update interest rate"
@@ -757,12 +807,14 @@ testPauseUnpause : Script ()
 testPauseUnpause = do
   setup <- setupTest
   pausedSvc <- submit setup.operator do
-    exerciseCmd setup.serviceCid Lending_SetPaused with newPaused = True
+    exerciseCmd setup.serviceCid Lending_SetPaused with
+      newPaused = True
   svc <- queryContractId setup.operator pausedSvc
   assertMsg "Service paused" ((fromSome svc).paused)
 
   unpausedSvc <- submit setup.operator do
-    exerciseCmd pausedSvc Lending_SetPaused with newPaused = False
+    exerciseCmd pausedSvc Lending_SetPaused with
+      newPaused = False
   svc2 <- queryContractId setup.operator unpausedSvc
   assertMsg "Service unpaused" (not (fromSome svc2).paused)
   debug "✅ 26. Pause / unpause"
@@ -774,8 +826,12 @@ testWithdrawReserves = do
   reserveServiceCid <- submit setup.operator do
     createCmd CantonLendingService with
       operator = setup.operator
-      configs = [defaultCTNConfig, defaultUSDCConfig, defaultUSDCxConfig, defaultSMUSDConfig]
+      configs = [defaultCTNConfig, defaultSMUSDConfig]
       totalBorrows = 0.0
+      cantonSupplyCap = 10000000.0  -- 10M mUSD lending cap
+      cantonCurrentSupply = 0.0
+      directMintServiceName = "direct-mint"
+      globalMintCap = 50000000.0
       interestRateBps = 500
       reserveFactorBps = 1000
       protocolReserves = 100.0  -- 100 mUSD in reserves
@@ -784,10 +840,16 @@ testWithdrawReserves = do
       paused = False
       mpaHash = testMpaHash
       mpaUri = testMpaUri
+      complianceRegistryCid = setup.complianceCid
+      serviceName = "lending-reserves"
       observers = [setup.user]
 
+  govProof <- createGovProof setup.operator setup.governor TreasuryWithdrawal "CantonLending" "withdraw-reserves"
+  let withdrawChoice = Lending_WithdrawReserves with
+        amount = 50.0
+        governanceProofCid = govProof
   (newSvcCid, reserveMusdCid) <- submit setup.operator do
-    exerciseCmd reserveServiceCid Lending_WithdrawReserves with amount = 50.0
+    exerciseCmd reserveServiceCid withdrawChoice
 
   musd <- queryContractId setup.operator reserveMusdCid
   assertMsg "Got 50 mUSD reserves" ((fromSome musd).amount == 50.0)
@@ -813,43 +875,55 @@ testUnauthorizedDeposit = do
       privacyObservers = []
 
   -- Attacker tries to deposit user's coin
-  submitMustFail attacker do
+  submitMultiMustFail [attacker] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = attacker
       coinCid
   debug "✅ 28. Unauthorized deposit rejected"
 
 -- ============================================================
---                     12. BORROW AGAINST USDC (HIGH LTV)
+--                     12. BORROW AGAINST sMUSD (HIGH LTV)
 -- ============================================================
 
-testBorrowAgainstUSDCHighLTV : Script ()
-testBorrowAgainstUSDCHighLTV = do
+testBorrowAgainstSMUSDHighLTV : Script ()
+testBorrowAgainstSMUSDHighLTV = do
   setup <- setupTest
-  -- Deposit 10000 USDC → 95% LTV → max borrow = 9500
-  usdcCid <- submitMulti [setup.operator, setup.user] [] do
-    createCmd CantonUSDC with
+  -- Deposit 10000 sMUSD shares at $1.05 → 90% LTV → max borrow = $9450
+  smusdCid <- submitMulti [setup.operator, setup.user] [] do
+    createCmd CantonSMUSD with
       issuer = setup.operator
       owner = setup.user
-      amount = 10000.0
+      shares = 10000.0
+      entrySharePrice = 1.05
+      stakedAt = datetime 2026 Jan 1 0 0 0
+      complianceRegistryCid = setup.complianceCid
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
-    exerciseCmd setup.serviceCid Lending_DepositUSDC with
-      user = setup.user
-      usdcCid
+  smusdFeedCid <- submit setup.operator do
+    createCmd CantonPriceFeed with
+      operator = setup.operator
+      symbol = "sMUSD"
+      priceUsd = 1.05
+      lastUpdated = datetime 2026 Feb 6 12 0 0
+      source = "smusd-share-price"
+      observers = [setup.user]
 
-  -- Borrow 9000 mUSD (under 9500 limit)
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
+    exerciseCmd setup.serviceCid Lending_DepositSMUSD with
+      user = setup.user
+      smusdCid
+
+  -- Borrow 9000 mUSD (under $9450 limit)
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 9000.0
       escrowCids = [escrowCid]
-      priceFeedCids = [setup.usdcFeedCid]
+      priceFeedCids = [smusdFeedCid]
 
   debt <- queryContractId setup.operator debtCid
   assertMsg "Borrowed 9000" ((fromSome debt).principalDebt == 9000.0)
-  debug "✅ 29. Borrow against USDC at 95% LTV"
+  debug "✅ 29. Borrow against sMUSD at 90% LTV"
 
 -- ============================================================
 --                     13. FULL LIFECYCLE TEST
@@ -866,13 +940,13 @@ testFullLifecycle = do
       amount = 10000.0
       privacyObservers = []
 
-  (svc1, escrowCid) <- submit setup.user do
+  (svc1, escrowCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd setup.serviceCid Lending_DepositCTN with
       user = setup.user
       coinCid
 
   -- 2. Borrow 500 mUSD
-  (svc2, debtCid, musdCid) <- submit setup.user do
+  (svc2, debtCid, musdCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc1 Lending_Borrow with
       user = setup.user
       borrowAmount = 500.0
@@ -880,14 +954,14 @@ testFullLifecycle = do
       priceFeedCids = [setup.ctnFeedCid]
 
   -- 3. Repay 500 mUSD
-  (svc3, newDebtCid) <- submit setup.user do
+  (svc3, newDebtCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc2 Lending_Repay with
       user = setup.user
       musdCid
       debtCid
 
   -- 4. Withdraw all collateral (debt should be ~0)
-  (svc4, returnedCoinCid) <- submit setup.user do
+  (svc4, returnedCoinCid) <- submitMulti [setup.user] [setup.operator] do
     exerciseCmd svc3 Lending_WithdrawCTN with
       user = setup.user
       escrowCid
@@ -898,3 +972,51 @@ testFullLifecycle = do
   coin <- queryContractId setup.operator returnedCoinCid
   assertMsg "Got all 10000 CTN back" ((fromSome coin).amount == 10000.0)
   debug "✅ 30. Full lifecycle: deposit → borrow → repay → withdraw"
+
+
+-- ============================================================
+--         31. LENDING AGGREGATE CREATION & UPDATE
+-- ============================================================
+
+-- | LendingAggregate tracks protocol-wide borrow/supply/reserve state
+testLendingAggregate : Script ()
+testLendingAggregate = do
+  operator <- allocateParty "Operator"
+  setTime (datetime 2026 Feb 6 12 0 0)
+  now <- getTime
+
+  -- Create aggregate
+  aggCid <- submit operator do
+    createCmd LendingAggregate with
+      operator
+      serviceName = "CantonLending"
+      totalBorrows = 0.0
+      cantonCurrentSupply = 0.0
+      protocolReserves = 0.0
+      lastUpdateTime = now
+
+  -- Update borrow state
+  aggCid2 <- submit operator do
+    exerciseCmd aggCid Aggregate_UpdateBorrow with
+      borrowDelta = 1000.0
+      supplyDelta = 500.0
+      reserveDelta = 50.0
+
+  agg <- queryContractId operator aggCid2
+  assertMsg "Borrows updated" ((fromSome agg).totalBorrows == 1000.0)
+  assertMsg "Supply updated" ((fromSome agg).cantonCurrentSupply == 500.0)
+  assertMsg "Reserves updated" ((fromSome agg).protocolReserves == 50.0)
+
+  -- Negative delta (repayment)
+  aggCid3 <- submit operator do
+    exerciseCmd aggCid2 Aggregate_UpdateBorrow with
+      borrowDelta = -500.0
+      supplyDelta = -200.0
+      reserveDelta = 10.0
+
+  agg2 <- queryContractId operator aggCid3
+  assertMsg "Borrows after repay" ((fromSome agg2).totalBorrows == 500.0)
+  assertMsg "Supply after withdrawal" ((fromSome agg2).cantonCurrentSupply == 300.0)
+  assertMsg "Reserves after accrual" ((fromSome agg2).protocolReserves == 60.0)
+
+  debug "✅ 31. LendingAggregate created and updated"

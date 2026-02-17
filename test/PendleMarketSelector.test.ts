@@ -23,7 +23,7 @@ describe("PendleMarketSelector", function () {
 
     // Deploy PendleMarketSelector as upgradeable
     const PendleMarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-    const selector = await upgrades.deployProxy(PendleMarketSelector, [admin.address], {
+    const selector = await upgrades.deployProxy(PendleMarketSelector, [admin.address, admin.address], {
       kind: "uups",
       initializer: "initialize",
     });
@@ -33,6 +33,11 @@ describe("PendleMarketSelector", function () {
     const PARAMS_ADMIN_ROLE = await selector.PARAMS_ADMIN_ROLE();
     await selector.connect(admin).grantRole(MARKET_ADMIN_ROLE, marketAdmin.address);
     await selector.connect(admin).grantRole(PARAMS_ADMIN_ROLE, paramsAdmin.address);
+
+    // Grant TIMELOCK_ROLE — whitelistMarket/removeMarket/setParams now require it
+    const TIMELOCK_ROLE = await selector.TIMELOCK_ROLE();
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, marketAdmin.address);
+    await selector.connect(admin).grantRole(TIMELOCK_ROLE, paramsAdmin.address);
 
     return { selector, admin, marketAdmin, paramsAdmin, user1, market1, market2, market3 };
   }
@@ -63,7 +68,7 @@ describe("PendleMarketSelector", function () {
     it("Should not allow re-initialization", async function () {
       const { selector, user1 } = await loadFixture(deployFixture);
 
-      await expect(selector.initialize(user1.address)).to.be.reverted;
+      await expect(selector.initialize(user1.address, user1.address)).to.be.reverted;
     });
   });
 
@@ -123,7 +128,7 @@ describe("PendleMarketSelector", function () {
 
       await expect(
         selector.connect(marketAdmin).whitelistMarket(ethers.ZeroAddress, "USD")
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(selector, "ZeroAddress");
     });
 
     it("Should revert batch whitelist with mismatched arrays", async function () {
@@ -134,7 +139,7 @@ describe("PendleMarketSelector", function () {
 
       await expect(
         selector.connect(marketAdmin).whitelistMarkets(markets, categories)
-      ).to.be.revertedWith("Length mismatch");
+      ).to.be.revertedWithCustomError(selector, "LengthMismatch");
     });
   });
 
@@ -319,7 +324,7 @@ describe("PendleMarketSelector", function () {
       await selector.connect(marketAdmin).whitelistMarket(await market1.getAddress(), "USD");
       expect(await selector.isWhitelisted(await market1.getAddress())).to.be.true;
 
-      // Upgrade
+      // Upgrade via timelock (admin IS the timelock in tests)
       const PendleMarketSelectorV2 = await ethers.getContractFactory("PendleMarketSelector");
       const upgraded = await upgrades.upgradeProxy(await selector.getAddress(), PendleMarketSelectorV2);
 
@@ -353,7 +358,7 @@ describe("PendleMarketSelector", function () {
       // Deploy V2
       const PendleMarketSelectorV2 = await ethers.getContractFactory("PendleMarketSelector");
       
-      // Upgrade should succeed
+      // Upgrade via timelock (admin IS the timelock in tests)
       const upgraded = await upgrades.upgradeProxy(await selector.getAddress(), PendleMarketSelectorV2);
       expect(await upgraded.getAddress()).to.equal(await selector.getAddress());
     });

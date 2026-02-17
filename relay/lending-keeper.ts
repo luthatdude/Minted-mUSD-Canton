@@ -22,9 +22,12 @@
  *   - Rate-limits liquidation calls to prevent ledger spam
  */
 
-import Ledger from "@daml/ledger";
-import { readSecret } from "./utils";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 import { fetchTradecraftQuote, fetchTradecraftPoolState, PriceOracleService } from "./price-oracle";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -56,7 +59,7 @@ interface KeeperBotConfig {
     bonusBps: number;
   }>;
 
-  // FIX LK-03: Configurable sMUSD price (should come from yield-sync service in production)
+  // Configurable sMUSD price (should come from yield-sync service in production)
   smusdPrice: number;
 }
 
@@ -69,32 +72,80 @@ const DEFAULT_CONFIG: KeeperBotConfig = {
 
   tradecraftBaseUrl: process.env.TRADECRAFT_URL || "https://api.tradecraft.fi/v1",
 
+  // INFRA-H-06: Validated below — requireHTTPS(tradecraftBaseUrl)
+
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "15000", 10),  // 15s
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "5.0"),
-  maxSlippagePct: parseFloat(process.env.MAX_SLIPPAGE_PCT || "3.0"),
+  // TS-H-01: Use Number() + validation instead of parseFloat for financial values
+  // parseFloat silently accepts garbage like "5.0abc" → 5.0, risking misconfiguration
+  minProfitUsd: (() => {
+    const v = Number(process.env.MIN_PROFIT_USD || "5.0");
+    if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+    return v;
+  })(),
+  maxSlippagePct: (() => {
+    const v = Number(process.env.MAX_SLIPPAGE_PCT || "3.0");
+    if (Number.isNaN(v) || v < 0 || v > 100) throw new Error("MAX_SLIPPAGE_PCT must be 0-100");
+    return v;
+  })(),
   maxConcurrentLiquidations: parseInt(process.env.MAX_CONCURRENT_LIQ || "3", 10),
   cooldownBetweenLiqMs: parseInt(process.env.LIQ_COOLDOWN_MS || "5000", 10),
 
   collateralConfigs: {
     "CTN_Coin": { ltvBps: 6500, liqThresholdBps: 7500, penaltyBps: 1000, bonusBps: 500 },
-    "CTN_USDC": { ltvBps: 9500, liqThresholdBps: 9700, penaltyBps: 300, bonusBps: 150 },
-    "CTN_USDCx": { ltvBps: 9500, liqThresholdBps: 9700, penaltyBps: 300, bonusBps: 150 },
     "CTN_SMUSD": { ltvBps: 9000, liqThresholdBps: 9300, penaltyBps: 400, bonusBps: 200 },
   },
 
-  // FIX LK-03: Read sMUSD price from env (production: synced from yield-sync-service)
-  smusdPrice: parseFloat(process.env.SMUSD_PRICE || "1.05"),
+  // Read sMUSD price from env (production: synced from yield-sync-service)
+  // TS-H-01: Strict numeric validation
+  smusdPrice: (() => {
+    const v = Number(process.env.SMUSD_PRICE || "1.05");
+    if (Number.isNaN(v) || v <= 0) throw new Error("SMUSD_PRICE must be a positive number");
+    return v;
+  })(),
 };
+
+// INFRA-H-06: Enforce HTTPS for external API endpoints in production
+requireHTTPS(DEFAULT_CONFIG.tradecraftBaseUrl, "TRADECRAFT_URL");
 
 // ============================================================
 //                     TYPES
 // ============================================================
 
+// Fixed-point precision constants for BigInt-based financial math
+// All USD/token values scaled to 18 decimals to avoid floating-point precision loss
+const PRECISION = BigInt(10) ** BigInt(18);
+const BPS_BASE = BigInt(10000);
+const YEAR_SECONDS = BigInt(31536000);
+
+/** Convert a number or ledger string to fixed-point BigInt (18 decimals).
+ *  TS-H-01/M-01: Strings are parsed directly to BigInt — no parseFloat intermediate.
+ *  This avoids IEEE 754 precision loss on values with 18+ significant digits.
+ *  For number inputs (config values, small constants), falls back to
+ *  string conversion via toFixed(18). */
+function toFixed(value: number | string): bigint {
+  const str = typeof value === "string" ? value : value.toFixed(18);
+  const negative = str.startsWith("-");
+  const abs = negative ? str.slice(1) : str;
+  const parts = abs.split(".");
+  const whole = BigInt(parts[0] || "0");
+  const fracStr = (parts[1] || "").padEnd(18, "0").slice(0, 18);
+  const frac = BigInt(fracStr);
+  const result = whole * PRECISION + frac;
+  return negative ? -result : result;
+}
+
+/** Convert fixed-point BigInt back to number (for display/logging only) */
+function fromFixed(value: bigint): number {
+  const whole = value / PRECISION;
+  const frac = value % PRECISION;
+  return Number(whole) + Number(frac) / Number(PRECISION);
+}
+
 interface DebtPosition {
   contractId: string;
   borrower: string;
-  principalDebt: number;
-  accruedInterest: number;
+  principalDebt: string;   // Raw ledger string — use toFixed() for BigInt math
+  accruedInterest: string; // Raw ledger string — use toFixed() for BigInt math
   lastAccrualTime: string;
   interestRateBps: number;
 }
@@ -103,7 +154,7 @@ interface EscrowPosition {
   contractId: string;
   owner: string;
   collateralType: string;
-  amount: number;
+  amount: string;  // Raw ledger string — use toFixed() for BigInt math
 }
 
 interface LiquidationCandidate {
@@ -143,7 +194,7 @@ interface KeeperStats {
 
 export class LendingKeeperBot {
   private config: KeeperBotConfig;
-  private ledger: Ledger | null = null;
+  private canton: CantonClient | null = null;
   private oracle: PriceOracleService;
   private running = false;
   private lastLiquidationTime = 0;
@@ -165,15 +216,16 @@ export class LendingKeeperBot {
    * Connect to Canton ledger
    */
   private async connectLedger(): Promise<void> {
-    if (this.ledger) return;
+    if (this.canton) return;
 
-    // FIX M-7: Default to TLS for Canton ledger connections (consistent with relay-service.ts)
+    // Default to TLS for Canton ledger connections (consistent with relay-service.ts)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
       token: this.config.cantonToken,
-      httpBaseUrl: `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${this.config.cantonHost}:${this.config.cantonPort}`,
+      userId: "administrator",
+      actAs: this.config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log(`[Keeper] Connected to Canton ledger`);
@@ -183,18 +235,19 @@ export class LendingKeeperBot {
    * Fetch all active debt positions from ledger
    */
   private async fetchDebtPositions(): Promise<DebtPosition[]> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
-    const contracts = await this.ledger.query(
-      "CantonLending:CantonDebtPosition" as any,
-      {}
+    const contracts = await this.canton.queryContracts(
+      parseTemplateId("CantonLending:CantonDebtPosition")
     );
 
     return contracts.map((c: any) => ({
       contractId: c.contractId,
       borrower: c.payload.borrower,
-      principalDebt: parseFloat(c.payload.principalDebt),
-      accruedInterest: parseFloat(c.payload.accruedInterest),
+      // TS-H-01/M-01: Preserve raw ledger strings to avoid IEEE 754 precision loss on
+      // financial values with 18+ significant digits. Use toFixed() for BigInt math.
+      principalDebt: String(c.payload.principalDebt),
+      accruedInterest: String(c.payload.accruedInterest),
       lastAccrualTime: c.payload.lastAccrualTime,
       interestRateBps: parseInt(c.payload.interestRateBps, 10),
     }));
@@ -204,18 +257,19 @@ export class LendingKeeperBot {
    * Fetch all escrowed collateral for a specific borrower
    */
   private async fetchEscrowPositions(borrower: string): Promise<EscrowPosition[]> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
-    const contracts = await this.ledger.query(
-      "CantonLending:EscrowedCollateral" as any,
-      { owner: borrower }
+    const contracts = await this.canton.queryContracts(
+      parseTemplateId("CantonLending:EscrowedCollateral"),
+      (p: any) => p.owner === borrower
     );
 
     return contracts.map((c: any) => ({
       contractId: c.contractId,
       owner: c.payload.owner,
       collateralType: c.payload.collateralType,
-      amount: parseFloat(c.payload.amount),
+      // TS-H-01/M-01: Preserve raw ledger string to avoid IEEE 754 precision loss
+      amount: String(c.payload.amount),
     }));
   }
 
@@ -227,11 +281,8 @@ export class LendingKeeperBot {
     switch (collateralType) {
       case "CTN_Coin":
         return this.oracle.getLastCTNPrice();
-      case "CTN_USDC":
-      case "CTN_USDCx":
-        return 1.0;  // Stablecoins hardcoded
       case "CTN_SMUSD":
-        return this.config.smusdPrice; // FIX LK-03: Configurable via SMUSD_PRICE env var
+        return this.config.smusdPrice; // Configurable via SMUSD_PRICE env var
       default:
         throw new Error(`Unknown collateral type: ${collateralType}`);
     }
@@ -241,6 +292,9 @@ export class LendingKeeperBot {
    * Calculate health factor for a borrower:
    * healthFactor = Σ(collateral × price × liqThreshold) / totalDebt
    * If < 1.0, position is liquidatable
+   *
+   * Uses BigInt fixed-point (18 decimals) to avoid float precision loss
+   * on positions > $10M where 64-bit float loses sub-cent accuracy.
    */
   private calculateHealthFactor(
     escrows: EscrowPosition[],
@@ -248,59 +302,87 @@ export class LendingKeeperBot {
   ): number {
     if (totalDebt <= 0) return 999.0;
 
-    let totalLiqValue = 0;
+    const debtBig = toFixed(totalDebt);
+    let totalLiqValue = BigInt(0);
+
     for (const escrow of escrows) {
       const price = this.getPrice(escrow.collateralType);
       const cfg = this.config.collateralConfigs[escrow.collateralType];
       if (!cfg) continue;
 
-      totalLiqValue += escrow.amount * price * cfg.liqThresholdBps / 10000;
+      const amountBig = toFixed(escrow.amount);
+      const priceBig = toFixed(price);
+      const thresholdBps = BigInt(cfg.liqThresholdBps);
+
+      // amount * price * threshold / 10000, all in fixed-point
+      totalLiqValue +=
+        (amountBig * priceBig / PRECISION) * thresholdBps / BPS_BASE;
     }
 
-    return totalLiqValue / totalDebt;
+    // healthFactor = totalLiqValue / totalDebt (both in fixed-point)
+    return fromFixed((totalLiqValue * PRECISION) / debtBig);
   }
 
   /**
    * Calculate total debt including projected interest since last accrual
+   *
+   * Uses BigInt fixed-point to prevent precision loss on large debts
    */
   private calculateTotalDebt(position: DebtPosition): number {
     const now = Date.now() / 1000;
     const lastAccrual = new Date(position.lastAccrualTime).getTime() / 1000;
     const elapsed = Math.max(0, now - lastAccrual);
-    const yearSeconds = 31536000;
 
+    const principalBig = toFixed(position.principalDebt);
+    const accruedBig = toFixed(position.accruedInterest);
+    const rateBps = BigInt(position.interestRateBps);
+    const elapsedBig = BigInt(Math.floor(elapsed));
+
+    // newInterest = principal * rateBps * elapsed / (10000 * yearSeconds)
     const newInterest =
-      position.principalDebt * position.interestRateBps * elapsed / (10000 * yearSeconds);
+      principalBig * rateBps * elapsedBig / (BPS_BASE * YEAR_SECONDS);
 
-    return position.principalDebt + position.accruedInterest + newInterest;
+    return fromFixed(principalBig + accruedBig + newInterest);
   }
 
   /**
    * Find the most profitable collateral to seize for a given position.
    * Prefers CTN (highest penalty = highest keeper bonus).
+   *
+   * Uses BigInt fixed-point for seize/bonus calculations
    */
   private selectBestTarget(
     escrows: EscrowPosition[],
     maxRepayUsd: number
   ): { escrow: EscrowPosition; expectedProfit: number } | null {
     let bestEscrow: EscrowPosition | null = null;
-    let bestProfit = 0;
+    let bestProfit = BigInt(0);
+
+    const maxRepayBig = toFixed(maxRepayUsd);
 
     for (const escrow of escrows) {
       const cfg = this.config.collateralConfigs[escrow.collateralType];
       if (!cfg) continue;
 
       const price = this.getPrice(escrow.collateralType);
-      const collateralValueUsd = escrow.amount * price;
+      const priceBig = toFixed(price);
+      const amountBig = toFixed(escrow.amount);
+      const penaltyBps = BigInt(cfg.penaltyBps);
+      const bonusBps = BigInt(cfg.bonusBps);
+
+      const collateralValueUsd = amountBig * priceBig / PRECISION;
 
       // How much debt can we repay against this collateral?
-      const seizeValueUsd = maxRepayUsd * (10000 + cfg.penaltyBps) / 10000;
-      const actualSeizeUsd = Math.min(seizeValueUsd, collateralValueUsd);
+      const seizeValueUsd = maxRepayBig * (BPS_BASE + penaltyBps) / BPS_BASE;
+      const actualSeizeUsd =
+        seizeValueUsd < collateralValueUsd ? seizeValueUsd : collateralValueUsd;
 
       // Keeper bonus from penalty
-      const actualRepay = actualSeizeUsd * 10000 / (10000 + cfg.penaltyBps);
+      const actualRepay = actualSeizeUsd * BPS_BASE / (BPS_BASE + penaltyBps);
       const penaltyUsd = actualSeizeUsd - actualRepay;
-      const keeperBonusUsd = penaltyUsd * cfg.bonusBps / cfg.penaltyBps;
+      const keeperBonusUsd = penaltyBps > BigInt(0)
+        ? penaltyUsd * bonusBps / penaltyBps
+        : BigInt(0);
 
       if (keeperBonusUsd > bestProfit) {
         bestProfit = keeperBonusUsd;
@@ -310,7 +392,7 @@ export class LendingKeeperBot {
 
     if (!bestEscrow) return null;
 
-    return { escrow: bestEscrow, expectedProfit: bestProfit };
+    return { escrow: bestEscrow, expectedProfit: fromFixed(bestProfit) };
   }
 
   /**
@@ -414,7 +496,7 @@ export class LendingKeeperBot {
   private async executeLiquidation(
     candidate: LiquidationCandidate
   ): Promise<LiquidationResult> {
-    if (!this.ledger) throw new Error("Ledger not connected");
+    if (!this.canton) throw new Error("Ledger not connected");
 
     const timestamp = new Date();
 
@@ -452,9 +534,9 @@ export class LendingKeeperBot {
       }
 
       // Fetch keeper's mUSD balance to use for repayment
-      const keeperMusd = await this.ledger.query(
-        "CantonDirectMint:CantonMUSD" as any,
-        { owner: this.config.keeperParty }
+      const keeperMusd = await this.canton.queryContracts(
+        parseTemplateId("CantonDirectMint:CantonMUSD"),
+        (p: any) => p.owner === this.config.keeperParty
       );
 
       if (keeperMusd.length === 0) {
@@ -470,9 +552,10 @@ export class LendingKeeperBot {
         };
       }
 
-      // Find an mUSD contract with enough balance
+      // TS-H-01/M-01: Use BigInt comparison to avoid precision loss on large amounts
+      const maxRepayBig = toFixed(candidate.maxRepay);
       const musdContract = keeperMusd.find(
-        (c: any) => parseFloat(c.payload.amount) >= candidate.maxRepay
+        (c: any) => toFixed(String(c.payload.amount)) >= maxRepayBig
       );
 
       if (!musdContract) {
@@ -488,8 +571,8 @@ export class LendingKeeperBot {
         };
       }
 
-      // FIX LK-01: Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
-      // FIX LK-02: Force fresh price fetch before execution
+      // Re-fetch ALL contract IDs immediately before exercise to avoid stale CIDs
+      // Force fresh price fetch before execution
       try {
         await this.oracle.fetchCTNPrice();
       } catch (err) {
@@ -497,9 +580,9 @@ export class LendingKeeperBot {
       }
 
       // Re-fetch debt position (may have been repaid since scan)
-      const freshDebtPositions = await this.ledger.query(
-        "CantonLending:CantonDebtPosition" as any,
-        { borrower: candidate.borrower }
+      const freshDebtPositions = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonDebtPosition"),
+        (p: any) => p.borrower === candidate.borrower
       );
       if (freshDebtPositions.length === 0) {
         return {
@@ -526,15 +609,13 @@ export class LendingKeeperBot {
       }
 
       // Collect all price feed contract IDs
-      const priceFeeds = await this.ledger.query(
-        "CantonLending:CantonPriceFeed" as any,
-        {}
+      const priceFeeds = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonPriceFeed")
       );
 
       // Find the lending service contract
-      const services = await this.ledger.query(
-        "CantonLending:CantonLendingService" as any,
-        {}
+      const services = await this.canton.queryContracts(
+        parseTemplateId("CantonLending:CantonLendingService")
       );
 
       if (services.length === 0) {
@@ -552,20 +633,20 @@ export class LendingKeeperBot {
         `repay=$${candidate.maxRepay.toFixed(2)}`
       );
 
-      await this.ledger.exercise(
-        "CantonLending:CantonLendingService" as any,
+      await this.canton.exerciseChoice(
+        parseTemplateId("CantonLending:CantonLendingService"),
         serviceContract.contractId,
-        "Lending_Liquidate" as any,
+        "Lending_Liquidate",
         {
           liquidator: this.config.keeperParty,
           borrower: candidate.borrower,
           repayAmount: candidate.maxRepay.toFixed(18),
-          targetEscrowCid: freshTarget.contractId,         // FIX LK-01: Fresh CID
-          debtCid: freshDebtCid,                           // FIX LK-01: Fresh CID
+          targetEscrowCid: freshTarget.contractId,         // Fresh CID
+          debtCid: freshDebtCid,                           // Fresh CID
           musdCid: (musdContract as any).contractId,
-          escrowCids: freshEscrows.map((e) => e.contractId), // FIX LK-01: Fresh CIDs
+          escrowCids: freshEscrows.map((e) => e.contractId), // Fresh CIDs
           priceFeedCids: priceFeeds.map((f: any) => f.contractId),
-        } as any
+        }
       );
 
       this.lastLiquidationTime = Date.now();

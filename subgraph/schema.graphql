@@ -1,0 +1,238 @@
+# FIX C-10: Subgraph schema for on-chain observability
+# Indexes critical protocol events for monitoring, exploit detection, and audit trails.
+# Without this, there is zero automated on-chain event indexing.
+
+# ── mUSD Token Events ──────────────────────────────────────────
+
+type MintEvent @entity {
+  id: ID!
+  to: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type BurnEvent @entity {
+  id: ID!
+  from: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type SupplyCapChange @entity {
+  id: ID!
+  oldCap: BigInt!
+  newCap: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type BlacklistEvent @entity {
+  id: ID!
+  account: Bytes!
+  isBlacklisted: Boolean!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── sMUSD Vault Events ─────────────────────────────────────────
+
+type StakeEvent @entity {
+  id: ID!
+  sender: Bytes!
+  owner: Bytes!
+  assets: BigInt!
+  shares: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type UnstakeEvent @entity {
+  id: ID!
+  sender: Bytes!
+  receiver: Bytes!
+  owner: Bytes!
+  assets: BigInt!
+  shares: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type InterestReceived @entity {
+  id: ID!
+  amount: BigInt!
+  newTotalAssets: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CantonShareSync @entity {
+  id: ID!
+  oldShares: BigInt!
+  newShares: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── BLE Bridge Attestations ────────────────────────────────────
+
+type Attestation @entity {
+  id: ID!
+  attestationId: Bytes!
+  cantonAssets: BigInt!
+  newSupplyCap: BigInt!
+  nonce: BigInt!
+  attestationTimestamp: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type EmergencyCapReduction @entity {
+  id: ID!
+  oldCap: BigInt!
+  newCap: BigInt!
+  reason: String!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Borrow Module Events ───────────────────────────────────────
+
+type BorrowEvent @entity {
+  id: ID!
+  user: Bytes!
+  amount: BigInt!
+  totalDebt: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type RepayEvent @entity {
+  id: ID!
+  user: Bytes!
+  amount: BigInt!
+  remainingDebt: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Liquidation Events ─────────────────────────────────────────
+
+type LiquidationEvent @entity {
+  id: ID!
+  borrower: Bytes!
+  liquidator: Bytes!
+  repayAmount: BigInt!
+  seizeAmount: BigInt!
+  collateralToken: Bytes!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type BadDebtEvent @entity {
+  id: ID!
+  borrower: Bytes!
+  amount: BigInt!
+  totalBadDebt: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Collateral Vault Events ────────────────────────────────────
+
+type CollateralDeposit @entity {
+  id: ID!
+  user: Bytes!
+  token: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type CollateralWithdrawal @entity {
+  id: ID!
+  user: Bytes!
+  token: Bytes!
+  amount: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Direct Mint Events ─────────────────────────────────────────
+
+type DirectMint @entity {
+  id: ID!
+  user: Bytes!
+  usdcAmount: BigInt!
+  musdAmount: BigInt!
+  fee: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type DirectRedeem @entity {
+  id: ID!
+  user: Bytes!
+  musdAmount: BigInt!
+  usdcAmount: BigInt!
+  fee: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── LeverageVault Events ───────────────────────────────────────
+
+type LeverageOpen @entity {
+  id: ID!
+  user: Bytes!
+  collateralToken: Bytes!
+  initialDeposit: BigInt!
+  totalCollateral: BigInt!
+  totalDebt: BigInt!
+  loops: Int!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type LeverageClose @entity {
+  id: ID!
+  user: Bytes!
+  collateralReturned: BigInt!
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Protocol Aggregate Stats (updated on each event) ──────────
+
+type ProtocolStats @entity {
+  id: ID!
+  totalMUSDSupply: BigInt!
+  totalSMUSDShares: BigInt!
+  totalBorrows: BigInt!
+  totalBadDebt: BigInt!
+  totalLiquidations: Int!
+  totalAttestations: Int!
+  lastAttestationTimestamp: BigInt!
+  lastUpdatedBlock: BigInt!
+}

@@ -1,262 +1,237 @@
 import { ethers, upgrades } from "hardhat";
-import * as fs from "fs";
 
-interface DeployedContracts {
-  network: string;
-  chainId: number;
-  timestamp: string;
-  deployer: string;
-  contracts: {
-    MUSD: string;
-    SMUSD: string;
-    MockUSDC: string;
-    PriceOracle: string;
-    CollateralVault: string;
-    BorrowModule: string;
-    LiquidationEngine: string;
-    DirectMint: string;
-    Treasury: string;
-    BLEBridgeV9: string;
-  };
-  chainlinkFeeds: {
-    ETH_USD: string;
-    BTC_USD: string;
-  };
-}
-
+/**
+ * Testnet deployment script for the Minted / BLE Protocol.
+ *
+ * Deployment order:
+ *   0. GlobalPauseRegistry       (needed by MUSD, SMUSD, CollateralVault)
+ *   1. MintedTimelockController   (governance primitive)
+ *   2. MUSD                       (stablecoin)
+ *   3. PriceOracle                (price feeds)
+ *   4. InterestRateModel          (rate model)
+ *   5. CollateralVault            (vault)
+ *   6. BorrowModule               (lending)
+ *   7. SMUSD                      (staking vault)
+ *   8. LiquidationEngine          (liquidation)
+ *   9. DirectMintV2               (direct mint)
+ *  10. TreasuryV2                 (UUPS proxy)
+ *  11. BLEBridgeV9                (UUPS proxy — Canton bridge)
+ *  12. LeverageVault              (leverage)
+ */
 async function main() {
   const [deployer] = await ethers.getSigners();
-  const network = await ethers.provider.getNetwork();
+  console.log("Deployer:", deployer.address);
+  const startBalance = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
+  console.log("Balance:", startBalance, "ETH");
+  if (parseFloat(startBalance) < 0.01) throw new Error("Insufficient Sepolia ETH");
 
-  console.log("=".repeat(72));
-  console.log("Minted mUSD Protocol - Testnet Deployment");
-  console.log("=".repeat(72));
-  console.log(`Network: ${network.name} (chainId: ${network.chainId})`);
-  console.log(`Deployer: ${deployer.address}`);
+  const USDC_ADDRESS = deployer.address; // placeholder for testnet
+  const FEE_RECIPIENT = deployer.address;
+  const SWAP_ROUTER = deployer.address;
 
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log(`Balance: ${ethers.formatEther(balance)} ETH`);
+  // ─── 0. GlobalPauseRegistry ───
+  console.log("\n[0/12] Deploying GlobalPauseRegistry...");
+  const GPRFactory = await ethers.getContractFactory("GlobalPauseRegistry");
+  const gpr = await GPRFactory.deploy(deployer.address, deployer.address);
+  await gpr.waitForDeployment();
+  const gprAddress = await gpr.getAddress();
+  console.log("GlobalPauseRegistry:", gprAddress);
 
-  if (balance < ethers.parseEther("0.1")) {
-    throw new Error("Insufficient balance. Need at least 0.1 ETH for deployment.");
-  }
+  // ─── 1. MintedTimelockController ───
+  console.log("\n[1/12] Deploying MintedTimelockController...");
+  const MIN_DELAY = 86400;
+  const proposers = [deployer.address];
+  const executors = [deployer.address];
+  const admin = deployer.address;
 
-  const CHAINLINK_ETH_USD = process.env.CHAINLINK_ETH_USD || "0x694AA1769357215DE4FAC081bf1f309aDC325306";
-  const CHAINLINK_BTC_USD = process.env.CHAINLINK_BTC_USD || "0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43";
-  const INITIAL_SUPPLY_CAP = process.env.MUSD_SUPPLY_CAP
-    ? ethers.parseEther(process.env.MUSD_SUPPLY_CAP)
-    : ethers.parseEther("10000000");
-  const DAILY_CAP_INCREASE_LIMIT = process.env.BRIDGE_DAILY_CAP_LIMIT
-    ? ethers.parseEther(process.env.BRIDGE_DAILY_CAP_LIMIT)
-    : ethers.parseEther("1000000");
+  const TimelockFactory = await ethers.getContractFactory("MintedTimelockController");
+  const timelock = await TimelockFactory.deploy(MIN_DELAY, proposers, executors, admin);
+  await timelock.waitForDeployment();
+  const timelockAddress = await timelock.getAddress();
+  console.log("MintedTimelockController:", timelockAddress);
 
-  // Optional token addresses to pre-configure oracle feeds.
-  const WETH_ADDRESS = process.env.WETH_ADDRESS;
-  const WBTC_ADDRESS = process.env.WBTC_ADDRESS;
-
-  console.log("\n1/10 Deploying MockUSDC...");
-  const MockERC20 = await ethers.getContractFactory("MockERC20");
-  const mockUSDC = await MockERC20.deploy("USD Coin", "USDC", 6);
-  await mockUSDC.waitForDeployment();
-  const mockUSDCAddress = await mockUSDC.getAddress();
-  console.log(`     MockUSDC: ${mockUSDCAddress}`);
-
-  console.log("2/10 Deploying MUSD...");
-  const MUSD = await ethers.getContractFactory("MUSD");
-  const musd = await MUSD.deploy(INITIAL_SUPPLY_CAP);
+  // ─────────────────────────────────────────────────────────────────────
+  // 2. MUSD
+  // ─────────────────────────────────────────────────────────────────────
+  const INITIAL_SUPPLY_CAP = ethers.parseEther("10000000"); // 10 M mUSD
+  const MUSDFactory = await ethers.getContractFactory("MUSD");
+  const musd = await MUSDFactory.deploy(INITIAL_SUPPLY_CAP, gprAddress);
   await musd.waitForDeployment();
   const musdAddress = await musd.getAddress();
-  console.log(`     MUSD: ${musdAddress}`);
+  console.log("MUSD:", musdAddress);
 
-  console.log("3/10 Deploying SMUSD...");
-  const SMUSD = await ethers.getContractFactory("SMUSD");
-  const smusd = await SMUSD.deploy(musdAddress);
-  await smusd.waitForDeployment();
-  const smusdAddress = await smusd.getAddress();
-  console.log(`     SMUSD: ${smusdAddress}`);
+  // ─────────────────────────────────────────────────────────────────────
+  // 3. PriceOracle
+  // ─────────────────────────────────────────────────────────────────────
+  const OracleFactory = await ethers.getContractFactory("PriceOracle");
+  const oracle = await OracleFactory.deploy();
+  await oracle.waitForDeployment();
+  const oracleAddress = await oracle.getAddress();
+  console.log("PriceOracle:", oracleAddress);
 
-  console.log("4/10 Deploying PriceOracle...");
-  const PriceOracle = await ethers.getContractFactory("PriceOracle");
-  const priceOracle = await PriceOracle.deploy();
-  await priceOracle.waitForDeployment();
-  const priceOracleAddress = await priceOracle.getAddress();
-  console.log(`     PriceOracle: ${priceOracleAddress}`);
+  // ─────────────────────────────────────────────────────────────────────
+  // 4. InterestRateModel
+  // ─────────────────────────────────────────────────────────────────────
+  const IRMFactory = await ethers.getContractFactory("InterestRateModel");
+  const irm = await IRMFactory.deploy(deployer.address);
+  await irm.waitForDeployment();
+  const irmAddress = await irm.getAddress();
+  console.log("InterestRateModel:", irmAddress);
 
-  console.log("5/10 Deploying CollateralVault...");
-  const CollateralVault = await ethers.getContractFactory("CollateralVault");
-  const vault = await CollateralVault.deploy();
+  // ─────────────────────────────────────────────────────────────────────
+  // 5. CollateralVault
+  // ─────────────────────────────────────────────────────────────────────
+  const VaultFactory = await ethers.getContractFactory("CollateralVault");
+  const vault = await VaultFactory.deploy(gprAddress);
   await vault.waitForDeployment();
   const vaultAddress = await vault.getAddress();
-  console.log(`     CollateralVault: ${vaultAddress}`);
+  console.log("CollateralVault:", vaultAddress);
 
-  console.log("6/10 Deploying TreasuryV2 (proxy)...");
-  const Treasury = await ethers.getContractFactory("TreasuryV2");
-  const treasury = await upgrades.deployProxy(
-    Treasury,
-    [mockUSDCAddress, deployer.address, deployer.address, deployer.address],
-    { initializer: "initialize" }
-  );
-  await treasury.waitForDeployment();
-  const treasuryAddress = await treasury.getAddress();
-  console.log(`     Treasury: ${treasuryAddress}`);
+  // ─────────────────────────────────────────────────────────────────────
+  // 6. BorrowModule
+  // ─────────────────────────────────────────────────────────────────────
+  const INTEREST_RATE_BPS = 500; // 5 %
+  const MIN_DEBT = ethers.parseEther("100"); // 100 mUSD minimum
 
-  console.log("7/10 Deploying DirectMintV2...");
-  const DirectMint = await ethers.getContractFactory("DirectMintV2");
-  const directMint = await DirectMint.deploy(
-    mockUSDCAddress,
+  const BorrowFactory = await ethers.getContractFactory("BorrowModule");
+  const borrow = await BorrowFactory.deploy(
+    vaultAddress,
+    oracleAddress,
     musdAddress,
-    treasuryAddress,
-    deployer.address
+    INTEREST_RATE_BPS,
+    MIN_DEBT
+  );
+  await borrow.waitForDeployment();
+  const borrowAddress = await borrow.getAddress();
+  console.log("BorrowModule:", borrowAddress);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 7. SMUSD
+  // ─────────────────────────────────────────────────────────────────────
+  const SMUSDFactory = await ethers.getContractFactory("SMUSD");
+  const smusd = await SMUSDFactory.deploy(musdAddress, gprAddress);
+  await smusd.waitForDeployment();
+  const smusdAddress = await smusd.getAddress();
+  console.log("SMUSD:", smusdAddress);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 8. LiquidationEngine
+  // ─────────────────────────────────────────────────────────────────────
+  const CLOSE_FACTOR_BPS = 5000; // 50 %
+
+  const LiqFactory = await ethers.getContractFactory("LiquidationEngine");
+  const liquidation = await LiqFactory.deploy(
+    vaultAddress,
+    borrowAddress,
+    oracleAddress,
+    musdAddress,
+    CLOSE_FACTOR_BPS
+  );
+  await liquidation.waitForDeployment();
+  const liquidationAddress = await liquidation.getAddress();
+  console.log("LiquidationEngine:", liquidationAddress);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 9. DirectMintV2
+  // ─────────────────────────────────────────────────────────────────────
+  const DirectMintFactory = await ethers.getContractFactory("DirectMintV2");
+  const directMint = await DirectMintFactory.deploy(
+    USDC_ADDRESS,
+    musdAddress,
+    deployer.address, // treasury placeholder
+    FEE_RECIPIENT
   );
   await directMint.waitForDeployment();
   const directMintAddress = await directMint.getAddress();
-  console.log(`     DirectMint: ${directMintAddress}`);
+  console.log("DirectMintV2:", directMintAddress);
 
-  console.log("8/10 Deploying BorrowModule...");
-  const BorrowModule = await ethers.getContractFactory("BorrowModule");
-  const borrowModule = await BorrowModule.deploy(
+  // ─────────────────────────────────────────────────────────────────────
+  // 10. TreasuryV2 (UUPS proxy)
+  // ─────────────────────────────────────────────────────────────────────
+  const TreasuryImpl = await ethers.getContractFactory("TreasuryV2");
+  const treasuryProxy = await upgrades.deployProxy(TreasuryImpl, [
+    USDC_ADDRESS, vaultAddress, deployer.address, FEE_RECIPIENT, timelockAddress,
+  ], { kind: "uups" });
+  await treasuryProxy.waitForDeployment();
+  const treasuryAddress = await treasuryProxy.getAddress();
+  console.log("TreasuryV2 proxy:", treasuryAddress);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 11. BLEBridgeV9 (UUPS proxy)
+  // ─────────────────────────────────────────────────────────────────────
+  const BridgeImpl = await ethers.getContractFactory("BLEBridgeV9");
+  const MIN_SIGS = 1; // testnet: single validator
+  const COLLATERAL_RATIO_BPS = 10000; // 100 %
+  const DAILY_CAP_INCREASE = ethers.parseEther("1000000"); // 1 M
+
+  const bridgeProxy = await upgrades.deployProxy(BridgeImpl, [
+    MIN_SIGS, musdAddress, COLLATERAL_RATIO_BPS, DAILY_CAP_INCREASE, timelockAddress,
+  ], { kind: "uups" });
+  await bridgeProxy.waitForDeployment();
+  const bridgeAddress = await bridgeProxy.getAddress();
+  console.log("BLEBridgeV9 proxy:", bridgeAddress);
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 12. LeverageVault
+  // ─────────────────────────────────────────────────────────────────────
+  const LeverageFactory = await ethers.getContractFactory("LeverageVault");
+  const leverage = await LeverageFactory.deploy(
+    SWAP_ROUTER,
     vaultAddress,
-    priceOracleAddress,
+    borrowAddress,
+    oracleAddress,
     musdAddress,
-    200,
-    ethers.parseEther("100")
+    timelockAddress
   );
-  await borrowModule.waitForDeployment();
-  const borrowModuleAddress = await borrowModule.getAddress();
-  console.log(`     BorrowModule: ${borrowModuleAddress}`);
+  await leverage.waitForDeployment();
+  const leverageAddress = await leverage.getAddress();
+  console.log("LeverageVault:", leverageAddress);
 
-  console.log("9/10 Deploying LiquidationEngine...");
-  const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
-  const liquidationEngine = await LiquidationEngine.deploy(
-    vaultAddress,
-    borrowModuleAddress,
-    priceOracleAddress,
-    musdAddress,
-    5000
-  );
-  await liquidationEngine.waitForDeployment();
-  const liquidationEngineAddress = await liquidationEngine.getAddress();
-  console.log(`     LiquidationEngine: ${liquidationEngineAddress}`);
+  // ═══════════════════════════════════════════════════════════════════════
+  // ROLE CONFIGURATION
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log("\n=== Configuring roles ===");
 
-  console.log("10/10 Deploying BLEBridgeV9 (proxy)...");
-  const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
-  const bridge = await upgrades.deployProxy(
-    BLEBridgeV9,
-    [2, musdAddress, 12000, DAILY_CAP_INCREASE_LIMIT],
-    { initializer: "initialize" }
-  );
-  await bridge.waitForDeployment();
-  const bridgeAddress = await bridge.getAddress();
-  console.log(`     BLEBridgeV9: ${bridgeAddress}`);
-
-  console.log("\n" + "=".repeat(72));
-  console.log("Configuring roles and wiring dependencies...");
-  console.log("=".repeat(72));
-
-  // MUSD roles
   const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
-  const CAP_MANAGER_ROLE = await musd.CAP_MANAGER_ROLE();
   const LIQUIDATOR_ROLE = await musd.LIQUIDATOR_ROLE();
-
-  await (await musd.grantRole(BRIDGE_ROLE, directMintAddress)).wait();
   await (await musd.grantRole(BRIDGE_ROLE, bridgeAddress)).wait();
-  await (await musd.grantRole(BRIDGE_ROLE, borrowModuleAddress)).wait();
-  await (await musd.grantRole(CAP_MANAGER_ROLE, bridgeAddress)).wait();
-  await (await musd.grantRole(LIQUIDATOR_ROLE, liquidationEngineAddress)).wait();
+  await (await musd.grantRole(LIQUIDATOR_ROLE, liquidationAddress)).wait();
+  await (await musd.grantRole(BRIDGE_ROLE, borrowAddress)).wait();
+  console.log("MUSD roles configured");
 
-  // Treasury roles
-  const VAULT_ROLE = await treasury.VAULT_ROLE();
-  await (await treasury.grantRole(VAULT_ROLE, directMintAddress)).wait();
+  const VAULT_ADMIN_ROLE = await vault.VAULT_ADMIN_ROLE();
+  await (await vault.grantRole(VAULT_ADMIN_ROLE, borrowAddress)).wait();
+  await (await vault.grantRole(VAULT_ADMIN_ROLE, liquidationAddress)).wait();
+  console.log("CollateralVault roles configured");
 
-  // CollateralVault roles
-  const BORROW_MODULE_ROLE = await vault.BORROW_MODULE_ROLE();
-  const VAULT_LIQUIDATION_ROLE = await vault.LIQUIDATION_ROLE();
-  await (await vault.grantRole(BORROW_MODULE_ROLE, borrowModuleAddress)).wait();
-  await (await vault.grantRole(VAULT_LIQUIDATION_ROLE, liquidationEngineAddress)).wait();
-  await (await vault.setBorrowModule(borrowModuleAddress)).wait();
+  // Register deployer as validator on BLEBridgeV9 for testnet
+  const bridge = await ethers.getContractAt("BLEBridgeV9", bridgeAddress);
+  const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
+  await (await bridge.grantRole(VALIDATOR_ROLE, deployer.address)).wait();
+  console.log("BLEBridgeV9: deployer registered as validator");
 
-  // BorrowModule roles + integrations
-  const BORROW_LIQUIDATION_ROLE = await borrowModule.LIQUIDATION_ROLE();
-  await (await borrowModule.grantRole(BORROW_LIQUIDATION_ROLE, liquidationEngineAddress)).wait();
-  await (await borrowModule.setSMUSD(smusdAddress)).wait();
-  await (await borrowModule.setTreasury(treasuryAddress)).wait();
-
-  // SMUSD integrations
-  const SMUSD_BRIDGE_ROLE = await smusd.BRIDGE_ROLE();
-  const INTEREST_ROUTER_ROLE = await smusd.INTEREST_ROUTER_ROLE();
-  await (await smusd.grantRole(SMUSD_BRIDGE_ROLE, bridgeAddress)).wait();
-  await (await smusd.grantRole(INTEREST_ROUTER_ROLE, borrowModuleAddress)).wait();
-  await (await smusd.setTreasury(treasuryAddress)).wait();
-
-  // Optional oracle feed configuration
-  if (WETH_ADDRESS) {
-    await (await priceOracle.setFeed(WETH_ADDRESS, CHAINLINK_ETH_USD, 3600, 18)).wait();
-    console.log(`Configured WETH/USD feed for ${WETH_ADDRESS}`);
-  }
-  if (WBTC_ADDRESS) {
-    await (await priceOracle.setFeed(WBTC_ADDRESS, CHAINLINK_BTC_USD, 3600, 8)).wait();
-    console.log(`Configured WBTC/USD feed for ${WBTC_ADDRESS}`);
-  }
-
-  // Seed test USDC
-  await (await mockUSDC.mint(deployer.address, 1_000_000n * 10n ** 6n)).wait();
-
-  const deployed: DeployedContracts = {
-    network: network.name,
-    chainId: Number(network.chainId),
-    timestamp: new Date().toISOString(),
-    deployer: deployer.address,
-    contracts: {
-      MUSD: musdAddress,
-      SMUSD: smusdAddress,
-      MockUSDC: mockUSDCAddress,
-      PriceOracle: priceOracleAddress,
-      CollateralVault: vaultAddress,
-      BorrowModule: borrowModuleAddress,
-      LiquidationEngine: liquidationEngineAddress,
-      DirectMint: directMintAddress,
-      Treasury: treasuryAddress,
-      BLEBridgeV9: bridgeAddress,
-    },
-    chainlinkFeeds: {
-      ETH_USD: CHAINLINK_ETH_USD,
-      BTC_USD: CHAINLINK_BTC_USD,
-    },
-  };
-
-  fs.mkdirSync("deployments", { recursive: true });
-  const deploymentPath = `deployments/${network.name}-${Date.now()}.json`;
-  fs.writeFileSync(deploymentPath, JSON.stringify(deployed, null, 2));
-  console.log(`\nDeployment saved to: ${deploymentPath}`);
-
-  const frontendEnv = [
-    "# Auto-generated from deploy-testnet.ts",
-    `NEXT_PUBLIC_CHAIN_ID=${network.chainId}`,
-    `NEXT_PUBLIC_MUSD_ADDRESS=${musdAddress}`,
-    `NEXT_PUBLIC_SMUSD_ADDRESS=${smusdAddress}`,
-    `NEXT_PUBLIC_USDC_ADDRESS=${mockUSDCAddress}`,
-    `NEXT_PUBLIC_DIRECT_MINT_ADDRESS=${directMintAddress}`,
-    `NEXT_PUBLIC_TREASURY_ADDRESS=${treasuryAddress}`,
-    `NEXT_PUBLIC_COLLATERAL_VAULT_ADDRESS=${vaultAddress}`,
-    `NEXT_PUBLIC_BORROW_MODULE_ADDRESS=${borrowModuleAddress}`,
-    `NEXT_PUBLIC_LIQUIDATION_ENGINE_ADDRESS=${liquidationEngineAddress}`,
-    `NEXT_PUBLIC_BRIDGE_ADDRESS=${bridgeAddress}`,
-    `NEXT_PUBLIC_PRICE_ORACLE_ADDRESS=${priceOracleAddress}`,
-  ].join("\n");
-
-  fs.writeFileSync("frontend/.env.local", frontendEnv);
-  console.log("Frontend env saved to: frontend/.env.local");
-
-  console.log("\nContract Addresses:");
-  console.log("-".repeat(72));
-  for (const [name, addr] of Object.entries(deployed.contracts)) {
-    console.log(`${name.padEnd(20)} ${addr}`);
-  }
+  // ═══════════════════════════════════════════════════════════════════════
+  const remaining = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
+  console.log("\n========== SEPOLIA DEPLOYMENT COMPLETE ==========");
+  console.log("GlobalPauseRegistry:", gprAddress);
+  console.log("MintedTimelockController:", timelockAddress);
+  console.log("MUSD:", musdAddress);
+  console.log("PriceOracle:", oracleAddress);
+  console.log("InterestRateModel:", irmAddress);
+  console.log("CollateralVault:", vaultAddress);
+  console.log("BorrowModule:", borrowAddress);
+  console.log("SMUSD:", smusdAddress);
+  console.log("LiquidationEngine:", liquidationAddress);
+  console.log("DirectMintV2:", directMintAddress);
+  console.log("TreasuryV2 (proxy):", treasuryAddress);
+  console.log("BLEBridgeV9 (proxy):", bridgeAddress);
+  console.log("LeverageVault:", leverageAddress);
+  console.log("=================================================");
+  console.log("Gas used:", (parseFloat(startBalance) - parseFloat(remaining)).toFixed(6), "ETH");
+  console.log("Remaining:", remaining, "ETH");
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

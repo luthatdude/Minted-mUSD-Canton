@@ -34,7 +34,8 @@ describe("DepositRouter", function () {
       treasury.address,
       directMint.address,
       DEFAULT_FEE_BPS,
-      admin.address
+      admin.address,
+      admin.address // timelockController
     );
 
     // Mint USDC to users
@@ -48,6 +49,10 @@ describe("DepositRouter", function () {
     // Grant pauser role
     const PAUSER_ROLE = await router.PAUSER_ROLE();
     await router.connect(admin).grantRole(PAUSER_ROLE, pauser.address);
+
+    // Grant timelock role to admin for parameter changes
+    const TIMELOCK_ROLE = await router.TIMELOCK_ROLE();
+    await router.connect(admin).grantRole(TIMELOCK_ROLE, admin.address);
 
     return { router, usdc, wormholeRelayer, tokenBridge, admin, pauser, user1, user2, treasury, directMint };
   }
@@ -87,6 +92,7 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           DEFAULT_FEE_BPS,
+          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "InvalidAddress");
@@ -104,6 +110,7 @@ describe("DepositRouter", function () {
           treasury.address,
           directMint.address,
           501, // > 5%
+          admin.address,
           admin.address
         )
       ).to.be.revertedWithCustomError(DepositRouter, "FeeTooHigh");
@@ -340,50 +347,52 @@ describe("DepositRouter", function () {
   });
 
   describe("Emergency Withdraw", function () {
-    it("Should allow admin to withdraw tokens", async function () {
-      const { router, usdc, admin, user1, treasury } = await loadFixture(deployFixture);
+    it("Should allow timelock to withdraw tokens to treasury when paused", async function () {
+      const { router, usdc, admin, pauser, user1, treasury } = await loadFixture(deployFixture);
 
       // Deposit to get some USDC in contract
       await router.connect(user1).deposit(ethers.parseUnits("1000", 6), { value: MOCK_BRIDGE_COST });
+      await router.connect(pauser).pause();
 
       const fees = await router.accumulatedFees();
 
-      await router.connect(admin).emergencyWithdraw(
-        await usdc.getAddress(),
-        treasury.address,
-        fees
-      );
+      await router.connect(admin).emergencyWithdraw(await usdc.getAddress(), fees);
 
       expect(await usdc.balanceOf(treasury.address)).to.equal(fees);
     });
 
-    it("Should allow admin to withdraw native token", async function () {
-      const { router, admin, treasury } = await loadFixture(deployFixture);
+    it("Should allow timelock to withdraw native token to treasury when paused", async function () {
+      const { router, admin, pauser, treasury } = await loadFixture(deployFixture);
 
       // Send ETH to contract
       await admin.sendTransaction({
         to: await router.getAddress(),
         value: ethers.parseEther("1.0")
       });
+      await router.connect(pauser).pause();
 
       const balanceBefore = await ethers.provider.getBalance(treasury.address);
 
-      await router.connect(admin).emergencyWithdraw(
-        ethers.ZeroAddress,
-        treasury.address,
-        ethers.parseEther("1.0")
-      );
+      await router.connect(admin).emergencyWithdraw(ethers.ZeroAddress, ethers.parseEther("1.0"));
 
       const balanceAfter = await ethers.provider.getBalance(treasury.address);
       expect(balanceAfter - balanceBefore).to.equal(ethers.parseEther("1.0"));
     });
 
-    it("Should revert emergency withdraw for non-admin", async function () {
-      const { router, usdc, user1, treasury } = await loadFixture(deployFixture);
+    it("Should revert emergency withdraw for non-timelock", async function () {
+      const { router, usdc, user1 } = await loadFixture(deployFixture);
 
       await expect(
-        router.connect(user1).emergencyWithdraw(await usdc.getAddress(), treasury.address, 1)
+        router.connect(user1).emergencyWithdraw(await usdc.getAddress(), 1)
       ).to.be.reverted;
+    });
+
+    it("Should revert emergency withdraw when not paused", async function () {
+      const { router, usdc, admin } = await loadFixture(deployFixture);
+
+      await expect(
+        router.connect(admin).emergencyWithdraw(await usdc.getAddress(), 1)
+      ).to.be.revertedWithCustomError(router, "ExpectedPause");
     });
   });
 });

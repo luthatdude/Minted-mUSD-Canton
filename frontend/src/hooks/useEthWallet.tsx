@@ -259,6 +259,13 @@ export function EthWalletProvider({
   ): Promise<T> => {
     if (!provider) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, provider);
+    // Validate method name against ABI to prevent arbitrary invocation
+    const abiMethods = abi
+      .filter((item: any) => item.type === 'function')
+      .map((item: any) => item.name);
+    if (!abiMethods.includes(method)) {
+      throw new Error(`Method "${method}" not found in contract ABI`);
+    }
     return contract[method](...args);
   }, [provider]);
 
@@ -269,9 +276,23 @@ export function EthWalletProvider({
     args: any[] = []
   ): Promise<ethers.TransactionResponse> => {
     if (!signer) throw new Error('Not connected');
+    // FIX: Validate chain ID before sending transactions
+    if (chainId !== undefined && chainId !== null) {
+      const { CHAIN_ID } = await import('@/lib/config');
+      if (chainId !== CHAIN_ID) {
+        throw new Error(`Wrong network. Expected chain ${CHAIN_ID}, got ${chainId}. Please switch networks.`);
+      }
+    }
     const contract = new Contract(contractAddress, abi, signer);
+    // Validate method name against ABI to prevent arbitrary invocation
+    const abiMethods = abi
+      .filter((item: any) => item.type === 'function')
+      .map((item: any) => item.name);
+    if (!abiMethods.includes(method)) {
+      throw new Error(`Method "${method}" not found in contract ABI`);
+    }
     return contract[method](...args);
-  }, [signer]);
+  }, [signer, chainId]);
 
   const value: EthWalletContextType = {
     isConnected,

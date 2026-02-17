@@ -10,7 +10,7 @@ interface TxState {
 
 /**
  * Hook for sending Ethereum transactions with loading/error/success tracking.
- * FIX FE-H01: Added transaction simulation before signing to catch reverts early.
+ * Added transaction simulation before signing to catch reverts early.
  */
 export function useTx() {
   const [state, setState] = useState<TxState>({
@@ -26,7 +26,7 @@ export function useTx() {
 
   /**
    * Simulate a transaction to check if it would succeed
-   * FIX FE-H01: Catches reverts before user signs, saving gas on failed txs
+   * Catches reverts before user signs, saving gas on failed txs
    */
   const simulate = useCallback(
     async (simulateFn: () => Promise<void>): Promise<boolean> => {
@@ -50,7 +50,7 @@ export function useTx() {
     ): Promise<ethers.TransactionReceipt | null> => {
       setState({ loading: true, hash: null, error: null, success: false });
       
-      // FIX FE-H01: Simulate first if simulation function provided
+      // Simulate first if simulation function provided
       if (simulateFn) {
         const simOk = await simulate(simulateFn);
         if (!simOk) {

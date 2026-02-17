@@ -27,12 +27,12 @@ describe("SMUSD", function () {
 
     // Deploy MUSD
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Deploy SMUSD
     const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDFactory.deploy(await musd.getAddress());
+    smusd = await SMUSDFactory.deploy(await musd.getAddress(), ethers.ZeroAddress);
     await smusd.waitForDeployment();
 
     // Grant roles
@@ -64,7 +64,7 @@ describe("SMUSD", function () {
       expect(await smusd.asset()).to.equal(await musd.getAddress());
     });
 
-    it("should have decimalsOffset of 3 (FIX S-03 donation attack)", async function () {
+    it("should have decimalsOffset of 3", async function () {
       // ERC-4626 with offset means 1 share = 10^3 assets initially
       // This mitigates the donation attack by making share inflation expensive
       const shares = await smusd.previewDeposit(ethers.parseEther("1000"));
@@ -90,7 +90,7 @@ describe("SMUSD", function () {
       expect(await smusd.getRemainingCooldown(user1.address)).to.be.gt(0);
     });
 
-    it("FIX S-H01: should set cooldown for receiver (not depositor) on third-party deposit", async function () {
+    it("should set cooldown for receiver (not depositor) on third-party deposit", async function () {
       // user1 deposits on behalf of user2
       await smusd.connect(user1).deposit(ethers.parseEther("1000"), user2.address);
       expect(await smusd.canWithdraw(user2.address)).to.be.false;
@@ -109,7 +109,7 @@ describe("SMUSD", function () {
     it("should reject withdrawal during cooldown", async function () {
       await expect(
         smusd.connect(user1).withdraw(ethers.parseEther("100"), user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
 
     it("should allow withdrawal after cooldown", async function () {
@@ -119,11 +119,11 @@ describe("SMUSD", function () {
       expect(await musd.balanceOf(user1.address)).to.be.gt(balanceBefore);
     });
 
-    it("FIX S-02: should enforce cooldown on redeem() too", async function () {
+    it("should enforce cooldown on redeem() too", async function () {
       const shares = await smusd.balanceOf(user1.address);
       await expect(
         smusd.connect(user1).redeem(shares / 2n, user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
 
     it("should allow redeem after cooldown", async function () {
@@ -135,10 +135,10 @@ describe("SMUSD", function () {
   });
 
   // ============================================================
-  //  COOLDOWN PROPAGATION ON TRANSFER (FIX S-01)
+  //  COOLDOWN PROPAGATION ON TRANSFER
   // ============================================================
 
-  describe("Transfer cooldown propagation (FIX S-01)", function () {
+  describe("Transfer cooldown propagation", function () {
     it("should propagate stricter cooldown to receiver", async function () {
       // user2 deposits first — has an earlier cooldown
       await smusd.connect(user2).deposit(ethers.parseEther("1000"), user2.address);
@@ -193,18 +193,18 @@ describe("SMUSD", function () {
     it("should reject yield distribution with no shares", async function () {
       // Deploy fresh SMUSD with no deposits
       const SMUSDFactory = await ethers.getContractFactory("SMUSD");
-      const emptySmusd = await SMUSDFactory.deploy(await musd.getAddress());
+      const emptySmusd = await SMUSDFactory.deploy(await musd.getAddress(), ethers.ZeroAddress);
       await emptySmusd.grantRole(await emptySmusd.YIELD_MANAGER_ROLE(), yieldManager.address);
 
       await expect(
         emptySmusd.connect(yieldManager).distributeYield(ethers.parseEther("100"))
-      ).to.be.revertedWith("NO_SHARES_EXIST");
+      ).to.be.revertedWithCustomError(smusd, "NoSharesExist");
     });
 
     it("should reject zero yield", async function () {
       await expect(
         smusd.connect(yieldManager).distributeYield(0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(smusd, "InvalidAmount");
     });
 
     it("should reject yield without YIELD_MANAGER_ROLE", async function () {
@@ -213,13 +213,13 @@ describe("SMUSD", function () {
       ).to.be.reverted;
     });
 
-    it("FIX M-3: should reject yield exceeding MAX_YIELD_BPS cap", async function () {
+    it("should reject yield exceeding MAX_YIELD_BPS cap", async function () {
       // MAX_YIELD_BPS = 1000 = 10%
       // With 1000 mUSD deposited, max yield = 100 mUSD
       const excessiveYield = ethers.parseEther("200"); // 20% > 10%
       await expect(
         smusd.connect(yieldManager).distributeYield(excessiveYield)
-      ).to.be.revertedWith("YIELD_EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(smusd, "YieldExceedsCap");
     });
 
     it("should accept yield within MAX_YIELD_BPS cap", async function () {
@@ -292,7 +292,7 @@ describe("SMUSD", function () {
     it("should reject zero address for treasury", async function () {
       await expect(
         smusd.connect(deployer).setTreasury(ethers.ZeroAddress)
-      ).to.be.revertedWith("ZERO_ADDRESS");
+      ).to.be.revertedWithCustomError(smusd, "ZeroAddress");
     });
 
     it("should emit TreasuryUpdated event", async function () {
@@ -331,7 +331,7 @@ describe("SMUSD", function () {
 
       await expect(
         smusd.connect(bridge).syncCantonShares(ethers.parseEther("2000"), 1)
-      ).to.be.revertedWith("EPOCH_NOT_SEQUENTIAL");
+      ).to.be.revertedWithCustomError(smusd, "EpochNotSequential");
     });
 
     it("should update global total shares", async function () {

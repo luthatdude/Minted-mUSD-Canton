@@ -1,0 +1,203 @@
+-- BLE Protocol - DEPRECATED (DO NOT USE)
+-- Addresses: D-01 (TOCTOU), D-02 (Signature Uniqueness), D-03 (Timestamp Validation)
+--
+-- ╔══════════════════════════════════════════════════════════════════════════════╗
+-- ║  DEPRECATED: This module is superseded by BLEBridgeProtocol.daml.          ║
+-- ║  All templates have `ensure False` to prevent accidental instantiation.    ║
+-- ║                                                                            ║
+-- ║  C-3 CRITICAL: ValidatorSignature has `signatory aggregator`, NOT validator  ║
+-- ║  A compromised aggregator can forge signatures and bypass BFT validation.   ║
+-- ║  USE BLEBridgeProtocol.daml INSTEAD — it makes validator the signatory      ║
+-- ║  and adds ValidatorSelfAttestation for independent commitment.              ║
+-- ╚══════════════════════════════════════════════════════════════════════════════╝
+
+module BLEProtocol where
+
+import DA.Time
+import DA.List (dedup)
+import DA.Text qualified as T
+import DA.Set qualified as Set
+import DA.Foldable hiding (elem, length, all, sum)
+
+-- 18-decimal precision for 1:1 mapping with Ethereum Wei
+type Money = Numeric 18
+
+-- 1. INSTITUTIONAL EQUITY POSITION
+-- Maintained by participating banks. Validator Group observes the aggregate value.
+template InstitutionalEquityPosition
+  with
+    bank: Party
+    validatorGroup: [Party]
+    aggregator: Party
+    totalValue: Money     -- Total USD Equity Value verified on this node
+    referenceId: Text     -- Unique ID for the bank's internal ledger
+    lastUpdated: Time
+  where
+    signatory bank
+    observer aggregator, validatorGroup
+
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
+
+    key (bank, aggregator) : (Party, Party)
+    maintainer key._1
+
+    choice UpdateEquity : ContractId InstitutionalEquityPosition
+      with newValue: Money
+      controller bank
+      do
+        -- FIX 5C-M07: Validate positive value to prevent zero/negative equity positions
+        assertMsg "VALUE_MUST_BE_POSITIVE" (newValue > 0.0)
+        now <- getTime
+        create this with totalValue = newValue, lastUpdated = now
+
+
+-- 2. GLOBAL ATTESTATION PAYLOAD
+-- D-03: Added expiresAt for timestamp validation
+data AttestationPayload = AttestationPayload with
+    attestationId: Text
+    globalCantonAssets: Money
+    targetAddress: Text
+    amount: Money
+    isMint: Bool
+    nonce: Int
+    chainId: Int
+    expiresAt: Time        -- D-03: Expiration timestamp
+    entropy: Text          -- C-05: Unpredictable entropy from aggregator (hex-encoded)
+  deriving (Eq, Show)
+
+
+-- 3. THE GLOBAL ATTESTATION REQUEST
+-- D-01: Changed to consuming choice with position locking
+-- D-02: Added signature tracking set
+template AttestationRequest
+  with
+    aggregator: Party
+    validatorGroup: [Party]
+    payload: AttestationPayload
+    positionCids: [ContractId InstitutionalEquityPosition]
+    collectedSignatures: Set.Set Party  -- D-02: Track who has signed
+  where
+    signatory aggregator
+    observer validatorGroup
+
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
+
+    -- D-01: Consuming choice to prevent TOCTOU
+    -- Positions are locked when attestation begins
+    choice ProvideSignature : (ContractId AttestationRequest, ContractId ValidatorSignature)
+      with
+        validator: Party
+        ecdsaSignature: Text
+      controller validator
+      do
+        -- D-02: Ensure validator hasn't already signed
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        -- M-24: Basic signature format validation
+        assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature > 0)
+        assertMsg "SIGNATURE_TOO_SHORT" (T.length ecdsaSignature >= 130)
+
+        -- D-03: Check expiration
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        -- ATOMIC FETCH: Verify linked positions
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+
+        -- VERIFICATION: Enforce 110% Collateral Ratio
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+        -- D-H08: Use tolerance-based comparison for Numeric 18 (1 USD tolerance)
+        let valueDiff = if totalGlobalValue > payload.globalCantonAssets
+                        then totalGlobalValue - payload.globalCantonAssets
+                        else payload.globalCantonAssets - totalGlobalValue
+        assertMsg "PAYLOAD_VALUE_MISMATCH" (valueDiff < 1.0)
+
+        -- D-02: Update signature tracking
+        let newSignatures = Set.insert validator collectedSignatures
+
+        -- Archive and recreate with updated signatures
+        newRequest <- create this with collectedSignatures = newSignatures
+
+        sig <- create ValidatorSignature with
+            requestId = newRequest
+            validator
+            aggregator
+            ecdsaSignature
+            nonce = payload.nonce
+
+        return (newRequest, sig)
+
+    -- D-01: Choice to finalize and consume positions atomically
+    -- C-12: requiredSignatures is now derived from validatorGroup, not caller-supplied
+    -- H-17: Signature uniqueness enforced via dedup check
+    choice FinalizeAttestation : [ContractId ValidatorSignature]
+      with
+        signatureCids: [ContractId ValidatorSignature]
+      controller aggregator
+      do
+        -- DC-06: Supermajority quorum (67%) for Byzantine fault tolerance
+        -- For 5 validators: ceil(3.33) = 4 required (80%)
+        -- For 7 validators: ceil(4.67) = 5 required (71%)
+        let n = length validatorGroup
+        let requiredSignatures = (n * 2 + 2) / 3  -- ceil(2n/3) using integer arithmetic
+        -- Verify we have enough signatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (length signatureCids >= requiredSignatures)
+
+        -- D-03: Check expiration
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        -- Verify all signatures are valid and from authorized validators
+        sigs <- mapA fetch signatureCids
+        let sigValidators = map (.validator) sigs
+
+        -- H-17: Enforce signature uniqueness
+        let uniqueValidators = Set.fromList sigValidators
+        assertMsg "DUPLICATE_VALIDATOR_SIGNATURES" (Set.size uniqueValidators == length sigValidators)
+
+        assertMsg "INVALID_SIGNATURE_VALIDATORS" (all (`elem` validatorGroup) sigValidators)
+
+        -- C-08: Consume and recreate positions to lock the collateral value
+        -- This prevents the TOCTOU race condition
+        positions <- mapA fetch positionCids
+        let totalGlobalValue = sum [p.totalValue | p <- positions]
+
+        -- Final verification before attestation is considered valid
+        assertMsg "INSUFFICIENT_GLOBAL_COLLATERAL" (totalGlobalValue >= payload.amount * 1.1)
+
+        -- D-M05: Archive signature contracts after finalization to prevent reuse
+        mapA archive signatureCids
+
+        return signatureCids
+
+
+-- 4. THE SIGNATURE RECORD
+-- Note: Only aggregator is signatory to allow archiving in FinalizeAttestation.
+-- Validator is observer since they provided the signature via ProvideSignature choice.
+template ValidatorSignature
+  with
+    requestId: ContractId AttestationRequest
+    validator: Party
+    aggregator: Party
+    ecdsaSignature: Text
+    nonce: Int
+  where
+    signatory aggregator
+    observer validator
+
+    -- DAML-M-07: Deprecated — prevent instantiation. Use BLEBridgeProtocol instead.
+    ensure False
+
+
+-- 5. HELPER: Create new attestation request
+createAttestationRequest : Party -> [Party] -> AttestationPayload -> [ContractId InstitutionalEquityPosition] -> Update (ContractId AttestationRequest)
+createAttestationRequest aggregator validators payload positions = do
+  create AttestationRequest with
+    aggregator
+    validatorGroup = validators
+    payload
+    positionCids = positions
+    collectedSignatures = Set.empty  -- D-02: Initialize empty set

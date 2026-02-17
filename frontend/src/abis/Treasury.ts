@@ -1,4 +1,4 @@
-// FIX FE-C01: Updated to TreasuryV2 ABI (was stale v1 with non-existent functions)
+// Updated to TreasuryV2 ABI (was stale v1 with non-existent functions)
 export const TREASURY_ABI = [
   // View functions
   "function totalValue() view returns (uint256)",
@@ -25,6 +25,8 @@ export const TREASURY_ABI = [
   "function removeStrategy(address strategy)",
   "function updateStrategy(address strategy, uint256 newTargetBps, uint256 newMinBps, uint256 newMaxBps, bool autoAllocate)",
   "function rebalance()",
+  "function deployToStrategy(address strategy, uint256 amount)",
+  "function withdrawFromStrategy(address strategy, uint256 amount)",
   "function accrueFees()",
   "function claimFees()",
   "function setFeeConfig(uint256 performanceFeeBps, address feeRecipient)",
@@ -46,4 +48,6 @@ export const TREASURY_ABI = [
   "event FeesClaimed(address indexed recipient, uint256 amount)",
   "event Rebalanced(uint256 totalValue)",
   "event EmergencyWithdraw(uint256 amount)",
+  "event ManualDeploy(address indexed strategy, uint256 amount, uint256 deposited)",
+  "event ManualWithdraw(address indexed strategy, uint256 amount, uint256 withdrawn)",
 ] as const;

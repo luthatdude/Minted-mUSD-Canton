@@ -20,6 +20,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { timelockSetFeed, timelockAddCollateral, timelockSetBorrowModule, timelockSetInterestRateModel, timelockAddStrategy, timelockRemoveStrategy, refreshFeeds } from "./helpers/timelock";
 
 describe("DEEP AUDIT – Full Protocol Integration", function () {
   // ── actors ──
@@ -85,7 +86,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy MUSD (constructor takes initialSupplyCap)
     const MUSDF = await ethers.getContractFactory("MUSD");
-    musd = await MUSDF.deploy(SUPPLY_CAP);
+    musd = await MUSDF.deploy(SUPPLY_CAP, ethers.ZeroAddress);
 
     // Deploy InterestRateModel (constructor takes admin address)
     const IRMF = await ethers.getContractFactory("InterestRateModel");
@@ -97,7 +98,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     // Deploy CollateralVault
     const CVF = await ethers.getContractFactory("CollateralVault");
-    vault = await CVF.deploy();
+    vault = await CVF.deploy(ethers.ZeroAddress);
 
     // Deploy TreasuryV2 (UUPS proxy)
     const TV2F = await ethers.getContractFactory("TreasuryV2");
@@ -106,11 +107,12 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       admin.address, // placeholder vault — will update later
       admin.address,
       admin.address, // fee recipient
+      admin.address
     ]);
 
     // Deploy SMUSD (constructor takes IERC20 _musd)
     const SMUSDF = await ethers.getContractFactory("SMUSD");
-    smusd = await SMUSDF.deploy(await musd.getAddress());
+    smusd = await SMUSDF.deploy(await musd.getAddress(), ethers.ZeroAddress);
 
     // Deploy BorrowModule (constructor: vault, oracle, musd, interestRateBps, minDebt)
     const BMF = await ethers.getContractFactory("BorrowModule");
@@ -160,15 +162,15 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await vault.grantRole(BORROW_MODULE_ROLE, await borrowModule.getAddress());
     await vault.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
     await vault.grantRole(PAUSER_ROLE, pauser.address);
-    await vault.setBorrowModule(await borrowModule.getAddress());
+    await timelockSetBorrowModule(vault, admin, await borrowModule.getAddress());
 
     // BorrowModule: LIQUIDATION_ROLE for LiquidationEngine
     await borrowModule.grantRole(LIQUIDATION_ROLE, await liquidationEngine.getAddress());
 
-    // BorrowModule: set InterestRateModel
-    const BM_BORROW_ADMIN = ethers.keccak256(ethers.toUtf8Bytes("BORROW_ADMIN_ROLE"));
-    await borrowModule.grantRole(BM_BORROW_ADMIN, admin.address);
-    await borrowModule.setInterestRateModel(await interestRateModel.getAddress());
+    // BorrowModule: set InterestRateModel (requires TIMELOCK_ROLE per SOL-H-01)
+    const BM_TIMELOCK = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+    await borrowModule.grantRole(BM_TIMELOCK, admin.address);
+    await timelockSetInterestRateModel(borrowModule, admin, await interestRateModel.getAddress());
 
     // Treasury roles — grant VAULT_ROLE to DirectMint
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
@@ -177,13 +179,15 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     await directMint.grantRole(MINTER_ROLE, minter.address);
 
     // ── Setup Price Feeds ──
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await weth.getAddress(),
       await ethFeed.getAddress(),
       3600,
       WETH_DECIMALS
     );
-    await priceOracle.setFeed(
+    await timelockSetFeed(
+      priceOracle, admin,
       await wbtc.getAddress(),
       await btcFeed.getAddress(),
       3600,
@@ -191,18 +195,23 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     );
 
     // ── Setup Collateral ──
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await weth.getAddress(),
       7500, // 75% LTV
       8000, // 80% liquidation threshold
       500   // 5% penalty
     );
-    await vault.addCollateral(
+    await timelockAddCollateral(
+      vault, admin,
       await wbtc.getAddress(),
       7000, // 70% LTV
       7500, // 75% liquidation threshold
       500   // 5% penalty
     );
+
+    // Refresh mock Chainlink feeds after timelock calls advanced block time
+    await refreshFeeds(ethFeed, btcFeed);
 
     // ── Mint test tokens ──
     await usdc.mint(user1.address, ethers.parseUnits("1000000", USDC_DECIMALS));
@@ -264,20 +273,20 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const amount = ethers.parseUnits("200", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
-      await expect(directMint.connect(user1).mint(amount)).to.be.revertedWith("EXCEEDS_SUPPLY_CAP");
+      await expect(directMint.connect(user1).mint(amount)).to.be.revertedWithCustomError(directMint, "ExceedsSupplyCap");
     });
 
     it("should reject mint below minimum amount", async function () {
       const tooSmall = ethers.parseUnits("0.5", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), tooSmall);
-      await expect(directMint.connect(user1).mint(tooSmall)).to.be.revertedWith("BELOW_MIN");
+      await expect(directMint.connect(user1).mint(tooSmall)).to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("should reject mint above maximum amount", async function () {
       const tooLarge = ethers.parseUnits("2000000", USDC_DECIMALS);
       await usdc.mint(user1.address, tooLarge);
       await usdc.connect(user1).approve(await directMint.getAddress(), tooLarge);
-      await expect(directMint.connect(user1).mint(tooLarge)).to.be.revertedWith("ABOVE_MAX");
+      await expect(directMint.connect(user1).mint(tooLarge)).to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("should allow mintFor by MINTER_ROLE", async function () {
@@ -324,13 +333,13 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await usdc.connect(user1).approve(await vault.getAddress(), amount);
       await expect(
         vault.connect(user1).deposit(await usdc.getAddress(), amount)
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
     });
 
     it("should reject zero amount deposits", async function () {
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), 0)
-      ).to.be.revertedWith("INVALID_AMOUNT");
+      ).to.be.revertedWithCustomError(vault, "InvalidAmount");
     });
 
     it("should disable/enable collateral correctly", async function () {
@@ -340,7 +349,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await weth.connect(user1).approve(await vault.getAddress(), amount);
       await expect(
         vault.connect(user1).deposit(await weth.getAddress(), amount)
-      ).to.be.revertedWith("TOKEN_NOT_SUPPORTED");
+      ).to.be.revertedWithCustomError(vault, "TokenNotSupported");
 
       await vault.enableCollateral(await weth.getAddress());
       await vault.connect(user1).deposit(await weth.getAddress(), amount);
@@ -351,14 +360,14 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       for (let i = 0; i < 48; i++) {
         const MockERC20F = await ethers.getContractFactory("MockERC20");
         const token = await MockERC20F.deploy(`Token${i}`, `TK${i}`, 18);
-        await vault.addCollateral(await token.getAddress(), 7000, 7500, 500);
+        await timelockAddCollateral(vault, admin, await token.getAddress(), 7000, 7500, 500);
       }
 
       const MockERC20F = await ethers.getContractFactory("MockERC20");
       const extraToken = await MockERC20F.deploy("Extra", "EXT", 18);
       await expect(
         vault.addCollateral(await extraToken.getAddress(), 7000, 7500, 500)
-      ).to.be.revertedWith("TOO_MANY_TOKENS");
+      ).to.be.revertedWithCustomError(vault, "TooManyTokens");
     });
   });
 
@@ -388,14 +397,14 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const tooMuch = ethers.parseEther("16000");
       await expect(
         borrowModule.connect(user1).borrow(tooMuch)
-      ).to.be.revertedWith("EXCEEDS_BORROW_CAPACITY");
+      ).to.be.revertedWithCustomError(borrowModule, "ExceedsBorrowCapacity");
     });
 
     it("should reject borrow below minimum debt", async function () {
       const tiny = ethers.parseEther("1"); // Below 100 mUSD min
       await expect(
         borrowModule.connect(user1).borrow(tiny)
-      ).to.be.revertedWith("BELOW_MIN_DEBT");
+      ).to.be.revertedWithCustomError(borrowModule, "BelowMinDebt");
     });
 
     it("should accrue interest over time", async function () {
@@ -474,7 +483,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await expect(
         borrowModule.connect(user1).withdrawCollateral(await weth.getAddress(), ethers.parseEther("5"))
-      ).to.be.revertedWith("WITHDRAWAL_WOULD_LIQUIDATE");
+      ).to.be.revertedWithCustomError(borrowModule, "WithdrawalWouldLiquidate");
     });
   });
 
@@ -503,7 +512,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("1000")
         )
-      ).to.be.revertedWith("POSITION_HEALTHY");
+      ).to.be.revertedWithCustomError(liquidationEngine, "PositionHealthy");
     });
 
     it("should liquidate after price drop", async function () {
@@ -605,7 +614,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("1000")
         )
-      ).to.be.revertedWith("CANNOT_SELF_LIQUIDATE");
+      ).to.be.revertedWithCustomError(liquidationEngine, "CannotSelfLiquidate");
     });
 
     it("should prevent dust liquidations", async function () {
@@ -621,7 +630,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
           await weth.getAddress(),
           ethers.parseEther("50") // Below 100 mUSD min
         )
-      ).to.be.revertedWith("DUST_LIQUIDATION");
+      ).to.be.revertedWithCustomError(liquidationEngine, "DustLiquidation");
     });
 
     it("should correctly compute WBTC seizure with 8 decimals", async function () {
@@ -657,16 +666,19 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       const hf = await borrowModule.healthFactor(user1.address);
 
-      if (hf < 10000n) {
-        await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+      // Assert health factor is actually below threshold instead of
+      // silently skipping all assertions when it's not
+      expect(hf).to.be.lt(10000n, "Health factor should be below 1.0 for liquidation test");
 
-        const btcBefore = await wbtc.balanceOf(liquidator.address);
-        await liquidationEngine.connect(liquidator).liquidate(
-          user1.address,
-          await wbtc.getAddress(),
-          ethers.parseEther("5000")
-        );
-        const btcAfter = await wbtc.balanceOf(liquidator.address);
+      await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.parseEther("5000"));
+
+      const btcBefore = await wbtc.balanceOf(liquidator.address);
+      await liquidationEngine.connect(liquidator).liquidate(
+        user1.address,
+        await wbtc.getAddress(),
+        ethers.parseEther("5000")
+      );
+      const btcAfter = await wbtc.balanceOf(liquidator.address);
 
         expect(btcAfter).to.be.gt(btcBefore);
 
@@ -675,7 +687,6 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         // Use 5% tolerance due to stepped circuit-breaker prices
         expect(seized).to.be.gt(0n);
         expect(seized).to.be.lt(ethers.parseUnits("1", WBTC_DECIMALS));
-      }
     });
   });
 
@@ -690,7 +701,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -706,7 +718,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should keep reserve buffer in treasury", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -727,7 +740,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
       await treasury.grantRole(ALLOCATOR_ROLE, admin.address);
 
-      await treasury.addStrategy(
+      await timelockAddStrategy(
+        treasury, admin,
         await mockStrategy.getAddress(),
         9000, 5000, 10000, true
       );
@@ -755,8 +769,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const MSF2 = await ethers.getContractFactory("MockStrategy");
       const strategy2 = await MSF2.deploy(await usdc.getAddress(), await treasury.getAddress());
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 4500, 2000, 8000, true);
-      await treasury.addStrategy(await strategy2.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 4500, 2000, 8000, true);
+      await timelockAddStrategy(treasury, admin, await strategy2.getAddress(), 4500, 2000, 8000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -778,7 +792,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
     it("should handle strategy removal with full withdrawal", async function () {
       await treasury.grantRole(STRATEGIST_ROLE, admin.address);
 
-      await treasury.addStrategy(await mockStrategy.getAddress(), 9000, 5000, 10000, true);
+      await timelockAddStrategy(treasury, admin, await mockStrategy.getAddress(), 9000, 5000, 10000, true);
 
       const amount = ethers.parseUnits("100000", USDC_DECIMALS);
       await usdc.connect(user1).approve(await directMint.getAddress(), amount);
@@ -787,7 +801,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       const stratValBefore = await mockStrategy.totalValue();
       expect(stratValBefore).to.be.gt(0n);
 
-      await treasury.removeStrategy(await mockStrategy.getAddress());
+      await timelockRemoveStrategy(treasury, admin, await mockStrategy.getAddress());
 
       const stratValAfter = await mockStrategy.totalValue();
       expect(stratValAfter).to.equal(0n);
@@ -823,7 +837,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       // Immediate redeem should fail
       await expect(
         smusd.connect(user1).redeem(shares, user1.address, user1.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
 
       // Advance 24h+1s
       await time.increase(24 * 60 * 60 + 1);
@@ -845,7 +859,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       // user2 should NOT be able to redeem (inherited cooldown)
       await expect(
         smusd.connect(user2).redeem(halfShares, user2.address, user2.address)
-      ).to.be.revertedWith("COOLDOWN_ACTIVE");
+      ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
   });
 
@@ -870,6 +884,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
         await musd.getAddress(),
         11000, // 110% collateral ratio
         ethers.parseEther("1000000"), // 1M daily limit
+        admin.address // _timelockController
       ]);
 
       const VALIDATOR_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VALIDATOR_ROLE"));
@@ -877,19 +892,23 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await bridge.grantRole(VALIDATOR_ROLE, validator2.address);
       await bridge.grantRole(VALIDATOR_ROLE, validator3.address);
 
+      // Grant RELAYER_ROLE so default signer can call processAttestation()
+      const RELAYER_ROLE = ethers.keccak256(ethers.toUtf8Bytes("RELAYER_ROLE"));
+      await bridge.grantRole(RELAYER_ROLE, admin.address);
+
       // Grant CAP_MANAGER_ROLE to bridge
       await musd.grantRole(CAP_MANAGER_ROLE, await bridge.getAddress());
     });
 
     async function signAttestation(
-      att: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint },
+      att: { id: string; cantonAssets: bigint; nonce: bigint; timestamp: bigint; entropy: string; cantonStateHash: string },
       bridgeAddr: string,
       signersList: SignerWithAddress[]
     ) {
       const chainId = (await ethers.provider.getNetwork()).chainId;
       const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
-        [att.id, att.cantonAssets, att.nonce, att.timestamp, chainId, bridgeAddr]
+        ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+        [att.id, att.cantonAssets, att.nonce, att.timestamp, att.entropy, att.cantonStateHash, chainId, bridgeAddr]
       );
 
       const sorted = [...signersList].sort(
@@ -905,11 +924,16 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should process valid attestation with sufficient signatures", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-1");
+      const cantonStateHash = ethers.id("state-1");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-attestation-1"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
@@ -921,57 +945,77 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
     it("should reject attestation with insufficient signatures", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-2");
+      const cantonStateHash = ethers.id("state-2");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-attestation-2"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INSUFFICIENT_SIGNATURES");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InsufficientSignatures");
     });
 
     it("should reject replay attestation", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-replay");
+      const cantonStateHash = ethers.id("state-replay");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-replay"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
       await bridge.processAttestation(att, sigs);
 
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INVALID_NONCE");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InvalidNonce");
     });
 
     it("should reject attestation with wrong nonce", async function () {
       const ts = BigInt(await time.latest()) - 60n;
+      const entropy = ethers.id("entropy-nonce");
+      const cantonStateHash = ethers.id("state-nonce");
+      const id = await bridge.computeAttestationId(5n, ethers.parseEther("1000000"), ts, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("test-wrong-nonce"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 5n, // Wrong
         timestamp: ts,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("INVALID_NONCE");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "InvalidNonce");
     });
 
     it("should reject expired attestation", async function () {
       // 7 hours ago (MAX_ATTESTATION_AGE = 6h)
       const oldTs = BigInt(await time.latest()) - 7n * 3600n;
+      const entropy = ethers.id("entropy-old");
+      const cantonStateHash = ethers.id("state-old");
+      const id = await bridge.computeAttestationId(1n, ethers.parseEther("1000000"), oldTs, entropy, cantonStateHash);
       const att = {
-        id: ethers.id("old-attestation"),
+        id,
         cantonAssets: ethers.parseEther("1000000"),
         nonce: 1n,
         timestamp: oldTs,
+        entropy,
+        cantonStateHash,
       };
 
       const sigs = await signAttestation(att, await bridge.getAddress(), [validator1, validator2]);
-      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWith("ATTESTATION_TOO_OLD");
+      await expect(bridge.processAttestation(att, sigs)).to.be.revertedWithCustomError(bridge, "AttestationTooOld");
     });
 
     it("should enforce unpause timelock", async function () {
@@ -983,7 +1027,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await bridge.requestUnpause();
 
-      await expect(bridge.executeUnpause()).to.be.revertedWith("TIMELOCK_NOT_ELAPSED");
+      await expect(bridge.executeUnpause()).to.be.revertedWithCustomError(bridge, "TimelockNotElapsed");
 
       await time.increase(24 * 60 * 60 + 1);
 
@@ -1015,7 +1059,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await time.increase(3601);
       await expect(
         priceOracle.getPrice(await weth.getAddress())
-      ).to.be.revertedWith("STALE_PRICE");
+      ).to.be.revertedWithCustomError(priceOracle, "StalePrice");
     });
 
     it("should allow admin to update price after circuit breaker", async function () {
@@ -1095,7 +1139,7 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
 
       await expect(
         musd.connect(user1).transfer(user2.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should pause/unpause MUSD with role separation", async function () {

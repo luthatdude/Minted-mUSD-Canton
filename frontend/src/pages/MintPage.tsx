@@ -110,6 +110,12 @@ export function MintPage() {
     await tx.send(async () => {
       const allowance = await usdc.allowance(address, CONTRACTS.DirectMint);
       if (allowance < parsed) {
+        // Reset allowance to 0 first for non-standard tokens (USDT)
+        // that revert on non-zero to non-zero approval changes
+        if (allowance > 0n) {
+          const resetTx = await usdc.approve(CONTRACTS.DirectMint, 0n);
+          await resetTx.wait();
+        }
         const approveTx = await usdc.approve(CONTRACTS.DirectMint, parsed);
         await approveTx.wait();
       }
@@ -134,6 +140,12 @@ export function MintPage() {
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.DirectMint);
       if (allowance < parsed) {
+        // Reset allowance to 0 first for non-standard tokens (USDT)
+        // that revert on non-zero to non-zero approval changes
+        if (allowance > 0n) {
+          const resetTx = await musd.approve(CONTRACTS.DirectMint, 0n);
+          await resetTx.wait();
+        }
         const approveTx = await musd.approve(CONTRACTS.DirectMint, parsed);
         await approveTx.wait();
       }

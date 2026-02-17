@@ -1,10 +1,18 @@
 // Minted mUSD Protocol - Position Monitor
 // View-only monitoring without liquidation execution
+//
+// Never load .env files. All config comes from env vars.
 
 import { ethers } from "ethers";
-import * as dotenv from "dotenv";
 
-dotenv.config();
+// Validate required env vars at startup (read-only — no private key needed)
+const REQUIRED_MONITOR_VARS = ["RPC_URL", "BORROW_MODULE_ADDRESS", "LIQUIDATION_ENGINE_ADDRESS", "COLLATERAL_VAULT_ADDRESS", "PRICE_ORACLE_ADDRESS"] as const;
+for (const name of REQUIRED_MONITOR_VARS) {
+  if (!process.env[name]) {
+    console.error(`FATAL: ${name} env var is required`);
+    process.exit(1);
+  }
+}
 
 const BORROW_MODULE_ABI = [
   "function healthFactor(address user) external view returns (uint256)",

@@ -75,7 +75,7 @@ export function BridgePage() {
       try {
         const filter = bridge.filters.AttestationReceived();
         const logs = await bridge.queryFilter(filter, -10000);
-        // FIX FE-H07: Use ethers.EventLog type instead of any
+        // Use ethers.EventLog type instead of any
         const parsed = logs.slice(-20).reverse().map((log) => {
           const eventLog = log as ethers.EventLog;
           return {

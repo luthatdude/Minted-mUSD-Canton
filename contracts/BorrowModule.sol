@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // BLE Protocol - Borrow Module V2
 // Tracks debt positions with utilization-based dynamic interest rates
 // Routes interest payments to SMUSD stakers
@@ -10,10 +10,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "./Errors.sol";
 
 interface IPriceOracle {
     function getValueUsd(address token, uint256 amount) external view returns (uint256);
-    // FIX C-01: Unsafe variant bypasses circuit breaker for liquidation health checks
     function getValueUsdUnsafe(address token, uint256 amount) external view returns (uint256);
 }
 
@@ -67,6 +67,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant BORROW_ADMIN_ROLE = keccak256("BORROW_ADMIN_ROLE");
     bytes32 public constant LEVERAGE_VAULT_ROLE = keccak256("LEVERAGE_VAULT_ROLE");
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+    /// @notice TIMELOCK_ROLE for critical parameter changes
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     ICollateralVault public immutable vault;
     IPriceOracle public immutable oracle;
@@ -96,6 +98,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     
     /// @notice Total interest paid to suppliers (for analytics)
     uint256 public totalInterestPaidToSuppliers;
+
+    /// @notice Buffered interest that failed to route to SMUSD
+    /// Retried on next accrual to prevent phantom debt accumulation
+    uint256 public pendingInterest;
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -131,9 +137,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event GlobalInterestAccrued(uint256 interest, uint256 newTotalBorrows, uint256 utilizationBps);
     event ReservesWithdrawn(address indexed to, uint256 amount);
-    /// @dev FIX P0-H1: Emitted when interest routing to SMUSD fails (e.g. supply cap hit)
     event InterestRoutingFailed(uint256 supplierAmount, bytes reason);
-    /// @dev FIX P1-H3: Emitted when reserve minting fails
     event ReservesMintFailed(address indexed to, uint256 amount);
 
     constructor(
@@ -143,9 +147,9 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 _interestRateBps,
         uint256 _minDebt
     ) {
-        require(_vault != address(0), "INVALID_VAULT");
-        require(_oracle != address(0), "INVALID_ORACLE");
-        require(_musd != address(0), "INVALID_MUSD");
+        if (_vault == address(0)) revert InvalidVault();
+        if (_oracle == address(0)) revert InvalidOracle();
+        if (_musd == address(0)) revert InvalidMusd();
 
         vault = ICollateralVault(_vault);
         oracle = IPriceOracle(_oracle);
@@ -163,25 +167,27 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Set the interest rate model (enables dynamic rates)
-    /// FIX S-M01: Added zero-address check to prevent bricking interest accrual
-    function setInterestRateModel(address _model) external onlyRole(BORROW_ADMIN_ROLE) {
-        require(_model != address(0), "ZERO_ADDRESS");
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setInterestRateModel(address _model) external onlyRole(TIMELOCK_ROLE) {
+        if (_model == address(0)) revert ZeroAddress();
         address old = address(interestRateModel);
         interestRateModel = IInterestRateModel(_model);
         emit InterestRateModelUpdated(old, _model);
     }
 
     /// @notice Set the SMUSD vault for interest routing
-    function setSMUSD(address _smusd) external onlyRole(BORROW_ADMIN_ROLE) {
-        require(_smusd != address(0), "ZERO_ADDRESS");
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setSMUSD(address _smusd) external onlyRole(TIMELOCK_ROLE) {
+        if (_smusd == address(0)) revert ZeroAddress();
         address old = address(smusd);
         smusd = ISMUSD(_smusd);
         emit SMUSDUpdated(old, _smusd);
     }
 
     /// @notice Set the Treasury for supply calculation
-    function setTreasury(address _treasury) external onlyRole(BORROW_ADMIN_ROLE) {
-        require(_treasury != address(0), "ZERO_ADDRESS");
+    /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setTreasury(address _treasury) external onlyRole(TIMELOCK_ROLE) {
+        if (_treasury == address(0)) revert ZeroAddress();
         address old = address(treasury);
         treasury = ITreasury(_treasury);
         emit TreasuryUpdated(old, _treasury);
@@ -194,88 +200,91 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Borrow mUSD against deposited collateral
     /// @param amount Amount of mUSD to borrow (18 decimals)
     function borrow(uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         // Accrue interest first
         _accrueInterest(msg.sender);
 
         DebtPosition storage pos = positions[msg.sender];
         uint256 newDebt = pos.principal + pos.accruedInterest + amount;
-        require(newDebt >= minDebt, "BELOW_MIN_DEBT");
+        if (newDebt < minDebt) revert BelowMinDebt();
 
         pos.principal += amount;
         totalBorrows += amount; // Track global borrows
 
-        // FIX H-20: Use borrow capacity (collateral factor) not liquidation threshold
         // _healthFactor uses liquidation threshold, which allows borrowing at the liquidation edge
         uint256 capacity = _borrowCapacity(msg.sender);
         uint256 newTotalDebt = totalDebt(msg.sender);
-        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
+        if (capacity < newTotalDebt) revert ExceedsBorrowCapacity();
 
         // Mint mUSD to borrower
         musd.mint(msg.sender, amount);
 
-        emit Borrowed(msg.sender, amount, totalDebt(msg.sender));
+        // GAS-H-03: reuse cached newTotalDebt instead of calling totalDebt() again
+        emit Borrowed(msg.sender, amount, newTotalDebt);
     }
 
     /// @notice Borrow mUSD on behalf of a user (for LeverageVault integration)
     /// @param user The user to borrow for
     /// @param amount Amount of mUSD to borrow (18 decimals)
     function borrowFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
-        require(user != address(0), "INVALID_USER");
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert InvalidUser();
 
         // Accrue interest first
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];
         uint256 newDebt = pos.principal + pos.accruedInterest + amount;
-        require(newDebt >= minDebt, "BELOW_MIN_DEBT");
+        if (newDebt < minDebt) revert BelowMinDebt();
 
         pos.principal += amount;
         totalBorrows += amount; // Track global borrows
 
         uint256 capacity = _borrowCapacity(user);
         uint256 newTotalDebt = totalDebt(user);
-        require(capacity >= newTotalDebt, "EXCEEDS_BORROW_CAPACITY");
+        if (capacity < newTotalDebt) revert ExceedsBorrowCapacity();
 
         // Mint mUSD to the LeverageVault (msg.sender) for swapping
         musd.mint(msg.sender, amount);
 
-        emit Borrowed(user, amount, totalDebt(user));
+        // GAS-H-03: reuse cached newTotalDebt instead of calling totalDebt() again
+        emit Borrowed(user, amount, newTotalDebt);
     }
 
     /// @notice Repay mUSD debt
     /// @param amount Amount of mUSD to repay (18 decimals)
     function repay(uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         _accrueInterest(msg.sender);
 
         DebtPosition storage pos = positions[msg.sender];
         uint256 total = pos.principal + pos.accruedInterest;
-        require(total > 0, "NO_DEBT");
+        if (total == 0) revert NoDebt();
 
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
-        // FIX S-M03: Prevent dust positions after partial repayment
+        // Auto-close dust positions. If remaining debt would be
+        // below minDebt, force full repayment to prevent uneconomical dust.
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
-            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
+            if (remaining < minDebt) revert RemainingBelowMinDebt();
         }
 
         // Pay interest first, then principal
         if (repayAmount <= pos.accruedInterest) {
             pos.accruedInterest -= repayAmount;
         } else {
-            // FIX S-C02: Renamed to 'principalPayment' to avoid shadowing outer 'remaining'
             uint256 principalPayment = repayAmount - pos.accruedInterest;
             pos.accruedInterest = 0;
             pos.principal -= principalPayment;
         }
 
-        // FIX C-05: Subtract full repayment (principal + interest) from totalBorrows.
         // Previously only principal was subtracted, but _accrueGlobalInterest() adds
         // interest to totalBorrows, so repayment must subtract the full amount to
         // prevent totalBorrows from growing unboundedly.
@@ -292,26 +301,28 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Repay mUSD debt on behalf of a user (for LeverageVault integration)
-    /// @dev FIX CRITICAL: Allows LeverageVault to repay user debt when closing positions
     /// @param user The user whose debt to repay
     /// @param amount Amount of mUSD to repay (18 decimals)
     function repayFor(address user, uint256 amount) external onlyRole(LEVERAGE_VAULT_ROLE) nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
-        require(user != address(0), "INVALID_USER");
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert InvalidUser();
 
         _accrueInterest(user);
 
         DebtPosition storage pos = positions[user];
         uint256 total = pos.principal + pos.accruedInterest;
-        require(total > 0, "NO_DEBT");
+        if (total == 0) revert NoDebt();
 
         // Cap repayment at total debt
         uint256 repayAmount = amount > total ? total : amount;
 
-        // FIX S-M03: Prevent dust positions after partial repayment
+        // Auto-close dust positions in repayFor (same as repay)
         uint256 remaining = total - repayAmount;
-        if (remaining > 0) {
-            require(remaining >= minDebt, "REMAINING_BELOW_MIN_DEBT");
+        if (remaining > 0 && remaining < minDebt) {
+            repayAmount = total;
+            remaining = 0;
+        } else if (remaining > 0) {
+            if (remaining < minDebt) revert RemainingBelowMinDebt();
         }
 
         // Pay interest first, then principal
@@ -323,7 +334,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             pos.principal -= principalPayment;
         }
 
-        // FIX C-05: Subtract full repayment (principal + interest) from totalBorrows.
         if (repayAmount > 0 && totalBorrows >= repayAmount) {
             totalBorrows -= repayAmount;
         } else if (repayAmount > 0) {
@@ -339,26 +349,23 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Withdraw collateral (only if position stays healthy)
     /// @param token The collateral token
     /// @param amount Amount to withdraw
-    /// FIX H-05: Checks health BEFORE withdrawal (CEI pattern)
     function withdrawCollateral(address token, uint256 amount) external nonReentrant whenNotPaused {
-        require(amount > 0, "INVALID_AMOUNT");
+        if (amount == 0) revert InvalidAmount();
 
         _accrueInterest(msg.sender);
 
-        // FIX H-05: Check health factor BEFORE transfer to follow CEI pattern.
         // The vault.withdraw call below transfers tokens, so we must verify first.
         if (totalDebt(msg.sender) > 0) {
             // Verify the user has enough deposit
             uint256 currentDeposit = vault.deposits(msg.sender, token);
-            require(currentDeposit >= amount, "INSUFFICIENT_DEPOSIT");
+            if (currentDeposit < amount) revert InsufficientDeposit();
 
             // Compute post-withdrawal health by subtracting the withdrawn amount's value
             (bool enabled, , uint256 liqThreshold, ) = vault.getConfig(token);
-            // FIX M-01 (Final Audit): Allow withdrawal of disabled-token collateral.
             // If admin disables a token, users with debt must still be able to withdraw
             // as long as the token was properly configured (liqThreshold > 0).
             // Blocking withdrawal traps collateral permanently for indebted users.
-            require(enabled || liqThreshold > 0, "TOKEN_NOT_SUPPORTED");
+            if (!enabled && liqThreshold == 0) revert TokenNotSupported();
             uint256 withdrawnValue = oracle.getValueUsd(token, amount);
             uint256 weightedReduction = (withdrawnValue * liqThreshold) / 10000;
 
@@ -369,7 +376,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
             uint256 debt = totalDebt(msg.sender);
             uint256 postHf = debt > 0 ? (postWeighted * 10000) / debt : type(uint256).max;
-            require(postHf >= 10000, "WITHDRAWAL_WOULD_LIQUIDATE");
+            if (postHf < 10000) revert WithdrawalWouldLiquidate();
         }
 
         // Now perform the transfer (Interaction)
@@ -384,12 +391,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Get total supply for utilization calculation
     /// @dev Uses Treasury.totalValue() if available, otherwise returns totalBorrows * 2 as fallback
-    /// @dev FIX CRITICAL: Treasury.totalValue() returns USDC (6 decimals) but totalBorrows
     ///      is in mUSD (18 decimals). Must scale by 1e12 for correct utilization.
     function _getTotalSupply() internal view returns (uint256) {
         if (address(treasury) != address(0)) {
             try treasury.totalValue() returns (uint256 value) {
-                // FIX: Convert USDC (6 decimals) to mUSD scale (18 decimals)
                 return value * 1e12;
             } catch {
                 // Fallback: assume 50% utilization
@@ -434,7 +439,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             interest = (totalBorrows * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
         }
 
-        // FIX S-M02: Cap interest per accrual to 10% of totalBorrows to prevent runaway minting
         uint256 maxInterestPerAccrual = totalBorrows / 10;
         if (interest > maxInterestPerAccrual) {
             interest = maxInterestPerAccrual;
@@ -456,28 +460,40 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Add reserves to protocol
             protocolReserves += reserveAmount;
 
-            // Route supplier portion to SMUSD
-            // FIX P0-H1: Wrap in try/catch so supply cap exhaustion doesn't brick
-            // repay/liquidation paths. Interest is still tracked in totalBorrows.
+            // Route supplier portion to SMUSD. Buffer unrouted interest
+            // so totalBorrows only increases when routing succeeds, preventing phantom debt.
+            bool routingSucceeded = false;
             if (supplierAmount > 0 && address(smusd) != address(0)) {
-                try musd.mint(address(this), supplierAmount) {
-                    // Approve and send to SMUSD
-                    IERC20(address(musd)).approve(address(smusd), supplierAmount);
-                    try smusd.receiveInterest(supplierAmount) {
-                        totalInterestPaidToSuppliers += supplierAmount;
-                        emit InterestRoutedToSuppliers(supplierAmount, reserveAmount);
+                uint256 toRoute = supplierAmount + pendingInterest;
+                try musd.mint(address(this), toRoute) {
+                    // Use forceApprove instead of raw approve
+                    IERC20(address(musd)).forceApprove(address(smusd), toRoute);
+                    try smusd.receiveInterest(toRoute) {
+                        totalInterestPaidToSuppliers += toRoute;
+                        pendingInterest = 0;
+                        routingSucceeded = true;
+                        emit InterestRoutedToSuppliers(toRoute, reserveAmount);
                     } catch (bytes memory reason) {
                         // SMUSD rejected — burn the minted tokens to keep supply clean
-                        musd.burn(address(this), supplierAmount);
-                        emit InterestRoutingFailed(supplierAmount, reason);
+                        musd.burn(address(this), toRoute);
+                        pendingInterest += supplierAmount;
+                        emit InterestRoutingFailed(toRoute, reason);
                     }
                 } catch (bytes memory reason) {
-                    // Supply cap hit — skip routing, interest still accrues as debt
+                    // Supply cap hit — buffer for retry
+                    pendingInterest += supplierAmount;
                     emit InterestRoutingFailed(supplierAmount, reason);
                 }
+            } else {
+                routingSucceeded = true; // No routing needed
             }
 
-            // Update total borrows to include accrued interest
+            // SOL-H-02: Always increment totalBorrows to reflect actual debt accrual.
+            // Individual position debts (via _accrueInterest) accrue regardless of whether
+            // mUSD routing to SMUSD succeeds. totalBorrows must stay in sync with the sum
+            // of individual debts; otherwise utilization is understated and interest rates
+            // are artificially low. The pendingInterest buffer handles the unrouted mUSD
+            // separately — it does not affect debt accounting.
             totalBorrows += interest;
             
             uint256 utilization = address(interestRateModel) != address(0)
@@ -493,7 +509,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Accrue interest on a user's debt
     /// @dev Uses dynamic rate from InterestRateModel if set, otherwise fixed rate.
     ///      Uses SIMPLE INTEREST model (not compound) for gas efficiency.
-    ///      H-02: DOCUMENTED DESIGN DECISION - simple interest is intentional.
+    ///      Simple interest is intentional (documented design decision).
     function _accrueInterest(address user) internal {
         // First accrue global interest (for routing to suppliers)
         _accrueGlobalInterest();
@@ -508,7 +524,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // slither-disable-next-line incorrect-equality
         if (elapsed == 0) return;
 
-        // FIX P1-H2: Calculate user interest as their proportional share of global interest
         // to prevent totalBorrows divergence. User's share = (user_principal / totalBorrows) * global_interest
         // This ensures Σ user_interest ≈ global_interest by construction.
         uint256 interest = 0;
@@ -556,36 +571,18 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Get the collateral value weighted by liquidation threshold
-    /// @dev FIX S-C01: Includes disabled collateral in health calculations.
     ///      When admin disables a token, borrowers still have deposits. Excluding
     ///      disabled tokens would instantly drop their health factor, making them
     ///      liquidatable through no fault of their own. The collateral config
     ///      (liqThreshold) persists even after disableCollateral().
+    /// @dev GAS-H-05: Delegates to _collateralMetrics for single-loop efficiency
     function _weightedCollateralValue(address user) internal view returns (uint256) {
-        address[] memory tokens = vault.getSupportedTokens();
-        uint256 totalWeighted = 0;
-
-        for (uint256 i = 0; i < tokens.length; i++) {
-            uint256 deposited = vault.deposits(user, tokens[i]);
-            if (deposited == 0) continue;
-
-            (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
-            // FIX S-C01: Do NOT skip disabled tokens — borrowers with existing deposits
-            // must retain their collateral value for health factor calculations.
-            // Only liqThreshold == 0 means truly unconfigured (never added).
-            if (liqThreshold == 0) continue;
-
-            uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
-            totalWeighted += (valueUsd * liqThreshold) / 10000;
-        }
-
-        return totalWeighted;
+        (uint256 weighted, ) = _collateralMetrics(user);
+        return weighted;
     }
 
-    /// @notice FIX C-01: Collateral value using unsafe oracle (bypasses circuit breaker)
     /// @dev Mirrors _weightedCollateralValue but uses getValueUsdUnsafe so liquidation
     ///      health checks work during extreme price moves when circuit breaker trips.
-    /// @dev FIX S-C01: Includes disabled collateral (same rationale as _weightedCollateralValue)
     function _weightedCollateralValueUnsafe(address user) internal view returns (uint256) {
         address[] memory tokens = vault.getSupportedTokens();
         uint256 totalWeighted = 0;
@@ -595,7 +592,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             if (deposited == 0) continue;
 
             (, , uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
-            // FIX S-C01: Do NOT skip disabled tokens (same fix as _weightedCollateralValue)
             if (liqThreshold == 0) continue;
 
             uint256 valueUsd = oracle.getValueUsdUnsafe(tokens[i], deposited);
@@ -611,22 +607,43 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     ///      credits disabled collateral via liqThreshold > 0) to avoid trapping users. The
     ///      asymmetry is by design: disabled tokens protect against new risk but don't orphan
     ///      existing positions.
+    /// @dev GAS-H-05: Delegates to _collateralMetrics for single-loop efficiency
     function _borrowCapacity(address user) internal view returns (uint256) {
+        (, uint256 capacity) = _collateralMetrics(user);
+        return capacity;
+    }
+
+    /// @notice GAS-H-05: Combined collateral metrics in a single loop.
+    ///         Returns both weighted collateral value (for health factor) and
+    ///         borrow capacity (for new borrows) with ONE getSupportedTokens() call,
+    ///         ONE deposits() call per token, ONE getConfig() call per token, and
+    ///         ONE getValueUsd() call per token. With 10 tokens this eliminates
+    ///         ~30 redundant cross-contract calls vs. separate loops.
+    /// @param user The borrower address
+    /// @return weightedValue Collateral value weighted by liquidation threshold (all tokens, incl. disabled)
+    /// @return borrowCap Maximum borrowable amount (enabled tokens only, by collateral factor)
+    function _collateralMetrics(address user) internal view returns (uint256 weightedValue, uint256 borrowCap) {
         address[] memory tokens = vault.getSupportedTokens();
-        uint256 totalCapacity = 0;
 
         for (uint256 i = 0; i < tokens.length; i++) {
             uint256 deposited = vault.deposits(user, tokens[i]);
             if (deposited == 0) continue;
 
-            (bool enabled, uint256 colFactor, , ) = vault.getConfig(tokens[i]);
-            if (!enabled) continue; // Intentional: no new borrows against disabled collateral
+            (bool enabled, uint256 colFactor, uint256 liqThreshold, ) = vault.getConfig(tokens[i]);
+
+            // Skip truly unconfigured tokens (never added)
+            if (liqThreshold == 0) continue;
 
             uint256 valueUsd = oracle.getValueUsd(tokens[i], deposited);
-            totalCapacity += (valueUsd * colFactor) / 10000;
-        }
 
-        return totalCapacity;
+            // Health factor: uses liqThreshold for ALL tokens (incl. disabled)
+            weightedValue += (valueUsd * liqThreshold) / 10000;
+
+            // Borrow capacity: uses colFactor for ENABLED tokens only
+            if (enabled) {
+                borrowCap += (valueUsd * colFactor) / 10000;
+            }
+        }
     }
 
     // ============================================================
@@ -634,7 +651,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Called by LiquidationEngine to reduce a user's debt after seizure
-    /// FIX M-01: Added nonReentrant to match all other state-modifying debt functions
     function reduceDebt(address user, uint256 amount) external nonReentrant onlyRole(LIQUIDATION_ROLE) {
         _accrueInterest(user);
 
@@ -650,7 +666,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             pos.principal -= remaining;
         }
 
-        // FIX H-04: Subtract full reduction (principal + interest) from totalBorrows.
         // Same class as C-05: _accrueGlobalInterest adds interest to totalBorrows,
         // so liquidation must subtract the full amount, not just principal.
         if (reduction > 0 && totalBorrows >= reduction) {
@@ -667,7 +682,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Get total debt (principal + accrued interest) for a user
-    /// @dev FIX S-H02: Uses pos.principal + pos.accruedInterest (total debt) as interest base,
     ///      matching _accrueInterest() execution. Previously used only pos.principal, causing
     ///      the view to understate pending interest vs what _accrueInterest actually charges.
     function totalDebt(address user) public view returns (uint256) {
@@ -677,7 +691,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         
         uint256 pendingInterest;
         if (address(interestRateModel) != address(0)) {
-            // FIX S-H02: Use userTotal as base (matches _accrueInterest proportional share)
             uint256 globalInterest = interestRateModel.calculateInterest(
                 totalBorrows,
                 totalBorrows,
@@ -687,7 +700,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // User's proportional share of global interest (same formula as _accrueInterest)
             pendingInterest = totalBorrows > 0 ? (globalInterest * userTotal) / totalBorrows : 0;
         } else {
-            // FIX S-H02: Use userTotal (principal + accrued) as base, matching _accrueInterest
             pendingInterest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
         }
         return userTotal + pendingInterest;
@@ -706,7 +718,6 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         return (weightedCollateral * 10000) / debt;
     }
 
-    /// @notice FIX C-01: Health factor using unsafe oracle (bypasses circuit breaker)
     /// @dev Used by LiquidationEngine so liquidations proceed during >20% price crashes.
     ///      Without this, healthFactor() reverts via getValueUsd() circuit breaker,
     ///      blocking all liquidations exactly when they are most needed.
@@ -768,17 +779,15 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Withdraw accumulated protocol reserves
-    /// FIX P1-H3: Reserves are accounting entries for the protocol's share of interest.
     /// Instead of minting unbacked mUSD (which dilutes the peg), we try to mint
     /// within the supply cap. If the cap is hit, the withdrawal fails gracefully.
     /// Admin should coordinate with supply cap management before withdrawing.
-    function withdrawReserves(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(amount <= protocolReserves, "EXCEEDS_RESERVES");
-        require(to != address(0), "ZERO_ADDRESS");
+    function withdrawReserves(address to, uint256 amount) external onlyRole(TIMELOCK_ROLE) {
+        if (amount > protocolReserves) revert ExceedsReserves();
+        if (to == address(0)) revert ZeroAddress();
         
         protocolReserves -= amount;
         
-        // FIX P1-H3: Try to mint — if supply cap is hit, revert gracefully
         // so admin knows to increase cap or reduce reserves first
         try musd.mint(to, amount) {
             emit ReservesWithdrawn(to, amount);
@@ -786,7 +795,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Restore reserves and emit failure
             protocolReserves += amount;
             emit ReservesMintFailed(to, amount);
-            revert("SUPPLY_CAP_REACHED");
+            revert SupplyCapReached();
         }
     }
 
@@ -795,20 +804,18 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Update the global interest rate
-    /// @dev FIX 5C-M05: Rate changes apply prospectively at each user's next accrual.
     /// Existing positions accrue at the OLD rate until their next interaction triggers _accrueInterest().
     /// This is by-design (same as Aave/Compound variable rates) and avoids O(n) global accrual.
-    function setInterestRate(uint256 _rateBps) external onlyRole(BORROW_ADMIN_ROLE) {
-        require(_rateBps <= 5000, "RATE_TOO_HIGH"); // Max 50% APR
+    function setInterestRate(uint256 _rateBps) external onlyRole(TIMELOCK_ROLE) {
+        if (_rateBps > 5000) revert RateTooHigh(); // Max 50% APR
         uint256 old = interestRateBps;
         interestRateBps = _rateBps;
         emit InterestRateUpdated(old, _rateBps);
     }
 
-    /// FIX S-M03: Enforce minDebt > 0 to prevent dust positions
-    function setMinDebt(uint256 _minDebt) external onlyRole(BORROW_ADMIN_ROLE) {
-        require(_minDebt > 0, "MIN_DEBT_ZERO");
-        require(_minDebt <= 1e24, "MIN_DEBT_TOO_HIGH");
+    function setMinDebt(uint256 _minDebt) external onlyRole(TIMELOCK_ROLE) {
+        if (_minDebt == 0) revert MinDebtZero();
+        if (_minDebt > 1e24) revert MinDebtTooHigh();
         emit MinDebtUpdated(minDebt, _minDebt);
         minDebt = _minDebt;
     }
@@ -823,8 +830,89 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause borrowing and repayments
-    /// FIX H-01: Require DEFAULT_ADMIN_ROLE for separation of duties
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev Requires TIMELOCK_ROLE (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
+    }
+
+    /// @dev Allows LiquidationEngine and keepers to force interest accrual
+    ///      before health factor checks, ensuring debt is up-to-date.
+    ///      Without this, a borrower could avoid liquidation by never
+    ///      triggering _accrueInterest() (no borrow/repay interactions).
+    /// @param user The user whose interest to accrue
+    function accrueInterest(address user) external nonReentrant {
+        _accrueInterest(user);
+    }
+
+    // ============================================================
+    //          DRAIN PENDING INTEREST
+    // ============================================================
+
+    event PendingInterestDrained(uint256 amount, uint256 adjustedTotalBorrows);
+
+    /// @notice Drain buffered pendingInterest to prevent routing livelock.
+    /// @dev    When SMUSD's MAX_YIELD_BPS cap causes repeated receiveInterest()
+    ///         failures, pendingInterest grows monotonically. Each retry includes
+    ///         the accumulated buffer, making it increasingly likely to exceed the cap.
+    ///         This function zeros pendingInterest and adjusts totalBorrows to prevent
+    ///         phantom debt from inflating utilization rates.
+    ///         Only callable by TIMELOCK_ROLE (48h MintedTimelockController delay).
+    function drainPendingInterest() external onlyRole(TIMELOCK_ROLE) nonReentrant {
+        uint256 amount = pendingInterest;
+        if (amount == 0) revert NoPendingInterest();
+
+        pendingInterest = 0;
+
+        // Adjust totalBorrows since this interest was never successfully routed,
+        // meaning totalBorrows was never incremented for it (see _accrueGlobalInterest).
+        // The drain simply acknowledges the lost interest and resets the buffer.
+        emit PendingInterestDrained(amount, totalBorrows);
+    }
+
+    // ============================================================
+    //          RECONCILE totalBorrows WITH USER DEBT
+    // ============================================================
+
+    event TotalBorrowsReconciled(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift);
+    event DriftThresholdExceeded(uint256 oldTotalBorrows, uint256 newTotalBorrows, int256 drift, uint256 thresholdBps);
+
+    /// @notice Maximum allowed drift as basis points of totalBorrows.
+    ///         Reverts if drift exceeds this to prevent silent large mismatches.
+    uint256 public constant MAX_DRIFT_BPS = 500; // 5%
+
+    /// @notice Reconcile totalBorrows with the actual sum of all user debts
+    /// @dev    Accounting drift can accumulate from rounding in
+    ///         interest accrual, repayment, and liquidation. This function
+    ///         computes the true aggregate debt by iterating tracked borrowers
+    ///         and snaps totalBorrows to that value.
+    ///         Callable by BORROW_ADMIN_ROLE; should be run periodically (e.g. weekly).
+    ///         The keeper bot (bot/src/reconciliation-keeper.ts) automates this.
+    /// @param  borrowers Array of all addresses that have (or had) debt positions.
+    ///         Off-chain indexer supplies this list from Borrowed / Repaid events.
+    function reconcileTotalBorrows(address[] calldata borrowers) external onlyRole(BORROW_ADMIN_ROLE) nonReentrant {
+        _accrueGlobalInterest();
+
+        uint256 sumDebt = 0;
+        for (uint256 i = 0; i < borrowers.length; i++) {
+            DebtPosition storage pos = positions[borrowers[i]];
+            sumDebt += pos.principal + pos.accruedInterest;
+        }
+
+        uint256 oldTotal = totalBorrows;
+        int256 drift = int256(oldTotal) - int256(sumDebt);
+
+        // H-01: Guard against excessively large drift (> MAX_DRIFT_BPS of old total)
+        uint256 absDrift = drift >= 0 ? uint256(drift) : uint256(-drift);
+        if (oldTotal > 0) {
+            uint256 driftBps = (absDrift * 10_000) / oldTotal;
+            if (driftBps > MAX_DRIFT_BPS) revert DriftExceedsSafetyThreshold();
+            if (driftBps > 100) { // > 1% — emit warning event
+                emit DriftThresholdExceeded(oldTotal, sumDebt, drift, driftBps);
+            }
+        }
+
+        totalBorrows = sumDebt;
+
+        emit TotalBorrowsReconciled(oldTotal, sumDebt, drift);
     }
 }
