@@ -36,6 +36,8 @@
  * Requires:
  *   - RPC_URL (or ETHEREUM_RPC_URL)
  *   - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (for alerts + buttons)
+ *   - AUTHORIZED_CHAT_IDS + AUTHORIZED_USER_IDS (recommended for command auth)
+ *   - TRUSTED_ADDRESSES (optional CSV for known safe proposers/actors)
  *   - GUARDIAN_PRIVATE_KEY (for on-chain pause/cancel — optional but recommended)
  */
 
@@ -63,11 +65,16 @@ const ADDRESSES = {
   DIRECT_MINT: process.env.DIRECT_MINT_ADDRESS || "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
 };
 
-// Known trusted addresses — operations from these are INFO, from unknown are CRITICAL
-const TRUSTED_ADDRESSES = new Set([
-  (process.env.DEPLOYER_ADDRESS || "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0").toLowerCase(),
-  ADDRESSES.TIMELOCK.toLowerCase(),
-]);
+// Known trusted addresses — operations from these are HIGH, unknown senders are CRITICAL
+const TRUSTED_ADDRESSES = new Set(
+  [
+    process.env.DEPLOYER_ADDRESS || "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0",
+    ADDRESSES.TIMELOCK,
+    ...(process.env.TRUSTED_ADDRESSES || "").split(","),
+  ]
+    .map((addr: string) => addr.trim().toLowerCase())
+    .filter(Boolean)
+);
 
 // Large mint threshold (mUSD has 18 decimals)
 const LARGE_MINT_THRESHOLD = ethers.parseUnits(
@@ -78,6 +85,14 @@ const LARGE_MINT_THRESHOLD = ethers.parseUnits(
 // Restrict who can use Telegram buttons (only your chat ID)
 const AUTHORIZED_CHAT_IDS = new Set(
   (process.env.AUTHORIZED_CHAT_IDS || TELEGRAM_CHAT_ID)
+    .split(",")
+    .map((id: string) => id.trim())
+    .filter(Boolean)
+);
+
+// Restrict who can execute sensitive Telegram actions (chat + user must both match)
+const AUTHORIZED_USER_IDS = new Set(
+  (process.env.AUTHORIZED_USER_IDS || process.env.AUTHORIZED_CHAT_IDS || TELEGRAM_CHAT_ID)
     .split(",")
     .map((id: string) => id.trim())
     .filter(Boolean)
@@ -182,6 +197,19 @@ function contractName(addr: string): string {
   return shortAddr(addr);
 }
 
+function isTrustedAddress(addr: string): boolean {
+  return TRUSTED_ADDRESSES.has(addr.toLowerCase());
+}
+
+function isAuthorizedActor(chatId: string, userId: string): boolean {
+  return AUTHORIZED_CHAT_IDS.has(chatId) && AUTHORIZED_USER_IDS.has(userId);
+}
+
+function sanitizeTelegramText(text: string): string {
+  // Strip control characters that can break Telegram rendering/parsing.
+  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TELEGRAM API HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -196,12 +224,21 @@ type InlineKeyboard = InlineButton[][];
 async function telegramAPI(method: string, body: Record<string, unknown>): Promise<any> {
   if (!TELEGRAM_BOT_TOKEN) return null;
   try {
+    const payload: Record<string, unknown> = { ...body };
+    if (method === "sendMessage") {
+      delete payload.parse_mode; // enforce plain-text rendering to avoid markdown injection
+      if (typeof payload.text === "string") {
+        payload.text = sanitizeTelegramText(payload.text);
+      }
+    }
+
     const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
+    const timeoutMs = method === "getUpdates" ? 35_000 : 10_000;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return await res.json();
   } catch (err) {
@@ -249,7 +286,7 @@ async function sendAlert(
 ): Promise<void> {
   const emoji = SEVERITY_EMOJI[severity];
   const timestamp = new Date().toISOString();
-  const message = `${emoji} *${severity}: ${title}*\n${body}\n\n_${timestamp}_`;
+  const message = `${emoji} ${severity}: ${title}\n${body}\n\n${timestamp}`;
 
   // Always log to console
   const prefix = severity === "CRITICAL" ? "\x1b[31m" : severity === "HIGH" ? "\x1b[33m" : "\x1b[36m";
@@ -261,7 +298,6 @@ async function sendAlert(
     const payload: Record<string, unknown> = {
       chat_id: TELEGRAM_CHAT_ID,
       text: message,
-      parse_mode: "Markdown",
       disable_web_page_preview: true,
     };
 
@@ -303,8 +339,8 @@ async function executeGlobalPause(): Promise<string> {
     const receipt = await tx.wait();
 
     return [
-      "🔴 *PROTOCOL PAUSED SUCCESSFULLY*",
-      `Tx: \`${receipt.hash}\``,
+      "🔴 PROTOCOL PAUSED SUCCESSFULLY",
+      `Tx: ${receipt.hash}`,
       `Block: ${receipt.blockNumber}`,
       `Gas: ${receipt.gasUsed.toString()}`,
       "",
@@ -338,8 +374,8 @@ async function executeUnpause(): Promise<string> {
     const receipt = await tx.wait();
 
     return [
-      "🟢 *PROTOCOL UNPAUSED*",
-      `Tx: \`${receipt.hash}\``,
+      "🟢 PROTOCOL UNPAUSED",
+      `Tx: ${receipt.hash}`,
       `Block: ${receipt.blockNumber}`,
     ].join("\n");
   } catch (err) {
@@ -374,9 +410,9 @@ async function executeCancelTimelock(operationId: string): Promise<string> {
     const receipt = await tx.wait();
 
     return [
-      "✅ *TIMELOCK OPERATION CANCELLED*",
-      `Operation: \`${operationId}\``,
-      `Tx: \`${receipt.hash}\``,
+      "✅ TIMELOCK OPERATION CANCELLED",
+      `Operation: ${operationId}`,
+      `Tx: ${receipt.hash}`,
       `Block: ${receipt.blockNumber}`,
     ].join("\n");
   } catch (err) {
@@ -401,11 +437,11 @@ async function getProtocolStatus(): Promise<string> {
 
     const status = isPaused ? "🔴 PAUSED" : "🟢 RUNNING";
     const walletInfo = guardianWallet
-      ? `Guardian: \`${shortAddr(guardianWallet.address)}\``
+      ? `Guardian: ${shortAddr(guardianWallet.address)}`
       : "Guardian: ❌ not configured";
 
     return [
-      `📊 *Minted Protocol Status*`,
+      "📊 Minted Protocol Status",
       ``,
       `Status: ${status}`,
       `Block: ${blockNumber}`,
@@ -413,7 +449,7 @@ async function getProtocolStatus(): Promise<string> {
       `Contracts: ${Object.keys(ADDRESSES).length} monitored`,
       walletInfo,
       ``,
-      `_${new Date().toISOString()}_`,
+      `${new Date().toISOString()}`,
     ].join("\n");
   } catch (err) {
     return `❌ Status check failed: ${(err as Error).message}`;
@@ -428,25 +464,38 @@ let telegramOffset = 0;
 
 async function handleCallbackQuery(callbackQuery: any): Promise<void> {
   const chatId = String(callbackQuery.message?.chat?.id || "");
+  const userId = String(callbackQuery.from?.id || "");
   const callbackId = callbackQuery.id;
+  const isSyntheticCallback = callbackId === "cmd";
   const data = callbackQuery.data as string;
 
-  // Authorization check — only your chat ID(s) can trigger actions
-  if (!AUTHORIZED_CHAT_IDS.has(chatId)) {
-    await telegramAPI("answerCallbackQuery", {
-      callback_query_id: callbackId,
-      text: "⛔ Unauthorized. This incident has been logged.",
-      show_alert: true,
-    });
-    console.log(`\x1b[31m[SECURITY]\x1b[0m Unauthorized callback from chat ${chatId}: ${data}`);
+  // Authorization check — chat and user must both be allowlisted.
+  if (!isAuthorizedActor(chatId, userId)) {
+    if (isSyntheticCallback) {
+      await telegramAPI("sendMessage", {
+        chat_id: chatId,
+        text: "⛔ Unauthorized. This incident has been logged.",
+      });
+    } else {
+      await telegramAPI("answerCallbackQuery", {
+        callback_query_id: callbackId,
+        text: "⛔ Unauthorized. This incident has been logged.",
+        show_alert: true,
+      });
+    }
+    console.log(
+      `\x1b[31m[SECURITY]\x1b[0m Unauthorized callback from chat ${chatId}, user ${userId}: ${data}`
+    );
     return;
   }
 
   // Acknowledge the button press immediately
-  await telegramAPI("answerCallbackQuery", {
-    callback_query_id: callbackId,
-    text: "Processing...",
-  });
+  if (!isSyntheticCallback) {
+    await telegramAPI("answerCallbackQuery", {
+      callback_query_id: callbackId,
+      text: "Processing...",
+    });
+  }
 
   // ── STATUS ──
   if (data === "status") {
@@ -454,7 +503,6 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: status,
-      parse_mode: "Markdown",
     });
     return;
   }
@@ -464,7 +512,7 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: [
-        "⚠️ *CONFIRM EMERGENCY PAUSE*",
+        "⚠️ CONFIRM EMERGENCY PAUSE",
         "",
         "This will immediately halt ALL protocol operations:",
         "• Deposits & withdrawals",
@@ -473,7 +521,6 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
         "",
         "Are you absolutely sure?",
       ].join("\n"),
-      parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
           [
@@ -491,14 +538,12 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: "⏳ Signing and broadcasting `pauseGlobal()` transaction...",
-      parse_mode: "Markdown",
     });
 
     const result = await executeGlobalPause();
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: result,
-      parse_mode: "Markdown",
     });
     return;
   }
@@ -512,20 +557,67 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     return;
   }
 
+  // ── UNPAUSE CONFIRM (step 1) ──
+  if (data === "unpause_confirm") {
+    await telegramAPI("sendMessage", {
+      chat_id: chatId,
+      text: [
+        "⚠️ CONFIRM PROTOCOL UNPAUSE",
+        "",
+        "This will re-enable protocol operations.",
+        "Only proceed if the incident has been resolved.",
+        "",
+        "Are you absolutely sure?",
+      ].join("\n"),
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🟢 YES — UNPAUSE NOW", callback_data: "unpause_execute" },
+            { text: "↩️ No, keep paused", callback_data: "unpause_abort" },
+          ],
+        ],
+      },
+    });
+    return;
+  }
+
+  // ── UNPAUSE EXECUTE (step 2) ──
+  if (data === "unpause_execute") {
+    await telegramAPI("sendMessage", {
+      chat_id: chatId,
+      text: "⏳ Signing and broadcasting `unpauseGlobal()` transaction...",
+    });
+
+    const result = await executeUnpause();
+    await telegramAPI("sendMessage", {
+      chat_id: chatId,
+      text: result,
+    });
+    return;
+  }
+
+  // ── UNPAUSE ABORT ──
+  if (data === "unpause_abort") {
+    await telegramAPI("sendMessage", {
+      chat_id: chatId,
+      text: "✅ Unpause cancelled. Protocol remains paused.",
+    });
+    return;
+  }
+
   // ── CANCEL CONFIRM (step 1) ──
   if (data.startsWith("cancel_confirm:")) {
     const operationId = data.split(":")[1];
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: [
-        "⚠️ *CONFIRM TIMELOCK CANCELLATION*",
+        "⚠️ CONFIRM TIMELOCK CANCELLATION",
         "",
         `Operation: \`${operationId}\``,
         "",
         "This will permanently cancel this pending timelock operation.",
         "The operation will NOT be executable.",
       ].join("\n"),
-      parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
           [
@@ -544,14 +636,12 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: "⏳ Signing and broadcasting `cancel()` transaction...",
-      parse_mode: "Markdown",
     });
 
     const result = await executeCancelTimelock(operationId);
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: result,
-      parse_mode: "Markdown",
     });
     return;
   }
@@ -568,20 +658,26 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
 
 async function handleCommand(message: any): Promise<void> {
   const chatId = String(message.chat?.id || "");
+  const userId = String(message.from?.id || "");
   const text = (message.text || "").trim();
 
-  if (!AUTHORIZED_CHAT_IDS.has(chatId)) return;
+  if (!isAuthorizedActor(chatId, userId)) {
+    console.log(`\x1b[31m[SECURITY]\x1b[0m Unauthorized command from chat ${chatId}, user ${userId}: ${text}`);
+    return;
+  }
 
   if (text === "/status" || text === "/start") {
     const status = await getProtocolStatus();
     await telegramAPI("sendMessage", {
       chat_id: chatId,
       text: status,
-      parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
           [
             { text: "🔴 PAUSE PROTOCOL", callback_data: "pause_confirm" },
+            { text: "🟢 UNPAUSE", callback_data: "unpause_confirm" },
+          ],
+          [
             { text: "🔄 Refresh", callback_data: "status" },
           ],
         ],
@@ -594,17 +690,18 @@ async function handleCommand(message: any): Promise<void> {
     await handleCallbackQuery({
       id: "cmd",
       message: { chat: { id: chatId }, message_id: 0 },
+      from: { id: userId },
       data: "pause_confirm",
     });
     return;
   }
 
   if (text === "/unpause") {
-    const result = await executeUnpause();
-    await telegramAPI("sendMessage", {
-      chat_id: chatId,
-      text: result,
-      parse_mode: "Markdown",
+    await handleCallbackQuery({
+      id: "cmd",
+      message: { chat: { id: chatId }, message_id: 0 },
+      from: { id: userId },
+      data: "unpause_confirm",
     });
     return;
   }
@@ -614,14 +711,14 @@ async function handleCommand(message: any): Promise<void> {
     if (!operationId.startsWith("0x") || operationId.length !== 66) {
       await telegramAPI("sendMessage", {
         chat_id: chatId,
-        text: "Usage: `/cancel 0x<64-hex-chars>`",
-        parse_mode: "Markdown",
+        text: "Usage: /cancel 0x<64-hex-chars>",
       });
       return;
     }
     await handleCallbackQuery({
       id: "cmd",
       message: { chat: { id: chatId }, message_id: 0 },
+      from: { id: userId },
       data: `cancel_confirm:${operationId}`,
     });
     return;
@@ -636,15 +733,27 @@ async function handleCommand(message: any): Promise<void> {
         "Commands:",
         "/status — Protocol status",
         "/pause — Emergency pause",
-        "/unpause — Resume protocol",
-        "/cancel `<opId>` — Cancel timelock operation",
+        "/unpause — Resume protocol (with confirmation)",
+        "/cancel <opId> — Cancel timelock operation",
         "/help — This message",
         "",
         "Buttons appear automatically on CRITICAL alerts.",
       ].join("\n"),
-      parse_mode: "Markdown",
     });
     return;
+  }
+}
+
+async function initializeTelegramOffset(): Promise<void> {
+  const data = await telegramAPI("getUpdates", {
+    timeout: 0,
+    limit: 100,
+    allowed_updates: ["callback_query", "message"],
+  });
+
+  if (data?.ok && Array.isArray(data.result) && data.result.length > 0) {
+    telegramOffset = data.result[data.result.length - 1].update_id + 1;
+    console.log(`[Telegram] Skipping ${data.result.length} stale updates from before startup`);
   }
 }
 
@@ -664,22 +773,17 @@ async function pollTelegramUpdates(): Promise<void> {
     ],
   });
 
+  // Avoid replaying stale callbacks/commands after restarts.
+  await initializeTelegramOffset();
+
   while (true) {
     try {
-      const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          offset: telegramOffset,
-          timeout: 30, // long-poll for 30s
-          allowed_updates: ["callback_query", "message"],
-        }),
-        signal: AbortSignal.timeout(35_000), // 30s poll + 5s buffer
+      const data = await telegramAPI("getUpdates", {
+        offset: telegramOffset,
+        timeout: 30, // long-poll for 30s
+        allowed_updates: ["callback_query", "message"],
       });
-
-      const data = await res.json() as any;
-      if (!data.ok || !data.result?.length) continue;
+      if (!data?.ok || !Array.isArray(data.result) || data.result.length === 0) continue;
 
       for (const update of data.result) {
         telegramOffset = update.update_id + 1;
@@ -707,20 +811,51 @@ async function pollTelegramUpdates(): Promise<void> {
 function setupTimelockMonitor(provider: ethers.Provider): void {
   const timelock = new ethers.Contract(ADDRESSES.TIMELOCK, TIMELOCK_EVENT_ABI, provider);
 
-  // 🔴 CRITICAL: New operation scheduled — show PAUSE + CANCEL buttons
+  // Timelock operation scheduled — escalate to CRITICAL only if proposer is untrusted.
   timelock.on("CallScheduled", async (id, index, target, value, data, predecessor, delay, event) => {
-    const txHash = event?.log?.transactionHash || "unknown";
+    const operationId = String(id);
+    const txHash = event?.log?.transactionHash;
+    const blockNumber = event?.log?.blockNumber;
+    const dataStr = String(data);
 
-    await sendAlert("CRITICAL", "Timelock Operation Scheduled", [
-      `Operation ID: \`${id}\``,
-      `Target: ${contractName(target)} (\`${target}\`)`,
+    let proposer = "unknown";
+    let proposerTrusted = false;
+    if (txHash) {
+      try {
+        const tx = await provider.getTransaction(txHash);
+        if (tx?.from) {
+          proposer = tx.from;
+          proposerTrusted = isTrustedAddress(tx.from);
+        }
+      } catch (err) {
+        console.error(`[Timelock] Failed to resolve proposer for tx ${txHash}: ${(err as Error).message}`);
+      }
+    }
+
+    let blockTimestamp = Math.floor(Date.now() / 1000);
+    if (typeof blockNumber === "number") {
+      try {
+        const block = await provider.getBlock(blockNumber);
+        if (block?.timestamp) blockTimestamp = Number(block.timestamp);
+      } catch (err) {
+        console.error(`[Timelock] Failed to resolve block ${blockNumber}: ${(err as Error).message}`);
+      }
+    }
+
+    const executeAfter = new Date((blockTimestamp + Number(delay)) * 1000).toISOString();
+    const severity: Severity = proposerTrusted ? "HIGH" : "CRITICAL";
+
+    await sendAlert(severity, "Timelock Operation Scheduled", [
+      `Operation ID: ${operationId}`,
+      `Target: ${contractName(target)} (${target})`,
+      `Proposer: ${proposer} ${proposerTrusted ? "(trusted)" : "⚠️ UNKNOWN/UNVERIFIED"}`,
       `Delay: ${Number(delay)}s (${(Number(delay) / 3600).toFixed(1)}h)`,
       `Value: ${ethers.formatEther(value)} ETH`,
-      `Data: \`${String(data).slice(0, 40)}…\``,
-      `Tx: \`${txHash}\``,
-      ``,
-      `⏰ *Executable after*: ${new Date(Date.now() + Number(delay) * 1000).toISOString()}`,
-    ].join("\n"), timelockButtons(id));
+      `Data: ${dataStr.length > 42 ? `${dataStr.slice(0, 42)}…` : dataStr}`,
+      `Tx: ${txHash || "unknown"}`,
+      "",
+      `Executable after: ${executeAfter}`,
+    ].join("\n"), proposerTrusted ? undefined : timelockButtons(operationId));
   });
 
   // ℹ️ INFO: Operation executed
@@ -740,7 +875,7 @@ function setupTimelockMonitor(provider: ethers.Provider): void {
   timelock.on("MinDelayChange", async (oldDuration, newDuration) => {
     await sendAlert("CRITICAL", "Timelock Delay Changed", [
       `Old: ${Number(oldDuration)}s → New: ${Number(newDuration)}s`,
-      Number(newDuration) < Number(oldDuration) ? "⚠️ *DELAY REDUCED* — potential governance attack" : "",
+      Number(newDuration) < Number(oldDuration) ? "⚠️ DELAY REDUCED — potential governance attack" : "",
     ].join("\n"), pauseButtons());
   });
 
@@ -764,13 +899,13 @@ function setupAccessControlMonitor(provider: ethers.Provider): void {
     const contract = new ethers.Contract(address, ACCESS_CONTROL_ABI, provider);
 
     contract.on("RoleGranted", async (role, account, sender) => {
-      const isTrusted = TRUSTED_ADDRESSES.has(sender.toLowerCase());
+      const isTrusted = isTrustedAddress(sender);
       const severity: Severity = isTrusted ? "HIGH" : "CRITICAL";
 
       await sendAlert(severity, `Role Granted on ${name}`, [
         `Role: ${roleName(role)}`,
         `Account: \`${account}\``,
-        `Granted by: \`${sender}\` ${isTrusted ? "(trusted)" : "⚠️ *UNKNOWN SENDER*"}`,
+        `Granted by: \`${sender}\` ${isTrusted ? "(trusted)" : "⚠️ UNKNOWN SENDER"}`,
       ].join("\n"), isTrusted ? undefined : pauseButtons());
     });
 
@@ -820,7 +955,7 @@ function setupGlobalPauseMonitor(provider: ethers.Provider): void {
     const action = paused ? "🔴 PROTOCOL PAUSED" : "🟢 PROTOCOL UNPAUSED";
 
     await sendAlert(severity, action, [
-      `Actor: \`${actor}\` ${TRUSTED_ADDRESSES.has(actor.toLowerCase()) ? "(trusted)" : "⚠️ UNKNOWN"}`,
+      `Actor: \`${actor}\` ${isTrustedAddress(actor) ? "(trusted)" : "⚠️ UNKNOWN"}`,
       paused ? "All deposits, withdrawals, mints, and borrows are now HALTED." : "Protocol operations have resumed.",
     ].join("\n"));
   });
@@ -927,10 +1062,12 @@ async function main(): Promise<void> {
   if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     console.log("[Telegram] ✅ Configured — alerts + interactive buttons enabled");
     console.log(`[Telegram] Authorized chats: ${[...AUTHORIZED_CHAT_IDS].join(", ")}`);
+    console.log(`[Telegram] Authorized users: ${[...AUTHORIZED_USER_IDS].join(", ")}`);
   } else {
     console.log("[Telegram] ⚠️  Not configured — console-only mode");
     console.log("  Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for mobile alerts.");
   }
+  console.log(`[Security] Trusted addresses: ${TRUSTED_ADDRESSES.size}`);
   console.log();
 
   // ── Register all monitors ──
