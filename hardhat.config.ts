@@ -47,7 +47,7 @@ const config: HardhatUserConfig = {
       chainId: 31337,
     },
     sepolia: {
-      url: RPC_URL || "https://eth-sepolia.g.alchemy.com/v2/demo",
+      url: RPC_URL,
       chainId: 11155111,
       accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
