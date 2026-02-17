@@ -424,7 +424,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         uint256 totalSupply = _getTotalSupply();
-        uint256 interest;
+        uint256 interest = 0;
 
         if (address(interestRateModel) != address(0)) {
             // Use dynamic interest rate model
