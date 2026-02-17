@@ -267,7 +267,8 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
       const balBefore = await randomToken.balanceOf(admin.address);
       await strategy.connect(admin).recoverToken(
         await randomToken.getAddress(),
-        admin.address
+        admin.address,
+        ethers.parseUnits("1000", 18)
       );
       const balAfter = await randomToken.balanceOf(admin.address);
 
@@ -277,14 +278,14 @@ describe("PendleStrategyV2 — Coverage Boost", function () {
     it("Should reject recover for USDC", async function () {
       const { strategy, admin, usdc } = await loadFixture(deployFixture);
       await expect(
-        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address)
+        strategy.connect(admin).recoverToken(await usdc.getAddress(), admin.address, 1)
       ).to.be.revertedWithCustomError(strategy, "CannotRecoverUsdc");
     });
 
     it("Should reject recover from non-admin", async function () {
       const { strategy, user1, randomToken } = await loadFixture(deployFixture);
       await expect(
-        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address)
+        strategy.connect(user1).recoverToken(await randomToken.getAddress(), user1.address, 1)
       ).to.be.reverted;
     });
   });
