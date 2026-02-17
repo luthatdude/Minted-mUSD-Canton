@@ -645,7 +645,7 @@ test_BridgeAssignNonce = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1; minValidators = 1
+      validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -672,7 +672,7 @@ test_BridgePauseUnpause = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1; minValidators = 1
+      validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -708,7 +708,7 @@ test_BridgeUpdateValidators = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1; minValidators = 1
+      validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -847,7 +847,7 @@ test_BridgeOutRequestLifecycle = script do
       operator = op; user = alice; amount = 1000.0
       targetChainId = 1; targetTreasury = ""; nonce = 0
       createdAt = now; status = "pending"
-      validators = [v1]; requiredSignatures = 1
+      validators = Some [v1]; requiredSignatures = Some 1
 
   req2 <- submit alice do
     exerciseCmd req BridgeOut_SetTarget with
@@ -879,7 +879,7 @@ test_BridgeOutRequestLifecycle = script do
 
   -- Complete with attested proof
   req4 <- submit op do
-    exerciseCmd req3 BridgeOut_Complete with attestationCid = attest2
+    exerciseCmd req3 BridgeOut_Complete with attestationCid = Some attest2
 
   r <- queryContractId op req4
   case r of
@@ -1305,8 +1305,8 @@ test_LiquidityPoolCreation = script do
       baseReserve = 1000000.0
       quoteReserve = 20.0
       exchangeRate = 50000.0
-      oracleCid = oracleCid    -- AUDIT-C-01: Oracle reference
-      spreadBps = 30            -- AUDIT-C-01: 0.3% spread
+      oracleCid = Some oracleCid    -- AUDIT-C-01: Oracle reference
+      spreadBps = Some 30              -- AUDIT-C-01: 0.3% spread
 
   pool <- queryContractId op poolCid
   assertMsg "Pool created" (isSome pool)

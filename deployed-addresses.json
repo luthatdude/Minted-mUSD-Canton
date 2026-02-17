@@ -1,0 +1,54 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployedAt": "2026-02-17",
+  "deployer": "0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36",
+  "newDeployer": "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0",
+
+  "contracts": {
+    "MUSD": "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
+    "sMUSD": "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540",
+    "TreasuryV2": "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
+    "DirectMintV2": "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
+    "BorrowModule": "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8",
+    "CollateralVault": "0x155d6618dcdeb2F4145395CA57C80e6931D7941e",
+    "LiquidationEngine": "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8",
+    "PriceOracle": "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025",
+    "InterestRateModel": "0x501265BeF81E6E96e4150661e2b9278272e9177B",
+    "BLEBridgeV9": "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+    "LeverageVault": "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
+    "GlobalPauseRegistry": "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F",
+    "MintedTimelockController": "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
+    "MockUSDC": "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
+    "DepositRouter": "0x531e95585bcDfcB2303511483F232EEF4a0Cd2de"
+  },
+
+  "strategies": {
+    "AaveV3Strategy": "0xd41d3f4677E98a5C2f7B6B7F49F9dC697fD7DeA8",
+    "CompoundV3Strategy": "0xaCfaAC20e25D9a6e9b0482a69C4f64dB70c12a11",
+    "FluidStrategy": "0x8c26E6fa1C5dd02E3b71e4A5abe5aff8d8a79978",
+    "EigenLayerStrategy": "0x33a2BB67D84B0d4E7F0f1B8ba59CD6e0e4FD5D7a",
+    "UniswapV3Strategy": "0xf17f9cD1C5A5A6f1F0Dc7AdDc3d8fA8D1B0aF75e",
+    "PendleStrategy": "0x7a1eB08bCe5eD89E9DB6fA81Fb8aaFB05bbA9c0e",
+    "CantonBridgeStrategy": "0x95723EF7A1fBab76bdC5eF86Ee78Ae6F7C4c8bAe",
+    "TreasuryReceiver": "0x0c4734bC23e098FB64C14dB0D5e2bdd13Affc4f3"
+  },
+
+  "canton": {
+    "network": "devnet",
+    "participantUrl": "http://localhost:7575",
+    "grpcPort": 5001,
+    "adminPort": 5002,
+    "damlPackageVersion": "2.3.0",
+    "damlPackageId": "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b",
+    "sdkVersion": "3.4.10",
+    "contracts": {
+      "ComplianceRegistry": "00ee0f9b630c33d1516298b00a3d5676b4914c48276ac5a251feb4677ce6516825ca1212209cc706e7402bd45ba64be0faa6c6b571f5646744c1bd9da8f890e1671826cc50",
+      "MUSDSupplyService": "00052b2730e199099e3c68664629caf7feaf853af6c038a7a87ed4a9569d972228ca121220695a1fd91f757e3109a39fafe7e158b723e1da12a91fb65bd24cecdce77bcfc9",
+      "PriceOracle": "003de099d07530b5970ae8c4f1fdfaf03b88106218866c3317010b1761b7b05676ca121220d69c564158ce763a7895e3bedd3af332bb9f6ac48f4d1e074e03a3376c4c5800",
+      "VaultManager": "009e222439dbf75dd1c6bad6db54e4d923e72f18812deef0b21ffa7c415da467a4ca121220368ccec6d9d3cc3c07817e973cd19d94ba78af4a3c08e09ce5ef76e3ce2fb6e3",
+      "BridgeService": "00cf7ecf2ca403c9dc41e5957af70752691cc113c9a4d257ec4600a363a444dd22ca121220cd7c76e4a8c7edb4a5d3134206736efad8f37dd6111f6af725c6aa8a566658c3",
+      "LiquidityPool": "00bb57a4648d9f8ae09fed8007f14029893059669b7548bf8a227d098b80bf6733ca1212209d9e568ad503ccfaff1226bec9a5a4595080d533f27401c619f46985029f84ef"
+    }
+  }
+}
