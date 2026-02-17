@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "MUSD",
-    "specfile": "certora/specs/MUSD.spec",
-    "specfileOrigRelpath": "certora/specs/MUSD.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}

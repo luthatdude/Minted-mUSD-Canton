@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "TreasuryV2",
-    "specfile": "certora/specs/TreasuryV2.spec",
-    "specfileOrigRelpath": "certora/specs/TreasuryV2.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}

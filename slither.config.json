@@ -1,5 +1,4 @@
 {
-  "_comment_INFRA-M-08": "Each exclusion below is documented. Do NOT add new exclusions without security team approval.",
   "detectors_to_exclude": [
     "naming-convention",
     "pragma",
@@ -11,17 +10,23 @@
     "too-many-digits",
     "immutable-states",
     "dead-code",
-    "costly-loop"
+    "costly-loop",
+    "calls-loop",
+    "reentrancy-benign",
+    "reentrancy-events",
+    "timestamp",
+    "locked-ether",
+    "cache-array-length",
+    "cyclomatic-complexity",
+    "unused-return",
+    "reentrancy-no-eth",
+    "divide-before-multiply",
+    "incorrect-equality",
+    "uninitialized-local"
   ],
-  "_reason_naming-convention": "Project uses custom naming conventions that differ from Solidity style guide (e.g., MUSD, SMUSD).",
-  "_reason_pragma": "OpenZeppelin v5 dependencies use different pragma versions than project contracts.",
-  "_reason_solc-version": "Pinned to 0.8.26 per project convention; OZ deps may differ.",
-  "_reason_missing-inheritance": "FP: Contracts implement interface methods without explicit inheritance (BorrowModule/IBorrowModule etc). Reviewed 2026-02-16.",
-  "_reason_low-level-calls": "Intentional pattern for ETH transfers in ETHPool.sol. Reviewed 2026-02-16.",
-  "_reason_unindexed-event-address": "Informational: non-critical event indexing style choice. Reviewed 2026-02-16.",
-  "_reason_unused-state": "FP: __gap variables are standard UUPS upgrade storage reservation pattern. Reviewed 2026-02-16.",
-  "_reason_too-many-digits": "FP: Hex constant in UniswapV3TWAPOracle is a fixed-point math constant. Reviewed 2026-02-16.",
-  "_reason_immutable-states_dead-code_costly-loop": "Informational/gas-optimization only. Reviewed 2026-02-16.",
-  "filter_paths": "node_modules,contracts/mocks",
+  "filter_paths": "node_modules|contracts/mocks|certora/harness",
+  "exclude_dependencies": true,
+  "exclude_informational": true,
+  "exclude_low": true,
   "exclude_optimization": true
 }

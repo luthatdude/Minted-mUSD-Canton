@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "BorrowModuleUpgradeable",
-    "specfile": "certora/specs/BorrowModule.spec",
-    "specfileOrigRelpath": "certora/specs/BorrowModule.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}

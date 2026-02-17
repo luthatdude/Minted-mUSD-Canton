@@ -459,9 +459,8 @@ contract TreasuryV2 is
 
         _accrueFees();
 
-        // slither-disable-next-line arbitrary-send-erc20
-        // FP: `from` is enforced to equal msg.sender (line above) — no arbitrary-from risk.
-        asset.safeTransferFrom(from, address(this), amount);
+        // Pull funds from caller only. `from` is retained for legacy interface compatibility.
+        asset.safeTransferFrom(msg.sender, address(this), amount);
 
         // Auto-allocate if above minimum
         if (amount >= minAutoAllocateAmount) {
