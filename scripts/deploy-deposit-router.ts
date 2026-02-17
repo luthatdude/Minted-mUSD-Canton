@@ -70,11 +70,11 @@ const CONFIG: Record<string, {
   },
   // Sepolia (for TreasuryReceiver testnet)
   sepolia: {
-    usdc: process.env.SEPOLIA_USDC || "",
+    usdc: process.env.SEPOLIA_USDC || "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
     wormholeRelayer: "0x7B1bD7a6b4E61c2a123AC6BC2cbfC614437D0470",
     tokenBridge: "0xDB5492265f6038831E89f495670FF909aDe94bd9",
-    treasuryAddress: process.env.SEPOLIA_TREASURY_ADDRESS || "",
-    directMintAddress: process.env.SEPOLIA_DIRECT_MINT_ADDRESS || "",
+    treasuryAddress: process.env.SEPOLIA_TREASURY_ADDRESS || "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
+    directMintAddress: process.env.SEPOLIA_DIRECT_MINT_ADDRESS || "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
     wormholeCore: "0x4a8bc80Ed5a4067f1CCf107057b8270E0cC11A78",
     feeBps: 0,
   },
