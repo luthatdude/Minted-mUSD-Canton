@@ -645,7 +645,7 @@ test_BridgeAssignNonce = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1
+      validators = [op]; requiredSignatures = 1; minValidators = 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -672,7 +672,7 @@ test_BridgePauseUnpause = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1
+      validators = [op]; requiredSignatures = 1; minValidators = 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -708,7 +708,7 @@ test_BridgeUpdateValidators = script do
   svc <- submitMulti [op, gov] [] do
     createCmd BridgeService with
       operator = op; governance = gov
-      validators = [op]; requiredSignatures = 1
+      validators = [op]; requiredSignatures = 1; minValidators = 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
       lastNonce = 0; paused = False; observers = []
 
@@ -839,6 +839,7 @@ test_BridgeOutRequestLifecycle : Script ()
 test_BridgeOutRequestLifecycle = script do
   op <- allocateParty "Operator"
   alice <- allocateParty "Alice"
+  v1 <- allocateParty "Validator1"
   now <- getTime
 
   req <- submit op do
@@ -846,6 +847,7 @@ test_BridgeOutRequestLifecycle = script do
       operator = op; user = alice; amount = 1000.0
       targetChainId = 1; targetTreasury = ""; nonce = 0
       createdAt = now; status = "pending"
+      validators = [v1]; requiredSignatures = 1
 
   req2 <- submit alice do
     exerciseCmd req BridgeOut_SetTarget with
@@ -854,8 +856,30 @@ test_BridgeOutRequestLifecycle = script do
   req3 <- submit op do
     exerciseCmd req2 BridgeOut_AssignNonce with newNonce = 42
 
+  -- AUDIT-H-04: Create attestation and have validator sign it
+  attest <- submit op do
+    createCmd AttestationRequest with
+      aggregator = op
+      validatorGroup = [v1]
+      payload = AttestationPayload with
+        attestationId = "bridge-out-42"
+        globalCantonAssets = 1000.0
+        targetAddress = ethAddr
+        amount = 1000.0; isMint = True; nonce = 42
+        chainId = 1; expiresAt = addRelTime now (hours 24)
+        entropy = dummyEntropy; cantonStateHash = dummyStateHash
+      collectedSignatures = Set.empty
+      ecdsaSignatures = []
+      requiredSignatures = 1
+      direction = CantonToEthereum
+
+  attest2 <- submit v1 do
+    exerciseCmd attest Attestation_Sign with
+      validator = v1; ecdsaSignature = dummySig
+
+  -- Complete with attested proof
   req4 <- submit op do
-    exerciseCmd req3 BridgeOut_Complete
+    exerciseCmd req3 BridgeOut_Complete with attestationCid = attest2
 
   r <- queryContractId op req4
   case r of
