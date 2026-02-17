@@ -495,6 +495,11 @@ contract TreasuryV2 is
 
         asset.safeTransfer(to, amount);
 
+        // SOL-L-9: Update lastRecordedValue after withdrawal to prevent fee drift
+        // Without this, the next _accrueFees() sees currentValue < lastRecordedValue
+        // and skips fee accrual even if real yield was earned.
+        lastRecordedValue = totalValue();
+
         emit Withdrawn(to, amount);
     }
 
@@ -856,8 +861,15 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // SOL-L-10: Wrap in try/catch to prevent a single reverting strategy from DoS-ing rebalance
+            uint256 currentValue;
             // slither-disable-next-line calls-loop
-            uint256 currentValue = IStrategy(strat).totalValue();
+            try IStrategy(strat).totalValue() returns (uint256 val) {
+                currentValue = val;
+            } catch {
+                emit RebalanceWithdrawFailed(strat, 0);
+                continue;
+            }
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue > targetValue) {
@@ -882,8 +894,15 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
+            // SOL-L-10: Wrap in try/catch to prevent a single reverting strategy from DoS-ing rebalance
+            uint256 currentValue;
             // slither-disable-next-line calls-loop
-            uint256 currentValue = IStrategy(strat).totalValue();
+            try IStrategy(strat).totalValue() returns (uint256 val) {
+                currentValue = val;
+            } catch {
+                emit RebalanceDepositFailed(strat, 0);
+                continue;
+            }
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue < targetValue) {
@@ -987,6 +1006,10 @@ contract TreasuryV2 is
         // on next _accrueFees() call after emergency withdrawal
         lastRecordedValue = totalValue();
 
+        // SOL-L-12: Auto-pause to prevent deposits from re-deploying to strategies
+        // between emergency withdrawal and manual pause. TIMELOCK_ROLE required to unpause.
+        _pause();
+
         emit EmergencyWithdraw(reserveBalance());
     }
 
@@ -1031,6 +1054,12 @@ contract TreasuryV2 is
      */
     function setReserveBps(uint256 _reserveBps) external onlyTimelock {
         if (_reserveBps > 3000) revert ReserveTooHigh();
+        // SOL-L-11: Validate that reserveBps + active strategy targetBps <= 10000
+        uint256 totalTarget = _reserveBps;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            if (strategies[i].active) totalTarget += strategies[i].targetBps;
+        }
+        if (totalTarget > BPS) revert TotalAllocationInvalid();
         uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
         emit ReserveBpsUpdated(oldBps, _reserveBps);

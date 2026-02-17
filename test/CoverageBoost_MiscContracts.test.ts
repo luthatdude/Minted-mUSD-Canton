@@ -1304,15 +1304,13 @@ describe("CoverageBoost — Misc Contracts", function () {
     });
 
     // --- globalTotalAssets: treasury set, catch fallback to cache ---
-    it("should fall back to cached globalAssets when treasury reverts", async function () {
-      // Deploy any contract that does NOT have totalValue() — call will revert
+    it("should revert with NoTreasury when treasury reverts and no cache", async function () {
+      // SOL-H-2: globalTotalAssets now reverts instead of silently falling back
       const MockERC20 = await ethers.getContractFactory("MockERC20");
       const fakeTreasury = await MockERC20.deploy("Fake", "FK", 18);
       await smusd.setTreasury(await fakeTreasury.getAddress());
-      // Deposit — globalTotalAssets should catch the revert and fall back to totalAssets
-      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
-      const gta = await smusd.globalTotalAssets();
-      expect(gta).to.be.gt(0);
+      // globalTotalAssets should revert because treasury call fails and no cache exists
+      await expect(smusd.globalTotalAssets()).to.be.revertedWithCustomError(smusd, "NoTreasury");
     });
 
     // --- globalSharePrice: zero shares ---

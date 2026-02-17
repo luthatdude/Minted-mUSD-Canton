@@ -428,6 +428,12 @@ contract PendleStrategyV2 is
 
         // Auto mode: deploy to single current market
         if (currentMarket == address(0) || _shouldRollover()) {
+            // SOL-M-8: Redeem existing PT before switching markets to prevent orphaned positions
+            if (ptBalance > 0 && currentMarket != address(0)) {
+                uint256 recovered = _redeemPt(ptBalance);
+                // recovered USDC will be re-deployed to new market below (added to amount)
+                amount += recovered;
+            }
             _selectNewMarket();
         }
 

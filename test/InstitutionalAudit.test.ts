@@ -1169,6 +1169,10 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       await musd.connect(deployer).approve(await smusd.getAddress(), ethers.parseEther("500"));
       await smusd.connect(deployer).distributeYield(ethers.parseEther("500"));
 
+      // SOL-M-9: Fast-forward past vesting period so yield is fully realized
+      await ethers.provider.send("evm_increaseTime", [43200]); // 12 hours
+      await ethers.provider.send("evm_mine", []);
+
       // Preview should match actual deposit
       const depositAmount = ethers.parseEther("1000");
       const previewShares = await smusd.convertToShares(depositAmount);

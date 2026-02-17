@@ -210,8 +210,8 @@ error NoValidMarket();
 error InvalidPtToken();
 error ZeroRecipient();
 error LengthMismatch();
-error ZeroTimelock();
-
+error ZeroTimelock();/// @dev SOL-M-2: Full deleverage did not fully unwind position
+error PositionNotCleared();
 // ─── Timelock ───────────────────────────────────────────────────────────
 error DelayTooShort();
 

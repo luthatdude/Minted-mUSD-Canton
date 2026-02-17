@@ -62,6 +62,51 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     uint256 public constant MAX_SHARE_CHANGE_BPS = 500;
 
     // ═══════════════════════════════════════════════════════════════════════
+    // SOL-H-2: Cached treasury value (circuit breaker on Treasury failure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Last successfully read treasury value (USDC 6 decimals)
+    uint256 public lastKnownTreasuryValue;
+
+    /// @notice Timestamp of last successful treasury read
+    uint256 public lastTreasuryRefreshTime;
+
+    /// @notice Maximum staleness before we revert instead of using cache
+    uint256 public constant MAX_TREASURY_STALENESS = 6 hours;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SOL-H-3: Rolling 24h cumulative cap for Canton share changes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Canton shares at the start of the current 24h window
+    uint256 public cantonSharesAtWindowStart;
+
+    /// @notice Timestamp when the current 24h window started
+    uint256 public windowStartTime;
+
+    /// @notice Maximum cumulative change in a 24h window (15% = 1500 bps)
+    uint256 public constant MAX_DAILY_CHANGE_BPS = 1500;
+
+    /// @notice Maximum ratio of Canton shares to ETH shares
+    uint256 public constant MAX_CANTON_RATIO = 5;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SOL-M-9: Yield vesting to prevent sandwich attacks
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Unvested yield still being dripped
+    uint256 public unvestedYield;
+
+    /// @notice Timestamp when current yield finishes vesting
+    uint256 public yieldVestingEnd;
+
+    /// @notice Last time vested yield was checkpointed
+    uint256 public lastVestingCheckpoint;
+
+    /// @notice Duration over which yield is linearly vested
+    uint256 public constant VESTING_DURATION = 12 hours;
+
+    // ═══════════════════════════════════════════════════════════════════════
     // INTEREST ROUTING: Track interest from BorrowModule
     // ═══════════════════════════════════════════════════════════════════════
     
@@ -77,6 +122,12 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
+    /// @dev SOL-H-2: Emitted when treasury value is successfully cached
+    event TreasuryCacheRefreshed(uint256 cachedValue, uint256 timestamp);
+    /// @dev SOL-H-2: Emitted when treasury call fails and cache is used
+    event TreasuryCacheFallback(uint256 cachedValue, uint256 cacheAge);
+    /// @dev SOL-M-9: Emitted when yield vesting starts
+    event YieldVestingStarted(uint256 amount, uint256 vestingEnd);
 
     /// @param _musd The mUSD token (underlying asset)
     /// @param _globalPauseRegistry Address of the GlobalPauseRegistry (address(0) to skip global pause)
@@ -134,6 +185,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     }
 
     // Use SafeERC20 for token transfers with maximum yield cap to prevent excessive dilution
+    // SOL-M-9: Yield is vested linearly over VESTING_DURATION to prevent sandwich attacks
     function distributeYield(uint256 amount) external onlyRole(YIELD_MANAGER_ROLE) {
         if (totalSupply() == 0) revert NoSharesExist();
         if (amount == 0) revert InvalidAmount();
@@ -146,11 +198,19 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         // Use safeTransferFrom
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
 
+        // SOL-M-9: Checkpoint existing vesting, then add new yield to vesting schedule
+        _checkpointVesting();
+        unvestedYield += amount;
+        yieldVestingEnd = block.timestamp + VESTING_DURATION;
+        lastVestingCheckpoint = block.timestamp;
+
         emit YieldDistributed(msg.sender, amount);
+        emit YieldVestingStarted(amount, yieldVestingEnd);
     }
 
     /// @notice Receive interest payments from BorrowModule
     /// @dev Called by BorrowModule to route borrower interest to suppliers
+    /// SOL-M-9: Interest is vested linearly over VESTING_DURATION to prevent sandwich attacks
     /// @param amount The amount of mUSD interest to receive
     function receiveInterest(uint256 amount) external onlyRole(INTEREST_ROUTER_ROLE) {
         if (amount == 0) revert ZeroAmount();
@@ -166,11 +226,18 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         // Transfer mUSD from BorrowModule (which approved us)
         IERC20(asset()).safeTransferFrom(msg.sender, address(this), amount);
         
+        // SOL-M-9: Checkpoint existing vesting, then add to vesting schedule
+        _checkpointVesting();
+        unvestedYield += amount;
+        yieldVestingEnd = block.timestamp + VESTING_DURATION;
+        lastVestingCheckpoint = block.timestamp;
+        
         // Track for analytics
         totalInterestReceived += amount;
         lastInterestReceiptTime = block.timestamp;
 
         emit InterestReceived(msg.sender, amount, totalInterestReceived);
+        emit YieldVestingStarted(amount, yieldVestingEnd);
     }
 
     // decimalsOffset provides some protection against donation attacks
@@ -208,6 +275,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
 
     /// @notice Sync Canton shares from bridge attestation
     /// @dev Rate-limited to prevent share price manipulation
+    /// SOL-H-3: Rolling 24h cumulative cap prevents compounding 5% changes
+    /// SOL-H-4: First sync requires ethShares > 0 to prevent inflation at zero supply
     /// @param _cantonShares Total smUSD shares on Canton
     /// @param epoch Sync epoch (must be sequential)
     function syncCantonShares(uint256 _cantonShares, uint256 epoch) external onlyRole(BRIDGE_ROLE) {
@@ -216,18 +285,43 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         // Rate limit — minimum 1 hour between syncs
         if (block.timestamp < lastCantonSyncTime + MIN_SYNC_INTERVAL) revert SyncTooFrequent();
         
-        // First sync must use admin-only initialization to prevent manipulation
-        // On first sync, cap initial shares to max 2x Ethereum shares to prevent inflation attack
+        // SOL-H-4: First sync requires existing Ethereum deposits
         if (cantonTotalShares == 0) {
             uint256 ethShares = totalSupply();
-            uint256 maxInitialShares = ethShares > 0 ? ethShares * 2 : _cantonShares;
+            // Require Ethereum deposits before Canton sync to prevent inflation attack
+            if (ethShares == 0) revert NoSharesExist();
+            uint256 maxInitialShares = ethShares * 2;
             if (_cantonShares > maxInitialShares) revert InitialSharesTooLarge();
+            // Initialize rolling window
+            cantonSharesAtWindowStart = _cantonShares;
+            windowStartTime = block.timestamp;
         } else {
-            // Magnitude limit — max 5% change per sync to prevent manipulation
+            // Per-sync magnitude limit — max 5% change per sync
             uint256 maxIncrease = (cantonTotalShares * (10000 + MAX_SHARE_CHANGE_BPS)) / 10000;
             uint256 maxDecrease = (cantonTotalShares * (10000 - MAX_SHARE_CHANGE_BPS)) / 10000;
             if (_cantonShares > maxIncrease) revert ShareIncreaseTooLarge();
             if (_cantonShares < maxDecrease) revert ShareDecreaseTooLarge();
+
+            // SOL-H-3: Rolling 24h cumulative cap
+            if (block.timestamp >= windowStartTime + 24 hours) {
+                // Start new window
+                cantonSharesAtWindowStart = cantonTotalShares;
+                windowStartTime = block.timestamp;
+            }
+            // Check cumulative change within window stays within MAX_DAILY_CHANGE_BPS
+            uint256 windowBase = cantonSharesAtWindowStart;
+            if (windowBase > 0) {
+                uint256 maxCumulative = (windowBase * (10000 + MAX_DAILY_CHANGE_BPS)) / 10000;
+                uint256 minCumulative = (windowBase * (10000 - MAX_DAILY_CHANGE_BPS)) / 10000;
+                if (_cantonShares > maxCumulative) revert DailyShareChangeExceeded();
+                if (_cantonShares < minCumulative) revert DailyShareChangeExceeded();
+            }
+
+            // SOL-H-3: Absolute ratio cap — Canton shares cannot exceed MAX_CANTON_RATIO * ETH shares
+            uint256 ethShares = totalSupply();
+            if (ethShares > 0 && _cantonShares > ethShares * MAX_CANTON_RATIO) {
+                revert ShareIncreaseTooLarge();
+            }
         }
         
         cantonTotalShares = _cantonShares;
@@ -243,8 +337,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     }
 
     /// @notice Get global total assets from Treasury
-    /// @dev Falls back to local totalAssets if treasury not set
-    /// @dev Treasury.totalValue() returns USDC (6 decimals) but
+    /// @dev SOL-H-2: On Treasury failure, uses cached last-known-good value (max 6h stale).
+    ///      Reverts if cache is too stale instead of silently falling back to local totalAssets().
+    ///      Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
     ///      Uses typed interface call for better error propagation and compile-time safety.
     function globalTotalAssets() public view returns (uint256) {
@@ -257,12 +352,24 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
             // Convert USDC (6 decimals) to mUSD (18 decimals)
             return usdcValue * 1e12;
         } catch {
-            // SOL-C-05: Fallback to local assets if Treasury call fails.
-            // Cannot emit events in a view function — monitoring should detect
-            // divergence between globalTotalAssets() and Treasury.totalValue()
-            // off-chain by comparing both values periodically.
-            return totalAssets();
+            // SOL-H-2: Use cached treasury value instead of silently falling back to local
+            if (lastKnownTreasuryValue > 0 && block.timestamp <= lastTreasuryRefreshTime + MAX_TREASURY_STALENESS) {
+                return lastKnownTreasuryValue * 1e12;
+            }
+            // If cache is too stale or never set, revert to prevent incorrect accounting
+            revert NoTreasury();
         }
+    }
+
+    /// @notice Refresh the cached treasury value
+    /// @dev SOL-H-2: Non-view function to update cache. Should be called periodically by keeper.
+    function refreshTreasuryCache() external {
+        if (treasury == address(0)) revert NoTreasury();
+        // slither-disable-next-line calls-loop
+        uint256 usdcValue = ITreasury(treasury).totalValue();
+        lastKnownTreasuryValue = usdcValue;
+        lastTreasuryRefreshTime = block.timestamp;
+        emit TreasuryCacheRefreshed(usdcValue, block.timestamp);
     }
 
     /// @notice Global share price used for both chains
@@ -346,6 +453,60 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
             return 0;
         }
         return super.maxRedeem(owner);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SOL-M-9: YIELD VESTING — linear drip to prevent sandwich attacks
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Override totalAssets to subtract unvested yield
+    /// @dev This makes the share price increase linearly over VESTING_DURATION
+    ///      instead of jumping instantly on yield injection.
+    function totalAssets() public view override returns (uint256) {
+        uint256 raw = super.totalAssets();
+        uint256 stillUnvested = _currentUnvestedYield();
+        // Protect against underflow if yield was somehow removed
+        return raw > stillUnvested ? raw - stillUnvested : raw;
+    }
+
+    /// @notice Calculate currently unvested yield (view-safe)
+    function _currentUnvestedYield() internal view returns (uint256) {
+        if (unvestedYield == 0) return 0;
+        if (block.timestamp >= yieldVestingEnd) return 0;
+
+        uint256 vestingStart = lastVestingCheckpoint;
+        uint256 totalDuration = yieldVestingEnd - vestingStart;
+        if (totalDuration == 0) return 0;
+
+        uint256 elapsed = block.timestamp - vestingStart;
+        uint256 vested = (unvestedYield * elapsed) / totalDuration;
+        return unvestedYield - vested;
+    }
+
+    /// @notice Checkpoint vesting — realize vested portion
+    /// @dev Called before adding new yield to correctly account for partially vested amounts
+    function _checkpointVesting() internal {
+        if (unvestedYield == 0) return;
+        if (block.timestamp >= yieldVestingEnd) {
+            // All vested
+            unvestedYield = 0;
+            return;
+        }
+        uint256 vestingStart = lastVestingCheckpoint;
+        uint256 totalDuration = yieldVestingEnd - vestingStart;
+        if (totalDuration == 0) {
+            unvestedYield = 0;
+            return;
+        }
+        uint256 elapsed = block.timestamp - vestingStart;
+        uint256 vested = (unvestedYield * elapsed) / totalDuration;
+        unvestedYield -= vested;
+        lastVestingCheckpoint = block.timestamp;
+    }
+
+    /// @notice View: current unvested yield amount
+    function currentUnvestedYield() external view returns (uint256) {
+        return _currentUnvestedYield();
     }
 
     // ============================================================

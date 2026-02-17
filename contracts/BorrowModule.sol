@@ -185,8 +185,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Set the interest rate model (enables dynamic rates)
     /// @dev SOL-H-01: Changed from BORROW_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    /// @dev SOL-L-3: Accrues interest under OLD model before swapping to prevent retroactive rate application
     function setInterestRateModel(address _model) external onlyRole(TIMELOCK_ROLE) {
         if (_model == address(0)) revert ZeroAddress();
+        // SOL-L-3: Accrue all pending interest under current rates before switching
+        _accrueGlobalInterest();
         address old = address(interestRateModel);
         interestRateModel = IInterestRateModel(_model);
         emit InterestRateModelUpdated(old, _model);
@@ -898,6 +901,14 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @param user The user whose interest to accrue
     function accrueInterest(address user) external nonReentrant {
         _accrueInterest(user);
+    }
+
+    /// @notice Accrue global interest without a user-specific context.
+    /// @dev SOL-L-3: Exposed so timelock proposals can batch
+    ///      accrueGlobalInterest() + InterestRateModel.setParams() atomically,
+    ///      ensuring interest is settled under the OLD model before new rates apply.
+    function accrueGlobalInterest() external nonReentrant {
+        _accrueGlobalInterest();
     }
 
     // ============================================================
