@@ -149,10 +149,9 @@ spec:
       containers:
         - name: relay
           # C-2: Pin to immutable SHA256 digest from CI build.
-          # Update after each CI run:
-          #   export DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/minted-protocol/bridge-relay:$(git rev-parse --short HEAD))
-          #   sed -i "s|bridge-relay@sha256:.*|${DIGEST#*@}|" k8s/canton/relay-deployment.yaml
-          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # Update after each CI run or use: ./scripts/update-image-digests.sh
+          # Built: 2026-02-17 from relay/Dockerfile (node:20-alpine multi-stage)
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
           imagePullPolicy: IfNotPresent
           command: ["node", "dist/relay-service.js"]
           env:
@@ -319,7 +318,8 @@ spec:
               memory: 32Mi
       containers:
         - name: validator
-          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # C-2: Pin to immutable SHA256 digest — same image as relay, different entrypoint
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
           imagePullPolicy: IfNotPresent
           command: ["node", "dist/validator-node-v2.js"]
           env:
@@ -486,7 +486,8 @@ spec:
               memory: 32Mi
       containers:
         - name: validator
-          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # C-2: Pin to immutable SHA256 digest — same image as relay, different entrypoint
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
           imagePullPolicy: IfNotPresent
           command: ["node", "dist/validator-node-v2.js"]
           env:
