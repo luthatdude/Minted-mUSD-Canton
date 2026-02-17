@@ -42,3 +42,6 @@ frontend/.next/
 *.log
 subgraph/build/
 subgraph/generated/
+nohup.out
+*.bak
+*.bak2
