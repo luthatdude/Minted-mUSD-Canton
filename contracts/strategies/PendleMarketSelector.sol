@@ -528,6 +528,25 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
         return whitelistedMarkets.length;
     }
 
+    /**
+     * @notice H-04: Check if a market is valid (whitelisted, not expired, sufficient time to expiry)
+     * @dev Satisfies the IPendleMarketSelector interface used by PendleStrategyV2.
+     *      Does not check TVL/APY minimums since those require oracle calls.
+     * @param market Market address to validate
+     * @return True if market passes basic whitelist + expiry filters
+     */
+    function isValidMarket(address market) external view returns (bool) {
+        if (!isWhitelisted[market]) return false;
+
+        IPendleMarket pendleMarket = IPendleMarket(market);
+        if (pendleMarket.isExpired()) return false;
+
+        uint256 expiry = pendleMarket.expiry();
+        if (expiry < block.timestamp + minTimeToExpiry) return false;
+
+        return true;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // UPGRADEABILITY
     // ═══════════════════════════════════════════════════════════════════════

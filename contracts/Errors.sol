@@ -98,6 +98,8 @@ error FeeTooHigh();
 error InvalidRecipientAddr();
 error ReserveTooHigh();
 error ZeroMinAmount();
+error EVCAlreadySetup();
+error InsufficientOutput();
 
 // ─── Interest Rate / Borrowing ──────────────────────────────────────────
 error RateTooHigh();
