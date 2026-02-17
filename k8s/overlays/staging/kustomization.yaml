@@ -1,0 +1,220 @@
+# ══════════════════════════════════════════════════════════════
+# Kustomize Overlay — STAGING Environment
+# ══════════════════════════════════════════════════════════════
+# Pre-production environment (Sepolia or Holesky):
+#   - Prod-like replicas (2 NGINX, 1 Canton, 1 Postgres)
+#   - Full TLS with cert-manager (internal CA)
+#   - External Secrets Operator (staging secrets path)
+#   - 6-block confirmations
+#   - Production-like rate limits
+#   - Monitoring enabled with Telegram alerts (staging channel)
+# ══════════════════════════════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: musd-canton-staging
+
+namePrefix: staging-
+
+commonLabels:
+  app.kubernetes.io/environment: staging
+  app.kubernetes.io/part-of: minted-musd
+
+commonAnnotations:
+  musd.io/environment: "staging"
+  musd.io/tls-mode: "cert-manager-internal-ca"
+  musd.io/secrets-backend: "aws-secrets-manager"
+
+resources:
+  - ../../base
+  # Staging-only: include External Secrets Operator CRDs
+  - external-secrets-staging.yaml
+
+patches:
+  # ── Namespace: staging namespace with restricted PSA ──
+  - target:
+      kind: Namespace
+      name: musd-canton
+    patch: |
+      - op: replace
+        path: /metadata/name
+        value: musd-canton-staging
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: restricted
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1audit
+        value: restricted
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1warn
+        value: restricted
+
+  # ── PostgreSQL: single replica (staging), moderate resources ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 4Gi
+
+  # ── Canton Participant: moderate resources ──
+  - target:
+      kind: Deployment
+      name: canton-participant
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 2Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "3"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 4Gi
+
+  # ── NGINX Proxy: 2 replicas (prod-like) ──
+  - target:
+      kind: Deployment
+      name: nginx-proxy
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+  # ── Bridge Relay: 6-block confirmations ──
+  # Using strategic merge patch (named env vars) to avoid fragile positional indices
+  - target:
+      kind: Deployment
+      name: bridge-relay
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bridge-relay
+      spec:
+        template:
+          spec:
+            containers:
+              - name: bridge-relay
+                env:
+                  - name: CONFIRMATIONS
+                    value: "6"
+                  - name: POLL_INTERVAL_MS
+                    value: "5000"
+
+  # ── Relay ConfigMap: staging contract addresses ──
+  - target:
+      kind: ConfigMap
+      name: relay-config
+    patch: |
+      - op: replace
+        path: /data/BRIDGE_CONTRACT_ADDRESS
+        value: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+      - op: replace
+        path: /data/TREASURY_ADDRESS
+        value: "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d"
+
+  # ── Bot ConfigMap: staging network ──
+  - target:
+      kind: ConfigMap
+      name: bot-config
+    patch: |
+      - op: replace
+        path: /data/CHAIN_ID
+        value: "11155111"
+      - op: replace
+        path: /data/MIN_PROFIT_USD
+        value: "10"
+      - op: replace
+        path: /data/MAX_GAS_PRICE_GWEI
+        value: "100"
+      - op: replace
+        path: /data/USE_FLASHBOTS
+        value: "false"
+
+  # ── External Secrets: staging paths ──
+  - target:
+      kind: ExternalSecret
+      name: postgres-credentials
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/staging/postgres
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/staging/postgres
+      - op: replace
+        path: /spec/data/2/remoteRef/key
+        value: canton/staging/postgres
+      - op: replace
+        path: /spec/data/3/remoteRef/key
+        value: canton/staging/postgres
+  - target:
+      kind: ExternalSecret
+      name: canton-tls
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/staging/tls
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/staging/tls
+      - op: replace
+        path: /spec/data/2/remoteRef/key
+        value: canton/staging/tls
+  - target:
+      kind: ExternalSecret
+      name: json-api-credentials
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/staging/json-api
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/staging/json-api
+
+  # ── Backup: staging bucket, 50Gi PVC ──
+  - target:
+      kind: ConfigMap
+      name: backup-config
+    patch: |
+      - op: replace
+        path: /data/BACKUP_S3_BUCKET
+        value: "minted-canton-backups-staging-us-east-1"
+      - op: replace
+        path: /data/BACKUP_GCS_BUCKET
+        value: "minted-canton-backups-staging"
+
+  # ── Postgres PVC: moderate in staging ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 50Gi
+
+  # ── Health check: every 10 min in staging ──
+  - target:
+      kind: CronJob
+      name: canton-health-check
+    patch: |
+      - op: replace
+        path: /spec/schedule
+        value: "*/10 * * * *"

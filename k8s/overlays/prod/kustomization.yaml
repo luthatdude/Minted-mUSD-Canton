@@ -1,0 +1,305 @@
+# ══════════════════════════════════════════════════════════════
+# Kustomize Overlay — PRODUCTION Environment
+# ══════════════════════════════════════════════════════════════
+# Mainnet production deployment:
+#   - Full HA: 2 PostgreSQL (with Patroni), 2 NGINX, 1 Canton, 1 Relay
+#   - Strict PSA (restricted) enforced
+#   - cert-manager with AWS PCA or Let's Encrypt for TLS
+#   - External Secrets Operator (production paths)
+#   - 12-block confirmations (mainnet finality)
+#   - Flashbots MEV protection enabled
+#   - Cloud Armor / WAF attached to LoadBalancer
+#   - Offsite S3 backups with KMS encryption
+#   - Full monitoring with PagerDuty/Telegram alerts
+# ══════════════════════════════════════════════════════════════
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: musd-canton
+
+commonLabels:
+  app.kubernetes.io/environment: production
+  app.kubernetes.io/part-of: minted-musd
+
+commonAnnotations:
+  musd.io/environment: "production"
+  musd.io/tls-mode: "cert-manager-aws-pca"
+  musd.io/secrets-backend: "aws-secrets-manager"
+  musd.io/monitoring: "pagerduty+telegram"
+
+resources:
+  - ../../base
+  # Production: External Secrets for prod paths
+  - external-secrets-prod.yaml
+
+patches:
+  # ── Namespace: production with strict PSA ──
+  - target:
+      kind: Namespace
+      name: musd-canton
+    patch: |
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: restricted
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1audit
+        value: restricted
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1warn
+        value: restricted
+
+  # ── PostgreSQL: 2 replicas (HA with Patroni), full resources ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 2Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "4"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 8Gi
+
+  # ── Canton Participant: full resources ──
+  - target:
+      kind: Deployment
+      name: canton-participant
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 4Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "4"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 8Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: "-Xmx6g -Xms4g -XX:+UseG1GC -XX:+UseStringDeduplication"
+
+  # ── NGINX Proxy: 2 replicas, LoadBalancer with WAF ──
+  - target:
+      kind: Deployment
+      name: nginx-proxy
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 200m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 256Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 512Mi
+
+  # ── Bridge Relay: 12-block finality, production resources ──
+  # Using strategic merge patch (named env vars) to avoid fragile positional indices
+  - target:
+      kind: Deployment
+      name: bridge-relay
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bridge-relay
+      spec:
+        template:
+          spec:
+            containers:
+              - name: bridge-relay
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 1Gi
+                env:
+                  - name: CONFIRMATIONS
+                    value: "12"
+                  - name: POLL_INTERVAL_MS
+                    value: "5000"
+                  - name: USE_FLASHBOTS
+                    value: "true"
+
+  # ── Relay ConfigMap: MAINNET contract addresses ──
+  # ⚠️ CRITICAL: Replace these with actual mainnet addresses before deploy
+  - target:
+      kind: ConfigMap
+      name: relay-config
+    patch: |
+      - op: replace
+        path: /data/BRIDGE_CONTRACT_ADDRESS
+        value: "REPLACE_WITH_MAINNET_BRIDGE_ADDRESS"
+      - op: replace
+        path: /data/TREASURY_ADDRESS
+        value: "REPLACE_WITH_MAINNET_TREASURY_ADDRESS"
+
+  # ── Bot ConfigMap: mainnet ──
+  - target:
+      kind: ConfigMap
+      name: bot-config
+    patch: |
+      - op: replace
+        path: /data/CHAIN_ID
+        value: "1"
+      - op: replace
+        path: /data/BORROW_MODULE_ADDRESS
+        value: "REPLACE_WITH_MAINNET_BORROW_MODULE"
+      - op: replace
+        path: /data/LIQUIDATION_ENGINE_ADDRESS
+        value: "REPLACE_WITH_MAINNET_LIQUIDATION_ENGINE"
+      - op: replace
+        path: /data/COLLATERAL_VAULT_ADDRESS
+        value: "REPLACE_WITH_MAINNET_COLLATERAL_VAULT"
+      - op: replace
+        path: /data/PRICE_ORACLE_ADDRESS
+        value: "REPLACE_WITH_MAINNET_PRICE_ORACLE"
+      - op: replace
+        path: /data/MUSD_ADDRESS
+        value: "REPLACE_WITH_MAINNET_MUSD"
+      - op: replace
+        path: /data/MIN_PROFIT_USD
+        value: "50"
+      - op: replace
+        path: /data/MAX_GAS_PRICE_GWEI
+        value: "80"
+      - op: replace
+        path: /data/USE_FLASHBOTS
+        value: "true"
+      - op: replace
+        path: /data/FLASHBOTS_RELAY_URL
+        value: "https://relay.flashbots.net"
+
+  # ── Validators: production resources with KMS ──
+  - target:
+      kind: Deployment
+      name: bridge-validator-1
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 100m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 256Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/env/6/value
+        value: "us-east-1"
+  - target:
+      kind: Deployment
+      name: bridge-validator-2
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 100m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 256Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/env/6/value
+        value: "us-east-1"
+
+  # ── External Secrets: production paths ──
+  - target:
+      kind: ExternalSecret
+      name: postgres-credentials
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/production/postgres
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/production/postgres
+      - op: replace
+        path: /spec/data/2/remoteRef/key
+        value: canton/production/postgres
+      - op: replace
+        path: /spec/data/3/remoteRef/key
+        value: canton/production/postgres
+  - target:
+      kind: ExternalSecret
+      name: canton-tls
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/production/tls
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/production/tls
+      - op: replace
+        path: /spec/data/2/remoteRef/key
+        value: canton/production/tls
+  - target:
+      kind: ExternalSecret
+      name: json-api-credentials
+    patch: |
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: canton/production/json-api
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: canton/production/json-api
+
+  # ── Backup: production S3 bucket with KMS, 100Gi PVC ──
+  - target:
+      kind: ConfigMap
+      name: backup-config
+    patch: |
+      - op: replace
+        path: /data/BACKUP_S3_BUCKET
+        value: "minted-canton-backups-prod-us-east-1"
+      - op: replace
+        path: /data/BACKUP_GCS_BUCKET
+        value: "minted-canton-backups-prod"
+
+  # ── Postgres PVC: full 100Gi in prod with encrypted storage ──
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 100Gi
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: gp3-encrypted
+
+  # ── Health check: every 5 min in prod ──
+  - target:
+      kind: CronJob
+      name: canton-health-check
+    patch: |
+      - op: replace
+        path: /spec/schedule
+        value: "*/5 * * * *"

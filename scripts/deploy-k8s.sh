@@ -5,15 +5,19 @@
 # dependency order with pre-flight checks and rollout verification.
 #
 # Usage:
-#   ./scripts/deploy-k8s.sh                   # Full deploy
-#   ./scripts/deploy-k8s.sh --dry-run         # Validate only
-#   ./scripts/deploy-k8s.sh --component relay # Deploy relay only
-#   ./scripts/deploy-k8s.sh --skip-secrets    # Skip secret creation prompts
+#   ./scripts/deploy-k8s.sh                          # Full deploy (legacy)
+#   ./scripts/deploy-k8s.sh --dry-run                # Validate only
+#   ./scripts/deploy-k8s.sh --component relay        # Deploy relay only
+#   ./scripts/deploy-k8s.sh --skip-secrets           # Skip secret creation prompts
+#   ./scripts/deploy-k8s.sh --overlay dev            # Deploy using Kustomize dev overlay
+#   ./scripts/deploy-k8s.sh --overlay staging        # Deploy using Kustomize staging overlay
+#   ./scripts/deploy-k8s.sh --overlay prod           # Deploy using Kustomize prod overlay
 #
 # Prerequisites:
 #   - kubectl configured with cluster access
 #   - Namespace musd-canton exists (or this script creates it)
 #   - Secrets created (see k8s/canton/secrets.yaml or external-secrets.yaml)
+#   - kustomize CLI (for --overlay mode): https://kubectl.docs.kubernetes.io/installation/kustomize/
 # ══════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -35,6 +39,7 @@ DRY_RUN=""
 COMPONENT=""
 SKIP_SECRETS=false
 NAMESPACE="musd-canton"
+OVERLAY=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -55,8 +60,16 @@ while [[ $# -gt 0 ]]; do
       NAMESPACE="$2"
       shift 2
       ;;
+    --overlay)
+      OVERLAY="$2"
+      if [[ ! "$OVERLAY" =~ ^(dev|staging|prod)$ ]]; then
+        echo -e "${RED}Invalid overlay: $OVERLAY (must be dev, staging, or prod)${NC}"
+        exit 1
+      fi
+      shift 2
+      ;;
     -h|--help)
-      head -17 "$0" | tail -11
+      head -20 "$0" | tail -14
       exit 0
       ;;
     *)
@@ -150,6 +163,9 @@ fi
 echo ""
 echo -e "${CYAN}Deploying to namespace: ${NAMESPACE}${NC}"
 echo -e "${CYAN}Cluster context:        ${CLUSTER}${NC}"
+if [ -n "$OVERLAY" ]; then
+  echo -e "${CYAN}Kustomize overlay:      ${OVERLAY}${NC}"
+fi
 if [ -n "$DRY_RUN" ]; then
   echo -e "${YELLOW}Mode: DRY RUN${NC}"
 fi
@@ -160,6 +176,91 @@ if [ -z "$DRY_RUN" ]; then
     echo "Aborted."
     exit 0
   fi
+fi
+
+# ══════════════════════════════════════════════════════════════
+# KUSTOMIZE OVERLAY DEPLOY (if --overlay specified)
+# Builds the full environment-specific manifest and applies it.
+# This replaces the phase-by-phase deploy below.
+# ══════════════════════════════════════════════════════════════
+if [ -n "$OVERLAY" ]; then
+  OVERLAY_DIR="$K8S_DIR/overlays/$OVERLAY"
+
+  if [ ! -f "$OVERLAY_DIR/kustomization.yaml" ]; then
+    fail "Overlay not found: $OVERLAY_DIR/kustomization.yaml"
+  fi
+
+  # Verify kustomize is available
+  if command -v kustomize &>/dev/null; then
+    KUSTOMIZE_CMD="kustomize build"
+  elif kubectl kustomize --help &>/dev/null 2>&1; then
+    KUSTOMIZE_CMD="kubectl kustomize"
+  else
+    fail "Neither kustomize CLI nor kubectl kustomize found. Install: https://kubectl.docs.kubernetes.io/installation/kustomize/"
+  fi
+
+  step "Building Kustomize overlay: $OVERLAY"
+  echo -e "  ${CYAN}$KUSTOMIZE_CMD $OVERLAY_DIR${NC}"
+
+  # Validate the overlay builds cleanly
+  if ! $KUSTOMIZE_CMD "$OVERLAY_DIR" > /dev/null 2>&1; then
+    fail "Kustomize build failed for overlay $OVERLAY — fix errors first"
+  fi
+  ok "Kustomize build validated"
+
+  # ── PROD SAFETY: Block deploy if REPLACE_WITH placeholders remain ──
+  if [ "$OVERLAY" = "prod" ]; then
+    RENDERED=$($KUSTOMIZE_CMD "$OVERLAY_DIR")
+    PLACEHOLDER_FOUND=$(echo "$RENDERED" | grep -c 'REPLACE_WITH' || true)
+    if [ "$PLACEHOLDER_FOUND" -gt 0 ]; then
+      echo "$RENDERED" | grep --color=always 'REPLACE_WITH' | head -10
+      echo ""
+      fail "Production overlay still contains $PLACEHOLDER_FOUND REPLACE_WITH placeholder(s). Update k8s/overlays/prod/kustomization.yaml with real mainnet values before deploying."
+    fi
+    ok "No REPLACE_WITH placeholders in rendered production manifests"
+  fi
+
+  # Apply (or dry-run)
+  step "Applying $OVERLAY overlay"
+  $KUSTOMIZE_CMD "$OVERLAY_DIR" | kubectl apply $DRY_RUN -f -
+  ok "All resources applied via Kustomize ($OVERLAY)"
+
+  # Determine namespace from overlay
+  case "$OVERLAY" in
+    dev)     NAMESPACE="musd-canton-dev" ;;
+    staging) NAMESPACE="musd-canton-staging" ;;
+    prod)    NAMESPACE="musd-canton" ;;
+  esac
+
+  if [ -z "$DRY_RUN" ]; then
+    step "Waiting for rollouts ($OVERLAY)"
+    wait_rollout "statefulset" "postgres" "180s" 2>/dev/null || true
+    wait_rollout "deployment" "canton-participant" "180s" 2>/dev/null || true
+    wait_rollout "deployment" "nginx-proxy" "120s" 2>/dev/null || true
+    wait_rollout "deployment" "bridge-relay" "120s" 2>/dev/null || true
+    wait_rollout "deployment" "liquidation-bot" "120s" 2>/dev/null || true
+
+    step "Post-deploy verification ($OVERLAY)"
+    echo "  Pods in $NAMESPACE:"
+    kubectl get pods -n "$NAMESPACE" -o wide --no-headers 2>/dev/null | while read -r line; do
+      POD_STATUS=$(echo "$line" | awk '{print $3}')
+      if [ "$POD_STATUS" = "Running" ] || [ "$POD_STATUS" = "Completed" ]; then
+        echo -e "    ${GREEN}●${NC} $line"
+      else
+        echo -e "    ${RED}●${NC} $line"
+      fi
+    done
+
+    echo ""
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  ✅ Kustomize deployment complete ($OVERLAY)!${NC}"
+    echo -e "${GREEN}══════════════════════════════════════════════════${NC}"
+  else
+    echo ""
+    echo -e "${GREEN}✅ Kustomize dry run complete ($OVERLAY) — all manifests validated${NC}"
+  fi
+
+  exit 0
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -282,6 +383,12 @@ if [ -z "$COMPONENT" ] || [ "$COMPONENT" = "monitoring" ]; then
   fi
 
   apply "$K8S_DIR/monitoring/canton-health-cronjob.yaml" "canton health check cronjob"
+
+  # Grafana dashboards (auto-provisioned via sidecar label)
+  apply "$K8S_DIR/monitoring/grafana-dashboards.yaml" "grafana dashboard configmaps"
+
+  # Loki logging stack
+  apply "$K8S_DIR/monitoring/loki-stack.yaml" "loki logging stack"
 fi
 
 # ══════════════════════════════════════════════════════════════
