@@ -194,8 +194,14 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         dailyCapIncreaseLimit = _limit;
     }
 
+    /// @notice Maximum attestation IDs per migration batch to prevent gas DoS
+    /// @dev SOL-H-10: Limits unbounded loop in migrateUsedAttestations
+    uint256 public constant MAX_MIGRATION_BATCH = 200;
+
     /// @notice Migrate used attestation IDs from previous bridge version
-    /// @dev Must be called during upgrade to prevent cross-version replay attacks
+    /// @dev Must be called during upgrade to prevent cross-version replay attacks.
+    ///      SOL-H-10: Batch size capped at MAX_MIGRATION_BATCH to prevent gas DoS.
+    ///      Call multiple times for large migrations.
     /// @param attestationIds Array of attestation IDs that were used in the previous bridge
     /// @param previousBridge Address of the previous bridge contract (for audit trail)
     function migrateUsedAttestations(
@@ -203,6 +209,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
         address previousBridge
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (previousBridge == address(0)) revert InvalidPreviousBridge();
+        if (attestationIds.length > MAX_MIGRATION_BATCH) revert BatchTooLarge();
         for (uint256 i = 0; i < attestationIds.length; i++) {
             usedAttestationIds[attestationIds[i]] = true;
         }
@@ -445,7 +452,8 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     }
 
     /// @notice Set minimum bridge-out amount (prevents dust bridge requests)
-    function setBridgeOutMinAmount(uint256 _min) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-03: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — bridge parameter requires governance delay
+    function setBridgeOutMinAmount(uint256 _min) external onlyRole(TIMELOCK_ROLE) {
         emit BridgeOutMinAmountUpdated(bridgeOutMinAmount, _min);
         bridgeOutMinAmount = _min;
     }

@@ -63,7 +63,8 @@ describe("LiquidationEngine", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000 // 50% close factor
+      5000, // 50% close factor
+      owner.address // timelockController
     );
 
     // Grant roles

@@ -994,7 +994,8 @@ contract TreasuryV2 is
         _pause();
     }
 
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-03: Changed from DEFAULT_ADMIN_ROLE to onlyTimelock — consistent unpause governance
+    function unpause() external onlyTimelock {
         _unpause();
     }
 

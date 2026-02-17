@@ -86,7 +86,8 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
 
     /// @notice Set the local chain cap as percentage of global supply cap
     /// @param _bps Basis points (e.g., 6000 = 60%). Both chains should sum to <= 12000 for 20% safety margin.
-    function setLocalCapBps(uint256 _bps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-M-19: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — cap percentage is a critical parameter
+    function setLocalCapBps(uint256 _bps) external onlyRole(TIMELOCK_ROLE) {
         if (_bps < 1000 || _bps > 10000) revert LocalCapOutOfRange();
         emit LocalCapBpsUpdated(localCapBps, _bps);
         localCapBps = _bps;

@@ -391,7 +391,8 @@ describe("FUZZ: LiquidationEngine", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000
+      5000,
+      owner.address
     );
 
     // Grant roles

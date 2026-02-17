@@ -1481,7 +1481,8 @@ describe("LiquidationEngine — Additional Coverage (Audit)", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000 // closeFactorBps = 50%
+      5000, // closeFactorBps = 50%
+      deployer.address // timelockController
     );
 
     // Grant roles

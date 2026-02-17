@@ -46,7 +46,7 @@ contract ReentrancyTest is Test {
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),
-            address(musd), 5000
+            address(musd), 5000, address(this)
         );
 
         oracle.setFeed(address(weth), address(ethFeed), 1 hours, 18, 0);
