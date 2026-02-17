@@ -1,16 +1,16 @@
 {
   "/_document": "pages/_document.js",
-  "/AdminPage": "pages/AdminPage.html",
-  "/BorrowPage": "pages/BorrowPage.html",
-  "/BridgePage": "pages/BridgePage.html",
-  "/DashboardPage": "pages/DashboardPage.html",
-  "/LeveragePage": "pages/LeveragePage.html",
-  "/LiquidationsPage": "pages/LiquidationsPage.html",
-  "/MintPage": "pages/MintPage.html",
-  "/StakePage": "pages/StakePage.html",
-  "/": "pages/index.html",
-  "/revenue-model": "pages/revenue-model.html",
-  "/_app": "pages/_app.js",
+  "/AdminPage": "pages/AdminPage.js",
+  "/BridgePage": "pages/BridgePage.js",
+  "/BorrowPage": "pages/BorrowPage.js",
+  "/DashboardPage": "pages/DashboardPage.js",
+  "/MintPage": "pages/MintPage.js",
+  "/PointsPage": "pages/PointsPage.js",
+  "/api/onboard": "pages/api/onboard.js",
+  "/api/prices": "pages/api/prices.js",
+  "/StakePage": "pages/StakePage.js",
+  "/api/yields": "pages/api/yields.js",
+  "/": "pages/index.js",
   "/_error": "pages/_error.js",
-  "/404": "pages/404.html"
+  "/_app": "pages/_app.js"
 }

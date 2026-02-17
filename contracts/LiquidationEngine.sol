@@ -107,13 +107,15 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
         address _borrowModule,
         address _oracle,
         address _musd,
-        uint256 _closeFactorBps
+        uint256 _closeFactorBps,
+        address _timelockController
     ) {
         if (_vault == address(0)) revert InvalidVault();
         if (_borrowModule == address(0)) revert InvalidBorrowModule();
         if (_oracle == address(0)) revert InvalidOracle();
         if (_musd == address(0)) revert InvalidMusd();
         if (_closeFactorBps == 0 || _closeFactorBps > 10000) revert InvalidCloseFactor();
+        if (_timelockController == address(0)) revert InvalidAddress();
 
         vault = ICollateralVaultLiq(_vault);
         borrowModule = IBorrowModule(_borrowModule);
@@ -124,6 +126,9 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(ENGINE_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
     }
 
     /// @notice Liquidate an undercollateralized position
@@ -269,7 +274,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Write off bad debt for a specific borrower
     /// @dev Called after all collateral has been seized and position is fully underwater.
     ///      Reduces totalBadDebt accounting so protocol solvency metrics are accurate.
-    function socializeBadDebt(address borrower) external onlyRole(ENGINE_ADMIN_ROLE) {
+    /// @dev SOL-M-21: Changed from ENGINE_ADMIN_ROLE to TIMELOCK_ROLE — bad debt write-off is a critical operation
+    function socializeBadDebt(address borrower) external onlyRole(TIMELOCK_ROLE) {
         uint256 amount = borrowerBadDebt[borrower];
         if (amount == 0) revert NoBadDebt();
         borrowerBadDebt[borrower] = 0;
@@ -289,9 +295,8 @@ contract LiquidationEngine is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause liquidations
-    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties.
-    /// Ensures a compromised PAUSER cannot immediately re-enable liquidations.
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-03: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — consistent unpause governance
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 }

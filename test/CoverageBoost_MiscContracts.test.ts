@@ -392,7 +392,8 @@ describe("CoverageBoost — Misc Contracts", function () {
         await borrowModule.getAddress(),
         await priceOracle.getAddress(),
         await musd.getAddress(),
-        5000
+        5000,
+        owner.address
       );
 
       // Grant roles
@@ -419,20 +420,23 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert on invalid constructor args", async function () {
       const LE = await ethers.getContractFactory("LiquidationEngine");
       await expect(
-        LE.deploy(ethers.ZeroAddress, await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000)
+        LE.deploy(ethers.ZeroAddress, await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWithCustomError(LE, "InvalidVault");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), ethers.ZeroAddress, await priceOracle.getAddress(), await musd.getAddress(), 5000)
+        LE.deploy(await collateralVault.getAddress(), ethers.ZeroAddress, await priceOracle.getAddress(), await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWithCustomError(LE, "InvalidBorrowModule");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), ethers.ZeroAddress, await musd.getAddress(), 5000)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), ethers.ZeroAddress, await musd.getAddress(), 5000, owner.address)
       ).to.be.revertedWithCustomError(LE, "InvalidOracle");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), ethers.ZeroAddress, 5000)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), ethers.ZeroAddress, 5000, owner.address)
       ).to.be.revertedWithCustomError(LE, "InvalidMusd");
       await expect(
-        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 0)
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 0, owner.address)
       ).to.be.revertedWithCustomError(LE, "InvalidCloseFactor");
+      await expect(
+        LE.deploy(await collateralVault.getAddress(), await borrowModule.getAddress(), await priceOracle.getAddress(), await musd.getAddress(), 5000, ethers.ZeroAddress)
+      ).to.be.revertedWithCustomError(LE, "InvalidAddress");
     });
 
     // --- liquidate: INVALID_AMOUNT ---

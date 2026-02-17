@@ -767,8 +767,9 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         _pause();
     }
 
-    /// @notice Unpause leverage operations (requires admin for separation of duties)
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Unpause leverage operations
+    /// @dev SOL-H-03: Changed from DEFAULT_ADMIN_ROLE to onlyTimelock — consistent unpause governance
+    function unpause() external onlyTimelock {
         _unpause();
     }
 }

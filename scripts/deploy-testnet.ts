@@ -125,7 +125,8 @@ async function main() {
     borrowAddress,
     oracleAddress,
     musdAddress,
-    CLOSE_FACTOR_BPS
+    CLOSE_FACTOR_BPS,
+    timelockAddress
   );
   await liquidation.waitForDeployment();
   const liquidationAddress = await liquidation.getAddress();
