@@ -15,7 +15,7 @@ const CONTRACTS = {
   MockWETH: "0x7999F2894290F2Ce34a508eeff776126D9a7D46e",
   MockWBTC: "0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F",
   // Deployed LeverageVault
-  LeverageVault: "0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC",
+  LeverageVault: "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
 };
 
 // Mock Chainlink feeds from deploy-mock-oracles.ts
@@ -66,50 +66,32 @@ async function main() {
   // Gas limit constant for public RPC compatibility
   const GAS = { gasLimit: 300_000 };
 
-  try {
-    const config = await collateralVault.getConfig(CONTRACTS.MockWETH);
-    console.log(`   Enabled: ${config.enabled}`);
-    console.log(`   Collateral Factor: ${config.collateralFactorBps / 100}%`);
-    console.log(`   Liquidation Threshold: ${config.liquidationThresholdBps / 100}%`);
-    console.log(`   Liquidation Penalty: ${config.liquidationPenaltyBps / 100}%`);
-    
-    if (!config.enabled) {
-      console.log("\n   ⚠️ WETH not enabled as collateral. Adding it now...");
-      const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
-      if (!(await collateralVault.hasRole(TIMELOCK_ROLE, signer.address))) {
-        // TIMELOCK_ROLE is self-governed — can only be granted by existing holders
-        // Try granting via DEFAULT_ADMIN_ROLE (will fail if roleAdmin != DEFAULT_ADMIN_ROLE)
-        try {
-          console.log("   Granting TIMELOCK_ROLE...");
-          await (await collateralVault.grantRole(TIMELOCK_ROLE, signer.address, GAS)).wait();
-        } catch {
-          console.log("   ⚠️ Cannot grant TIMELOCK_ROLE (self-governed). Need old deployer key.");
-          console.log("   💡 Run: npx hardhat run scripts/fix-timelock-roles.ts --network sepolia");
-          console.log("   💡 (with old deployer key in .env)");
-          console.log("   Skipping collateral setup...");
-          return;
-        }
-      }
-      await (await collateralVault.addCollateral(CONTRACTS.MockWETH, 7500, 8000, 500, GAS)).wait();
-      console.log("   ✅ Added WETH as collateral");
-    }
-  } catch (e: any) {
-    if (e?.message?.includes("Cannot grant")) throw e;
-    console.log("   ⚠️ WETH not configured. Adding it now...");
+  const config = await collateralVault.getConfig(CONTRACTS.MockWETH);
+  console.log(`   Enabled: ${config.enabled}`);
+  console.log(`   Collateral Factor: ${Number(config.collateralFactorBps) / 100}%`);
+  console.log(`   Liquidation Threshold: ${Number(config.liquidationThresholdBps) / 100}%`);
+  console.log(`   Liquidation Penalty: ${Number(config.liquidationPenaltyBps) / 100}%`);
+  
+  if (!config.enabled && Number(config.collateralFactorBps) === 0) {
+    console.log("\n   ⚠️ WETH not configured. Adding it now...");
     const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
     if (!(await collateralVault.hasRole(TIMELOCK_ROLE, signer.address))) {
-      try {
-        console.log("   Granting TIMELOCK_ROLE...");
-        await (await collateralVault.grantRole(TIMELOCK_ROLE, signer.address, GAS)).wait();
-      } catch {
-        console.log("   ⚠️ Cannot grant TIMELOCK_ROLE (self-governed). Need old deployer key.");
-        console.log("   💡 Run: npx hardhat run scripts/fix-timelock-roles.ts --network sepolia");
-        console.log("   💡 (with old deployer key in .env)");
-        return;
-      }
+      console.log("   ⚠️ No TIMELOCK_ROLE. Run fix-timelock-roles.ts first.");
+      return;
     }
     await (await collateralVault.addCollateral(CONTRACTS.MockWETH, 7500, 8000, 500, GAS)).wait();
     console.log("   ✅ Added WETH as collateral");
+  } else if (!config.enabled) {
+    console.log("   ⚠️ WETH is disabled but configured. Enabling...");
+    const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+    if (!(await collateralVault.hasRole(TIMELOCK_ROLE, signer.address))) {
+      console.log("   ⚠️ No TIMELOCK_ROLE. Run fix-timelock-roles.ts first.");
+      return;
+    }
+    await (await collateralVault.enableCollateral(CONTRACTS.MockWETH, GAS)).wait();
+    console.log("   ✅ Re-enabled WETH as collateral");
+  } else {
+    console.log("   ✅ WETH already configured and enabled");
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -122,9 +104,14 @@ async function main() {
     console.log("   ⚠️ WETH not enabled in LeverageVault. Enabling...");
     // Ensure we have LEVERAGE_ADMIN_ROLE
     const LEVERAGE_ADMIN_ROLE = ethers.keccak256(ethers.toUtf8Bytes("LEVERAGE_ADMIN_ROLE"));
-    if (!(await leverageVault.hasRole(LEVERAGE_ADMIN_ROLE, signer.address))) {
+    const hasLevAdmin = await leverageVault.hasRole(LEVERAGE_ADMIN_ROLE, signer.address);
+    if (!hasLevAdmin) {
       console.log("   Granting LEVERAGE_ADMIN_ROLE...");
-      await (await leverageVault.grantRole(LEVERAGE_ADMIN_ROLE, signer.address, GAS)).wait();
+      const grantTx = await leverageVault.grantRole(LEVERAGE_ADMIN_ROLE, signer.address, GAS);
+      await grantTx.wait();
+      console.log("   ✅ LEVERAGE_ADMIN_ROLE granted");
+      // Wait for nonce to propagate on public RPC
+      await new Promise(r => setTimeout(r, 4000));
     }
     const enableTx = await leverageVault.enableToken(CONTRACTS.MockWETH, 3000, GAS); // 0.3% fee tier
     await enableTx.wait();
@@ -134,9 +121,46 @@ async function main() {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // Step 4: Approve and open leveraged position
+  // Step 4: Close any existing position, then open new one
   // ═══════════════════════════════════════════════════════════
   console.log("\n4️⃣ Opening leveraged position...");
+
+  // Check for existing position (from previous test runs)
+  const existingPos = await leverageVault.getPosition(signer.address);
+  if (existingPos.totalCollateral > 0n) {
+    console.log("   ⚠️ Existing position found. Closing first...");
+    const existingDebt = await borrowModule.totalDebt(signer.address);
+    
+    if (existingDebt > 0n) {
+      // User likely has mUSD from prior test runs
+      const musdBal = await musd.balanceOf(signer.address);
+      const debtWithBuffer = existingDebt * 101n / 100n;
+      
+      if (musdBal < debtWithBuffer) {
+        console.log("   📝 Need more mUSD, minting via DirectMintV2...");
+        const directMint = await ethers.getContractAt("DirectMintV2", "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7");
+        const mockUSDC = await ethers.getContractAt("MockERC20", CONTRACTS.MockUSDC);
+        const shortfall = debtWithBuffer - musdBal;
+        const usdcNeeded = (shortfall / 10n ** 12n) + 1000000n;
+        await (await mockUSDC.mint(signer.address, usdcNeeded, GAS)).wait();
+        await new Promise(r => setTimeout(r, 5000));
+        await (await mockUSDC.approve(await directMint.getAddress(), usdcNeeded, GAS)).wait();
+        await new Promise(r => setTimeout(r, 5000));
+        await (await directMint.mint(usdcNeeded, { gasLimit: 500_000 })).wait();
+        await new Promise(r => setTimeout(r, 5000));
+      }
+      
+      await (await musd.approve(CONTRACTS.LeverageVault, ethers.MaxUint256, GAS)).wait();
+      await new Promise(r => setTimeout(r, 5000));
+      
+      await (await leverageVault.closeLeveragedPositionWithMusd(debtWithBuffer, 0, { gasLimit: 1_000_000 })).wait();
+      console.log("   ✅ Existing position closed");
+    } else {
+      await (await leverageVault.closeLeveragedPositionWithMusd(0, 0, { gasLimit: 1_000_000 })).wait();
+      console.log("   ✅ Existing position closed (no debt)");
+    }
+    await new Promise(r => setTimeout(r, 5000));
+  }
   
   const depositAmount = ethers.parseEther("5"); // 5 WETH = $12,500
   
@@ -184,7 +208,7 @@ async function main() {
   );
   const healthFactor = (collateralValue * 8000n) / (position.totalDebt * 10000n);
   console.log(`   Collateral Value: $${ethers.formatUnits(collateralValue, 18)}`);
-  console.log(`   Health Factor: ${Number(healthFactor) / 100}`);
+  console.log(`   Health Factor: ${Number(collateralValue * 8000n / position.totalDebt) / 10000}`);
 
   // ═══════════════════════════════════════════════════════════
   // Step 6: Simulate price drop (for liquidation testing)
@@ -197,7 +221,7 @@ async function main() {
     const newPrice = 2000n * 10n ** 8n; // $2000 (down from $2500)
     console.log("   ⚠️ Dropping ETH price to $2,000 (-20%)...");
     
-    const updateTx = await mockFeed.updateAnswer(newPrice, GAS);
+    const updateTx = await mockFeed.setAnswer(newPrice, GAS);
     await updateTx.wait();
     
     // Check new health
@@ -207,15 +231,16 @@ async function main() {
     );
     const newHealthFactor = (newCollateralValue * 8000n) / (position.totalDebt * 10000n);
     console.log(`   📉 New Collateral Value: $${ethers.formatUnits(newCollateralValue, 18)}`);
-    console.log(`   📉 New Health Factor: ${Number(newHealthFactor) / 100}`);
+    console.log(`   📉 New Health Factor: ${Number(newCollateralValue * 8000n / position.totalDebt) / 10000}`);
     
     // Check if liquidatable
-    const isLiquidatable = await borrowModule.isLiquidatable(signer.address);
+    const liquidationEngine = await ethers.getContractAt("LiquidationEngine", "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8");
+    const isLiquidatable = await liquidationEngine.isLiquidatable(signer.address);
     console.log(`   🔴 Is Liquidatable: ${isLiquidatable}`);
     
     // Restore price
     console.log("\n   🔄 Restoring ETH price to $2,500...");
-    const restoreTx = await mockFeed.updateAnswer(2500n * 10n ** 8n, GAS);
+    const restoreTx = await mockFeed.setAnswer(2500n * 10n ** 8n, GAS);
     await restoreTx.wait();
   }
 
@@ -233,20 +258,57 @@ async function main() {
   console.log(`   Debt to repay: ${ethers.formatUnits(debtNeeded, 18)} mUSD`);
   
   if (debtNeeded > 0n) {
-    // Get mUSD via DirectMintV2 to close position
-    console.log("   📝 Getting mUSD via DirectMintV2 to repay debt...");
     const mockUSDC = await ethers.getContractAt("MockERC20", CONTRACTS.MockUSDC);
     const directMint = await ethers.getContractAt("DirectMintV2", "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7");
     
-    // Need USDC (6 decimals) → mUSD (18 decimals). Add 2% buffer for fees
-    const usdcNeeded = (debtNeeded / 10n ** 12n) * 102n / 100n;
-    await (await mockUSDC.mint(signer.address, usdcNeeded, GAS)).wait();
-    await (await mockUSDC.approve(await directMint.getAddress(), usdcNeeded, GAS)).wait();
-    await (await directMint.mint(usdcNeeded, { gasLimit: 500_000 })).wait();
+    // Add 5% buffer for accrued interest during close flow
+    const debtWithBuffer = debtNeeded * 105n / 100n;
     
-    await (await musd.approve(CONTRACTS.LeverageVault, debtNeeded, GAS)).wait();
+    // Check existing mUSD balance and mint more if needed
+    // DirectMintV2 has 1% mint fee, so account for that by minting 2% extra
+    const existingMusd = await musd.balanceOf(signer.address);
+    console.log(`   Existing mUSD balance: ${ethers.formatUnits(existingMusd, 18)}`);
+    console.log(`   mUSD needed (with 5% buffer): ${ethers.formatUnits(debtWithBuffer, 18)}`);
     
-    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtNeeded, 0, { gasLimit: 1_000_000 });
+    if (existingMusd < debtWithBuffer) {
+      console.log("   📝 Minting additional mUSD via DirectMintV2 (1% mint fee applies)...");
+      const shortfall = debtWithBuffer - existingMusd;
+      // Account for DirectMintV2's 1% fee: multiply by 100/99 and add generous buffer
+      const usdcNeeded = (shortfall * 102n / 99n / 10n ** 12n) + 10000000n; // +10 USDC buffer
+      console.log(`   Minting ${ethers.formatUnits(usdcNeeded, 6)} USDC worth of mUSD...`);
+      
+      await (await mockUSDC.mint(signer.address, usdcNeeded, GAS)).wait();
+      await new Promise(r => setTimeout(r, 5000));
+      await (await mockUSDC.approve(await directMint.getAddress(), usdcNeeded, GAS)).wait();
+      await new Promise(r => setTimeout(r, 5000));
+      await (await directMint.mint(usdcNeeded, { gasLimit: 500_000 })).wait();
+      await new Promise(r => setTimeout(r, 5000));
+      
+      // Verify balance after mint
+      const newMusd = await musd.balanceOf(signer.address);
+      console.log(`   mUSD balance after mint: ${ethers.formatUnits(newMusd, 18)}`);
+      if (newMusd < debtWithBuffer) {
+        console.log(`   ⚠️ Still insufficient! Minting another batch...`);
+        const bigBatch = debtWithBuffer * 2n / 10n ** 12n; // 2x the debt in USDC
+        await (await mockUSDC.mint(signer.address, bigBatch, GAS)).wait();
+        await new Promise(r => setTimeout(r, 5000));
+        await (await mockUSDC.approve(await directMint.getAddress(), bigBatch, GAS)).wait();
+        await new Promise(r => setTimeout(r, 5000));
+        await (await directMint.mint(bigBatch, { gasLimit: 500_000 })).wait();
+        await new Promise(r => setTimeout(r, 5000));
+        const finalMusd = await musd.balanceOf(signer.address);
+        console.log(`   mUSD balance after 2nd mint: ${ethers.formatUnits(finalMusd, 18)}`);
+      }
+    } else {
+      console.log("   ✅ Sufficient mUSD balance already available");
+    }
+    
+    // Approve mUSD for LeverageVault (use max approval to avoid rounding issues)
+    await (await musd.approve(CONTRACTS.LeverageVault, ethers.MaxUint256, GAS)).wait();
+    await new Promise(r => setTimeout(r, 5000));
+    
+    console.log(`   Providing ${ethers.formatUnits(debtWithBuffer, 18)} mUSD to close position...`);
+    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtWithBuffer, 0, { gasLimit: 1_000_000 });
     await closeTx.wait();
     console.log("   ✅ Position closed!");
   }

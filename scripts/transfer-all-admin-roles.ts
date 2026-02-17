@@ -57,7 +57,7 @@ const CONTRACTS: Record<string, { address: string; artifact: string; extraRoles?
     artifact: "LiquidationEngine",
   },
   LeverageVault: {
-    address: "0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC",
+    address: "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
     artifact: "LeverageVault",
   },
   GlobalPauseRegistry: {
