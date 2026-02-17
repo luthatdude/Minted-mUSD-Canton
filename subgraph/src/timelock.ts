@@ -6,12 +6,12 @@ import {
   MinDelayChange,
   RoleGranted,
   RoleRevoked,
-} from "../../generated/MintedTimelockController/MintedTimelockController";
+} from "../generated/MintedTimelockController/MintedTimelockController";
 import {
   TimelockOperation,
   TimelockDelayChange,
   RoleChange,
-} from "../../generated/schema";
+} from "../generated/schema";
 
 export function handleCallScheduled(event: CallScheduled): void {
   let id =
