@@ -9,6 +9,7 @@ module CantonCoinToken where
 import CantonDirectMint (Money)
 -- DAML-H-01: Import Compliance module for transfer validation
 import Compliance (ComplianceRegistry(..), ValidateTransfer(..))
+import UserPrivacySettings (lookupUserObservers)
 
 -- | Represents Canton coin held on Canton Network.
 -- In production, this wraps the native Canton validator token.
@@ -25,10 +26,10 @@ template CantonCoin
 
     -- | Update observers from user's privacy settings
     choice CantonCoin_UpdateObservers : ContractId CantonCoin
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     -- DAML-H-01: Compliance validated at transfer initiation (matches CantonMUSD_Transfer pattern)
     choice CantonCoin_Transfer : ContractId CantonCoinTransferProposal
