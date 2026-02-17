@@ -16,6 +16,8 @@ metadata:
     app.kubernetes.io/name: bridge-relay
     app.kubernetes.io/component: relay
     app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "0.0.0"  # L-1: Replaced by CI with git SHA
+    app.kubernetes.io/managed-by: kubectl
   annotations:
     kubernetes.io/enforce-mountable-secrets: "true"
 automountServiceAccountToken: false
