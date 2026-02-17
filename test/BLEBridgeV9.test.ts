@@ -62,6 +62,10 @@ describe("BLEBridgeV9", function () {
     // Grant TIMELOCK_ROLE to deployer for admin function tests
     const TIMELOCK_ROLE = await bridge.TIMELOCK_ROLE();
     await bridge.grantRole(TIMELOCK_ROLE, deployer.address);
+
+    // BRIDGE-M-04: Grant RELAYER_ROLE to deployer for attestation tests
+    const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    await bridge.grantRole(RELAYER_ROLE, deployer.address);
   });
 
   // Helper to create sorted signatures
@@ -390,6 +394,48 @@ describe("BLEBridgeV9", function () {
 
       await expect(bridge.processAttestation(attestation, sigs))
         .to.be.revertedWithCustomError(bridge, "EnforcedPause");
+    });
+  });
+
+  describe("BRIDGE-M-04: Relayer Access Control", function () {
+    it("Should reject processAttestation from non-relayer", async function () {
+      const attestation = await createAttestation(1n, ethers.parseEther("1000000"), BigInt(await time.latest()));
+      const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
+
+      // user does not have RELAYER_ROLE
+      await expect(bridge.connect(user).processAttestation(attestation, sigs))
+        .to.be.reverted;
+    });
+
+    it("Should allow processAttestation from granted relayer", async function () {
+      const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+      await bridge.grantRole(RELAYER_ROLE, user.address);
+
+      const attestation = await createAttestation(1n, ethers.parseEther("1100000"), BigInt(await time.latest()));
+      const sigs = await createSortedSignatures(attestation, validators.slice(0, 3));
+
+      await expect(bridge.connect(user).processAttestation(attestation, sigs))
+        .to.emit(bridge, "AttestationReceived");
+    });
+
+    it("Should reject processAttestation after relayer role is revoked", async function () {
+      const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+      await bridge.grantRole(RELAYER_ROLE, user.address);
+
+      // Process one attestation successfully
+      const attestation1 = await createAttestation(1n, ethers.parseEther("1100000"), BigInt(await time.latest()));
+      const sigs1 = await createSortedSignatures(attestation1, validators.slice(0, 3));
+      await bridge.connect(user).processAttestation(attestation1, sigs1);
+
+      // Revoke role
+      await bridge.revokeRole(RELAYER_ROLE, user.address);
+
+      // Should fail now
+      await time.increase(61);
+      const attestation2 = await createAttestation(2n, ethers.parseEther("1100000"), BigInt(await time.latest()));
+      const sigs2 = await createSortedSignatures(attestation2, validators.slice(0, 3));
+      await expect(bridge.connect(user).processAttestation(attestation2, sigs2))
+        .to.be.reverted;
     });
   });
 
