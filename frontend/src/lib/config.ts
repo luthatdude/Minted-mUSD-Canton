@@ -35,7 +35,7 @@ export function validateContracts(): { valid: boolean; missing: string[] } {
 // Move to server-side API routes for production. This is a placeholder.
 export const CANTON_CONFIG = {
   ledgerHost: process.env.NEXT_PUBLIC_CANTON_LEDGER_HOST || "localhost",
-  ledgerPort: parseInt(process.env.NEXT_PUBLIC_CANTON_LEDGER_PORT || "6865"),
+  ledgerPort: parseInt(process.env.NEXT_PUBLIC_CANTON_LEDGER_PORT || "7575"),
   // Use HTTPS in production, HTTP only for local development
   protocol: process.env.NODE_ENV === 'production' 
     ? (process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "https")

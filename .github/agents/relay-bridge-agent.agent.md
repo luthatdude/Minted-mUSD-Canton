@@ -86,7 +86,7 @@ validator-node-v2.ts              yield-keeper.ts              smusd-sync.ts
 ## Tech Stack
 
 - **ethers.js 6** — Ethereum RPC and contract interaction
-- **@daml/ledger** — Canton JSON API / gRPC client
+- **canton-client.ts** — Custom Canton v2 HTTP JSON API client (replaces deprecated @daml/ledger)
 - **AWS KMS** — Key management for validator signing
 - **Docker Compose** — Local 3-validator setup with secrets
 - **Node.js 18+** — Runtime
