@@ -1,0 +1,16 @@
+# Minted Bot — Docker ignore
+# Keep the build context small and exclude sensitive files
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.git/
+.gitignore
+coverage/
+test/
+__tests__/
+jest.config.ts
+README.md
+*.md
