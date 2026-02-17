@@ -125,7 +125,8 @@ spec:
       containers:
         - name: bot
           # C-2: Pin to immutable SHA256 digest from CI build
-          image: ghcr.io/minted-protocol/liquidation-bot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # Built: 2026-02-17 from bot/Dockerfile (node:20-alpine multi-stage)
+          image: ghcr.io/minted-protocol/liquidation-bot@sha256:49d1cbc0d8f39bf7fe7d86769522b2acea68eee6e092e0311145760691580588
           imagePullPolicy: IfNotPresent
           command: ["node", "dist/index.js"]
           env:
