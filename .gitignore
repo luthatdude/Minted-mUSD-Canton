@@ -8,6 +8,9 @@ install.sh
 # Certora Prover build artifacts (contains anonymous URL tokens)
 .certora_internal/
 
+# Ephemeral deployment/upgrade state (stale data risk)
+scripts/.upgrade-state.json
+
 # Coverage reports (auto-generated)
 coverage/
 coverage.json

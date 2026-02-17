@@ -169,11 +169,11 @@ async function main() {
   await approveTx.wait();
   console.log(`   ✅ Approved ${ethers.formatEther(depositAmount)} WETH`);
 
-  // Open 2x leveraged position
-  const targetLeverage = 20; // 2.0x
-  const maxLoops = 5;
+  // Open 3x leveraged position
+  const targetLeverage = 30; // 3.0x
+  const maxLoops = 10;
   
-  console.log(`   📊 Opening ${targetLeverage / 10}x leveraged position...`);
+  console.log(`   📊 Opening ${targetLeverage / 10}x leveraged position (target 3x)...`);
   
   const openTx = await leverageVault.openLeveragedPosition(
     CONTRACTS.MockWETH,
