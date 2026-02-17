@@ -1,0 +1,729 @@
+# Bridge Relay + Validator Deployment
+# Matches NetworkPolicy label: app.kubernetes.io/name: bridge-relay
+# Bridges finalized attestations between Canton and Ethereum (BLEBridgeV9)
+#
+# Prerequisites:
+#   - Canton participant running (canton-participant service)
+#   - bridge-relay-secrets created (see external-secrets.yaml or manual kubectl)
+#   - DAR uploaded and protocol initialized (canton-init.sh)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bridge-relay
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-relay
+    app.kubernetes.io/component: relay
+    app.kubernetes.io/part-of: minted-musd
+  annotations:
+    kubernetes.io/enforce-mountable-secrets: "true"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bridge-relay-binding
+  namespace: musd-canton
+subjects:
+  - kind: ServiceAccount
+    name: bridge-relay
+    namespace: musd-canton
+roleRef:
+  kind: Role
+  name: canton-minimal
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bridge-validator
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-validator
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/part-of: minted-musd
+  annotations:
+    kubernetes.io/enforce-mountable-secrets: "true"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bridge-validator-binding
+  namespace: musd-canton
+subjects:
+  - kind: ServiceAccount
+    name: bridge-validator
+    namespace: musd-canton
+roleRef:
+  kind: Role
+  name: canton-minimal
+  apiGroup: rbac.authorization.k8s.io
+---
+# Relay Service — headless (health-check only, no external traffic)
+apiVersion: v1
+kind: Service
+metadata:
+  name: bridge-relay
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-relay
+    app.kubernetes.io/component: relay
+spec:
+  type: ClusterIP
+  ports:
+    - name: health
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: bridge-relay
+---
+# ============================================================
+# RELAY DEPLOYMENT
+# Single replica — stateless but should not run concurrent copies
+# to avoid duplicate attestation submissions
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge-relay
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-relay
+    app.kubernetes.io/component: relay
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Prevent duplicate relay instances
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-relay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bridge-relay
+        app.kubernetes.io/component: relay
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: bridge-relay
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Wait for Canton participant to be reachable
+      initContainers:
+        - name: wait-for-canton
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Canton participant Ledger API..."
+              until nc -z canton-participant.musd-canton.svc.cluster.local 5011; do
+                echo "  participant:5011 not ready, retrying in 3s..."
+                sleep 3
+              done
+              echo "Canton participant is reachable."
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: relay
+          # C-2: Pin to immutable SHA256 digest from CI build.
+          # Update after each CI run:
+          #   export DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/minted-protocol/bridge-relay:$(git rev-parse --short HEAD))
+          #   sed -i "s|bridge-relay@sha256:.*|${DIGEST#*@}|" k8s/canton/relay-deployment.yaml
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/relay-service.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CANTON_HOST
+              value: "canton-participant.musd-canton.svc.cluster.local"
+            - name: CANTON_PORT
+              value: "5011"
+            - name: CANTON_USE_TLS
+              value: "true"
+            - name: CANTON_PARTY
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: CANTON_PARTY
+            - name: BRIDGE_CONTRACT_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: BRIDGE_CONTRACT_ADDRESS
+            - name: TREASURY_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: TREASURY_ADDRESS
+            - name: CONFIRMATIONS
+              value: "12"   # Mainnet: 12 blocks; Sepolia: 2
+            - name: POLL_INTERVAL_MS
+              value: "5000"
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: HEALTH_BIND_HOST
+              value: "0.0.0.0"  # Must be 0.0.0.0 for K8s probes
+            - name: VALIDATOR_ADDRESSES
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: VALIDATOR_ADDRESSES
+            # Secrets mounted as files — never env vars
+            - name: CANTON_TOKEN
+              value: "file:///run/secrets/canton_token"
+            - name: RELAYER_KMS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: bridge-relay-secrets
+                  key: RELAYER_KMS_KEY_ID
+            - name: AWS_REGION
+              value: "us-east-1"
+          volumeMounts:
+            - name: relay-secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: relay-secrets
+          projected:
+            sources:
+              - secret:
+                  name: bridge-relay-secrets
+                  items:
+                    - key: CANTON_TOKEN
+                      path: canton_token
+                    - key: RELAYER_PRIVATE_KEY
+                      path: relayer_private_key
+                    - key: ETHEREUM_RPC_URL
+                      path: ethereum_rpc_url
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-relay
+---
+# ============================================================
+# VALIDATOR 1 DEPLOYMENT
+# Watches Canton for attestation requests, signs with KMS
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge-validator-1
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-validator
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/instance: validator-1
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-validator
+      app.kubernetes.io/instance: validator-1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bridge-validator
+        app.kubernetes.io/component: validator
+        app.kubernetes.io/instance: validator-1
+    spec:
+      serviceAccountName: bridge-validator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-canton
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command: ['sh', '-c', 'until nc -z canton-participant.musd-canton.svc.cluster.local 5011; do sleep 3; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: validator
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/validator-node-v2.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CANTON_HOST
+              value: "canton-participant.musd-canton.svc.cluster.local"
+            - name: CANTON_PORT
+              value: "5011"
+            - name: CANTON_USE_TLS
+              value: "true"
+            - name: VALIDATOR_PARTY
+              valueFrom:
+                secretKeyRef:
+                  name: validator-1-secrets
+                  key: VALIDATOR_PARTY
+            - name: VALIDATOR_ETH_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: validator-1-secrets
+                  key: VALIDATOR_ETH_ADDRESS
+            - name: KMS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: validator-1-secrets
+                  key: KMS_KEY_ID
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: BRIDGE_CONTRACT_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: BRIDGE_CONTRACT_ADDRESS
+            - name: MIN_COLLATERAL_RATIO_BPS
+              value: "11000"
+            - name: POLL_INTERVAL_MS
+              value: "3000"
+            # H-3: AWS credentials as env vars (SDK reads these natively)
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: validator-1-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: validator-1-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          # H-2: readinessProbe — verify heartbeat before marking Ready
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs=require('fs');
+                  try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs=require('fs');
+                  try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: secrets
+          projected:
+            sources:
+              - secret:
+                  name: validator-1-secrets
+                  items:
+                    - key: CANTON_TOKEN
+                      path: canton_token
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      # L-3: Spread validators across nodes for quorum resilience
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-validator
+---
+# ============================================================
+# VALIDATOR 2 DEPLOYMENT
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bridge-validator-2
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-validator
+    app.kubernetes.io/component: validator
+    app.kubernetes.io/instance: validator-2
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-validator
+      app.kubernetes.io/instance: validator-2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bridge-validator
+        app.kubernetes.io/component: validator
+        app.kubernetes.io/instance: validator-2
+    spec:
+      serviceAccountName: bridge-validator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-canton
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command: ['sh', '-c', 'until nc -z canton-participant.musd-canton.svc.cluster.local 5011; do sleep 3; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: validator
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/validator-node-v2.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CANTON_HOST
+              value: "canton-participant.musd-canton.svc.cluster.local"
+            - name: CANTON_PORT
+              value: "5011"
+            - name: CANTON_USE_TLS
+              value: "true"
+            - name: VALIDATOR_PARTY
+              valueFrom:
+                secretKeyRef:
+                  name: validator-2-secrets
+                  key: VALIDATOR_PARTY
+            - name: VALIDATOR_ETH_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: validator-2-secrets
+                  key: VALIDATOR_ETH_ADDRESS
+            - name: KMS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: validator-2-secrets
+                  key: KMS_KEY_ID
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: BRIDGE_CONTRACT_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: relay-config
+                  key: BRIDGE_CONTRACT_ADDRESS
+            - name: MIN_COLLATERAL_RATIO_BPS
+              value: "11000"
+            - name: POLL_INTERVAL_MS
+              value: "3000"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: validator-2-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: validator-2-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+          volumeMounts:
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs=require('fs');
+                  try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - |
+                  const fs=require('fs');
+                  try{const s=fs.statSync('/tmp/heartbeat');process.exit(Date.now()-s.mtimeMs<120000?0:1)}catch(e){process.exit(1)}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: secrets
+          projected:
+            sources:
+              - secret:
+                  name: validator-2-secrets
+                  items:
+                    - key: CANTON_TOKEN
+                      path: canton_token
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-validator
+---
+# ============================================================
+# RELAY CONFIGMAP
+# Non-sensitive config shared across relay + validators
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: bridge-relay
+    app.kubernetes.io/part-of: minted-musd
+data:
+  # Sepolia testnet — update for mainnet
+  BRIDGE_CONTRACT_ADDRESS: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+  TREASURY_ADDRESS: "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d"
+  CANTON_PARTY: "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4"
+  # JSON map: DAML Party → Ethereum address
+  VALIDATOR_ADDRESSES: |
+    {"minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4":"0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36"}
+---
+# ============================================================
+# RELAY NETWORKPOLICY
+# Must allow egress to Canton participant + Ethereum RPC
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bridge-relay-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-relay
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Health-check from K8s kubelet / monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Kubelet probes (no podSelector matches kube-system)
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Canton participant Ledger API
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 5011
+          protocol: TCP
+    # Ethereum RPC (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Validator NetworkPolicy — same egress as relay but no ingress needed
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bridge-validator-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-validator
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # Validators have no inbound traffic
+  egress:
+    # Canton participant Ledger API
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 5011
+          protocol: TCP
+    # AWS KMS (external HTTPS for signing)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# PDB for relay — maxUnavailable since single replica
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bridge-relay-pdb
+  namespace: musd-canton
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bridge-relay
