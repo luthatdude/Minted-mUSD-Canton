@@ -22,6 +22,10 @@ export const CONTRACTS: Record<string, string> = {
   MetaVault3: process.env.NEXT_PUBLIC_VAULT3_ADDRESS || "",
   GlobalPauseRegistry: process.env.NEXT_PUBLIC_GLOBAL_PAUSE_REGISTRY_ADDRESS || "",
   Timelock: process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS || "",
+  InterestRateModel: process.env.NEXT_PUBLIC_INTEREST_RATE_MODEL_ADDRESS || "",
+  DepositRouter: process.env.NEXT_PUBLIC_DEPOSIT_ROUTER_ADDRESS || "",
+  TreasuryV2: process.env.NEXT_PUBLIC_TREASURY_V2_ADDRESS || "",
+  WETH: process.env.NEXT_PUBLIC_WETH_ADDRESS || "",
 };
 
 // Validate contract addresses at config time
