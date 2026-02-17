@@ -255,6 +255,45 @@ export class CantonClient {
   }
 
   /**
+   * Create a contract on the ledger.
+   *
+   * @param templateId   Template of the contract to create
+   * @param payload      Contract payload (create arguments)
+   * @returns The contract creation result (transaction events)
+   */
+  async createContract<T = Record<string, unknown>>(
+    templateId: TemplateId,
+    payload: T
+  ): Promise<unknown> {
+    const commandId = `relay-create-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+
+    const tid: Record<string, string> = {
+      moduleName: templateId.moduleName,
+      entityName: templateId.entityName,
+    };
+    if (templateId.packageId) {
+      tid.packageId = templateId.packageId;
+    }
+
+    const body = {
+      userId: this.userId,
+      actAs: [this.actAs],
+      readAs: this.readAs,
+      commandId,
+      commands: [
+        {
+          createCommand: {
+            templateId: tid,
+            createArgument: payload,
+          },
+        },
+      ],
+    };
+
+    return this.request("POST", "/v2/commands/submit-and-wait", body);
+  }
+
+  /**
    * Exercise a choice on a contract.
    *
    * @param templateId   Template of the contract
@@ -354,4 +393,7 @@ export const TEMPLATES = {
   AttestationRequest: { moduleName: "Minted.Protocol.V3", entityName: "AttestationRequest" } as TemplateId,
   ValidatorSignature: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSignature" } as TemplateId,
   BridgeService:      { moduleName: "Minted.Protocol.V3", entityName: "BridgeService" } as TemplateId,
+  BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
+  BridgeInRequest:    { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" } as TemplateId,
+  MUSDSupplyService:  { moduleName: "Minted.Protocol.V3", entityName: "MUSDSupplyService" } as TemplateId,
 } as const;
