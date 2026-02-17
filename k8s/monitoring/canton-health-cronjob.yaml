@@ -1,0 +1,300 @@
+# Canton Health Monitor CronJob
+# Runs every 5 minutes to verify Canton participant, bridge relay,
+# and PostgreSQL are healthy. Sends Telegram alerts on failure.
+#
+# Adapted from scripts/canton-monitor.sh for Kubernetes
+# (HTTP-based checks instead of Docker inspect).
+#
+# Prerequisites:
+#   kubectl create secret generic telegram-alerting \
+#     --namespace=musd-canton \
+#     --from-literal=bot-token=<BOT_TOKEN> \
+#     --from-literal=chat-id=<CHAT_ID>
+#
+# Disable alerts: set TELEGRAM_ENABLED=false in the ConfigMap below.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canton-health-check
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-health-check
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: minted-musd
+data:
+  health-check.sh: |
+    #!/bin/sh
+    set -e
+
+    # ── Configuration ──────────────────────────────────────────
+    PARTICIPANT_HOST="${CANTON_PARTICIPANT_HOST:-canton-participant.musd-canton.svc.cluster.local}"
+    LEDGER_API_PORT="${CANTON_LEDGER_API_PORT:-5011}"
+    JSON_API_PORT="${CANTON_JSON_API_PORT:-7575}"
+    RELAY_HOST="${BRIDGE_RELAY_HOST:-bridge-relay.musd-canton.svc.cluster.local}"
+    RELAY_PORT="${BRIDGE_RELAY_PORT:-8080}"
+    POSTGRES_HOST="${POSTGRES_HOST:-postgres.musd-canton.svc.cluster.local}"
+    POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    TELEGRAM_ENABLED="${TELEGRAM_ENABLED:-true}"
+    TIMEOUT="${HTTP_TIMEOUT:-5}"
+
+    FAILURES=""
+    DETAILS=""
+
+    check() {
+      local name="$1" url="$2" expected_code="${3:-200}"
+      CODE=$(wget -q -O /dev/null -S --timeout="$TIMEOUT" "$url" 2>&1 | awk '/HTTP\//{print $2}' | tail -1) || CODE="000"
+      if [ "$CODE" = "$expected_code" ]; then
+        echo "✅ $name: OK (HTTP $CODE)"
+      else
+        echo "❌ $name: FAILED (HTTP $CODE, expected $expected_code)"
+        FAILURES="${FAILURES}${name}, "
+        DETAILS="${DETAILS}\n❌ $name: HTTP $CODE (expected $expected_code)"
+      fi
+    }
+
+    check_tcp() {
+      local name="$1" host="$2" port="$3"
+      if nc -z -w "$TIMEOUT" "$host" "$port" 2>/dev/null; then
+        echo "✅ $name: OK (port $port open)"
+      else
+        echo "❌ $name: FAILED (port $port unreachable)"
+        FAILURES="${FAILURES}${name}, "
+        DETAILS="${DETAILS}\n❌ $name: port $port unreachable"
+      fi
+    }
+
+    # ── Health Checks ──────────────────────────────────────────
+    echo "═══════════════════════════════════════════════"
+    echo "  Canton Health Check — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "═══════════════════════════════════════════════"
+
+    # 1. Canton Participant — Ledger API gRPC port
+    check_tcp "Canton Ledger API" "$PARTICIPANT_HOST" "$LEDGER_API_PORT"
+
+    # 2. Canton Participant — JSON API (HTTP)
+    check "Canton JSON API" "http://${PARTICIPANT_HOST}:${JSON_API_PORT}/readyz"
+
+    # 3. Bridge Relay — health endpoint
+    check "Bridge Relay Health" "http://${RELAY_HOST}:${RELAY_PORT}/health"
+
+    # 4. Bridge Relay — metrics endpoint (verifies monitoring is working)
+    check "Bridge Relay Metrics" "http://${RELAY_HOST}:${RELAY_PORT}/metrics"
+
+    # 5. PostgreSQL — TCP connectivity
+    check_tcp "PostgreSQL" "$POSTGRES_HOST" "$POSTGRES_PORT"
+
+    # ── Summary ────────────────────────────────────────────────
+    echo ""
+    if [ -z "$FAILURES" ]; then
+      echo "✅ All health checks passed"
+      exit 0
+    fi
+
+    # Remove trailing comma+space
+    FAILURES=$(echo "$FAILURES" | sed 's/, $//')
+    echo "🚨 FAILURES: $FAILURES"
+
+    # ── Telegram Alert ─────────────────────────────────────────
+    if [ "$TELEGRAM_ENABLED" = "true" ] && [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+      NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || echo "musd-canton")
+      NODE_NAME="${NODE_NAME:-unknown}"
+      POD_NAME="${POD_NAME:-unknown}"
+
+      MESSAGE="🚨 *Canton Health Alert*
+
+    *Cluster:* ${CLUSTER_NAME:-musd-canton}
+    *Namespace:* ${NAMESPACE}
+    *Time:* $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+    *Node:* ${NODE_NAME}
+
+    *Failed checks:*
+    $(printf '%b' "$DETAILS")
+
+    _Investigate immediately — bridge attestations may be blocked._"
+
+      wget -q -O /dev/null --timeout=10 \
+        --post-data="chat_id=${TELEGRAM_CHAT_ID}&text=${MESSAGE}&parse_mode=Markdown&disable_web_page_preview=true" \
+        "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" 2>/dev/null || \
+        echo "⚠️  Failed to send Telegram alert"
+    else
+      echo "⚠️  Telegram alerting disabled or credentials missing"
+    fi
+
+    # Exit non-zero so K8s marks the Job as failed (visible in CronJob history)
+    exit 1
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: canton-health-check
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-health-check
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  schedule: "*/5 * * * *"  # Every 5 minutes
+  concurrencyPolicy: Forbid  # Skip if previous check still running
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 10  # Keep more failed jobs for debugging
+  startingDeadlineSeconds: 120  # Tolerate 2m scheduling delay
+  jobTemplate:
+    spec:
+      backoffLimit: 0  # Don't retry — wait for next scheduled run
+      activeDeadlineSeconds: 60  # Kill if check hangs > 60s
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: canton-health-check
+            app.kubernetes.io/component: monitoring
+          annotations:
+            sidecar.istio.io/inject: "false"  # No mesh sidecar for probes
+        spec:
+          restartPolicy: Never
+          serviceAccountName: canton-health-check
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534  # nobody
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: health-check
+              # busybox — includes wget, nc, sh. Pinned by digest.
+              # To update: docker pull busybox:1.36 && docker inspect --format='{{index .RepoDigests 0}}' busybox:1.36
+              image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+              command: ["/bin/sh", "/scripts/health-check.sh"]
+              env:
+                - name: TELEGRAM_ENABLED
+                  value: "true"
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-alerting
+                      key: bot-token
+                      optional: true
+                - name: TELEGRAM_CHAT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: telegram-alerting
+                      key: chat-id
+                      optional: true
+                - name: CLUSTER_NAME
+                  value: "musd-canton"
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+              volumeMounts:
+                - name: health-check-script
+                  mountPath: /scripts
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 50m
+                  memory: 32Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+          volumes:
+            - name: health-check-script
+              configMap:
+                name: canton-health-check
+                defaultMode: 0555  # r-xr-xr-x
+          # Prefer scheduling on nodes that already run Canton workloads
+          affinity:
+            podAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 50
+                  podAffinityTerm:
+                    labelSelector:
+                      matchExpressions:
+                        - key: app.kubernetes.io/part-of
+                          operator: In
+                          values: ["minted-musd"]
+                    topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canton-health-check
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-health-check
+    app.kubernetes.io/component: monitoring
+automountServiceAccountToken: false
+---
+# NetworkPolicy: health-check pods only need egress to Canton services + Telegram API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canton-health-check-egress
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: canton-health-check
+    app.kubernetes.io/component: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: canton-health-check
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress: []  # No inbound traffic
+  egress:
+    # Canton participant (Ledger API + JSON API)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - protocol: TCP
+          port: 5011
+        - protocol: TCP
+          port: 7575
+    # Bridge relay (health + metrics)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-relay
+      ports:
+        - protocol: TCP
+          port: 8080
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # DNS resolution (required for service discovery)
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Telegram API (api.telegram.org — HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
