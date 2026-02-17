@@ -1264,6 +1264,15 @@ test_LiquidationReceipt = script do
 test_LiquidityPoolCreation : Script ()
 test_LiquidityPoolCreation = script do
   op <- allocateParty "Operator"
+  now <- getTime
+  -- AUDIT-C-01: LiquidityPool now requires oracle for dynamic pricing
+  oracleCid <- submit op do
+    createCmd PriceOracle with
+      provider = op
+      symbol = "WBTC/USD"
+      price = 50000.0
+      lastUpdated = now
+      observers = [op]
   poolCid <- submit op do
     createCmd LiquidityPool with
       operator = op
@@ -1272,6 +1281,8 @@ test_LiquidityPoolCreation = script do
       baseReserve = 1000000.0
       quoteReserve = 20.0
       exchangeRate = 50000.0
+      oracleCid = oracleCid    -- AUDIT-C-01: Oracle reference
+      spreadBps = 30            -- AUDIT-C-01: 0.3% spread
 
   pool <- queryContractId op poolCid
   assertMsg "Pool created" (isSome pool)
@@ -1313,6 +1324,7 @@ test_CantonDirectMintV3 = script do
       mpaUri = dummyUri
       validators = [op]
       complianceRegistryCid = complianceCid
+      supplyServiceCid = None  -- AUDIT-MED-01: No global supply service in unit test
       observers = []
 
   svc <- queryContractId op svcCid
