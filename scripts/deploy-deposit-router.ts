@@ -120,7 +120,10 @@ async function main() {
   // Deploy based on network type
   if (networkName === "sepolia") {
     // Sepolia testnet: deploy both for end-to-end testing on one chain
-    const routerAddr = await deployDepositRouter(config);
+    const existingRouter = process.env.SKIP_DEPOSIT_ROUTER;
+    const routerAddr = existingRouter
+      ? (console.log(`⏭️  Skipping DepositRouter (already at ${existingRouter})`), existingRouter)
+      : await deployDepositRouter(config);
     const receiverAddr = await deployTreasuryReceiver(config);
     console.log("\n📋 Update frontend/.env.sepolia:");
     console.log(`NEXT_PUBLIC_SEPOLIA_DEPOSIT_ROUTER_ADDRESS=${routerAddr}`);
