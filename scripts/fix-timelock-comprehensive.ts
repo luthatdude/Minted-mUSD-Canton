@@ -109,7 +109,12 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════
   console.log("\n── Phase 2: Self-governed InterestRateModel (old deployer key) ──");
 
-  const OLD_DEPLOYER_KEY = "REDACTED_OLD_DEPLOYER_PRIVATE_KEY";
+  const OLD_DEPLOYER_KEY = process.env.OLD_DEPLOYER_KEY;
+  if (!OLD_DEPLOYER_KEY) {
+    console.log("  ❌ OLD_DEPLOYER_KEY not set in environment — skipping Phase 2");
+    console.log("  Set OLD_DEPLOYER_KEY=<hex> to run Phase 2");
+    return;
+  }
   const oldDeployer = new ethers.Wallet(OLD_DEPLOYER_KEY, ethers.provider);
   console.log("  Old deployer:", oldDeployer.address);
 
