@@ -30,10 +30,12 @@ const config: HardhatUserConfig = {
       },
     ],
     overrides: {
+      // PendleStrategyV2 exceeds EIP-3860 initcode limit (49 KB) without viaIR.
+      // Always enable viaIR + runs=1 to shrink bytecode enough for deployment.
       "contracts/strategies/PendleStrategyV2.sol": {
         version: "0.8.26",
         settings: {
-          viaIR: isCoverage,
+          viaIR: true,
           optimizer: {
             enabled: true,
             runs: 1,

@@ -1,81 +1,157 @@
 import { ethers, upgrades } from "hardhat";
 
 /**
- * Deploy All 8 Strategy Contracts to Devnet/Sepolia
+ * Resumable Strategy Deployment — Phase 0 (remaining mocks) + Phases 1-8 + Roles
  *
- * Contracts:
- *   1. PendleMarketSelector (UUPS proxy)
- *   2. PendleStrategyV2 (UUPS proxy)
- *   3. MorphoLoopStrategy (UUPS proxy)
- *   4. SkySUSDSStrategy (UUPS proxy)
- *   5. FluidLoopStrategy (UUPS proxy)
- *   6. EulerV2LoopStrategy (UUPS proxy)
- *   7. EulerV2CrossStableLoopStrategy (UUPS proxy)
- *   8. MetaVault (UUPS proxy)
+ * Phase 0 partially completed earlier. These 6 mocks are already deployed:
+ *   RLUSD:                0xe435F3B9B772e4349547774251eed2ec1220D2CA
+ *   USDS:                 0xb4A219CbA22f37A4Fc609525f7baE6bc5119FbE8
+ *   MorphoBlue:           0xFf4F89dD40D83dA008f88366d1e4066eB1c12D17
+ *   AaveV3Pool:           0x10cFdF253484E75bC746a0F0be6C194595C6cE6b
+ *   EVC:                  0x36E5a1359BD3ff326C86E7AEaAed5E35932BFd5B
+ *   EulerSupplyVault(USDC): 0x7A78fD4eAf59ff5484Cd4E1cE386CC557f7a57D8
  *
- * Prerequisites:
- *   - Core protocol deployed (TreasuryV2, MUSD, PriceOracle, etc.)
- *   - USDC token address available
- *   - External protocol addresses available (Morpho, Euler, Pendle, Fluid, Sky)
+ * This script deploys the remaining 10 mocks, then all 8 strategy proxies + roles.
  *
  * Usage:
  *   npx hardhat run scripts/deploy-strategies-devnet.ts --network sepolia
  */
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONFIGURATION — Update these for your target network
+// CORE PROTOCOL (already deployed)
 // ═══════════════════════════════════════════════════════════════════════════
-
-const CONFIG = {
-  // Already deployed core protocol
+const CORE = {
   timelockAddress: "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
   treasuryV2Address: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
-  usdcAddress: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474", // MockUSDC on Sepolia
-
-  // External protocol addresses (Sepolia/devnet — use deployer address as placeholder if not available)
-  // These MUST be updated to real addresses before mainnet deployment
-  morpho: {
-    blueAddress: ethers.ZeroAddress, // Morpho Blue on Sepolia (set before deploy)
-    marketId: ethers.ZeroHash,       // Target market ID (set before deploy)
-  },
-  euler: {
-    supplyVaultUsdc: ethers.ZeroAddress,    // Euler V2 USDC supply vault
-    borrowVaultUsdc: ethers.ZeroAddress,    // Euler V2 USDC borrow vault
-    evc: ethers.ZeroAddress,               // Euler V2 EVC
-    // Cross-stable (RLUSD/USDC)
-    rlusd: ethers.ZeroAddress,             // RLUSD token
-    supplyVaultRlusd: ethers.ZeroAddress,  // Euler V2 RLUSD supply vault
-    borrowVaultUsdcCross: ethers.ZeroAddress, // Euler V2 USDC borrow vault (cross)
-    rlusdPriceFeed: ethers.ZeroAddress,    // Chainlink RLUSD/USD feed
-  },
-  pendle: {
-    // PendleStrategyV2 has no Pendle router dependency at init — it uses market selector
-  },
-  fluid: {
-    fluidVault: ethers.ZeroAddress,    // Fluid vault address
-    vaultFactory: ethers.ZeroAddress,  // Fluid VaultFactory
-    vaultResolver: ethers.ZeroAddress, // Fluid VaultResolver
-    dexResolver: ethers.ZeroAddress,   // Fluid DexResolver
-    dexPool: ethers.ZeroAddress,       // Fluid DEX pool
-    supplyToken: ethers.ZeroAddress,   // Supply token (e.g., USDC)
-    borrowToken: ethers.ZeroAddress,   // Borrow token (e.g., USDC)
-  },
-  sky: {
-    usds: ethers.ZeroAddress,  // USDS token
-    psm: ethers.ZeroAddress,   // Sky PSM
-    sUsds: ethers.ZeroAddress, // sUSDS savings vault
-  },
-
-  // Shared infrastructure
-  aaveV3Pool: ethers.ZeroAddress,      // AAVE V3 Pool for flash loans
-  merklDistributor: ethers.ZeroAddress, // Merkl Distributor
-  swapRouter: ethers.ZeroAddress,      // Uniswap V3 SwapRouter
+  usdcAddress: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ALREADY DEPLOYED MOCKS (from partial run)
+// ═══════════════════════════════════════════════════════════════════════════
+const MOCKS: Record<string, string> = {
+  rlusd: "0xe435F3B9B772e4349547774251eed2ec1220D2CA",
+  usds: "0xb4A219CbA22f37A4Fc609525f7baE6bc5119FbE8",
+  morphoBlue: "0xFf4F89dD40D83dA008f88366d1e4066eB1c12D17",
+  morphoMarketId: "0xf8bd2203f7d53e90bb1d2304ecdb443737e4848ecf65e1f3cd9e674011eb9872",
+  aaveV3Pool: "0x10cFdF253484E75bC746a0F0be6C194595C6cE6b",
+  evc: "0x36E5a1359BD3ff326C86E7AEaAed5E35932BFd5B",
+  eulerSupplyVaultUsdc: "0x7A78fD4eAf59ff5484Cd4E1cE386CC557f7a57D8",
+  // Deployed in second run:
+  eulerBorrowVaultUsdc: "0x520f88b39342021548C675330A42f7Eb5c0564EE",
+  eulerSupplyVaultRlusd: "0x2f875630902b2290Bdba853513a7c2d3D353d2cF",
+  eulerBorrowVaultUsdcCross: "0xAEC852F71367f1B7e70529685575461fC251A1d4",
+  rlusdPriceFeed: "0x233f74d6DbB2253d53DccdaB5B39B012AA60a65B",
+  merklDistributor: "0xf2d880B60834aF2Ab6C8Ed20Ac74CC76346F21b4",
+  swapRouter: "0x1652Fee80c7038ab87828D77F21EA8F7FECBbf65",
+  fluidVault: "0xcf54A9bF5c82B1EC9cde70Ed15614451F46936a3",
+  fluidVaultFactory: "0x650Cb51e46D27765c71B61AB3c23468bEF2d5938",
+  skyPsm: "0x4120b088463B76AE7776f5C32518AECd3b762ABC",
+  sUsds: "0xC59B9d8Abf5d23BF90E1fC83bFb1D58cb1Dd31BA",
+};
+
+// Strategy already deployed in second run:
+const ALREADY_DEPLOYED = {
+  PendleMarketSelector: "0x17Fb251e4580891590633848f3ea9d8d99DA77F6",
+};
+
+async function deployRemainingMocks(deployer: any) {
+  console.log("─".repeat(70));
+  console.log("  PHASE 0 (resume): Deploying Remaining Mock Infrastructure");
+  console.log("─".repeat(70));
+
+  const usdc = CORE.usdcAddress;
+  const MockEulerVault = await ethers.getContractFactory("MockEulerVaultCrossStable");
+
+  // 0g. MockEulerVault — USDC borrow vault
+  console.log("  [0g] MockEulerVault — USDC borrow...");
+  const eulerBorrowUsdc = await MockEulerVault.deploy(usdc);
+  await eulerBorrowUsdc.waitForDeployment();
+  MOCKS.eulerBorrowVaultUsdc = await eulerBorrowUsdc.getAddress();
+  console.log(`       ✅ EulerBorrowVault(USDC): ${MOCKS.eulerBorrowVaultUsdc}`);
+
+  // 0h. MockEulerVault — RLUSD supply vault (cross-stable)
+  console.log("  [0h] MockEulerVault — RLUSD supply...");
+  const eulerSupplyRlusd = await MockEulerVault.deploy(MOCKS.rlusd);
+  await eulerSupplyRlusd.waitForDeployment();
+  MOCKS.eulerSupplyVaultRlusd = await eulerSupplyRlusd.getAddress();
+  console.log(`       ✅ EulerSupplyVault(RLUSD): ${MOCKS.eulerSupplyVaultRlusd}`);
+
+  // 0i. MockEulerVault — USDC borrow vault (cross-stable)
+  console.log("  [0i] MockEulerVault — USDC borrow (cross)...");
+  const eulerBorrowUsdcCross = await MockEulerVault.deploy(usdc);
+  await eulerBorrowUsdcCross.waitForDeployment();
+  MOCKS.eulerBorrowVaultUsdcCross = await eulerBorrowUsdcCross.getAddress();
+  console.log(`       ✅ EulerBorrowVault(USDC-cross): ${MOCKS.eulerBorrowVaultUsdcCross}`);
+
+  // 0j. MockPriceFeedCrossStable — RLUSD/USD ($1.00, 8 decimals)
+  console.log("  [0j] MockPriceFeedCrossStable — RLUSD/USD...");
+  const MockPriceFeed = await ethers.getContractFactory("MockPriceFeedCrossStable");
+  const rlusdFeed = await MockPriceFeed.deploy(1e8, 8);
+  await rlusdFeed.waitForDeployment();
+  MOCKS.rlusdPriceFeed = await rlusdFeed.getAddress();
+  console.log(`       ✅ RLUSD/USD Feed: ${MOCKS.rlusdPriceFeed}`);
+
+  // 0k. MockMerklDistributor
+  console.log("  [0k] MockMerklDistributor...");
+  const MockMerkl = await ethers.getContractFactory("MockMerklDistributor");
+  const merkl = await MockMerkl.deploy();
+  await merkl.waitForDeployment();
+  MOCKS.merklDistributor = await merkl.getAddress();
+  console.log(`       ✅ MerklDistributor: ${MOCKS.merklDistributor}`);
+
+  // 0l. MockSwapRouterV3ForLoop (1:1 stablecoin swaps)
+  console.log("  [0l] MockSwapRouterV3ForLoop...");
+  const MockRouter = await ethers.getContractFactory("MockSwapRouterV3ForLoop");
+  const swapRouter = await MockRouter.deploy();
+  await swapRouter.waitForDeployment();
+  MOCKS.swapRouter = await swapRouter.getAddress();
+  console.log(`       ✅ SwapRouter: ${MOCKS.swapRouter}`);
+
+  // 0m. MockFluidVaultT1 (USDC/USDC stable vault)
+  console.log("  [0m] MockFluidVaultT1...");
+  const MockFluidVaultT1 = await ethers.getContractFactory("MockFluidVaultT1");
+  const fluidVault = await MockFluidVaultT1.deploy(usdc, usdc);
+  await fluidVault.waitForDeployment();
+  MOCKS.fluidVault = await fluidVault.getAddress();
+  console.log(`       ✅ FluidVaultT1: ${MOCKS.fluidVault}`);
+
+  // 0n. MockFluidVaultFactory
+  console.log("  [0n] MockFluidVaultFactory...");
+  const MockFluidFactory = await ethers.getContractFactory("MockFluidVaultFactory");
+  const fluidFactory = await MockFluidFactory.deploy();
+  await fluidFactory.waitForDeployment();
+  MOCKS.fluidVaultFactory = await fluidFactory.getAddress();
+  await (await fluidFactory.registerVault(146, MOCKS.fluidVault)).wait();
+  console.log(`       ✅ FluidVaultFactory: ${MOCKS.fluidVaultFactory}`);
+
+  // 0o. MockSkyPSM (USDC <-> USDS)
+  console.log("  [0o] MockSkyPSM...");
+  const MockSkyPSM = await ethers.getContractFactory("MockSkyPSM");
+  const skyPsm = await MockSkyPSM.deploy(usdc, MOCKS.usds);
+  await skyPsm.waitForDeployment();
+  MOCKS.skyPsm = await skyPsm.getAddress();
+  console.log(`       ✅ SkyPSM: ${MOCKS.skyPsm}`);
+
+  // 0p. MockSUSDS (sUSDS savings vault)
+  console.log("  [0p] MockSUSDS...");
+  const MockSUSDS = await ethers.getContractFactory("MockSUSDS");
+  const sUsds = await MockSUSDS.deploy(MOCKS.usds);
+  await sUsds.waitForDeployment();
+  MOCKS.sUsds = await sUsds.getAddress();
+  console.log(`       ✅ sUSDS: ${MOCKS.sUsds}`);
+
+  console.log();
+  console.log(`  ✅ Phase 0 complete — all ${Object.keys(MOCKS).length} mock entries populated`);
+  console.log();
+}
 
 async function main() {
   const [deployer] = await ethers.getSigners();
+  const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+
   console.log("═".repeat(70));
-  console.log("  MINTED mUSD — Strategy Deployment (Devnet)");
+  console.log("  MINTED mUSD — Strategy Deployment (Devnet) — RESUME");
   console.log("═".repeat(70));
   console.log(`  Deployer:  ${deployer.address}`);
   const startBalance = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
@@ -83,61 +159,42 @@ async function main() {
   console.log(`  Network:   ${(await ethers.provider.getNetwork()).name}`);
   console.log();
 
-  // Use deployer as placeholder for zero addresses (devnet only)
-  const placeholder = deployer.address;
-  const resolve = (addr: string) => addr === ethers.ZeroAddress ? placeholder : addr;
-
-  const results: Record<string, string> = {};
-
   // ═══════════════════════════════════════════════════════════════════
-  // 1. PendleMarketSelector (UUPS proxy)
+  // PHASE 0: All mocks already deployed — skip
   // ═══════════════════════════════════════════════════════════════════
-  console.log("[1/8] Deploying PendleMarketSelector...");
-  const MarketSelector = await ethers.getContractFactory("PendleMarketSelector");
-  const marketSelector = await upgrades.deployProxy(
-    MarketSelector,
-    [deployer.address, CONFIG.timelockAddress],
-    { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
-  );
-  await marketSelector.waitForDeployment();
-  results.PendleMarketSelector = await marketSelector.getAddress();
-  console.log(`  ✅ PendleMarketSelector: ${results.PendleMarketSelector}`);
+  console.log("  All mock infrastructure already deployed ✅");
+  console.log(`  Mock contracts: ${Object.keys(MOCKS).length} entries`);
+  console.log();
+
+  const results: Record<string, string> = { ...ALREADY_DEPLOYED };
 
   // ═══════════════════════════════════════════════════════════════════
-  // 2. PendleStrategyV2 (UUPS proxy)
+  // 1. PendleMarketSelector — ALREADY DEPLOYED
   // ═══════════════════════════════════════════════════════════════════
-  console.log("[2/8] Deploying PendleStrategyV2...");
-  const PendleStrategy = await ethers.getContractFactory("PendleStrategyV2");
-  const pendleStrategy = await upgrades.deployProxy(
-    PendleStrategy,
-    [
-      CONFIG.usdcAddress,
-      results.PendleMarketSelector,
-      CONFIG.treasuryV2Address,
-      deployer.address,
-      "stablecoin",
-      CONFIG.timelockAddress,
-    ],
-    { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
-  );
-  await pendleStrategy.waitForDeployment();
-  results.PendleStrategyV2 = await pendleStrategy.getAddress();
-  console.log(`  ✅ PendleStrategyV2: ${results.PendleStrategyV2}`);
+  console.log(`[1/8] PendleMarketSelector — already deployed: ${results.PendleMarketSelector} ✅`);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 2. PendleStrategyV2 — ALREADY DEPLOYED
+  // ═══════════════════════════════════════════════════════════════════
+  results.PendleStrategyV2 = "0x8C952A04C45f0DCF6711DaC320f8cc3797d5c818";
+  console.log(`[2/8] PendleStrategyV2 — already deployed: ${results.PendleStrategyV2} ✅`);
+  const pendleStrategy = await ethers.getContractAt("PendleStrategyV2", results.PendleStrategyV2);
 
   // ═══════════════════════════════════════════════════════════════════
   // 3. MorphoLoopStrategy (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000); // let mempool clear
   console.log("[3/8] Deploying MorphoLoopStrategy...");
   const MorphoLoop = await ethers.getContractFactory("MorphoLoopStrategy");
   const morphoLoop = await upgrades.deployProxy(
     MorphoLoop,
     [
-      CONFIG.usdcAddress,
-      resolve(CONFIG.morpho.blueAddress),
-      CONFIG.morpho.marketId,
-      CONFIG.treasuryV2Address,
+      CORE.usdcAddress,
+      MOCKS.morphoBlue,
+      MOCKS.morphoMarketId,
+      CORE.treasuryV2Address,
       deployer.address,
-      CONFIG.timelockAddress,
+      CORE.timelockAddress,
     ],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -148,18 +205,19 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════
   // 4. SkySUSDSStrategy (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000);
   console.log("[4/8] Deploying SkySUSDSStrategy...");
   const SkySUSDS = await ethers.getContractFactory("SkySUSDSStrategy");
   const skySusds = await upgrades.deployProxy(
     SkySUSDS,
     [
-      CONFIG.usdcAddress,
-      resolve(CONFIG.sky.usds),
-      resolve(CONFIG.sky.psm),
-      resolve(CONFIG.sky.sUsds),
-      CONFIG.treasuryV2Address,
+      CORE.usdcAddress,
+      MOCKS.usds,
+      MOCKS.skyPsm,
+      MOCKS.sUsds,
+      CORE.treasuryV2Address,
       deployer.address,
-      CONFIG.timelockAddress,
+      CORE.timelockAddress,
     ],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -170,28 +228,29 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════
   // 5. FluidLoopStrategy (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000);
   console.log("[5/8] Deploying FluidLoopStrategy...");
   const FluidLoop = await ethers.getContractFactory("FluidLoopStrategy");
   const fluidLoop = await upgrades.deployProxy(
     FluidLoop,
     [{
       mode: 1, // MODE_STABLE
-      inputAsset: CONFIG.usdcAddress,
-      supplyToken: resolve(CONFIG.fluid.supplyToken) || CONFIG.usdcAddress,
-      borrowToken: resolve(CONFIG.fluid.borrowToken) || CONFIG.usdcAddress,
+      inputAsset: CORE.usdcAddress,
+      supplyToken: CORE.usdcAddress,
+      borrowToken: CORE.usdcAddress,
       supplyToken1: ethers.ZeroAddress,
       borrowToken1: ethers.ZeroAddress,
-      fluidVault: resolve(CONFIG.fluid.fluidVault),
-      vaultFactory: resolve(CONFIG.fluid.vaultFactory),
-      flashLoanPool: resolve(CONFIG.aaveV3Pool),
-      merklDistributor: resolve(CONFIG.merklDistributor),
-      swapRouter: resolve(CONFIG.swapRouter),
-      vaultResolver: CONFIG.fluid.vaultResolver, // Can be zero
-      dexResolver: CONFIG.fluid.dexResolver,     // Can be zero
-      dexPool: CONFIG.fluid.dexPool,             // Can be zero
-      treasury: CONFIG.treasuryV2Address,
+      fluidVault: MOCKS.fluidVault,
+      vaultFactory: MOCKS.fluidVaultFactory,
+      flashLoanPool: MOCKS.aaveV3Pool,
+      merklDistributor: MOCKS.merklDistributor,
+      swapRouter: MOCKS.swapRouter,
+      vaultResolver: ethers.ZeroAddress,
+      dexResolver: ethers.ZeroAddress,
+      dexPool: ethers.ZeroAddress,
+      treasury: CORE.treasuryV2Address,
       admin: deployer.address,
-      timelock: CONFIG.timelockAddress,
+      timelock: CORE.timelockAddress,
     }],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -202,21 +261,22 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════
   // 6. EulerV2LoopStrategy (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000);
   console.log("[6/8] Deploying EulerV2LoopStrategy...");
   const EulerLoop = await ethers.getContractFactory("EulerV2LoopStrategy");
   const eulerLoop = await upgrades.deployProxy(
     EulerLoop,
     [
-      CONFIG.usdcAddress,
-      resolve(CONFIG.euler.supplyVaultUsdc),
-      resolve(CONFIG.euler.borrowVaultUsdc),
-      resolve(CONFIG.euler.evc),
-      resolve(CONFIG.aaveV3Pool),
-      resolve(CONFIG.merklDistributor),
-      resolve(CONFIG.swapRouter),
-      CONFIG.treasuryV2Address,
+      CORE.usdcAddress,
+      MOCKS.eulerSupplyVaultUsdc,
+      MOCKS.eulerBorrowVaultUsdc,
+      MOCKS.evc,
+      MOCKS.aaveV3Pool,
+      MOCKS.merklDistributor,
+      MOCKS.swapRouter,
+      CORE.treasuryV2Address,
       deployer.address,
-      CONFIG.timelockAddress,
+      CORE.timelockAddress,
     ],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -227,27 +287,29 @@ async function main() {
   // Setup EVC
   console.log("  → Setting up EVC for EulerV2LoopStrategy...");
   await (await eulerLoop.setupEVC()).wait();
+  console.log("    ✅ EVC configured");
 
   // ═══════════════════════════════════════════════════════════════════
   // 7. EulerV2CrossStableLoopStrategy (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000);
   console.log("[7/8] Deploying EulerV2CrossStableLoopStrategy...");
   const EulerCrossStable = await ethers.getContractFactory("EulerV2CrossStableLoopStrategy");
   const eulerCrossStable = await upgrades.deployProxy(
     EulerCrossStable,
     [{
-      usdc: CONFIG.usdcAddress,
-      rlusd: resolve(CONFIG.euler.rlusd),
-      supplyVault: resolve(CONFIG.euler.supplyVaultRlusd),
-      borrowVault: resolve(CONFIG.euler.borrowVaultUsdcCross),
-      evc: resolve(CONFIG.euler.evc),
-      flashLoanPool: resolve(CONFIG.aaveV3Pool),
-      merklDistributor: resolve(CONFIG.merklDistributor),
-      swapRouter: resolve(CONFIG.swapRouter),
-      rlusdPriceFeed: resolve(CONFIG.euler.rlusdPriceFeed),
-      treasury: CONFIG.treasuryV2Address,
+      usdc: CORE.usdcAddress,
+      rlusd: MOCKS.rlusd,
+      supplyVault: MOCKS.eulerSupplyVaultRlusd,
+      borrowVault: MOCKS.eulerBorrowVaultUsdcCross,
+      evc: MOCKS.evc,
+      flashLoanPool: MOCKS.aaveV3Pool,
+      merklDistributor: MOCKS.merklDistributor,
+      swapRouter: MOCKS.swapRouter,
+      rlusdPriceFeed: MOCKS.rlusdPriceFeed,
+      treasury: CORE.treasuryV2Address,
       admin: deployer.address,
-      timelock: CONFIG.timelockAddress,
+      timelock: CORE.timelockAddress,
     }],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -258,19 +320,21 @@ async function main() {
   // Setup EVC
   console.log("  → Setting up EVC for EulerV2CrossStableLoopStrategy...");
   await (await eulerCrossStable.setupEVC()).wait();
+  console.log("    ✅ EVC configured");
 
   // ═══════════════════════════════════════════════════════════════════
-  // 8. MetaVault (UUPS proxy) — vault-of-vaults aggregator
+  // 8. MetaVault (UUPS proxy)
   // ═══════════════════════════════════════════════════════════════════
+  await wait(5000);
   console.log("[8/8] Deploying MetaVault...");
-  const MetaVault = await ethers.getContractFactory("MetaVault");
+  const MetaVault = await ethers.getContractFactory("contracts/strategies/MetaVault.sol:MetaVault");
   const metaVault = await upgrades.deployProxy(
     MetaVault,
     [
-      CONFIG.usdcAddress,
-      CONFIG.treasuryV2Address,
+      CORE.usdcAddress,
+      CORE.treasuryV2Address,
       deployer.address,
-      CONFIG.timelockAddress,
+      CORE.timelockAddress,
     ],
     { kind: "uups", initializer: "initialize", unsafeAllow: ["constructor"] }
   );
@@ -279,11 +343,12 @@ async function main() {
   console.log(`  ✅ MetaVault: ${results.MetaVault}`);
 
   // ═══════════════════════════════════════════════════════════════════
-  // ROLE CONFIGURATION
+  // PHASE 9: ROLE CONFIGURATION
   // ═══════════════════════════════════════════════════════════════════
-  console.log("\n  Configuring roles...");
+  console.log("\n" + "─".repeat(70));
+  console.log("  PHASE 9: Role Configuration");
+  console.log("─".repeat(70));
 
-  // Grant TREASURY_ROLE on each strategy to TreasuryV2
   const strategiesWithTreasuryRole = [
     { name: "PendleStrategyV2", contract: pendleStrategy },
     { name: "MorphoLoopStrategy", contract: morphoLoop },
@@ -291,22 +356,22 @@ async function main() {
     { name: "FluidLoopStrategy", contract: fluidLoop },
     { name: "EulerV2LoopStrategy", contract: eulerLoop },
     { name: "EulerV2CrossStableLoopStrategy", contract: eulerCrossStable },
+    { name: "MetaVault", contract: metaVault },
   ];
 
   for (const { name, contract } of strategiesWithTreasuryRole) {
-    const TREASURY_ROLE = await contract.TREASURY_ROLE();
-    const hasTreasuryRole = await contract.hasRole(TREASURY_ROLE, CONFIG.treasuryV2Address);
-    if (!hasTreasuryRole) {
-      await (await contract.grantRole(TREASURY_ROLE, CONFIG.treasuryV2Address)).wait();
-      console.log(`    ${name}: TREASURY_ROLE → TreasuryV2`);
+    try {
+      const TREASURY_ROLE = await contract.TREASURY_ROLE();
+      const hasTreasuryRole = await contract.hasRole(TREASURY_ROLE, CORE.treasuryV2Address);
+      if (!hasTreasuryRole) {
+        await (await contract.grantRole(TREASURY_ROLE, CORE.treasuryV2Address)).wait();
+        console.log(`    ${name}: TREASURY_ROLE → TreasuryV2 ✅`);
+      } else {
+        console.log(`    ${name}: TREASURY_ROLE already set ✅`);
+      }
+    } catch (e: any) {
+      console.log(`    ${name}: TREASURY_ROLE grant failed — ${e.message?.slice(0, 80)}`);
     }
-  }
-
-  // Grant TREASURY_ROLE on MetaVault to TreasuryV2
-  {
-    const TREASURY_ROLE = await metaVault.TREASURY_ROLE();
-    await (await metaVault.grantRole(TREASURY_ROLE, CONFIG.treasuryV2Address)).wait();
-    console.log("    MetaVault: TREASURY_ROLE → TreasuryV2");
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -316,19 +381,27 @@ async function main() {
   const gasUsed = (parseFloat(startBalance) - parseFloat(remaining)).toFixed(6);
 
   console.log("\n" + "═".repeat(70));
-  console.log("  STRATEGY DEPLOYMENT COMPLETE");
+  console.log("  DEPLOYMENT COMPLETE");
   console.log("═".repeat(70));
-  console.log();
+
+  console.log("\n  ── Mock Infrastructure ──");
+  for (const [name, addr] of Object.entries(MOCKS)) {
+    console.log(`  ${name.padEnd(30)} ${addr}`);
+  }
+
+  console.log("\n  ── Strategy Proxies ──");
   for (const [name, addr] of Object.entries(results)) {
     console.log(`  ${name.padEnd(36)} ${addr}`);
   }
+
   console.log();
   console.log(`  Gas used:   ${gasUsed} ETH`);
   console.log(`  Remaining:  ${remaining} ETH`);
   console.log("═".repeat(70));
 
-  // Output JSON for programmatic use
-  console.log("\n// Copy for deployment config:");
+  console.log("\n// ── Mock addresses (JSON) ──");
+  console.log(JSON.stringify(MOCKS, null, 2));
+  console.log("\n// ── Strategy addresses (JSON) ──");
   console.log(JSON.stringify(results, null, 2));
 }
 
