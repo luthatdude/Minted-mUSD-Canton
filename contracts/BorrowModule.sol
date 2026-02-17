@@ -419,7 +419,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         uint256 totalSupply = _getTotalSupply();
-        uint256 interest;
+        uint256 interest = 0;
 
         if (address(interestRateModel) != address(0)) {
             // Use dynamic interest rate model
@@ -511,7 +511,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         // FIX P1-H2: Calculate user interest as their proportional share of global interest
         // to prevent totalBorrows divergence. User's share = (user_principal / totalBorrows) * global_interest
         // This ensures Σ user_interest ≈ global_interest by construction.
-        uint256 interest;
+        uint256 interest = 0;
         uint256 userTotal = pos.principal + pos.accruedInterest;
         if (totalBorrows > 0 && userTotal > 0) {
             if (address(interestRateModel) != address(0)) {
