@@ -25,10 +25,10 @@ import Compliance
 initProtocol : Script ()
 initProtocol = do
   -- Allocate parties
-  operator <- allocatePartyWithHint "MintedOperator" (PartyIdHint "minted-operator")
-  governance <- allocatePartyWithHint "MintedGovernance" (PartyIdHint "minted-governance")
-  regulator <- allocatePartyWithHint "Regulator" (PartyIdHint "regulator")
-  validator1 <- allocatePartyWithHint "Validator1" (PartyIdHint "validator-1")
+  operator <- allocatePartyWithHint "minted-operator" (PartyIdHint "minted-operator")
+  governance <- allocatePartyWithHint "minted-governance" (PartyIdHint "minted-governance")
+  regulator <- allocatePartyWithHint "regulator" (PartyIdHint "regulator")
+  validator1 <- allocatePartyWithHint "validator-1" (PartyIdHint "validator-1")
 
   now <- getTime
 
