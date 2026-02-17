@@ -15,9 +15,9 @@
 | BorrowModule | [`0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8`](https://sepolia.etherscan.io/address/0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8#code) | ✅ |
 | SMUSD | [`0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540`](https://sepolia.etherscan.io/address/0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540#code) | ✅ |
 | LiquidationEngine | [`0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8`](https://sepolia.etherscan.io/address/0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8#code) | ✅ |
-| DirectMintV2 | [`0xa869f58c213634Dda2Ef522b66E9587b953279C2`](https://sepolia.etherscan.io/address/0xa869f58c213634Dda2Ef522b66E9587b953279C2#code) | ✅ |
+| DirectMintV2 | [`0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7`](https://sepolia.etherscan.io/address/0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7#code) | ✅ (redeployed 2026-02-17) |
 | LeverageVault | [`0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC`](https://sepolia.etherscan.io/address/0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC#code) | ✅ |
-| TreasuryV2 (proxy) | [`0x11Cc7750F2033d21FC3762b94D1355eD15F7913d`](https://sepolia.etherscan.io/address/0x11Cc7750F2033d21FC3762b94D1355eD15F7913d) | ⏳ upgrade via timelock |
+| TreasuryV2 (proxy) | [`0xf2051bDfc738f638668DF2f8c00d01ba6338C513`](https://sepolia.etherscan.io/address/0xf2051bDfc738f638668DF2f8c00d01ba6338C513) | ✅ (redeployed 2026-02-17) |
 | BLEBridgeV9 (proxy) | [`0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125`](https://sepolia.etherscan.io/address/0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125) | ⏳ upgrade via timelock |
 
 ---
@@ -145,3 +145,19 @@ Liquidation requires:
 1. Mock oracle prices to be manipulated
 2. Sufficient liquidity in MockSwapRouter
 3. LiquidationEngine to have LIQUIDATOR_ROLE
+
+### Granting RELAYER_ROLE on BLEBridgeV9 (BRIDGE-M-04)
+
+After the BRIDGE-M-04 audit fix, `processAttestation` requires `RELAYER_ROLE`.
+The relay EOA (`0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0`) must be granted this
+role via the timelock upgrade script:
+
+```bash
+# Phase 1 — Deploy new impl + schedule upgrade (creates timelock proposal)
+npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
+
+# Phase 2 — Execute after 24h timelock delay
+PHASE=execute npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
+```
+
+See `scripts/upgrade-bridge-relayer-role.ts` for full details.

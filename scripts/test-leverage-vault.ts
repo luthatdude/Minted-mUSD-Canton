@@ -63,6 +63,9 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   console.log("\n2️⃣ Checking collateral configuration...");
   
+  // Gas limit constant for public RPC compatibility
+  const GAS = { gasLimit: 300_000 };
+
   try {
     const config = await collateralVault.getConfig(CONTRACTS.MockWETH);
     console.log(`   Enabled: ${config.enabled}`);
@@ -72,24 +75,40 @@ async function main() {
     
     if (!config.enabled) {
       console.log("\n   ⚠️ WETH not enabled as collateral. Adding it now...");
-      const addTx = await collateralVault.addCollateral(
-        CONTRACTS.MockWETH,
-        7500, // 75% LTV
-        8000, // 80% liquidation threshold
-        500   // 5% liquidation penalty
-      );
-      await addTx.wait();
+      const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+      if (!(await collateralVault.hasRole(TIMELOCK_ROLE, signer.address))) {
+        // TIMELOCK_ROLE is self-governed — can only be granted by existing holders
+        // Try granting via DEFAULT_ADMIN_ROLE (will fail if roleAdmin != DEFAULT_ADMIN_ROLE)
+        try {
+          console.log("   Granting TIMELOCK_ROLE...");
+          await (await collateralVault.grantRole(TIMELOCK_ROLE, signer.address, GAS)).wait();
+        } catch {
+          console.log("   ⚠️ Cannot grant TIMELOCK_ROLE (self-governed). Need old deployer key.");
+          console.log("   💡 Run: npx hardhat run scripts/fix-timelock-roles.ts --network sepolia");
+          console.log("   💡 (with old deployer key in .env)");
+          console.log("   Skipping collateral setup...");
+          return;
+        }
+      }
+      await (await collateralVault.addCollateral(CONTRACTS.MockWETH, 7500, 8000, 500, GAS)).wait();
       console.log("   ✅ Added WETH as collateral");
     }
-  } catch (e) {
+  } catch (e: any) {
+    if (e?.message?.includes("Cannot grant")) throw e;
     console.log("   ⚠️ WETH not configured. Adding it now...");
-    const addTx = await collateralVault.addCollateral(
-      CONTRACTS.MockWETH,
-      7500, // 75% LTV
-      8000, // 80% liquidation threshold
-      500   // 5% liquidation penalty
-    );
-    await addTx.wait();
+    const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+    if (!(await collateralVault.hasRole(TIMELOCK_ROLE, signer.address))) {
+      try {
+        console.log("   Granting TIMELOCK_ROLE...");
+        await (await collateralVault.grantRole(TIMELOCK_ROLE, signer.address, GAS)).wait();
+      } catch {
+        console.log("   ⚠️ Cannot grant TIMELOCK_ROLE (self-governed). Need old deployer key.");
+        console.log("   💡 Run: npx hardhat run scripts/fix-timelock-roles.ts --network sepolia");
+        console.log("   💡 (with old deployer key in .env)");
+        return;
+      }
+    }
+    await (await collateralVault.addCollateral(CONTRACTS.MockWETH, 7500, 8000, 500, GAS)).wait();
     console.log("   ✅ Added WETH as collateral");
   }
 
@@ -101,7 +120,13 @@ async function main() {
   
   if (!isEnabled) {
     console.log("   ⚠️ WETH not enabled in LeverageVault. Enabling...");
-    const enableTx = await leverageVault.enableToken(CONTRACTS.MockWETH, 3000); // 0.3% fee tier
+    // Ensure we have LEVERAGE_ADMIN_ROLE
+    const LEVERAGE_ADMIN_ROLE = ethers.keccak256(ethers.toUtf8Bytes("LEVERAGE_ADMIN_ROLE"));
+    if (!(await leverageVault.hasRole(LEVERAGE_ADMIN_ROLE, signer.address))) {
+      console.log("   Granting LEVERAGE_ADMIN_ROLE...");
+      await (await leverageVault.grantRole(LEVERAGE_ADMIN_ROLE, signer.address, GAS)).wait();
+    }
+    const enableTx = await leverageVault.enableToken(CONTRACTS.MockWETH, 3000, GAS); // 0.3% fee tier
     await enableTx.wait();
     console.log("   ✅ Enabled WETH for leverage");
   } else {
@@ -116,7 +141,7 @@ async function main() {
   const depositAmount = ethers.parseEther("5"); // 5 WETH = $12,500
   
   // Approve LeverageVault
-  const approveTx = await mockWETH.approve(CONTRACTS.LeverageVault, depositAmount);
+  const approveTx = await mockWETH.approve(CONTRACTS.LeverageVault, depositAmount, GAS);
   await approveTx.wait();
   console.log(`   ✅ Approved ${ethers.formatEther(depositAmount)} WETH`);
 
@@ -131,7 +156,8 @@ async function main() {
     depositAmount,
     targetLeverage,
     maxLoops,
-    0
+    0,
+    { gasLimit: 1_000_000 }
   );
   const receipt = await openTx.wait();
   console.log(`   ✅ Position opened! Gas used: ${receipt?.gasUsed}`);
@@ -171,7 +197,7 @@ async function main() {
     const newPrice = 2000n * 10n ** 8n; // $2000 (down from $2500)
     console.log("   ⚠️ Dropping ETH price to $2,000 (-20%)...");
     
-    const updateTx = await mockFeed.updateAnswer(newPrice);
+    const updateTx = await mockFeed.updateAnswer(newPrice, GAS);
     await updateTx.wait();
     
     // Check new health
@@ -189,7 +215,7 @@ async function main() {
     
     // Restore price
     console.log("\n   🔄 Restoring ETH price to $2,500...");
-    const restoreTx = await mockFeed.updateAnswer(2500n * 10n ** 8n);
+    const restoreTx = await mockFeed.updateAnswer(2500n * 10n ** 8n, GAS);
     await restoreTx.wait();
   }
 
@@ -207,22 +233,20 @@ async function main() {
   console.log(`   Debt to repay: ${ethers.formatUnits(debtNeeded, 18)} mUSD`);
   
   if (debtNeeded > 0n) {
-    // Mint mUSD to close position
-    console.log("   📝 Minting mUSD to close position...");
-    const BRIDGE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_ROLE"));
+    // Get mUSD via DirectMintV2 to close position
+    console.log("   📝 Getting mUSD via DirectMintV2 to repay debt...");
+    const mockUSDC = await ethers.getContractAt("MockERC20", CONTRACTS.MockUSDC);
+    const directMint = await ethers.getContractAt("DirectMintV2", "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7");
     
-    // Check if we can mint
-    const canMint = await musd.hasRole(BRIDGE_ROLE, signer.address);
-    if (!canMint) {
-      console.log("   ⚠️ Need BRIDGE_ROLE to mint mUSD for closing.");
-      console.log("   💡 Use DirectMint to get mUSD, then close with closeLeveragedPositionWithMusd()");
-      return;
-    }
+    // Need USDC (6 decimals) → mUSD (18 decimals). Add 2% buffer for fees
+    const usdcNeeded = (debtNeeded / 10n ** 12n) * 102n / 100n;
+    await (await mockUSDC.mint(signer.address, usdcNeeded, GAS)).wait();
+    await (await mockUSDC.approve(await directMint.getAddress(), usdcNeeded, GAS)).wait();
+    await (await directMint.mint(usdcNeeded, { gasLimit: 500_000 })).wait();
     
-    await musd.mint(signer.address, debtNeeded);
-    await musd.approve(CONTRACTS.LeverageVault, debtNeeded);
+    await (await musd.approve(CONTRACTS.LeverageVault, debtNeeded, GAS)).wait();
     
-    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtNeeded, 0);
+    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtNeeded, 0, { gasLimit: 1_000_000 });
     await closeTx.wait();
     console.log("   ✅ Position closed!");
   }

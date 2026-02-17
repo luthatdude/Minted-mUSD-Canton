@@ -204,14 +204,16 @@ describe("BLEBridgeV9 — Branch Coverage Boost", function () {
     });
   });
 
-  // ── 12. processAttestation: non-RELAYER caller ──────────────
+  // ── 12. processAttestation: non-RELAYER caller (BRIDGE-M-04) ─
 
-  describe("processAttestation — any caller", function () {
-    it("should allow any caller to process attestation (no RELAYER_ROLE required)", async function () {
+  describe("processAttestation — non-RELAYER caller", function () {
+    it("should revert when caller lacks RELAYER_ROLE (BRIDGE-M-04)", async function () {
       const now = BigInt(await time.latest());
       const att = await createAttestation(1n, ethers.parseEther("11000000"), now);
       const sigs = await createSortedSignatures(att, validators.slice(0, 3));
-      await expect(bridge.connect(user).processAttestation(att, sigs)).to.emit(bridge, "AttestationReceived");
+      await expect(bridge.connect(user).processAttestation(att, sigs))
+        .to.be.revertedWithCustomError(bridge, "AccessControlUnauthorizedAccount")
+        .withArgs(user.address, await bridge.RELAYER_ROLE());
     });
   });
 

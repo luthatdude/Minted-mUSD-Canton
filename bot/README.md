@@ -222,3 +222,16 @@ Run historical scan: `npm run monitor -- --scan 0`
 ## License
 
 MIT - Part of the Minted mUSD Protocol
+
+## Stub Modules (Not Yet Implemented)
+
+The following modules are **scaffolding only** and log a warning at startup:
+
+| Module | File | Status |
+|--------|------|--------|
+| **Pendle Sniper** | `src/pendle-sniper.ts` | Stub — pending Pendle SDK integration |
+| **Pool Alerts** | `src/pool-alerts.ts` | Stub — pending Telegram/Discord alerting |
+| **Snapshot** | `src/snapshot.ts` | Stub — returns zeroed snapshot data |
+
+These are safe to import but perform no real operations. Track implementation
+progress in the project backlog.
