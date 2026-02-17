@@ -138,7 +138,7 @@ initProtocol = do
           governance
           validators = [validator1]
           requiredSignatures = 1         -- Devnet: single validator
-          minValidators = 1              -- AUDIT-H-03: Devnet allows single validator
+          minValidators = Some 1          -- AUDIT-H-03: Devnet allows single validator
           totalBridgedIn = 0.0
           totalBridgedOut = 0.0
           lastNonce = 0
@@ -161,8 +161,8 @@ initProtocol = do
           baseReserve = 1000000.0       -- 1M mUSD initial liquidity
           quoteReserve = 333.33         -- ~333 ETH at $3000
           exchangeRate = 3000.0         -- Cached rate
-          oracleCid                     -- Uses the ETH/USD oracle created above
-          spreadBps = 30                -- 0.3% spread
+          oracleCid = Some oracleCid      -- Uses the ETH/USD oracle created above
+          spreadBps = Some 30            -- 0.3% spread
 
   debug "=========================================="
   debug "Canton Protocol Initialized!"
