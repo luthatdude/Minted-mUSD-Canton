@@ -96,10 +96,16 @@ metadata:
     app.kubernetes.io/name: bridge-relay
     app.kubernetes.io/component: relay
     app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
 spec:
   replicas: 1
   strategy:
-    type: Recreate  # Prevent duplicate relay instances
+    type: RollingUpdate    # maxSurge:0 ensures no concurrent relay instances
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: bridge-relay
@@ -113,6 +119,20 @@ spec:
         prometheus.io/port: "8080"
     spec:
       serviceAccountName: bridge-relay
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -195,10 +215,7 @@ spec:
             - name: CANTON_TOKEN
               value: "file:///run/secrets/canton_token"
             - name: RELAYER_KMS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: bridge-relay-secrets
-                  key: RELAYER_KMS_KEY_ID
+              value: "file:///run/secrets/relayer_kms_key_id"
             - name: AWS_REGION
               value: "us-east-1"
           volumeMounts:
@@ -250,6 +267,8 @@ spec:
                       path: canton_token
                     - key: RELAYER_PRIVATE_KEY
                       path: relayer_private_key
+                    - key: RELAYER_KMS_KEY_ID
+                      path: relayer_kms_key_id
                     - key: ETHEREUM_RPC_URL
                       path: ethereum_rpc_url
         - name: tmp
@@ -277,10 +296,16 @@ metadata:
     app.kubernetes.io/component: validator
     app.kubernetes.io/instance: validator-1
     app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: bridge-validator
@@ -293,6 +318,20 @@ spec:
         app.kubernetes.io/instance: validator-1
     spec:
       serviceAccountName: bridge-validator
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -321,7 +360,17 @@ spec:
           # C-2: Pin to immutable SHA256 digest — same image as relay, different entrypoint
           image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
           imagePullPolicy: IfNotPresent
-          command: ["node", "dist/validator-node-v2.js"]
+          # INFRA: Secrets loaded from volume-mounted files (not env vars)
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export VALIDATOR_PARTY="$(cat /run/secrets/validator_party)"
+              export VALIDATOR_ETH_ADDRESS="$(cat /run/secrets/validator_eth_address)"
+              export KMS_KEY_ID="$(cat /run/secrets/kms_key_id)"
+              export AWS_ACCESS_KEY_ID="$(cat /run/secrets/aws_access_key_id)"
+              export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/aws_secret_access_key)"
+              exec node dist/validator-node-v2.js
           env:
             - name: NODE_ENV
               value: "production"
@@ -331,21 +380,6 @@ spec:
               value: "5011"
             - name: CANTON_USE_TLS
               value: "true"
-            - name: VALIDATOR_PARTY
-              valueFrom:
-                secretKeyRef:
-                  name: validator-1-secrets
-                  key: VALIDATOR_PARTY
-            - name: VALIDATOR_ETH_ADDRESS
-              valueFrom:
-                secretKeyRef:
-                  name: validator-1-secrets
-                  key: VALIDATOR_ETH_ADDRESS
-            - name: KMS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: validator-1-secrets
-                  key: KMS_KEY_ID
             - name: AWS_REGION
               value: "us-east-1"
             - name: BRIDGE_CONTRACT_ADDRESS
@@ -357,17 +391,6 @@ spec:
               value: "11000"
             - name: POLL_INTERVAL_MS
               value: "3000"
-            # H-3: AWS credentials as env vars (SDK reads these natively)
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: validator-1-secrets
-                  key: AWS_ACCESS_KEY_ID
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: validator-1-secrets
-                  key: AWS_SECRET_ACCESS_KEY
           volumeMounts:
             - name: secrets
               mountPath: /run/secrets
@@ -420,6 +443,16 @@ spec:
                   items:
                     - key: CANTON_TOKEN
                       path: canton_token
+                    - key: VALIDATOR_PARTY
+                      path: validator_party
+                    - key: VALIDATOR_ETH_ADDRESS
+                      path: validator_eth_address
+                    - key: KMS_KEY_ID
+                      path: kms_key_id
+                    - key: AWS_ACCESS_KEY_ID
+                      path: aws_access_key_id
+                    - key: AWS_SECRET_ACCESS_KEY
+                      path: aws_secret_access_key
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
@@ -445,10 +478,16 @@ metadata:
     app.kubernetes.io/component: validator
     app.kubernetes.io/instance: validator-2
     app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
 spec:
   replicas: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: bridge-validator
@@ -461,6 +500,20 @@ spec:
         app.kubernetes.io/instance: validator-2
     spec:
       serviceAccountName: bridge-validator
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -489,7 +542,17 @@ spec:
           # C-2: Pin to immutable SHA256 digest — same image as relay, different entrypoint
           image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
           imagePullPolicy: IfNotPresent
-          command: ["node", "dist/validator-node-v2.js"]
+          # INFRA: Secrets loaded from volume-mounted files (not env vars)
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export VALIDATOR_PARTY="$(cat /run/secrets/validator_party)"
+              export VALIDATOR_ETH_ADDRESS="$(cat /run/secrets/validator_eth_address)"
+              export KMS_KEY_ID="$(cat /run/secrets/kms_key_id)"
+              export AWS_ACCESS_KEY_ID="$(cat /run/secrets/aws_access_key_id)"
+              export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/aws_secret_access_key)"
+              exec node dist/validator-node-v2.js
           env:
             - name: NODE_ENV
               value: "production"
@@ -499,21 +562,6 @@ spec:
               value: "5011"
             - name: CANTON_USE_TLS
               value: "true"
-            - name: VALIDATOR_PARTY
-              valueFrom:
-                secretKeyRef:
-                  name: validator-2-secrets
-                  key: VALIDATOR_PARTY
-            - name: VALIDATOR_ETH_ADDRESS
-              valueFrom:
-                secretKeyRef:
-                  name: validator-2-secrets
-                  key: VALIDATOR_ETH_ADDRESS
-            - name: KMS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: validator-2-secrets
-                  key: KMS_KEY_ID
             - name: AWS_REGION
               value: "us-east-1"
             - name: BRIDGE_CONTRACT_ADDRESS
@@ -525,16 +573,6 @@ spec:
               value: "11000"
             - name: POLL_INTERVAL_MS
               value: "3000"
-            - name: AWS_ACCESS_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: validator-2-secrets
-                  key: AWS_ACCESS_KEY_ID
-            - name: AWS_SECRET_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: validator-2-secrets
-                  key: AWS_SECRET_ACCESS_KEY
           volumeMounts:
             - name: secrets
               mountPath: /run/secrets
@@ -586,6 +624,16 @@ spec:
                   items:
                     - key: CANTON_TOKEN
                       path: canton_token
+                    - key: VALIDATOR_PARTY
+                      path: validator_party
+                    - key: VALIDATOR_ETH_ADDRESS
+                      path: validator_eth_address
+                    - key: KMS_KEY_ID
+                      path: kms_key_id
+                    - key: AWS_ACCESS_KEY_ID
+                      path: aws_access_key_id
+                    - key: AWS_SECRET_ACCESS_KEY
+                      path: aws_secret_access_key
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
@@ -726,6 +774,7 @@ metadata:
   name: bridge-relay-pdb
   namespace: musd-canton
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   maxUnavailable: 1
   selector:
     matchLabels:

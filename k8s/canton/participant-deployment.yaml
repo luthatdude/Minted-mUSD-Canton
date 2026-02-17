@@ -36,10 +36,16 @@ metadata:
   labels:
     app.kubernetes.io/name: canton-participant
     app.kubernetes.io/component: ledger
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
 spec:
   replicas: 1  # Stateful — do NOT scale without domain sequencer
   strategy:
-    type: Recreate  # Avoid dual-write to same DB
+    type: RollingUpdate    # maxSurge:0 prevents dual-write to same DB
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: canton-participant
@@ -55,6 +61,20 @@ spec:
         checksum/config: "__INJECT_AT_DEPLOY_TIME__"
     spec:
       serviceAccountName: canton-participant
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -333,3 +353,64 @@ metadata:
   labels:
     app.kubernetes.io/name: canton-participant
 automountServiceAccountToken: false
+---
+# ============================================================
+# PARTICIPANT NETWORKPOLICY
+# Accept ingress from relay/validators on Ledger API + JSON API
+# Egress to PostgreSQL + DNS only
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: canton-participant-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: canton-participant
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Ledger API from relay and validators
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-relay
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-validator
+      ports:
+        - port: 5011
+          protocol: TCP
+    # JSON API from relay (v2 HTTP)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bridge-relay
+      ports:
+        - port: 7575
+          protocol: TCP
+    # Kubelet probes (gRPC on 5011, HTTP on 7575)
+    - ports:
+        - port: 5011
+          protocol: TCP
+        - port: 7575
+          protocol: TCP
+  egress:
+    # PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

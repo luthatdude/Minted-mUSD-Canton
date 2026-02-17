@@ -51,6 +51,44 @@ contract MockSUSDS is ERC20 {
         return (shares * exchangeRate) / 1e18;
     }
 
+    /// @notice Withdraw exact amount of assets, burning proportional shares
+    function withdraw(uint256 assets, address receiver, address owner) external returns (uint256 shares) {
+        shares = (assets * 1e18) / exchangeRate;
+        require(balanceOf(owner) >= shares, "INSUFFICIENT_SHARES");
+        if (owner != msg.sender) {
+            uint256 allowed = allowance(owner, msg.sender);
+            require(allowed >= shares, "INSUFFICIENT_ALLOWANCE");
+            _approve(owner, msg.sender, allowed - shares);
+        }
+        _burn(owner, shares);
+        usds.transfer(receiver, assets);
+    }
+
+    /// @notice Max withdrawable assets for owner
+    function maxWithdraw(address owner) external view returns (uint256) {
+        return (balanceOf(owner) * exchangeRate) / 1e18;
+    }
+
+    /// @notice Max redeemable shares for owner
+    function maxRedeem(address owner) external view returns (uint256) {
+        return balanceOf(owner);
+    }
+
+    /// @notice Convert shares to assets
+    function convertToAssets(uint256 shares) external view returns (uint256) {
+        return (shares * exchangeRate) / 1e18;
+    }
+
+    /// @notice Convert assets to shares
+    function convertToShares(uint256 assets) external view returns (uint256) {
+        return (assets * 1e18) / exchangeRate;
+    }
+
+    /// @notice Underlying asset address
+    function asset() external view returns (address) {
+        return address(usds);
+    }
+
     /// @notice Total assets held
     function totalAssets() external view returns (uint256) {
         return usds.balanceOf(address(this));

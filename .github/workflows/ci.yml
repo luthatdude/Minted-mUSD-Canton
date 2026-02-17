@@ -887,6 +887,7 @@ jobs:
             --config .kube-linter.yaml 2>&1 || true
           # Run again with strict mode for core manifests
           kube-linter lint \
+            --config .kube-linter.yaml \
             k8s/canton/relay-deployment.yaml \
             k8s/canton/bot-deployment.yaml \
             k8s/canton/participant-deployment.yaml \
