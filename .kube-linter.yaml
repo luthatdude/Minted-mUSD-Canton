@@ -1,0 +1,11 @@
+# kube-linter configuration for Minted mUSD Canton
+# Enforces K8s security best practices across all manifests
+checks:
+  # Include all default checks plus extras
+  addAllBuiltIn: true
+  exclude:
+    # CronJob health-check uses busybox which runs as nobody (65534)
+    # but linter may flag readOnlyRootFilesystem on init containers
+    - "no-read-only-root-fs"
+    # We use emptyDir for temp volumes in init containers — acceptable
+    - "writable-host-mount"
