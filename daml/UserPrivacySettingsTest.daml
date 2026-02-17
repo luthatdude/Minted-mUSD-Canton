@@ -13,7 +13,7 @@ import DA.List (head)
 import UserPrivacySettings
 import CantonDirectMint (CantonMUSD(..), CantonUSDC(..), USDCx(..))
 import CantonSMUSD (CantonSMUSD(..))
-import CantonBoostPool (CantonCoin(..))
+import CantonCoinToken (CantonCoin(..))
 import CantonLending (EscrowedCollateral(..), CantonDebtPosition(..), CollateralType(..))
 
 -- ============================================================
@@ -456,7 +456,7 @@ testUnauthorizedGetSettings = do
   settingsCid <- createPrivateSettings operator alice
 
   -- Stranger cannot query Alice's settings
-  submitMustFail stranger do
+  submitMultiMustFail [stranger] [operator] do
     exerciseCmd settingsCid Privacy_GetSettings with requester = stranger
   debug "✅ 17. Unauthorized settings query rejected"
 
@@ -590,16 +590,21 @@ testObserverOnDebtPosition = do
 --         23. SETTINGS KEY UNIQUENESS
 -- ============================================================
 
+-- | LF 2.x removed contract keys, so duplicate creates are now allowed.
+-- This test verifies that creating two settings for the same user does NOT fail
+-- (regression from LF 1.x where contract key uniqueness was enforced on-ledger).
+-- Application-level deduplication must be enforced by the off-ledger layer.
 testUniqueSettingsKey : Script ()
 testUniqueSettingsKey = do
   operator <- allocateParty "Operator"
   alice <- allocateParty "Alice"
 
   -- First settings succeeds
-  _ <- createPrivateSettings operator alice
+  cid1 <- createPrivateSettings operator alice
 
-  -- Second settings for same (operator, alice) key should fail
-  submitMultiMustFail [operator, alice] [] do
+  -- LF 2.x: Second settings for same (operator, alice) now succeeds
+  -- (contract key uniqueness removed in Daml 3 / LF 2.x)
+  cid2 <- submitMulti [operator, alice] [] do
     createCmd UserPrivacySettings with
       operator
       user = alice
@@ -608,7 +613,11 @@ testUniqueSettingsKey = do
       labels = []
       createdAt = baseTime
       updatedAt = baseTime
-  debug "✅ 23. Unique key constraint — one settings per user"
+  -- Verify both contracts exist (application must handle dedup off-ledger)
+  s1 <- queryContractId operator cid1
+  s2 <- queryContractId operator cid2
+  assertMsg "Both settings exist" (s1 /= None && s2 /= None)
+  debug "✅ 23. LF 2.x: Duplicate settings allowed (dedup is off-ledger)"
 
 -- ============================================================
 --         24. ENSURE: FULLY PRIVATE CANNOT HAVE OBSERVERS

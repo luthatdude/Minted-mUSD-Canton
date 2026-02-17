@@ -7,6 +7,7 @@ import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { DirectMintV2, MUSD, TreasuryV2, MockERC20 } from "../typechain-types";
+import { timelockSetFees, timelockSetFeeRecipient, timelockSetLimits } from "./helpers/timelock";
 
 describe("DirectMintV2", function () {
   let directMint: DirectMintV2;
@@ -32,7 +33,7 @@ describe("DirectMintV2", function () {
 
     // Deploy MUSD with supply cap
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Deploy TreasuryV2 (upgradeable)
@@ -41,7 +42,8 @@ describe("DirectMintV2", function () {
       await usdc.getAddress(),
       deployer.address, // vault placeholder
       deployer.address, // admin
-      feeRecipient.address
+      feeRecipient.address,
+      deployer.address
     ])) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
 
@@ -61,6 +63,10 @@ describe("DirectMintV2", function () {
 
     const VAULT_ROLE = await treasury.VAULT_ROLE();
     await treasury.grantRole(VAULT_ROLE, await directMint.getAddress());
+
+    // Grant TIMELOCK_ROLE to deployer for setFees/setLimits
+    const TIMELOCK_ROLE = await directMint.TIMELOCK_ROLE();
+    await directMint.grantRole(TIMELOCK_ROLE, deployer.address);
 
     // Mint USDC to user
     await usdc.mint(user.address, INITIAL_USDC);
@@ -85,18 +91,18 @@ describe("DirectMintV2", function () {
       
       await expect(
         DirectMintFactory.deploy(ethers.ZeroAddress, await musd.getAddress(), await treasury.getAddress(), feeRecipient.address)
-      ).to.be.revertedWith("INVALID_USDC");
+      ).to.be.revertedWithCustomError(directMint, "InvalidUsdc");
 
       await expect(
         DirectMintFactory.deploy(await usdc.getAddress(), ethers.ZeroAddress, await treasury.getAddress(), feeRecipient.address)
-      ).to.be.revertedWith("INVALID_MUSD");
+      ).to.be.revertedWithCustomError(directMint, "InvalidMusd");
     });
   });
 
   describe("Minting", function () {
     it("Should mint mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedMusd = ethers.parseUnits("1000", MUSD_DECIMALS); // 1000 mUSD
@@ -110,7 +116,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply mint fee correctly", async function () {
       // Set 1% mint fee
-      await directMint.setFees(100, 0); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 100, 0); // 100 bps = 1%
 
       const usdcAmount = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
       const expectedFee = ethers.parseUnits("10", USDC_DECIMALS); // 10 USDC fee
@@ -127,7 +133,7 @@ describe("DirectMintV2", function () {
       const tooSmall = ethers.parseUnits("0.5", USDC_DECIMALS); // 0.5 USDC
 
       await expect(directMint.connect(user).mint(tooSmall))
-        .to.be.revertedWith("BELOW_MIN");
+        .to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("Should reject mint above maximum", async function () {
@@ -136,7 +142,7 @@ describe("DirectMintV2", function () {
       const tooLarge = ethers.parseUnits("1500000", USDC_DECIMALS); // 1.5M USDC
 
       await expect(directMint.connect(user).mint(tooLarge))
-        .to.be.revertedWith("ABOVE_MAX");
+        .to.be.revertedWithCustomError(directMint, "AboveMax");
     });
 
     it("Should reject mint that exceeds supply cap", async function () {
@@ -147,7 +153,7 @@ describe("DirectMintV2", function () {
       const usdcAmount = ethers.parseUnits("200", USDC_DECIMALS); // Would mint 200 mUSD
 
       await expect(directMint.connect(user).mint(usdcAmount))
-        .to.be.revertedWith("EXCEEDS_SUPPLY_CAP");
+        .to.be.revertedWithCustomError(directMint, "ExceedsSupplyCap");
     });
 
     it("Should reject mint when paused", async function () {
@@ -174,7 +180,7 @@ describe("DirectMintV2", function () {
 
     it("Should redeem mUSD for USDC at 1:1 ratio (no fees)", async function () {
       // Reset fees to 0 for this test (default mint fee is 1%)
-      await directMint.setFees(0, 0);
+      await timelockSetFees(directMint, deployer, 0, 0);
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const expectedUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -193,7 +199,7 @@ describe("DirectMintV2", function () {
 
     it("Should apply redeem fee correctly", async function () {
       // Set 1% redeem fee
-      await directMint.setFees(0, 100); // 100 bps = 1%
+      await timelockSetFees(directMint, deployer, 0, 100); // 100 bps = 1%
 
       const musdAmount = ethers.parseEther("1000"); // 1000 mUSD
       const grossUsdc = ethers.parseUnits("1000", USDC_DECIMALS); // 1000 USDC
@@ -211,12 +217,12 @@ describe("DirectMintV2", function () {
       const tooSmall = ethers.parseEther("0.5"); // 0.5 mUSD
 
       await expect(directMint.connect(user).redeem(tooSmall))
-        .to.be.revertedWith("BELOW_MIN");
+        .to.be.revertedWithCustomError(directMint, "BelowMin");
     });
 
     it("Should reject zero redeem amount", async function () {
       await expect(directMint.connect(user).redeem(0))
-        .to.be.revertedWith("INVALID_AMOUNT");
+        .to.be.revertedWithCustomError(directMint, "InvalidAmount");
     });
   });
 
@@ -232,12 +238,12 @@ describe("DirectMintV2", function () {
 
     it("Should reject fees above maximum", async function () {
       await expect(directMint.setFees(600, 0)) // 6% > 5% max
-        .to.be.revertedWith("MINT_FEE_TOO_HIGH");
+        .to.be.revertedWithCustomError(directMint, "MintFeeTooHigh");
     });
 
     it("Should allow fee withdrawal", async function () {
       // Set fees and mint
-      await directMint.setFees(100, 0); // 1% mint fee
+      await timelockSetFees(directMint, deployer, 100, 0); // 1% mint fee
       const usdcAmount = ethers.parseUnits("10000", USDC_DECIMALS);
       await directMint.connect(user).mint(usdcAmount);
 
@@ -271,8 +277,7 @@ describe("DirectMintV2", function () {
       const newMinRedeem = ethers.parseUnits("10", USDC_DECIMALS);
       const newMaxRedeem = ethers.parseUnits("500000", USDC_DECIMALS);
 
-      await expect(directMint.setLimits(newMinMint, newMaxMint, newMinRedeem, newMaxRedeem))
-        .to.emit(directMint, "LimitsUpdated");
+      await timelockSetLimits(directMint, deployer, newMinMint, newMaxMint, newMinRedeem, newMaxRedeem);
 
       expect(await directMint.minMintAmount()).to.equal(newMinMint);
       expect(await directMint.maxMintAmount()).to.equal(newMaxMint);
@@ -281,7 +286,7 @@ describe("DirectMintV2", function () {
     it("Should reject invalid limits (min > max)", async function () {
       await expect(
         directMint.setLimits(1000, 100, 1, 1000) // min > max
-      ).to.be.revertedWith("INVALID_MINT_LIMITS");
+      ).to.be.revertedWithCustomError(directMint, "InvalidMintLimits");
     });
   });
 

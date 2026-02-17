@@ -1,6 +1,6 @@
 /**
- * AWS KMS DER-to-RSV Signature Utility - Fixed Version
- * Fixes: T-01 (DER buffer overflow), T-02 (Input validation)
+ * AWS KMS DER-to-RSV Signature Utility
+ * Addresses: T-01 (DER buffer overflow), T-02 (Input validation)
  */
 
 import { ethers } from "ethers";
@@ -29,7 +29,7 @@ export function formatKMSSignature(
   messageHash: string,
   publicKey: string
 ): string {
-  // FIX T-02: Input validation
+  // Input validation
   if (!derSig || !Buffer.isBuffer(derSig)) {
     throw new Error("INVALID_INPUT: derSig must be a Buffer");
   }
@@ -46,19 +46,19 @@ export function formatKMSSignature(
     throw new Error("INVALID_INPUT: publicKey must be 0x prefixed");
   }
 
-  // FIX T-01: Validate minimum DER length
+  // Validate minimum DER length
   // Minimum DER signature: 30 + len + 02 + rLen + r + 02 + sLen + s
   // Minimum is around 8 bytes for structure + at least 1 byte each for r and s
   if (derSig.length < 8) {
     throw new Error("INVALID_DER: Signature too short");
   }
 
-  // FIX T-01: Validate DER structure
+  // Validate DER structure
   if (derSig[0] !== DER_SEQUENCE_TAG) {
     throw new Error("INVALID_DER: Missing sequence tag");
   }
 
-  // FIX H-16: Handle multi-byte DER length encoding and validate trailing bytes
+  // Handle multi-byte DER length encoding and validate trailing bytes
   let totalLength: number;
   let headerOffset: number;
   if (derSig[1] & 0x80) {
@@ -78,7 +78,7 @@ export function formatKMSSignature(
   if (headerOffset + totalLength > derSig.length) {
     throw new Error("INVALID_DER: Length exceeds buffer");
   }
-  // FIX H-16: Reject signatures with unexpected trailing bytes
+  // Reject signatures with unexpected trailing bytes
   if (headerOffset + totalLength < derSig.length) {
     throw new Error("INVALID_DER: Trailing bytes after DER sequence");
   }
@@ -90,12 +90,12 @@ export function formatKMSSignature(
 
   const rLen = derSig[headerOffset + 1];
 
-  // FIX H-11: Validate R/S length bounds (max 33 bytes for secp256k1)
+  // Validate R/S length bounds (max 33 bytes for secp256k1)
   if (rLen > 33) {
     throw new Error("INVALID_DER: R component too long");
   }
 
-  // FIX T-01: Bounds check for R
+  // Bounds check for R
   if (headerOffset + 2 + rLen > derSig.length) {
     throw new Error("INVALID_DER: R length exceeds buffer");
   }
@@ -121,12 +121,12 @@ export function formatKMSSignature(
   const sLen = derSig[sLenIndex];
   const sStartIndex = sLenIndex + 1;
 
-  // FIX H-11: Validate R/S length bounds (max 33 bytes for secp256k1)
+  // Validate R/S length bounds (max 33 bytes for secp256k1)
   if (sLen > 33) {
     throw new Error("INVALID_DER: S component too long");
   }
 
-  // FIX T-01: Bounds check for S
+  // Bounds check for S
   if (sStartIndex + sLen > derSig.length) {
     throw new Error("INVALID_DER: S length exceeds buffer");
   }
@@ -164,24 +164,24 @@ export function formatKMSSignature(
   }
 
   // Try both recovery IDs to find the correct one
-  // FIX: Use recoverAddress instead of verifyMessage because messageHash
+  // Use recoverAddress instead of verifyMessage because messageHash
   // is already the EIP-191 prefixed hash. verifyMessage would hash it again.
   const normalizedPublicKey = publicKey.toLowerCase();
 
-  // FIX B-C02: Track valid recovery IDs and reject if both work (malleability)
+  // Track valid recovery IDs and reject if both work (malleability)
   let validRecoveryId: number | null = null;
   let validSig: string | null = null;
 
   for (const v of [27, 28]) {
     const sig = `0x${rHex}${sHex}${v.toString(16)}`;
     try {
-      // FIX CRITICAL: recoverAddress expects the digest directly, not bytes
+      // recoverAddress expects the digest directly, not bytes
       const recovered = ethers
         .recoverAddress(messageHash, sig)
         .toLowerCase();
 
       if (recovered === normalizedPublicKey) {
-        // FIX B-C02: Enforce signature uniqueness - only one recovery ID should work
+        // Enforce signature uniqueness - only one recovery ID should work
         if (validRecoveryId !== null) {
           throw new Error("SIGNATURE_MALLEABILITY: Both recovery IDs valid - possible attack");
         }
@@ -219,7 +219,7 @@ export function validateSignature(
   expectedSigner: string
 ): boolean {
   try {
-    // FIX H-01: Use recoverAddress instead of verifyMessage to avoid double EIP-191 prefix.
+    // Use recoverAddress instead of verifyMessage to avoid double EIP-191 prefix.
     // The messageHash is already a hash — verifyMessage would hash it again with EIP-191 prefix.
     const recovered = ethers.recoverAddress(messageHash, signature);
     return recovered.toLowerCase() === expectedSigner.toLowerCase();
@@ -240,7 +240,7 @@ export function sortSignaturesBySignerAddress(
   messageHash: string
 ): string[] {
   const signerPairs = signatures.map((sig) => {
-    // FIX H-01: Use recoverAddress instead of verifyMessage (consistent with formatKMSSignature)
+    // Use recoverAddress instead of verifyMessage (consistent with formatKMSSignature)
     const signer = ethers.recoverAddress(messageHash, sig);
     return { signature: sig, signer: signer.toLowerCase() };
   });

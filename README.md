@@ -98,7 +98,7 @@ All components deployed via Kubernetes manifests in `k8s/` with:
 
 ## Solidity Contracts
 
-15 contracts in `contracts/` compiled with Solidity 0.8.26.
+29 contracts in `contracts/` compiled with Solidity 0.8.26.
 
 | Contract | Type | Description |
 |----------|------|-------------|
@@ -115,7 +115,20 @@ All components deployed via Kubernetes manifests in `k8s/` with:
 | `LiquidationEngine` | CDP | Liquidation with close factor and collateral seizure |
 | `PriceOracle` | Oracle | Chainlink-compatible feeds with staleness checks |
 | `PendleMarketSelector` | Yield | Market selection for TreasuryV2 yield strategies |
+| `YieldBasisStrategy` | Yield | Lends USDC into Yield Basis BTC/ETH pools for leveraged LP yield |
+| `YBStakingVault` | Staking | UUPS ERC-4626 vault for BTC/ETH YB yield — users stake mUSD, earn YB pool yield |
+| `MintedYBPool` | Yield | Minted-owned YB pool — Uni V3 concentrated liquidity with share-based lender accounting |
+| `MintedYBRouter` | Yield | Registry/router for MintedYBPool instances — pool discovery by base/quote pair |
+| `DepositRouter` | Bridge | L2 USDC deposit routing via Wormhole |
+| `LeverageVault` | CDP | Flash-loan-based leveraged vault positions |
+| `MetaVault` | Aggregator | Multi-vault aggregation and routing |
+| `InterestRateModel` | CDP | Utilization-based interest rate curve |
+| `GlobalPauseRegistry` / `GlobalPausable` | Safety | Protocol-wide emergency pause |
+| `RedemptionQueue` | Minting | Queued redemption processing |
+| `MintedTimelockController` | Governance | Timelocked admin operations |
 | `MockERC20` / `MockAggregatorV3` / `MockStrategy` | Testing | Mock contracts for Hardhat tests |
+| `MockYieldBasisPool` | Testing | Mock Yield Basis pool for strategy/vault testing |
+| `MockUniswapV3Pool` / `MockNonfungiblePositionManager` / `MockSwapRouter` | Testing | Mock Uni V3 for MintedYBPool testing |
 
 ### BLEBridgeV9 Rate Limiting
 
@@ -172,6 +185,14 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 | `CantonStakingService` | `CantonSMUSD.daml` | Canton yield vault. Share-price model (totalAssets/totalShares). Yield synced from ETH. |
 | `CantonSMUSD` | `CantonSMUSD.daml` | Individual smUSD share position. |
 
+### Yield Basis Staking (Canton)
+
+| Template | File | Description |
+|----------|------|-------------|
+| `CantonYBPosition` | `CantonYBStaking.daml` | Individual BTC or ETH YB staking position (shares). |
+| `CantonYBStakingService` | `CantonYBStaking.daml` | Per-pool staking service (BTC/ETH). Stake/unstake, yield sync, compliance. |
+| `CantonYBStakingSetup` | `CantonYBStaking.daml` | Factory for creating BTC and ETH staking services. |
+
 ### Vaults (CDP)
 
 | Template | File | Description |
@@ -216,7 +237,7 @@ Production-hardened TypeScript bridge infrastructure in `relay/`.
 | `relay-service.ts` | ~600 | Watches Canton ledger for finalized attestations, submits to BLEBridgeV9 on Ethereum. DER→RSV signature conversion, duplicate tracking, bounded cache. |
 | `validator-node-v2.ts` | ~400 | Canton Asset API integration, AWS KMS signing, collateral ratio validation (110% default). |
 | `validator-node.ts` | ~300 | Base validator implementation. |
-| `signer.ts` | ~200 | DER-to-RSV ECDSA signature conversion with 40+ security fixes. |
+| `signer.ts` | ~200 | DER-to-RSV ECDSA signature conversion with 40+ security hardening measures. |
 
 Docker deployment (`docker-compose.yml`):
 - Relay + 3 validator nodes
@@ -227,13 +248,14 @@ Docker deployment (`docker-compose.yml`):
 
 ## Frontend
 
-Next.js 14 / TypeScript / Tailwind CSS with dual-chain toggle in `frontend/`.
+Next.js 15 / TypeScript / Tailwind CSS with dual-chain toggle in `frontend/`.
 
 | Page | Ethereum Mode | Canton Mode |
 |------|---------------|-------------|
 | Dashboard | mUSD supply, treasury balance, vault stats, bridge health | Asset counts, service status, vault count |
 | Mint/Redeem | USDC ↔ mUSD via DirectMint contract | CantonDirectMint exercise via Daml JSON API |
 | Stake | smUSD ERC-4626 deposit/redeem with cooldown | CantonSMUSD deposit/withdraw |
+| YB Stake | ybBTC/ybETH vault deposit/redeem — Yield Basis pool yield | CantonYBStaking stake/unstake |
 | Borrow | Collateral deposit, borrow/repay, health factor | Vault CDP with oracle price feeds |
 | Liquidations | Check liquidatability, estimate seizure, execute | Browse vaults by health ratio |
 | Bridge | BLEBridgeV9 attestation events and health | Lock/attest/claim workflow |
@@ -259,7 +281,7 @@ cd daml && daml test       # DAML
 ```
 ├── .github/workflows/
 │   └── ci.yml                           # CI: Solidity, DAML, Docker, Slither, Trivy, kubeval
-├── contracts/                           # Solidity contracts (15 files)
+├── contracts/                           # Solidity contracts (29 files)
 │   ├── BLEBridgeV9.sol                  # Bridge V9 (supply cap model, 24h rate limiting)
 │   ├── MUSD.sol                         # ERC-20 mUSD token
 │   ├── SMUSD.sol                        # ERC-4626 staking vault
@@ -287,7 +309,7 @@ cd daml && daml test       # DAML
 ├── archive/                             # Deprecated/superseded code (excluded from audit)
 │   ├── contracts/                       # V1 non-upgradeable contracts
 │   └── daml/                            # Legacy DAML templates
-├── frontend/                            # Next.js 14 / TypeScript / Tailwind
+├── frontend/                            # Next.js 15 / TypeScript / Tailwind
 │   ├── src/abis/                        # Ethereum contract ABIs (10 files)
 │   ├── src/components/canton/           # Canton-mode UI components (7)
 │   ├── src/components/                  # Shared components (ChainToggle, Layout, Navbar, etc.)
@@ -313,7 +335,7 @@ cd daml && daml test       # DAML
 │       ├── network-policy.yaml          # Default-deny + explicit allow rules
 │       ├── secrets.yaml                 # Template secrets (postgres, TLS)
 │       └── pod-disruption-budget.yaml   # PDBs for Canton and PostgreSQL
-├── test/                                # Hardhat test suites (678 tests)
+├── test/                                # Hardhat test suites (1500+ tests)
 │   ├── BLEProtocol.test.ts
 │   ├── TreasuryV2.test.ts
 │   ├── TreasuryReceiver.test.ts
@@ -420,13 +442,13 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 - [x] NGINX API gateway with TLS termination and rate limiting
 - [x] Kubernetes deployment manifests (Canton, PostgreSQL, NGINX, NetworkPolicy)
 - [x] CI/CD pipeline (Solidity, DAML, Docker, Slither, Trivy, kubeval)
-- [x] Integration tests (678 Solidity + 16 DAML + 29 relay tests)
+- [x] Integration tests (1500+ Solidity + 16 DAML + 29 relay tests)
 - [ ] Mainnet deployment (deployment scripts, network config, contract verification)
-- [ ] Monitoring stack (Prometheus, Grafana dashboards for Canton + Bridge health)
+- [x] Monitoring stack (Loki, Promtail, Prometheus, Grafana dashboards for Canton + Bridge health)
 
 ## Security
 
-### Audit Fixes Applied
+### Security Remediations
 
 98 security findings resolved across Solidity and DAML:
 - Time manipulation: All user-supplied timestamps replaced with `getTime` (DAML) / `block.timestamp` (Solidity)

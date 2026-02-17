@@ -1,0 +1,234 @@
+# ── Minted mUSD Protocol Subgraph Manifest ─────────────────────────
+# Provides on-chain observability for critical protocol events.
+# Contract addresses below are placeholders — replace with deployed addresses.
+# Network: sepolia (chainId 11155111). Change to mainnet for production.
+
+specVersion: 1.0.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+
+dataSources:
+  # ── mUSD Token ─────────────────────────────────────────────────
+  - kind: ethereum
+    name: MUSD
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000001" # TODO: Replace with deployed MUSD address
+      abi: MUSD
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - MintEvent
+        - BurnEvent
+        - SupplyCapChange
+        - BlacklistEvent
+      abis:
+        - name: MUSD
+          file: ../artifacts/contracts/MUSD.sol/MUSD.json
+      eventHandlers:
+        - event: Mint(indexed address,uint256)
+          handler: handleMint
+        - event: Burn(indexed address,uint256)
+          handler: handleBurn
+        - event: SupplyCapUpdated(uint256,uint256)
+          handler: handleSupplyCapUpdated
+        - event: BlacklistUpdated(indexed address,bool)
+          handler: handleBlacklistUpdated
+      file: ./src/musd.ts
+
+  # ── sMUSD Vault ────────────────────────────────────────────────
+  - kind: ethereum
+    name: SMUSD
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000002" # TODO: Replace with deployed SMUSD address
+      abi: SMUSD
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - StakeEvent
+        - UnstakeEvent
+        - InterestReceived
+        - CantonShareSync
+      abis:
+        - name: SMUSD
+          file: ../artifacts/contracts/SMUSD.sol/SMUSD.json
+      eventHandlers:
+        - event: YieldDistributed(indexed address,uint256)
+          handler: handleYieldDistributed
+        - event: CantonSharesSynced(uint256,uint256,uint256)
+          handler: handleCantonSharesSynced
+        - event: InterestReceived(indexed address,uint256,uint256)
+          handler: handleInterestReceived
+      file: ./src/smusd.ts
+
+  # ── BLE Bridge ─────────────────────────────────────────────────
+  - kind: ethereum
+    name: BLEBridgeV9
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000003" # TODO: Replace with deployed BLEBridgeV9 proxy address
+      abi: BLEBridgeV9
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Attestation
+        - EmergencyCapReduction
+        - ProtocolStats
+      abis:
+        - name: BLEBridgeV9
+          file: ../artifacts/contracts/BLEBridgeV9.sol/BLEBridgeV9.json
+      eventHandlers:
+        - event: AttestationReceived(indexed bytes32,uint256,uint256,uint256,uint256)
+          handler: handleAttestationReceived
+        - event: EmergencyCapReduction(uint256,uint256,string)
+          handler: handleEmergencyCapReduction
+        - event: SupplyCapUpdated(uint256,uint256,uint256)
+          handler: handleBridgeSupplyCapUpdated
+        - event: AttestationInvalidated(indexed bytes32,string)
+          handler: handleAttestationInvalidated
+      file: ./src/ble-bridge.ts
+
+  # ── Borrow Module ──────────────────────────────────────────────
+  - kind: ethereum
+    name: BorrowModule
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000004" # TODO: Replace with deployed BorrowModule address
+      abi: BorrowModule
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - BorrowEvent
+        - RepayEvent
+        - ProtocolStats
+      abis:
+        - name: BorrowModule
+          file: ../artifacts/contracts/BorrowModule.sol/BorrowModule.json
+      eventHandlers:
+        - event: Borrowed(indexed address,uint256,uint256)
+          handler: handleBorrowed
+        - event: Repaid(indexed address,uint256,uint256)
+          handler: handleRepaid
+        - event: GlobalInterestAccrued(uint256,uint256,uint256)
+          handler: handleGlobalInterestAccrued
+      file: ./src/borrow-module.ts
+
+  # ── Collateral Vault ───────────────────────────────────────────
+  - kind: ethereum
+    name: CollateralVault
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000005" # TODO: Replace with deployed CollateralVault address
+      abi: CollateralVault
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - CollateralDeposit
+        - CollateralWithdrawal
+      abis:
+        - name: CollateralVault
+          file: ../artifacts/contracts/CollateralVault.sol/CollateralVault.json
+      eventHandlers:
+        - event: Deposited(indexed address,indexed address,uint256)
+          handler: handleDeposited
+        - event: Withdrawn(indexed address,indexed address,uint256)
+          handler: handleWithdrawn
+        - event: Seized(indexed address,indexed address,uint256,indexed address)
+          handler: handleSeized
+      file: ./src/collateral-vault.ts
+
+  # ── Direct Mint ────────────────────────────────────────────────
+  - kind: ethereum
+    name: DirectMintV2
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000006" # TODO: Replace with deployed DirectMintV2 address
+      abi: DirectMintV2
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - DirectMint
+        - DirectRedeem
+      abis:
+        - name: DirectMintV2
+          file: ../artifacts/contracts/DirectMintV2.sol/DirectMintV2.json
+      eventHandlers:
+        - event: Minted(indexed address,uint256,uint256,uint256)
+          handler: handleMinted
+        - event: Redeemed(indexed address,uint256,uint256,uint256)
+          handler: handleRedeemed
+      file: ./src/direct-mint.ts
+
+  # ── Liquidation Engine ─────────────────────────────────────────
+  - kind: ethereum
+    name: LiquidationEngine
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000007" # TODO: Replace with deployed LiquidationEngine address
+      abi: LiquidationEngine
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - LiquidationEvent
+        - BadDebtEvent
+        - ProtocolStats
+      abis:
+        - name: LiquidationEngine
+          file: ../artifacts/contracts/LiquidationEngine.sol/LiquidationEngine.json
+      eventHandlers:
+        - event: Liquidation(indexed address,indexed address,indexed address,uint256,uint256)
+          handler: handleLiquidation
+        - event: BadDebtRecorded(indexed address,uint256,uint256)
+          handler: handleBadDebtRecorded
+        - event: BadDebtSocialized(indexed address,uint256,uint256)
+          handler: handleBadDebtSocialized
+      file: ./src/liquidation-engine.ts
+
+  # ── Leverage Vault ─────────────────────────────────────────────
+  - kind: ethereum
+    name: LeverageVault
+    network: sepolia
+    source:
+      address: "0x0000000000000000000000000000000000000008" # TODO: Replace with deployed LeverageVault address
+      abi: LeverageVault
+      startBlock: 0 # TODO: Replace with deployment block
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - LeverageOpen
+        - LeverageClose
+      abis:
+        - name: LeverageVault
+          file: ../artifacts/contracts/LeverageVault.sol/LeverageVault.json
+      eventHandlers:
+        - event: LeverageOpened(indexed address,indexed address,uint256,uint256,uint256,uint256,uint256)
+          handler: handleLeverageOpened
+        - event: LeverageClosed(indexed address,indexed address,uint256,uint256,uint256)
+          handler: handleLeverageClosed
+      file: ./src/leverage-vault.ts

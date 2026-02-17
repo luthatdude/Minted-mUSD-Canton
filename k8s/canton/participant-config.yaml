@@ -25,7 +25,11 @@ data:
                 user = ${?CANTON_DB_USER}
                 password = ${?CANTON_DB_PASSWORD}
                 ssl = true
-                sslmode = "require"
+                # INFRA-M-01: Use verify-full to authenticate the PostgreSQL server certificate,
+                # preventing MITM attacks. Requires the CA cert to be mounted at the path below.
+                # The CA cert must be provisioned via cert-manager or external-secrets.
+                sslmode = "verify-full"
+                sslrootcert = "/etc/canton/tls/postgres-ca.crt"
               }
             }
             parameters {
@@ -37,6 +41,9 @@ data:
             port = 5011
             address = "0.0.0.0"
 
+            # INFRA-M-12: TLS certificates MUST be unique per environment.
+            # Use cert-manager to auto-provision per-environment certs.
+            # NEVER use self-signed certs or shared keys in staging/production.
             tls {
               cert-chain-file = "/etc/canton/tls/tls.crt"
               private-key-file = "/etc/canton/tls/tls.key"
@@ -55,7 +62,7 @@ data:
             port = 5012
             address = "127.0.0.1"  # Admin API is localhost-only — never expose externally
             
-            # FIX IF-H03: Enable TLS client certificate authentication for Admin API
+            # Enable TLS client certificate authentication for Admin API
             # Requires mounting admin client certificates
             tls {
               cert-chain-file = "/etc/canton/tls/admin-tls.crt"

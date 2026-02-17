@@ -1,0 +1,224 @@
+# PostgreSQL backup CronJob for disaster recovery
+# Runs daily at 2:00 AM UTC, dumps the Canton participant database,
+# and stores the backup in a PersistentVolumeClaim.
+#
+# Prerequisites:
+#   - Secret "postgres-credentials" with keys "username" and "password"
+#   - PVC "postgres-backups" (defined below) provisioned in the cluster
+#   - PostgreSQL service reachable at postgres.musd-canton.svc.cluster.local:5432
+#
+# To restore from backup:
+#   kubectl cp musd-canton/<backup-pod>:/backups/<file>.sql.gz ./restore.sql.gz
+#   gunzip restore.sql.gz
+#   psql -h <host> -U <user> -d canton < restore.sql
+---
+# INFRA-H-04: ConfigMap for offsite backup configuration
+# Set BACKUP_S3_BUCKET to the target S3/GCS bucket for cross-region disaster recovery.
+# The backup CronJob will upload each backup to this bucket after the local dump completes.
+# Ensure the pod's ServiceAccount (or IRSA / Workload Identity) has write access to this bucket.
+#
+# F-02 FIX: CI must validate these are NOT placeholder values before deployment.
+# Add to CI pipeline:
+#   grep -rq 'REPLACE_WITH_ACTUAL' k8s/canton/postgres-backup-cronjob.yaml && echo 'FAIL: backup bucket not configured' && exit 1
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+  annotations:
+    # F-02: CI validation gate — deployment blocked if buckets are still placeholders
+    musd.io/requires-configuration: "BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET must be set before production deploy"
+data:
+  # ⚠️ MUST be configured per-environment before production deployment.
+  # CI pipeline should fail if these contain 'REPLACE_WITH_ACTUAL'.
+  # For AWS: "my-org-musd-canton-backups-us-east-1"
+  # For GCS: "my-org-musd-canton-backups" (and use gsutil cp instead of aws s3 cp)
+  BACKUP_S3_BUCKET: "REPLACE_WITH_ACTUAL_BUCKET_NAME"
+  # For GCS-based backup (alternative to S3). Set to your GCS bucket name.
+  BACKUP_GCS_BUCKET: "REPLACE_WITH_ACTUAL_GCS_BUCKET_NAME"
+---
+# PVC for storing database backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: gp3-encrypted
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/component: backup
+spec:
+  # Run daily at 2:00 AM UTC
+  schedule: "0 2 * * *"
+  # Forbid concurrent backup runs
+  concurrencyPolicy: Forbid
+  # Keep last 7 successful and 3 failed jobs for debugging
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  # Don't start if missed by more than 15 minutes
+  startingDeadlineSeconds: 900
+  jobTemplate:
+    spec:
+      # Fail the job if it runs longer than 1 hour
+      activeDeadlineSeconds: 3600
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          # INFRA-H-05: Use dedicated zero-permission ServiceAccount
+          serviceAccountName: postgres-backup
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-backup
+              # Match the PostgreSQL version used in the StatefulSet (16.4-alpine)
+              # Uses the same pinned digest as the main postgres container
+              image: postgres:16.4-alpine@sha256:d898b0b78a2627cb4ee63464a14571e0a38aae2c66a9e0d7c5a44715c7bdc744
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+
+                  # INFRA-H-05: Read DB credentials from volume-mounted secret files
+                  export PGUSER="$(cat /run/secrets/db-username)"
+                  export PGPASSWORD="$(cat /run/secrets/db-password)"
+
+                  TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+                  BACKUP_FILE="/backups/canton_backup_${TIMESTAMP}.sql.gz"
+
+                  echo "[$(date -u)] Starting pg_dump of database '${PGDATABASE}'..."
+
+                  pg_dump \
+                    -h "${PGHOST}" \
+                    -p "${PGPORT}" \
+                    -U "${PGUSER}" \
+                    -d "${PGDATABASE}" \
+                    --no-password \
+                    --format=custom \
+                    --compress=6 \
+                    --verbose \
+                    -f "${BACKUP_FILE}"
+
+                  BACKUP_SIZE=$(du -h "${BACKUP_FILE}" | cut -f1)
+                  echo "[$(date -u)] Backup complete: ${BACKUP_FILE} (${BACKUP_SIZE})"
+
+                  # Verify backup integrity
+                  pg_restore --list "${BACKUP_FILE}" > /dev/null 2>&1
+                  echo "[$(date -u)] Backup integrity check passed."
+
+                  # INFRA-H-02: Upload backup to off-cluster storage (S3/GCS)
+                  # Ensures disaster recovery even if the entire cluster is lost
+                  if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+                    S3_KEY="canton-backups/${BACKUP_FILE##*/}"
+                    echo "[$(date -u)] Uploading to s3://${BACKUP_S3_BUCKET}/${S3_KEY}..."
+                    aws s3 cp "${BACKUP_FILE}" "s3://${BACKUP_S3_BUCKET}/${S3_KEY}" \
+                      --sse aws:kms \
+                      --storage-class STANDARD_IA \
+                      --only-show-errors
+                    echo "[$(date -u)] S3 upload complete."
+                  elif [ -n "${BACKUP_GCS_BUCKET:-}" ]; then
+                    GCS_KEY="canton-backups/${BACKUP_FILE##*/}"
+                    echo "[$(date -u)] Uploading to gs://${BACKUP_GCS_BUCKET}/${GCS_KEY}..."
+                    gsutil cp "${BACKUP_FILE}" "gs://${BACKUP_GCS_BUCKET}/${GCS_KEY}"
+                    echo "[$(date -u)] GCS upload complete."
+                  else
+                    echo "[$(date -u)] WARNING: No BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET set — backup is on-cluster only!"
+                  fi
+
+                  # Prune backups older than 30 days
+                  echo "[$(date -u)] Pruning backups older than 30 days..."
+                  find /backups -name "canton_backup_*.sql.gz" -mtime +30 -delete -print
+                  echo "[$(date -u)] Pruning complete."
+
+                  # List remaining backups
+                  echo "[$(date -u)] Current backups:"
+                  ls -lh /backups/canton_backup_*.sql.gz 2>/dev/null || echo "  (none)"
+
+              env:
+                - name: PGHOST
+                  value: postgres.musd-canton.svc.cluster.local
+                - name: PGPORT
+                  value: "5432"
+                - name: PGDATABASE
+                  value: canton
+                # INFRA-H-05: DB credentials read from volume-mounted secrets at /run/secrets/
+                # PGUSER and PGPASSWORD are set from files by the entrypoint script below
+                # INFRA-H-02: Off-cluster backup bucket configuration
+                - name: BACKUP_S3_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: backup-config
+                      key: BACKUP_S3_BUCKET
+                      optional: true
+                - name: BACKUP_GCS_BUCKET
+                  valueFrom:
+                    configMapKeyRef:
+                      name: backup-config
+                      key: BACKUP_GCS_BUCKET
+                      optional: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                # All writable paths (/tmp, /backups) are volume-mounted,
+                # so we can safely lock down the root filesystem.
+                readOnlyRootFilesystem: true
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+                # INFRA-H-05: Mount DB credentials as files instead of env vars
+                - name: db-credentials
+                  mountPath: /run/secrets/db-username
+                  subPath: username
+                  readOnly: true
+                - name: db-credentials
+                  mountPath: /run/secrets/db-password
+                  subPath: password
+                  readOnly: true
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgres-backups
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+            # INFRA-H-05: DB credentials mounted as files (read from /run/secrets/)
+            - name: db-credentials
+              secret:
+                secretName: postgres-credentials

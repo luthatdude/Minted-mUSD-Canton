@@ -20,9 +20,11 @@
  */
 
 import { ethers } from "ethers";
-import Ledger from "@daml/ledger";
-import { ContractId } from "@daml/types";
-import { readSecret } from "./utils";
+import { CantonClient, CantonClientConfig, ActiveContract, parseTemplateId } from "./canton-client";
+import { readSecret, enforceTLSSecurity, createSigner } from "./utils";
+
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -34,6 +36,7 @@ interface YieldSyncConfig {
   treasuryAddress: string;
   smusdAddress: string;        // NEW: SMUSD contract for global share price
   bridgePrivateKey: string;    // NEW: Private key with BRIDGE_ROLE
+  kmsKeyId: string;            // AWS KMS key ID (when set, raw key is ignored)
 
   // Canton
   cantonHost: string;
@@ -51,10 +54,19 @@ interface YieldSyncConfig {
 }
 
 const DEFAULT_CONFIG: YieldSyncConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01 / INFRA-H-03: Read RPC URL from Docker secret (contains API keys), fallback to env var
+  ethereumRpcUrl: (() => {
+    const url = readSecret("ethereum_rpc_url", "ETHEREUM_RPC_URL");
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required");
+    if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
+      throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
+    }
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   smusdAddress: process.env.SMUSD_ADDRESS || "",
   bridgePrivateKey: readSecret("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
+  kmsKeyId: process.env.KMS_KEY_ID || "",
 
   cantonHost: process.env.CANTON_HOST || "localhost",
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
@@ -183,7 +195,7 @@ interface YieldAttestation {
 
 // Matches BLEBridgeProtocol.YieldSignature
 interface YieldSignature {
-  requestCid: ContractId<YieldAttestation>;
+  requestCid: string;
   validator: string;
   aggregator: string;
   ecdsaSignature: string;
@@ -213,10 +225,10 @@ interface CantonStakingService {
 class YieldSyncService {
   private config: YieldSyncConfig;
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
   private treasury: ethers.Contract;
-  private smusd: ethers.Contract;
-  private ledger: Ledger;
+  private smusd!: ethers.Contract;
+  private canton: CantonClient;
   private isRunning: boolean = false;
 
   // State tracking
@@ -229,9 +241,29 @@ class YieldSyncService {
     this.config = config;
     this.currentEpoch = config.epochStartNumber;
 
+    // TS-C-01: Only validate raw private key when KMS is NOT configured
+    if (!config.kmsKeyId) {
+      const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
+      if (keyBytes.length !== 32) {
+        throw new Error(
+          `[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`
+        );
+      }
+      // Validate it's a valid secp256k1 scalar (0 < key < curve order)
+      const SECP256K1_ORDER = BigInt(
+        "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+      );
+      const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
+      if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
+        throw new Error(
+          "[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar"
+        );
+      }
+    }
+
     // Ethereum connection with signing capability
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.bridgePrivateKey, this.provider);
+    // Wallet initialised asynchronously via init() — use KMS when available
     
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
@@ -242,22 +274,23 @@ class YieldSyncService {
     this.smusd = new ethers.Contract(
       config.smusdAddress,
       SMUSD_ABI,
-      this.wallet  // Signing wallet for syncCantonShares()
+      this.provider  // Upgraded to signing wallet in init()
     );
 
     // Canton connection (TLS by default)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
       token: config.cantonToken,
-      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+      userId: "administrator",
+      actAs: config.cantonParty,
+      timeoutMs: 30_000,
     });
 
     console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
     console.log(`[YieldSync] Treasury: ${config.treasuryAddress}`);
     console.log(`[YieldSync] SMUSD: ${config.smusdAddress}`);
-    console.log(`[YieldSync] Bridge wallet: ${this.wallet.address}`);
+    console.log(`[YieldSync] Bridge wallet: (deferred until start)`);
     console.log(`[YieldSync] Canton: ${config.cantonHost}:${config.cantonPort}`);
     console.log(`[YieldSync] Operator: ${config.cantonParty}`);
     console.log(`[YieldSync] Sync interval: ${config.syncIntervalMs}ms`);
@@ -267,6 +300,16 @@ class YieldSyncService {
    * Start the yield sync service
    */
   async start(): Promise<void> {
+    // Initialise KMS-backed (or fallback) signer
+    this.wallet = await createSigner(this.provider, "bridge_private_key", "BRIDGE_PRIVATE_KEY");
+    // Re-bind smusd with signing capability
+    this.smusd = new ethers.Contract(
+      this.config.smusdAddress,
+      SMUSD_ABI,
+      this.wallet,
+    );
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`[YieldSync] Bridge wallet: ${walletAddress}`);
     console.log("[YieldSync] Starting UNIFIED yield sync...");
     this.isRunning = true;
 
@@ -307,9 +350,9 @@ class YieldSyncService {
     this.lastGlobalSharePrice = BigInt(currentSharePrice.toString());
 
     // Get last epoch from Canton staking service
-    const stakingServices = await (this.ledger.query as any)(
-      "CantonSMUSD:CantonStakingService",
-      { operator: this.config.cantonParty }
+    const stakingServices = await this.canton.queryContracts<CantonStakingService>(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
+      (p) => p.operator === this.config.cantonParty
     );
 
     if (stakingServices.length > 0) {
@@ -338,9 +381,9 @@ class YieldSyncService {
     // ═══════════════════════════════════════════════════════════════════
     console.log(`\n[YieldSync] Step 1: Syncing Canton shares → Ethereum...`);
     
-    const stakingServices = await (this.ledger.query as any)(
-      "CantonSMUSD:CantonStakingService",
-      { operator: this.config.cantonParty }
+    const stakingServices = await this.canton.queryContracts<CantonStakingService>(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
+      (p) => p.operator === this.config.cantonParty
     );
 
     if (stakingServices.length === 0) {
@@ -391,8 +434,8 @@ class YieldSyncService {
     // ═══════════════════════════════════════════════════════════════════
     console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
 
-    await (this.ledger.exercise as any)(
-      "CantonSMUSD:CantonStakingService",
+    await this.canton.exerciseChoice(
+      parseTemplateId("CantonSMUSD:CantonStakingService"),
       cantonService.contractId,
       "SyncGlobalSharePrice",
       {

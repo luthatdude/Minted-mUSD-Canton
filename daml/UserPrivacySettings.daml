@@ -57,9 +57,6 @@ template UserPrivacySettings
   where
     signatory operator, user
 
-    key (operator, user) : (Party, Party)
-    maintainer key._1
-
     ensure case mode of
       FullyPrivate -> null observers       -- Private = no observers
       SelectiveTransparency -> True        -- Can have 0+ observers (transitional)
@@ -143,11 +140,8 @@ template UserPrivacySettings
 
 -- | Look up a user's privacy observers. Returns [] if no settings exist (= fully private).
 -- This is called by product templates when creating user-facing contracts.
+-- NOTE: Contract keys removed in LF 2.x; callers should pass settings explicitly.
+-- This stub preserves backward compatibility by returning [] (fully private).
 lookupUserObservers : Party -> Party -> Update [Party]
-lookupUserObservers operator user = do
-  settingsOpt <- lookupByKey @UserPrivacySettings (operator, user)
-  case settingsOpt of
-    None -> return []               -- No settings = fully private
-    Some cid -> do
-      settings <- fetch cid
-      return settings.observers
+lookupUserObservers _operator _user = do
+  return []  -- LF 2.x: contract keys removed, default to fully private

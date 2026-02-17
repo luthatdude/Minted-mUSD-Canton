@@ -12,6 +12,9 @@ import { LIQUIDATION_ENGINE_ABI } from "@/abis/LiquidationEngine";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
+import { ETH_POOL_ABI } from "@/abis/ETHPool";
+import { SMUSDE_ABI } from "@/abis/SMUSDE";
+import { META_VAULT_ABI } from "@/abis/MetaVault";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -25,6 +28,12 @@ const ABI_MAP: Record<string, readonly string[]> = {
   BLEBridgeV9: BLE_BRIDGE_V9_ABI,
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
+  USDT: ERC20_ABI,
+  ETHPool: ETH_POOL_ABI,
+  SMUSDE: SMUSDE_ABI,
+  MetaVault1: META_VAULT_ABI,
+  MetaVault2: META_VAULT_ABI,
+  MetaVault3: META_VAULT_ABI,
 };
 
 /**
@@ -58,6 +67,7 @@ export function useWCContracts() {
         musd: null,
         smusd: null,
         usdc: null,
+        usdt: null,
         directMint: null,
         treasury: null,
         vault: null,
@@ -65,6 +75,11 @@ export function useWCContracts() {
         liquidation: null,
         bridge: null,
         oracle: null,
+        ethPool: null,
+        smusde: null,
+        metaVault1: null,
+        metaVault2: null,
+        metaVault3: null,
       };
     }
 
@@ -79,6 +94,7 @@ export function useWCContracts() {
       musd: createContract("MUSD"),
       smusd: createContract("SMUSD"),
       usdc: createContract("USDC"),
+      usdt: createContract("USDT"),
       directMint: createContract("DirectMint"),
       treasury: createContract("Treasury"),
       vault: createContract("CollateralVault"),
@@ -86,6 +102,11 @@ export function useWCContracts() {
       liquidation: createContract("LiquidationEngine"),
       bridge: createContract("BLEBridgeV9"),
       oracle: createContract("PriceOracle"),
+      ethPool: createContract("ETHPool"),
+      smusde: createContract("SMUSDE"),
+      metaVault1: createContract("MetaVault1"),
+      metaVault2: createContract("MetaVault2"),
+      metaVault3: createContract("MetaVault3"),
     };
   }, [signer, provider, isConnected]);
 }

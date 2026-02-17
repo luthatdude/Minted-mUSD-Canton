@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
+import "./TimelockGoverned.sol";
 
 /**
  * @title IWormhole
@@ -54,10 +55,9 @@ interface IDirectMint {
  * @title TreasuryReceiver
  * @notice Receives bridged USDC from L2 DepositRouters and forwards to DirectMint
  * @dev Deploy this on Ethereum mainnet to receive cross-chain deposits
- * @dev FIX H-02: Migrated from Ownable to AccessControl for role-based access
- * @dev FIX H-02: Added Pausable for emergency controls
+ * @dev Uses AccessControl for role-based access and Pausable for emergency controls
  */
-contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
+contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable, TimelockGoverned {
     using SafeERC20 for IERC20;
 
     // ============ Roles ============
@@ -95,7 +95,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
 
     /// @notice Aggregate pending USDC amount per recipient.
     mapping(address => uint256) public pendingCredits;
-    
+
     /// @notice Authorized source chains and their DepositRouter addresses
     mapping(uint16 => bytes32) public authorizedRouters;
     
@@ -118,7 +118,6 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     event RouterRevoked(uint16 chainId);
     event DirectMintUpdated(address oldDirectMint, address newDirectMint);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
-    // FIX H-07: Events for mUSD minting success/fallback
     event MUSDMinted(address indexed recipient, uint256 usdcAmount, uint256 musdAmount, bytes32 vaaHash);
     event MintFallbackToTreasury(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
     event MintQueued(address indexed recipient, uint256 usdcAmount, bytes32 vaaHash);
@@ -142,7 +141,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         address _wormhole,
         address _tokenBridge,
         address _directMint,
-        address _treasury
+        address _treasury,
+        address _timelock
     ) {
         if (_usdc == address(0)) revert InvalidAddress();
         if (_wormhole == address(0)) revert InvalidAddress();
@@ -156,10 +156,12 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         directMint = _directMint;
         treasury = _treasury;
         
-        // FIX H-02: Grant roles
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(BRIDGE_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+
+        // S-H-01: Initialize timelock for admin setters
+        _setTimelock(_timelock);
     }
 
     // ============ External Functions ============
@@ -167,11 +169,10 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     /**
      * @notice Complete a cross-chain deposit and mint mUSD
      * @param encodedVAA Wormhole VAA from the source chain
-     * @dev FIX H-02: Added whenNotPaused for emergency controls
+     * @dev Paused during emergencies
      */
     function receiveAndMint(bytes calldata encodedVAA) external nonReentrant whenNotPaused {
         // Parse and verify the VAA
-        // FIX: Suppress unused 'reason' compiler warning
         (IWormhole.VM memory vm, bool valid, ) = wormhole.parseAndVerifyVM(encodedVAA);
         if (!valid) revert InvalidVAA();
         
@@ -190,7 +191,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         tokenBridge.completeTransfer(encodedVAA);
         uint256 received = usdc.balanceOf(address(this)) - balanceBefore;
         
-        // FIX C-07: Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
+        // Parse Wormhole Token Bridge TransferWithPayload (type 3) format.
         // Layout: payloadID(1) + amount(32) + tokenAddress(32) + tokenChain(2) +
         //         to(32) + toChain(2) + fromAddress(32) + userPayload(variable)
         // Total fixed header = 133 bytes. User payload starts at offset 133.
@@ -204,8 +205,7 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
         }
         address recipient = abi.decode(userPayload, (address));
         
-        // FIX H-07: Actually mint mUSD for the recipient via DirectMint
-        // Previously forwarded USDC to treasury but never minted mUSD
+        // Mint mUSD for the recipient via DirectMint
         usdc.forceApprove(directMint, received);
         try IDirectMint(directMint).mintFor(recipient, received) returns (uint256 musdMinted) {
             // Mark processed only after successful mint
@@ -276,19 +276,21 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      * @notice Authorize a DepositRouter on a source chain
      * @param chainId Wormhole chain ID
      * @param routerAddress Address of the DepositRouter (as bytes32)
-     * @dev FIX H-02: Changed from onlyOwner to role-based access
+     * @dev Requires timelock (48h governance delay) — router changes control which
+     *      cross-chain sources can trigger minting, so they must be timelocked.
      */
-    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyRole(BRIDGE_ADMIN_ROLE) {
+    function authorizeRouter(uint16 chainId, bytes32 routerAddress) external onlyTimelock {
         authorizedRouters[chainId] = routerAddress;
         emit RouterAuthorized(chainId, routerAddress);
     }
-    
+
     /**
      * @notice Revoke authorization for a source chain
      * @param chainId Wormhole chain ID
-     * @dev FIX H-02: Changed from onlyOwner to role-based access
+     * @dev Requires timelock (48h governance delay) — router changes control which
+     *      cross-chain sources can trigger minting, so they must be timelocked.
      */
-    function revokeRouter(uint16 chainId) external onlyRole(BRIDGE_ADMIN_ROLE) {
+    function revokeRouter(uint16 chainId) external onlyTimelock {
         delete authorizedRouters[chainId];
         emit RouterRevoked(chainId);
     }
@@ -296,9 +298,9 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     /**
      * @notice Update DirectMint address
      * @param newDirectMint New DirectMint contract address
-     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
+     * @dev S-H-01: Changed to onlyTimelock — requires scheduling through MintedTimelockController
      */
-    function setDirectMint(address newDirectMint) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setDirectMint(address newDirectMint) external onlyTimelock {
         if (newDirectMint == address(0)) revert InvalidAddress();
         address old = directMint;
         directMint = newDirectMint;
@@ -308,9 +310,9 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     /**
      * @notice Update Treasury address
      * @param newTreasury New Treasury address
-     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
+     * @dev S-H-01: Changed to onlyTimelock — requires scheduling through MintedTimelockController
      */
-    function setTreasury(address newTreasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setTreasury(address newTreasury) external onlyTimelock {
         if (newTreasury == address(0)) revert InvalidAddress();
         address old = treasury;
         treasury = newTreasury;
@@ -322,14 +324,15 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
      * @param token Token to withdraw
      * @param to Recipient
      * @param amount Amount to withdraw
-     * @dev FIX H-02: Changed from onlyOwner to DEFAULT_ADMIN_ROLE
+     * @dev Requires DEFAULT_ADMIN_ROLE
      */
-    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev H-03 fix: Requires protocol to be paused to prevent misuse during normal operation.
+    function emergencyWithdraw(address token, address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) whenPaused {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }
 
-    // ============ Emergency Controls (FIX H-02) ============
+    // ============ Emergency Controls ============
     
     /// @notice Pause all receiving and minting
     function pause() external onlyRole(PAUSER_ROLE) {
@@ -337,8 +340,8 @@ contract TreasuryReceiver is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Unpause operations
-    /// @dev Requires DEFAULT_ADMIN_ROLE for separation of duties
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev Requires timelock (48h governance delay) to prevent compromised lower-privilege roles from unpausing
+    function unpause() external onlyTimelock {
         _unpause();
     }
 }

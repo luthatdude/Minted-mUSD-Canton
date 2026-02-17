@@ -23,13 +23,16 @@ describe("MUSD", function () {
     [deployer, bridge, compliance, emergency, user1, user2] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(SUPPLY_CAP);
+    musd = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     // Grant roles
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     await musd.grantRole(await musd.COMPLIANCE_ROLE(), compliance.address);
     await musd.grantRole(await musd.EMERGENCY_ROLE(), emergency.address);
+
+    // Set local cap to 100% so effective cap = supplyCap for supply-cap tests
+    await musd.setLocalCapBps(10000);
   });
 
   // ============================================================
@@ -48,7 +51,7 @@ describe("MUSD", function () {
 
     it("should revert with zero supply cap", async function () {
       const MUSDFactory = await ethers.getContractFactory("MUSD");
-      await expect(MUSDFactory.deploy(0)).to.be.revertedWith("INVALID_SUPPLY_CAP");
+      await expect(MUSDFactory.deploy(0, ethers.ZeroAddress)).to.be.revertedWithCustomError(MUSDFactory, "InvalidSupplyCap");
     });
 
     it("should grant DEFAULT_ADMIN_ROLE to deployer", async function () {
@@ -75,7 +78,7 @@ describe("MUSD", function () {
     it("should reject mint exceeding supply cap", async function () {
       await expect(
         musd.connect(bridge).mint(user1.address, SUPPLY_CAP + 1n)
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
     });
 
     it("should allow minting up to exact supply cap", async function () {
@@ -87,7 +90,7 @@ describe("MUSD", function () {
       await musd.connect(bridge).mint(user1.address, SUPPLY_CAP);
       await expect(
         musd.connect(bridge).mint(user1.address, 1n)
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
     });
 
     it("should emit Mint event", async function () {
@@ -134,7 +137,7 @@ describe("MUSD", function () {
   });
 
   // ============================================================
-  //  SUPPLY CAP (FIX C-2)
+  //  SUPPLY CAP
   // ============================================================
 
   describe("Supply Cap", function () {
@@ -154,14 +157,14 @@ describe("MUSD", function () {
     it("should reject unauthorized supply cap change", async function () {
       await expect(
         musd.connect(user1).setSupplyCap(ethers.parseEther("1"))
-      ).to.be.revertedWith("UNAUTHORIZED");
+      ).to.be.revertedWithCustomError(musd, "Unauthorized");
     });
 
     it("should reject zero supply cap", async function () {
-      await expect(musd.setSupplyCap(0)).to.be.revertedWith("INVALID_SUPPLY_CAP");
+      await expect(musd.setSupplyCap(0)).to.be.revertedWithCustomError(musd, "InvalidSupplyCap");
     });
 
-    it("FIX: should ALLOW cap below current supply (undercollateralization response)", async function () {
+    it("should ALLOW cap below current supply (undercollateralization response)", async function () {
       // Mint 5M tokens
       await musd.connect(bridge).mint(user1.address, ethers.parseEther("5000000"));
       
@@ -177,10 +180,10 @@ describe("MUSD", function () {
       // Now new mints should fail
       await expect(
         musd.connect(bridge).mint(user1.address, ethers.parseEther("1"))
-      ).to.be.revertedWith("EXCEEDS_CAP");
+      ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
     });
 
-    it("FIX C-2: should allow cap equal to current supply", async function () {
+    it("should allow cap equal to current supply", async function () {
       const mintAmount = ethers.parseEther("5000000");
       await musd.connect(bridge).mint(user1.address, mintAmount);
       await musd.setSupplyCap(mintAmount);
@@ -213,21 +216,21 @@ describe("MUSD", function () {
       await musd.connect(compliance).setBlacklist(user1.address, true);
       await expect(
         musd.connect(user1).transfer(user2.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should block transfers to blacklisted receiver", async function () {
       await musd.connect(compliance).setBlacklist(user2.address, true);
       await expect(
         musd.connect(user1).transfer(user2.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should block minting to blacklisted address", async function () {
       await musd.connect(compliance).setBlacklist(user1.address, true);
       await expect(
         musd.connect(bridge).mint(user1.address, ethers.parseEther("100"))
-      ).to.be.revertedWith("COMPLIANCE_REJECT");
+      ).to.be.revertedWithCustomError(musd, "ComplianceReject");
     });
 
     it("should remove from blacklist", async function () {
@@ -240,7 +243,7 @@ describe("MUSD", function () {
     it("should reject blacklist of zero address", async function () {
       await expect(
         musd.connect(compliance).setBlacklist(ethers.ZeroAddress, true)
-      ).to.be.revertedWith("INVALID_ADDRESS");
+      ).to.be.revertedWithCustomError(musd, "InvalidAddress");
     });
 
     it("should reject blacklist without COMPLIANCE_ROLE", async function () {
@@ -251,10 +254,10 @@ describe("MUSD", function () {
   });
 
   // ============================================================
-  //  PAUSABLE (FIX H-3)
+  //  PAUSABLE
   // ============================================================
 
-  describe("Pausable (FIX H-3)", function () {
+  describe("Pausable", function () {
     beforeEach(async function () {
       await musd.connect(bridge).mint(user1.address, ethers.parseEther("1000"));
     });

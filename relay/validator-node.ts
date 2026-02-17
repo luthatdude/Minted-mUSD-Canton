@@ -1,5 +1,21 @@
 /**
- * Minted Protocol - Canton Validator Node
+ * Minted Protocol - Canton Validator Node (V1 — DEPRECATED)
+ *
+ * @deprecated Use validator-node-v2.ts instead.
+ *
+ * ╔═══════════════════════════════════════════════════════════════════════════════╗
+ * ║  DEPRECATED — Use validator-node-v2.ts for all new deployments.        ║
+ * ║                                                                             ║
+ * ║  V1 message hash has 7 parameters; V2 has 8 (adds cantonStateHash).         ║
+ * ║  V1 attestation ID uses ethers.id() (keccak256 of UTF-8 string);            ║
+ * ║  V2 uses computeAttestationId() matching BLEBridgeV9 on-chain derivation.   ║
+ * ║                                                                             ║
+ * ║  These differences make V1 and V2 signatures INCOMPATIBLE.                  ║
+ * ║  If BLEBridgeV9 verifies using the V2 format, V1 signatures will always     ║
+ * ║  fail, potentially dropping below minSignatures and blocking attestations.  ║
+ * ║                                                                             ║
+ * ║  ALL validators MUST upgrade to V2 before BLEBridgeV9 V2 deployment.        ║
+ * ╚═══════════════════════════════════════════════════════════════════════════════╝
  *
  * Watches for AttestationRequest contracts and signs them using AWS KMS.
  *
@@ -11,15 +27,30 @@
  *   5. Submit ValidatorSignature to Canton
  */
 
-import Ledger, { CreateEvent } from "@daml/ledger";
-import { ContractId } from "@daml/types";
+import { CantonClient, CantonClientConfig, ActiveContract, TEMPLATES, parseTemplateId } from "./canton-client";
 import { KMSClient, SignCommand } from "@aws-sdk/client-kms";
 import { ethers } from "ethers";
-// FIX M-20: Use static import instead of dynamic require
+// Use static import instead of dynamic require
 import { formatKMSSignature } from "./signer";
-// FIX T-M01: Use shared readSecret utility
-import { readSecret } from "./utils";
+// Use shared readSecret utility
+import { readSecret, requireHTTPS, enforceTLSSecurity } from "./utils";
 import * as fs from "fs";
+
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
+
+// BRIDGE-H-04: V1 validator produces signatures with a 7-parameter hash
+// (missing cantonStateHash) while V2 uses 8 parameters matching BLEBridgeV9 on-chain.
+// Mixed V1/V2 signatures silently reduce the effective validator count below the BFT
+// threshold, potentially blocking all attestations. V1 is PERMANENTLY DISABLED.
+// TS-H-01: Removed ALLOW_V1_VALIDATOR env override — V1 cannot be force-enabled.
+console.error(
+  "FATAL: validator-node.ts (V1) is PERMANENTLY DISABLED and cannot be re-enabled. " +
+  "V1 signatures use a 7-parameter hash that is incompatible with BLEBridgeV9 " +
+  "on-chain verification. Using V1 silently reduces effective validator security. " +
+  "Migrate to validator-node-v2.ts."
+);
+process.exit(1);
 
 // ============================================================
 //                     CONFIGURATION
@@ -46,9 +77,9 @@ interface ValidatorConfig {
 
 const DEFAULT_CONFIG: ValidatorConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  // FIX H-7: Added explicit radix 10 to all parseInt calls
+  // Added explicit radix 10 to all parseInt calls
   cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
-  // FIX I-C01: Read sensitive values from Docker secrets, fallback to env vars
+  // Read sensitive values from Docker secrets, fallback to env vars
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 
@@ -80,7 +111,7 @@ interface AttestationRequest {
   aggregator: string;
   validatorGroup: string[];
   payload: AttestationPayload;
-  positionCids: ContractId<unknown>[];
+  positionCids: string[];
   collectedSignatures: string[];
 }
 
@@ -99,40 +130,46 @@ interface InstitutionalEquityPosition {
 
 class ValidatorNode {
   private config: ValidatorConfig;
-  private ledger: Ledger;
+  private canton: CantonClient;
   private kmsClient: KMSClient;
-  // FIX M-18: Use a bounded cache with eviction instead of unbounded Set
+  // Use a bounded cache with eviction instead of unbounded Set
   private signedAttestations: Set<string> = new Set();
   private readonly MAX_SIGNED_CACHE = 10000;
   private isRunning: boolean = false;
-  // FIX B-C06: Ethereum provider for contract verification
+  // Ethereum provider for contract verification
   private ethereumProvider: ethers.JsonRpcProvider | null = null;
   private verifiedBridgeCodeHash: string | null = null;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
 
-    // FIX H-12: Default to TLS for Canton ledger connections (opt-out instead of opt-in)
+    // Default to TLS for Canton ledger connections (opt-out instead of opt-in)
     const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-    const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-    this.ledger = new Ledger({
+    if (process.env.CANTON_USE_TLS === "false" && process.env.NODE_ENV === "production") {
+      throw new Error("[Validator] CANTON_USE_TLS=false is not allowed in production");
+    }
+    this.canton = new CantonClient({
+      baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
       token: config.cantonToken,
-      httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-      wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+      userId: "administrator",
+      actAs: config.validatorParty,
+      timeoutMs: 30_000,
     });
 
     // Initialize AWS KMS
     this.kmsClient = new KMSClient({ region: config.awsRegion });
 
-    // FIX B-C06: Initialize Ethereum provider for bridge verification
+    // Initialize Ethereum provider for bridge verification
     if (process.env.ETHEREUM_RPC_URL) {
+      // INFRA-H-01: Validate HTTPS for Ethereum RPC in production
+      requireHTTPS(process.env.ETHEREUM_RPC_URL, "ETHEREUM_RPC_URL");
       this.ethereumProvider = new ethers.JsonRpcProvider(process.env.ETHEREUM_RPC_URL);
     }
 
     console.log(`[Validator] Initialized`);
     console.log(`[Validator] Party: ${config.validatorParty}`);
     console.log(`[Validator] ETH Address: ${config.ethereumAddress}`);
-    console.log(`[Validator] KMS Key: ${config.kmsKeyId}`);
+    console.log(`[Validator] KMS Key: ${config.kmsKeyId ? "***..." + config.kmsKeyId.slice(-8) : "none"}`);
   }
 
   /**
@@ -141,7 +178,7 @@ class ValidatorNode {
   async start(): Promise<void> {
     console.log("[Validator] Starting...");
     
-    // FIX B-C06: Verify bridge contract before starting
+    // Verify bridge contract before starting
     await this.verifyBridgeContract();
     
     this.isRunning = true;
@@ -150,8 +187,14 @@ class ValidatorNode {
     while (this.isRunning) {
       try {
         await this.pollForAttestations();
-        // FIX 5C-L02: Write heartbeat file for Docker healthcheck
-        try { fs.writeFileSync("/tmp/heartbeat", new Date().toISOString()); } catch {}
+        // Write heartbeat file for Docker healthcheck
+        try {
+          fs.writeFileSync("/tmp/heartbeat", new Date().toISOString());
+        } catch (heartbeatError) {
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[Validator] heartbeat write failed", heartbeatError);
+          }
+        }
       } catch (error) {
         console.error("[Validator] Poll error:", error);
       }
@@ -168,7 +211,7 @@ class ValidatorNode {
   }
 
   /**
-   * FIX B-C06: Verify bridge contract exists and has expected code
+   * Verify bridge contract exists and has expected code
    * This prevents signing attestations for malicious/wrong contracts
    */
   private async verifyBridgeContract(): Promise<void> {
@@ -218,10 +261,10 @@ class ValidatorNode {
 
   /**
    * Poll for attestation requests that need signing
-   * FIX B-H05: Added query timeout to prevent indefinite hangs
+   * Added query timeout to prevent indefinite hangs
    */
   private async pollForAttestations(): Promise<void> {
-    // FIX B-H05: Timeout for Canton ledger queries (30 seconds)
+    // Timeout for Canton ledger queries (30 seconds)
     const QUERY_TIMEOUT_MS = 30000;
     const queryWithTimeout = async <T>(queryFn: () => Promise<T>): Promise<T> => {
       return Promise.race([
@@ -233,13 +276,12 @@ class ValidatorNode {
     };
 
     // Query AttestationRequest contracts where we're in the validator group
-    // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
+    // Use MintedProtocolV3 to match relay-service.ts
     const attestations = await queryWithTimeout(() =>
-      (this.ledger.query as any)(
-        "MintedProtocolV3:AttestationRequest",
-        {}  // Query all, filter locally
+      this.canton.queryContracts<AttestationRequest>(
+        TEMPLATES.AttestationRequest
       )
-    ) as CreateEvent<AttestationRequest>[];
+    );
 
     for (const attestation of attestations) {
       const request = attestation.payload;
@@ -284,19 +326,18 @@ class ValidatorNode {
   /**
    * Verify the attestation has sufficient collateral backing
    */
-  // FIX C-09: Fetch positions ONCE and deduplicate to prevent inflated collateral
-  // FIX H-13: Use ethers.parseUnits instead of parseFloat for financial precision
+  // Fetch positions ONCE and deduplicate to prevent inflated collateral
+  // Use ethers.parseUnits instead of parseFloat for financial precision
   private async verifyCollateral(request: AttestationRequest): Promise<boolean> {
     const payload = request.payload;
 
-    // FIX C-09: Fetch all positions ONCE, not per positionCid
+    // Fetch all positions ONCE, not per positionCid
     let totalValue = 0n;
     try {
-      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
-      const positions = await (this.ledger.query as any)(
-        "MintedProtocolV3:InstitutionalEquityPosition",
-        {}
-      ) as CreateEvent<InstitutionalEquityPosition>[];
+      // Use MintedProtocolV3 to match relay-service.ts
+      const positions = await this.canton.queryContracts<InstitutionalEquityPosition>(
+        parseTemplateId("MintedProtocolV3:InstitutionalEquityPosition")
+      );
 
       // Deduplicate by referenceId to prevent double-counting
       const seen = new Set<string>();
@@ -304,7 +345,7 @@ class ValidatorNode {
         const refId = pos.payload.referenceId;
         if (seen.has(refId)) continue;
         seen.add(refId);
-        // FIX H-13: Use ethers.parseUnits for precision
+        // Use ethers.parseUnits for precision
         totalValue += ethers.parseUnits(pos.payload.totalValue, 18);
       }
     } catch (error) {
@@ -312,7 +353,7 @@ class ValidatorNode {
       return false;
     }
 
-    // FIX H-13: Use ethers.parseUnits instead of parseFloat
+    // Use ethers.parseUnits instead of parseFloat
     const requestedAmount = ethers.parseUnits(payload.amount, 18);
     const reportedAssets = ethers.parseUnits(payload.globalCantonAssets, 18);
 
@@ -343,12 +384,12 @@ class ValidatorNode {
    * Sign attestation and submit to Canton
    */
   private async signAttestation(
-    contractId: ContractId<AttestationRequest>,
+    contractId: string,
     payload: AttestationPayload
   ): Promise<void> {
     const attestationId = payload.attestationId;
 
-    // FIX H-14: Mark as signing BEFORE async KMS call to prevent TOCTOU race
+    // Mark as signing BEFORE async KMS call to prevent TOCTOU race
     this.signedAttestations.add(attestationId);
 
     try {
@@ -359,11 +400,11 @@ class ValidatorNode {
       const signature = await this.signWithKMS(messageHash);
 
       // Submit to Canton
-      // FIX M-08: Use MintedProtocolV3 to match relay-service.ts
-      await (this.ledger.exercise as any)(
-        "MintedProtocolV3:AttestationRequest",
+      // Use MintedProtocolV3 to match relay-service.ts
+      await this.canton.exerciseChoice(
+        TEMPLATES.AttestationRequest,
         contractId,
-        "ProvideSignature",
+        "Attestation_Sign",
         {
           validator: this.config.validatorParty,
           ecdsaSignature: signature,
@@ -372,7 +413,7 @@ class ValidatorNode {
 
       console.log(`[Validator] Signed attestation ${attestationId}`);
 
-      // FIX M-18: Evict oldest 10% of entries if cache exceeds limit
+      // Evict oldest 10% of entries if cache exceeds limit
       if (this.signedAttestations.size > this.MAX_SIGNED_CACHE) {
         const toEvict = Math.floor(this.MAX_SIGNED_CACHE * 0.1);
         let evicted = 0;
@@ -386,7 +427,7 @@ class ValidatorNode {
     } catch (error: any) {
       console.error(`[Validator] Failed to sign attestation ${attestationId}:`, error.message);
 
-      // FIX H-14: Remove from set on failure so it can be retried
+      // Remove from set on failure so it can be retried
       // (except if the contract says we already signed)
       if (error.message?.includes("VALIDATOR_ALREADY_SIGNED")) {
         // Already signed on ledger - keep in set
@@ -401,22 +442,28 @@ class ValidatorNode {
    */
   private buildMessageHash(payload: AttestationPayload): string {
     const idBytes32 = ethers.id(payload.attestationId);
-    // FIX T-C01: Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
+    // Use BigInt for chainId to avoid IEEE 754 precision loss on large chain IDs
     const chainId = BigInt(payload.chainId);
-    // FIX B-M01: Validate timestamp to prevent negative values
+    // Validate timestamp to prevent negative values
     const rawTimestamp = Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600;
     const timestamp = Math.max(1, rawTimestamp);
 
+    // Include entropy in hash (matches BLEBridgeV9 signature verification)
+    const entropy = (payload as any).entropy
+      ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
+      : ethers.ZeroHash;
+
     // This must match what BLEBridgeV9 expects
     return ethers.solidityPackedKeccak256(
-      ["bytes32", "uint256", "uint256", "uint256", "uint256", "address"],
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "uint256", "address"],
       [
         idBytes32,
         ethers.parseUnits(payload.globalCantonAssets, 18),
         BigInt(payload.nonce),
         BigInt(timestamp),
+        entropy,
         chainId,
-        // FIX C-7: Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
+        // Require BRIDGE_CONTRACT_ADDRESS instead of falling back to ZeroAddress
         process.env.BRIDGE_CONTRACT_ADDRESS || (() => { throw new Error("BRIDGE_CONTRACT_ADDRESS not set"); })(),
       ]
     );
@@ -455,7 +502,7 @@ class ValidatorNode {
    * Convert DER-encoded signature to RSV format
    * Uses the logic from signer.ts
    */
-  // FIX M-20: Use static import (declared at top of file) instead of dynamic require
+  // Use static import (declared at top of file) instead of dynamic require
   private derToRsv(derSig: Buffer, messageHash: string): string {
     return formatKMSSignature(derSig, messageHash, this.config.ethereumAddress);
   }
@@ -488,11 +535,11 @@ async function main(): Promise<void> {
   if (!DEFAULT_CONFIG.ethereumAddress) {
     throw new Error("VALIDATOR_ETH_ADDRESS not set");
   }
-  // FIX M-23: Validate Ethereum address format
+  // Validate Ethereum address format
   if (!ethers.isAddress(DEFAULT_CONFIG.ethereumAddress)) {
     throw new Error("VALIDATOR_ETH_ADDRESS is not a valid Ethereum address");
   }
-  // FIX C-7: Validate bridge contract address at startup
+  // Validate bridge contract address at startup
   if (!process.env.BRIDGE_CONTRACT_ADDRESS) {
     throw new Error("BRIDGE_CONTRACT_ADDRESS not set");
   }
@@ -501,6 +548,21 @@ async function main(): Promise<void> {
   }
   if (!DEFAULT_CONFIG.cantonToken) {
     throw new Error("CANTON_TOKEN not set");
+  }
+
+  // Runtime deprecation warning — V1 signatures are incompatible with V2 on-chain verification.
+  console.warn("╔══════════════════════════════════════════════════════════════════════════════╗");
+  console.warn("║  ⚠️  DEPRECATION WARNING: validator-node.ts (V1) is DEPRECATED.             ║");
+  console.warn("║  V1 message hash has 7 parameters; BLEBridgeV9 V2 expects 8.               ║");
+  console.warn("║  V1 attestation ID derivation differs from V2 on-chain contract.           ║");
+  console.warn("║  Signatures from this node WILL BE REJECTED by BLEBridgeV9 V2.             ║");
+  console.warn("║  MIGRATE TO: validator-node-v2.ts                                          ║");
+  console.warn("╚══════════════════════════════════════════════════════════════════════════════╝");
+
+  // Abort in production to prevent V1 from silently generating unusable signatures
+  if (process.env.NODE_ENV === "production") {
+    console.error("[FATAL] V1 validator node MUST NOT run in production. Use validator-node-v2.ts.");
+    process.exit(1);
   }
 
   // Create validator node
@@ -520,7 +582,7 @@ async function main(): Promise<void> {
   await validator.start();
 }
 
-// FIX T-C03: Handle unhandled promise rejections to prevent silent failures
+// Handle unhandled promise rejections to prevent silent failures
 process.on("unhandledRejection", (reason, promise) => {
   console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
   process.exit(1);

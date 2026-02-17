@@ -14,9 +14,15 @@ export const CONTRACTS: Record<string, string> = {
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
+  ETHPool: process.env.NEXT_PUBLIC_ETH_POOL_ADDRESS || "",
+  SMUSDE: process.env.NEXT_PUBLIC_SMUSDE_ADDRESS || "",
+  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
+  MetaVault1: process.env.NEXT_PUBLIC_VAULT1_ADDRESS || "",
+  MetaVault2: process.env.NEXT_PUBLIC_VAULT2_ADDRESS || "",
+  MetaVault3: process.env.NEXT_PUBLIC_VAULT3_ADDRESS || "",
 };
 
-// FIX FE-H2: Validate contract addresses at config time
+// Validate contract addresses at config time
 export function validateContracts(): { valid: boolean; missing: string[] } {
   const requiredContracts = ["MUSD", "DirectMint", "USDC"];
   const missing = requiredContracts.filter(
@@ -25,16 +31,16 @@ export function validateContracts(): { valid: boolean; missing: string[] } {
   return { valid: missing.length === 0, missing };
 }
 
-// FIX FE-C1/C2: Canton token should NOT be exposed client-side
+// Canton token should NOT be exposed client-side
 // Move to server-side API routes for production. This is a placeholder.
 export const CANTON_CONFIG = {
   ledgerHost: process.env.NEXT_PUBLIC_CANTON_LEDGER_HOST || "localhost",
   ledgerPort: parseInt(process.env.NEXT_PUBLIC_CANTON_LEDGER_PORT || "6865"),
-  // FIX FE-C1: Use HTTPS in production, HTTP only for local development
+  // Use HTTPS in production, HTTP only for local development
   protocol: process.env.NODE_ENV === 'production' 
     ? (process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "https")
     : (process.env.NEXT_PUBLIC_CANTON_PROTOCOL || "http"),
-  // FIX FE-C2/FE-H4: Token removed from client - fetch from secure API route
+  // Token removed from client - fetch from secure API route
   // token: "" - Removed: Use /api/canton/token endpoint instead
 };
 
@@ -42,7 +48,7 @@ export const USDC_DECIMALS = 6;
 export const MUSD_DECIMALS = 18;
 export const SCALING_FACTOR = 10n ** 12n; // USDC 6 → mUSD 18
 
-// FIX FE-H2: Input validation utilities
+// Input validation utilities
 export function validateAmount(
   amount: string,
   decimals: number,

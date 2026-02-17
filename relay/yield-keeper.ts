@@ -12,7 +12,10 @@
  */
 
 import { ethers } from "ethers";
-import { readSecret } from "./utils";
+import { readSecret, requireHTTPS, enforceTLSSecurity, createSigner } from "./utils";
+
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+enforceTLSSecurity();
 
 // ============================================================
 //                     CONFIGURATION
@@ -28,12 +31,23 @@ interface KeeperConfig {
 }
 
 const DEFAULT_CONFIG: KeeperConfig = {
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+  // INFRA-H-01: No insecure fallback — require explicit RPC URL
+  ethereumRpcUrl: (() => {
+    const url = process.env.ETHEREUM_RPC_URL;
+    if (!url) throw new Error("ETHEREUM_RPC_URL is required (no insecure default)");
+    requireHTTPS(url, "ETHEREUM_RPC_URL");
+    return url;
+  })(),
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   keeperPrivateKey: readSecret("keeper_private_key", "KEEPER_PRIVATE_KEY"),
   pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10),  // 1 minute
   maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
-  minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
+  // TS-H-01: Use Number() + validation instead of parseFloat
+  minProfitUsd: (() => {
+    const v = Number(process.env.MIN_PROFIT_USD || "10");
+    if (Number.isNaN(v) || v < 0) throw new Error("MIN_PROFIT_USD must be a non-negative number");
+    return v;
+  })(),
 };
 
 // ============================================================
@@ -110,7 +124,8 @@ const TREASURY_ABI = [
 
 class YieldKeeper {
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
+  private wallet!: ethers.Signer;
+  private walletAddress: string = "";
   private treasury: ethers.Contract;
   private config: KeeperConfig;
   private running: boolean = false;
@@ -118,11 +133,23 @@ class YieldKeeper {
   constructor(config: KeeperConfig) {
     this.config = config;
     this.provider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    this.wallet = new ethers.Wallet(config.keeperPrivateKey, this.provider);
+    // Signer is initialised asynchronously via init()
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
       TREASURY_ABI,
-      this.wallet
+      this.provider
+    );
+  }
+
+  /** Initialise the KMS-backed (or fallback) signer */
+  async init(): Promise<void> {
+    this.wallet = await createSigner(this.provider, "keeper_private_key", "KEEPER_PRIVATE_KEY");
+    this.walletAddress = await this.wallet.getAddress();
+    // Re-bind treasury with signing capability
+    this.treasury = new ethers.Contract(
+      this.config.treasuryAddress,
+      TREASURY_ABI,
+      this.wallet,
     );
   }
 
@@ -130,9 +157,12 @@ class YieldKeeper {
    * Start the keeper loop
    */
   async start(): Promise<void> {
+    // Initialise signer (KMS or fallback)
+    await this.init();
     console.log("🚀 Yield Keeper starting...");
     console.log(`   Treasury: ${this.config.treasuryAddress}`);
-    console.log(`   Keeper wallet: ${this.wallet.address}`);
+    const walletAddress = await this.wallet.getAddress();
+    console.log(`   Keeper wallet: ${walletAddress}`);
     console.log(`   Poll interval: ${this.config.pollIntervalMs}ms`);
 
     // Verify connection and configuration
@@ -195,13 +225,13 @@ class YieldKeeper {
 
     console.log(`💰 Deploy opportunity: $${this.formatUsdc(deployable)} deployable`);
 
-    // 2. Check gas price
+    // 2. Check gas price (TS-M-03: use BigInt comparison to avoid precision loss)
     const feeData = await this.provider.getFeeData();
     const gasPrice = feeData.gasPrice || 0n;
-    const gasPriceGwei = Number(gasPrice) / 1e9;
+    const maxGasPriceWei = BigInt(this.config.maxGasPriceGwei) * 1_000_000_000n;
 
-    if (gasPriceGwei > this.config.maxGasPriceGwei) {
-      console.log(`⛽ Gas too high (${gasPriceGwei.toFixed(1)} gwei > ${this.config.maxGasPriceGwei}), skipping`);
+    if (gasPrice > maxGasPriceWei) {
+      console.log(`⛽ Gas too high (${ethers.formatUnits(gasPrice, "gwei")} gwei > ${this.config.maxGasPriceGwei}), skipping`);
       return;
     }
 
@@ -209,13 +239,21 @@ class YieldKeeper {
     try {
       const gasEstimate = await this.treasury.keeperTriggerAutoDeploy.estimateGas();
       const gasCostWei = gasEstimate * gasPrice;
-      const gasCostEth = Number(gasCostWei) / 1e18;
+      // TS-M-03: Use ethers.formatUnits for safe BigInt → decimal conversion
+      const gasCostEth = parseFloat(ethers.formatUnits(gasCostWei, 18));
 
-      // Rough ETH price assumption ($2000) - in production, fetch from oracle
-      const gasCostUsd = gasCostEth * 2000;
+      // TS-H-02: Use configurable ETH price from env/oracle instead of hardcoded $2000
+      // In production, this should be fetched from the price oracle service
+      const ethPriceUsd = Number(process.env.ETH_PRICE_USD || "0");
+      if (ethPriceUsd <= 0) {
+        console.warn("⚠️  ETH_PRICE_USD not set or invalid — skipping profitability check");
+        return;
+      }
+      const gasCostUsd = gasCostEth * ethPriceUsd;
 
       // Estimate daily yield on deployed amount (assume 10% APY)
-      const deployableUsd = Number(deployable) / 1e6;
+      // TS-M-04: Use ethers.formatUnits for safe BigInt → decimal conversion
+      const deployableUsd = parseFloat(ethers.formatUnits(deployable, 6));
       const dailyYieldUsd = (deployableUsd * 0.10) / 365;
 
       console.log(`   Gas cost: $${gasCostUsd.toFixed(2)} | Daily yield: $${dailyYieldUsd.toFixed(2)}`);
@@ -252,9 +290,10 @@ class YieldKeeper {
 
   /**
    * Format USDC amount for display (6 decimals → human readable)
+   * TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
    */
   private formatUsdc(amount: bigint): string {
-    return (Number(amount) / 1e6).toLocaleString(undefined, {
+    return parseFloat(ethers.formatUnits(amount, 6)).toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
@@ -263,12 +302,13 @@ class YieldKeeper {
   /**
    * Log metrics (placeholder for Prometheus/DataDog integration)
    */
+  // TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
   private logMetrics(event: string, amount: bigint): void {
     const metrics = {
       timestamp: new Date().toISOString(),
       event,
-      amountUsdc: Number(amount) / 1e6,
-      keeper: this.wallet.address,
+      amountUsdc: ethers.formatUnits(amount, 6),
+      keeper: this.walletAddress,
     };
     console.log("📈 METRICS:", JSON.stringify(metrics));
   }
@@ -310,13 +350,14 @@ export async function getKeeperStatus(config: KeeperConfig): Promise<{
     treasury.shouldAutoDeploy(),
   ]);
 
+  // TS-M-04: Use ethers.formatUnits to avoid precision loss on large USDC amounts
   return {
     autoDeployEnabled: enabled,
     defaultStrategy: strategy,
-    threshold: (Number(threshold) / 1e6).toFixed(2),
-    deployable: (Number(deployable) / 1e6).toFixed(2),
-    availableReserves: (Number(reserves) / 1e6).toFixed(2),
-    deployedToStrategies: (Number(deployed) / 1e6).toFixed(2),
+    threshold: parseFloat(ethers.formatUnits(threshold, 6)).toFixed(2),
+    deployable: parseFloat(ethers.formatUnits(deployable, 6)).toFixed(2),
+    availableReserves: parseFloat(ethers.formatUnits(reserves, 6)).toFixed(2),
+    deployedToStrategies: parseFloat(ethers.formatUnits(deployed, 6)).toFixed(2),
     shouldDeploy,
   };
 }

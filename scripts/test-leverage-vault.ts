@@ -131,7 +131,8 @@ async function main() {
     CONTRACTS.MockWETH,
     depositAmount,
     targetLeverage,
-    maxLoops
+    maxLoops,
+    0
   );
   const receipt = await openTx.wait();
   console.log(`   ✅ Position opened! Gas used: ${receipt?.gasUsed}`);
@@ -222,7 +223,7 @@ async function main() {
     await musd.mint(signer.address, debtNeeded);
     await musd.approve(CONTRACTS.LeverageVault, debtNeeded);
     
-    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtNeeded);
+    const closeTx = await leverageVault.closeLeveragedPositionWithMusd(debtNeeded, 0);
     await closeTx.wait();
     console.log("   ✅ Position closed!");
   }
