@@ -5,6 +5,7 @@
 module UpgradeTest where
 
 import Upgrade
+import Governance (GovernanceActionLog(..), ActionType(..))
 import DA.Set qualified as Set
 import DA.Time
 import DA.Date
@@ -256,7 +257,7 @@ test_CompleteUpgrade = script do
   pure ()
 
 -- ============================================================
---         TEST 8: EMERGENCY ROLLBACK
+--         TEST 8: EMERGENCY ROLLBACK (with governance proof)
 -- ============================================================
 
 test_EmergencyRollback : Script ()
@@ -267,14 +268,155 @@ test_EmergencyRollback = script do
     exerciseCmd registry UpgradeRegistry_RecordMigration with
       count = 42; direction = Forward
 
+  -- FIX M-8: Create governance proof (simulates multi-sig approval)
+  govProofCid <- submitMulti [admin, g1] [] do
+    createCmd GovernanceActionLog with
+      operator = admin
+      proposalId = "rollback-001"
+      actionType = ContractUpgrade
+      description = "Emergency rollback for critical bug"
+      payload = ""
+      payloadHash = ""
+      targetModule = "Upgrade"
+      approvers = [admin, g1]
+      executedBy = admin
+      executedAt = datetime 2026 Feb 6 12 0 0
+
+  -- Now requires operator as controller + governance proof
   registry3 <- submit admin do
     exerciseCmd registry2 UpgradeRegistry_EmergencyRollback with
-      reason = "Critical bug found"; authorizer = admin
+      reason = "Critical bug found"
+      authorizer = admin
+      governanceProofCid = Some govProofCid
 
   r <- queryContractId admin registry3
   case r of
     Some reg -> assertMsg "rolled back" (reg.status == RolledBack)
     None -> abort "not found"
+  pure ()
+
+-- | FIX M-8: Single member cannot rollback without governance proof
+test_EmergencyRollbackWithoutProofFails : Script ()
+test_EmergencyRollbackWithoutProofFails = script do
+  (admin, g1, g2, registry) <- setupUpgrade
+
+  -- Should fail: no governance proof provided
+  submitMustFail admin do
+    exerciseCmd registry UpgradeRegistry_EmergencyRollback with
+      reason = "Attempted single-member rollback"
+      authorizer = admin
+      governanceProofCid = None
+  pure ()
+
+-- | FIX M-10: Cannot rollback a Completed registry
+test_RollbackCompletedRegistryFails : Script ()
+test_RollbackCompletedRegistryFails = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  g2 <- allocateParty "Guardian2"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-100))
+
+  completedRegistry <- submit admin do
+    createCmd UpgradeRegistry with
+      operator = admin
+      governance = [admin, g1, g2]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      activatedAt = pastTime
+      migrationDeadline = addRelTime pastTime (hours 72)
+      rollbackDeadline = addRelTime now (hours 960)
+      totalMigrated = 50
+      totalRolledBack = 0
+      status = Completed
+
+  govProofCid <- submitMulti [admin, g1] [] do
+    createCmd GovernanceActionLog with
+      operator = admin
+      proposalId = "rollback-002"
+      actionType = ContractUpgrade
+      description = "Attempted rollback on completed"
+      payload = ""
+      payloadHash = ""
+      targetModule = "Upgrade"
+      approvers = [admin, g1]
+      executedBy = admin
+      executedAt = datetime 2026 Feb 6 12 0 0
+
+  submitMustFail admin do
+    exerciseCmd completedRegistry UpgradeRegistry_EmergencyRollback with
+      reason = "Should not work on Completed"
+      authorizer = admin
+      governanceProofCid = Some govProofCid
+  pure ()
+
+-- | FIX M-10: Cannot record migration on a RolledBack registry
+test_RecordMigrationOnRolledBackFails : Script ()
+test_RecordMigrationOnRolledBackFails = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+
+  rolledBackRegistry <- submit admin do
+    createCmd UpgradeRegistry with
+      operator = admin
+      governance = [admin, g1]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      activatedAt = now
+      migrationDeadline = addRelTime now (hours 720)
+      rollbackDeadline = addRelTime now (hours 960)
+      totalMigrated = 10
+      totalRolledBack = 0
+      status = RolledBack
+
+  submitMustFail admin do
+    exerciseCmd rolledBackRegistry UpgradeRegistry_RecordMigration with
+      count = 5; direction = Forward
+  pure ()
+
+-- | FIX M-10: Cannot complete a RolledBack registry
+test_CompleteRolledBackRegistryFails : Script ()
+test_CompleteRolledBackRegistryFails = script do
+  admin <- allocateParty "Admin"
+  g1 <- allocateParty "Guardian1"
+  now <- getTime
+  let pastTime = addRelTime now (hours (-100))
+
+  rolledBackRegistry <- submit admin do
+    createCmd UpgradeRegistry with
+      operator = admin
+      governance = [admin, g1]
+      sourceVersion = "2.0.0"
+      targetVersion = "3.0.0"
+      migrationScriptHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      activatedAt = pastTime
+      migrationDeadline = addRelTime pastTime (hours 72)
+      rollbackDeadline = addRelTime now (hours 960)
+      totalMigrated = 10
+      totalRolledBack = 0
+      status = RolledBack
+
+  submitMustFail admin do
+    exerciseCmd rolledBackRegistry UpgradeRegistry_Complete
+  pure ()
+
+-- | FIX L-19: Zero or negative count rejected
+test_ZeroCountMigrationFails : Script ()
+test_ZeroCountMigrationFails = script do
+  (admin, g1, g2, registry) <- setupUpgrade
+
+  -- Zero count should fail
+  submitMustFail admin do
+    exerciseCmd registry UpgradeRegistry_RecordMigration with
+      count = 0; direction = Forward
+
+  -- Negative count should fail
+  submitMustFail admin do
+    exerciseCmd registry UpgradeRegistry_RecordMigration with
+      count = -1; direction = Forward
   pure ()
 
 -- ============================================================
