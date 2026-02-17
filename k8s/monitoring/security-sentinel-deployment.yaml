@@ -42,16 +42,6 @@ spec:
                 secretKeyRef:
                   name: minted-telegram
                   key: chat-id
-            - name: AUTHORIZED_CHAT_IDS
-              valueFrom:
-                secretKeyRef:
-                  name: minted-telegram
-                  key: chat-ids
-            - name: AUTHORIZED_USER_IDS
-              valueFrom:
-                secretKeyRef:
-                  name: minted-telegram
-                  key: user-ids
             - name: GUARDIAN_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
