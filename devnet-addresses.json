@@ -1,0 +1,54 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployedAt": "2026-02-17",
+  "deployer": "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0",
+
+  "core": {
+    "MUSD": "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d",
+    "CollateralVault": "0xdaB6dc7354F9C511cF7e816910cb546770717a0F",
+    "BLEBridgeV9": "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+    "TreasuryV2": "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
+    "MintedTimelockController": "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
+    "MockUSDC": "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474"
+  },
+
+  "strategies": {
+    "PendleMarketSelector": "0x17Fb251e4580891590633848f3ea9d8d99DA77F6",
+    "PendleStrategyV2": "0xd0055C2002af04BA0622fFA8284767123e70390f",
+    "MorphoLoopStrategy": "0xA3A4D625C2c53833c7dDF9B358A4D8996B8061C6",
+    "SkySUSDSStrategy": "0x427dF673BCa0233cC16B1fdAB3895f7854358857",
+    "FluidLoopStrategy": "0x337ECA06Dc2A4cEa064554f6aeF62b0167145Cf2",
+    "EulerV2LoopStrategy": "0x67Ab12b2Aabe6147833784A2a84870B074a8a33e",
+    "EulerV2CrossStableLoopStrategy": "0x38e1D17621f73b7Cf3367C5971e05612673de59d",
+    "MetaVault": "0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6"
+  },
+
+  "mockInfrastructure": {
+    "RLUSD": "0x0C943514Ec5b2C6837B367736952926E8c336ed2",
+    "USDS": "0x78A37A9A0fc09dd1fCf8A62f88B9ccA08a88D669",
+    "MorphoBlue": "0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26",
+    "AaveV3Pool": "0x0Fb668a8648683789fF0C16261ec620543228806",
+    "EVC": "0xE5e49b9B0446045BaD94E361C5ec05A8354CfF34",
+    "EulerSupplyVaultUSDC": "0x0B7380708C0ba7699b6288F5347AcC38d2eEB7B9",
+    "EulerBorrowVaultUSDC": "0x934af130D5F525381987256b0a04Fa92b5a913B6",
+    "EulerSupplyVaultRLUSD": "0x8C952A04C45f0DCF6711DaC320f8cc3797d5c818",
+    "EulerBorrowVaultUSDCCross": "0xAcdA435Ec29903f323D7c35241141378A5473B4E",
+    "RLUSDPriceFeed": "0x1c82FE5136F4904D2292CdAA114761352c2af07F",
+    "MerklDistributor": "0xB0A97dE1D886e43DA9662D4DBD980A1221473C2b",
+    "SwapRouter": "0x32434BD86906EC51c72E1d6C90F3ce5C011F26A5",
+    "FluidVaultT1": "0xC7fe1a733Ed75b1377070dF929851e9f2a2A33eC",
+    "FluidVaultFactory": "0x75DdAef7C17Aa0C068935222505A1676c45a0aeD",
+    "SkyPSM": "0x3b8d152A3Aec8E3df165FCd1A0608CF6804ca7C3",
+    "SUSDS": "0x0C63bc44bcc5Ba5154301d4F68eB109d9e76820C"
+  },
+
+  "pendingOperations": {
+    "BLEBridgeV9_upgrade_relayerRole": {
+      "operationId": "0xb2693f1d561b08b889b568927f2930793111ee06eafe82142d40fed18b11afe4",
+      "newImplementation": "0x4FAF60221C6DA369d7B3cF8CdC9Cc43b894B8f0c",
+      "executableAfter": "2026-02-18T07:52:36.000Z",
+      "executeCommand": "PHASE=execute npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia"
+    }
+  }
+}
