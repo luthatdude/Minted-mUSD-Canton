@@ -35,7 +35,7 @@ async function main() {
     { name: "BorrowModule",    address: "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8" },
     { name: "SMUSD",           address: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540" },
     { name: "MUSD",            address: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B" },
-    { name: "LeverageVault",   address: "0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC" },
+    { name: "LeverageVault",   address: "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4" },
     { name: "PriceOracle",     address: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025" },
     { name: "DirectMintV2",    address: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7" },
   ];

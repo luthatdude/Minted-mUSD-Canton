@@ -214,7 +214,7 @@ dataSources:
     name: LeverageVault
     network: sepolia
     source:
-      address: "0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC"
+      address: "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4"
       abi: LeverageVault
       startBlock: 10276940
     mapping:
