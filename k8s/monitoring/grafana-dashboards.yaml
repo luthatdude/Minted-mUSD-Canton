@@ -1,0 +1,1021 @@
+# Minted Protocol — Grafana Dashboard ConfigMaps
+# Auto-provisioned by the Grafana sidecar (label: grafana_dashboard: "1").
+#
+# Dashboards:
+#   1. Bridge Relay Throughput — Attestation flow, tx success/failure, rate limits
+#   2. Bot Operations — Liquidations, oracle updates, rebalancer health
+#   3. Logging Overview — Loki-based log volume, error rates, search
+#
+# AUDIT TRAIL: INFRA-H-02 — Operational visibility for bridge and bot services.
+#
+# NOTE: Relay and bot services currently emit unstructured logs (console.log /
+# Winston) rather than Prometheus counters. These dashboards use LogQL count_over_time
+# queries against Loki to derive throughput metrics. When prom-client is added to
+# the relay/bot services, panels can be migrated to PromQL for higher fidelity.
+---
+# ============================================================
+# DASHBOARD PROVISIONER CONFIG
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioner
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard-provisioner
+    app.kubernetes.io/part-of: minted-musd
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: minted-dashboards
+        orgId: 1
+        folder: Minted Protocol
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards/minted
+          foldersFromFilesStructure: false
+---
+# ============================================================
+# 1. BRIDGE RELAY THROUGHPUT DASHBOARD
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-relay
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: minted-musd
+    grafana_dashboard: "1"
+data:
+  relay-throughput.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "description": "Minted Bridge Relay — attestation throughput, tx success/failure rates, rate limiting, anomaly detection",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "title": "🔗 Bridge Overview",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+          "id": 1,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Attestations Processed (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |= \"bridged successfully\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+          "id": 2,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "TX Reverts (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |= \"Transaction reverted\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+          "id": 3,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Rate Limit Hits (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |= \"RateLimit\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+          "id": 4,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Security Rejections (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |~ \"Rejecting|replay attack|possible attack\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+          "id": 5,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Bridge-Outs (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |= \"Bridge-out #\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+          "id": 6,
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Pause Guardian Active",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"bridge-relay\"} |= \"PauseGuardian\" |= \"PAUSING\" [1h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "id": 101,
+          "title": "📈 Throughput Over Time",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 30, "stacking": { "mode": "normal" } }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "success" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "revert" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "bridge_out" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 6 },
+          "id": 10,
+          "options": { "tooltip": { "mode": "multi" } },
+          "title": "Attestation Throughput",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"bridged successfully\" [$__interval]))",
+              "legendFormat": "success",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Transaction reverted\" [$__interval]))",
+              "legendFormat": "revert",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Bridge-out #\" [$__interval]))",
+              "legendFormat": "bridge_out",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+          "id": 11,
+          "title": "Rate Limiter & Anomaly Events",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"RateLimit\" [$__interval]))",
+              "legendFormat": "rate_limit",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"nonce mismatch\" [$__interval]))",
+              "legendFormat": "nonce_mismatch",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Switching to fallback RPC\" [$__interval]))",
+              "legendFormat": "rpc_failover",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+          "id": 102,
+          "title": "🔒 Security Events",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 50 },
+              "color": { "fixedColor": "red", "mode": "fixed" }
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 15 },
+          "id": 20,
+          "title": "Security Rejections Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=\"bridge-relay\"} |~ \"Rejecting invalid signature|cross-chain replay|possible attack\" [$__interval]))",
+              "legendFormat": "rejections",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 15 },
+          "id": 21,
+          "options": {
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none"
+          },
+          "title": "Security Event Log Stream",
+          "type": "logs",
+          "targets": [
+            {
+              "expr": "{app=\"bridge-relay\"} |~ \"Rejecting|replay attack|possible attack|PauseGuardian|PAUSING\"",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+          "id": 103,
+          "title": "📋 Relay Logs",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
+          "id": 30,
+          "options": {
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none"
+          },
+          "title": "Bridge Relay — Full Log Stream",
+          "type": "logs",
+          "targets": [
+            {
+              "expr": "{app=\"bridge-relay\"} |~ \"$search\"",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["minted", "bridge", "relay"],
+      "templating": {
+        "list": [
+          {
+            "current": { "selected": false, "text": "Loki", "value": "loki" },
+            "hide": 0,
+            "includeAll": false,
+            "label": "Loki Datasource",
+            "multi": false,
+            "name": "DS_LOKI",
+            "options": [],
+            "query": "loki",
+            "type": "datasource"
+          },
+          {
+            "current": { "selected": false, "text": "", "value": "" },
+            "hide": 0,
+            "label": "Search",
+            "name": "search",
+            "options": [],
+            "query": "",
+            "type": "textbox"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "timezone": "utc",
+      "title": "Minted — Bridge Relay Throughput",
+      "uid": "minted-relay-throughput",
+      "version": 1
+    }
+---
+# ============================================================
+# 2. BOT OPERATIONS DASHBOARD
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-bot
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: minted-musd
+    grafana_dashboard: "1"
+data:
+  bot-operations.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "description": "Minted Bot Operations — liquidation bot, oracle keeper, fluid rebalancer metrics",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 200,
+          "title": "⚡ Liquidation Bot",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+          "id": 40,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Liquidations Executed (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"liquidation-bot\"} |= \"Liquidation succeeded\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+          "id": 41,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Liquidation Failures (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"liquidation-bot\"} |= \"Liquidation failed\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+          "id": 42,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Borrowers Detected (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"liquidation-bot\"} |= \"New borrower detected\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+          "id": 43,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Gas Guard Skips (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"liquidation-bot\"} |= \"Gas too high\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+          "id": 44,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Flashbots Submissions (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=\"liquidation-bot\"} |= \"Flashbots\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 30, "stacking": { "mode": "normal" } }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "success" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+              { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+            ]
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+          "id": 50,
+          "title": "Liquidation Success vs Failure Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=\"liquidation-bot\"} |= \"Liquidation succeeded\" [$__interval]))",
+              "legendFormat": "success",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(count_over_time({app=\"liquidation-bot\"} |= \"Liquidation failed\" [$__interval]))",
+              "legendFormat": "failed",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+          "id": 51,
+          "options": {
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true,
+            "enableLogDetails": true
+          },
+          "title": "Liquidation Bot — Event Log",
+          "type": "logs",
+          "targets": [
+            {
+              "expr": "{app=\"liquidation-bot\"} |~ \"Liquidation|Executing|borrower|profit\"",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+          "id": 201,
+          "title": "🔮 Oracle Keeper",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 14 },
+          "id": 60,
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Circuit Breaker Trips (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=~\"liquidation-bot|oracle-keeper\"} |= \"Circuit breaker\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 14 },
+          "id": 61,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Price Deviation Alerts (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=~\"liquidation-bot|oracle-keeper\"} |~ \"Deviation|stale|diverge\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 14 },
+          "id": 62,
+          "title": "Oracle Events Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|oracle-keeper\"} |= \"Circuit breaker\" [$__interval]))",
+              "legendFormat": "circuit_breaker",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|oracle-keeper\"} |~ \"stale|Deviation\" [$__interval]))",
+              "legendFormat": "stale_or_deviation",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|oracle-keeper\"} |= \"Reset\" [$__interval]))",
+              "legendFormat": "reset_attempt",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+          "id": 202,
+          "title": "💧 Fluid Rebalancer",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 21 },
+          "id": 70,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Rebalances (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=~\"liquidation-bot|fluid-rebalancer\"} |= \"Rebalanced\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 21 },
+          "id": 71,
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["sum"] } },
+          "title": "Emergency Events (24h)",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "count_over_time({app=~\"liquidation-bot|fluid-rebalancer\"} |= \"Emergency\" [24h])",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 20 },
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "gridPos": { "h": 6, "w": 16, "x": 8, "y": 21 },
+          "id": 72,
+          "title": "Rebalancer Activity Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|fluid-rebalancer\"} |= \"Rebalanced\" [$__interval]))",
+              "legendFormat": "rebalance",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|fluid-rebalancer\"} |= \"Emergency\" [$__interval]))",
+              "legendFormat": "emergency",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(count_over_time({app=~\"liquidation-bot|fluid-rebalancer\"} |= \"Gas too high\" [$__interval]))",
+              "legendFormat": "gas_skip",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+          "id": 203,
+          "title": "📋 Bot Logs",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 28 },
+          "id": 80,
+          "options": {
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none"
+          },
+          "title": "All Bot Services — Log Stream",
+          "type": "logs",
+          "targets": [
+            {
+              "expr": "{app=~\"liquidation-bot|oracle-keeper|fluid-rebalancer\"} |~ \"$search\"",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["minted", "bot", "liquidation", "oracle"],
+      "templating": {
+        "list": [
+          {
+            "current": { "selected": false, "text": "Loki", "value": "loki" },
+            "hide": 0,
+            "includeAll": false,
+            "label": "Loki Datasource",
+            "multi": false,
+            "name": "DS_LOKI",
+            "options": [],
+            "query": "loki",
+            "type": "datasource"
+          },
+          {
+            "current": { "selected": false, "text": "", "value": "" },
+            "hide": 0,
+            "label": "Search",
+            "name": "search",
+            "options": [],
+            "query": "",
+            "type": "textbox"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "timezone": "utc",
+      "title": "Minted — Bot Operations",
+      "uid": "minted-bot-operations",
+      "version": 1
+    }
+---
+# ============================================================
+# 3. LOGGING OVERVIEW DASHBOARD (cross-service)
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-logging
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: minted-musd
+    grafana_dashboard: "1"
+data:
+  logging-overview.json: |
+    {
+      "description": "Minted Protocol — cross-service log volume, error rates, and health",
+      "editable": true,
+      "graphTooltip": 1,
+      "id": null,
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 300,
+          "title": "📊 Log Volume",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 40, "stacking": { "mode": "normal" } },
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "gridPos": { "h": 8, "w": 16, "x": 0, "y": 1 },
+          "id": 90,
+          "title": "Log Volume by Service",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (app) (count_over_time({namespace=\"musd-canton\"} [$__interval]))",
+              "legendFormat": "{{app}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" }
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+          "id": 91,
+          "options": {
+            "pieType": "donut",
+            "reduceOptions": { "calcs": ["sum"] },
+            "legend": { "displayMode": "table", "placement": "right" }
+          },
+          "title": "Log Distribution by Service (24h)",
+          "type": "piechart",
+          "targets": [
+            {
+              "expr": "sum by (app) (count_over_time({namespace=\"musd-canton\"} [24h]))",
+              "legendFormat": "{{app}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+          "id": 301,
+          "title": "🚨 Error Rates",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 50 },
+              "color": { "fixedColor": "red", "mode": "fixed" }
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 10 },
+          "id": 92,
+          "title": "Error Log Lines Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (app) (count_over_time({namespace=\"musd-canton\"} |~ \"(?i)error|ERROR|failed|FATAL|panic\" [$__interval]))",
+              "legendFormat": "{{app}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 30 },
+              "color": { "fixedColor": "orange", "mode": "fixed" }
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 10 },
+          "id": 93,
+          "title": "Warning Log Lines Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (app) (count_over_time({namespace=\"musd-canton\"} |~ \"(?i)warn|WARN|warning\" [$__interval]))",
+              "legendFormat": "{{app}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+          "id": 302,
+          "title": "🏥 Pod Health",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+              "mappings": [{ "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } }, "type": "value" }]
+            }
+          },
+          "gridPos": { "h": 4, "w": 24, "x": 0, "y": 17 },
+          "id": 94,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["last"] }
+          },
+          "title": "Service Health",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "up{namespace=\"musd-canton\"}",
+              "legendFormat": "{{job}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 5 },
+              "color": { "mode": "palette-classic" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 21 },
+          "id": 95,
+          "title": "Pod Restarts (1h)",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"musd-canton\"}[$__interval])",
+              "legendFormat": "{{pod}} / {{container}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" },
+              "unit": "bytes"
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 21 },
+          "id": 96,
+          "title": "Container Memory Usage",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"musd-canton\", container!=\"\"}",
+              "legendFormat": "{{pod}} / {{container}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "1m",
+      "schemaVersion": 39,
+      "tags": ["minted", "logging", "overview"],
+      "templating": {
+        "list": [
+          {
+            "current": { "selected": false, "text": "Loki", "value": "loki" },
+            "hide": 0,
+            "label": "Loki Datasource",
+            "name": "DS_LOKI",
+            "query": "loki",
+            "type": "datasource"
+          },
+          {
+            "current": { "selected": false, "text": "Prometheus", "value": "prometheus" },
+            "hide": 0,
+            "label": "Prometheus Datasource",
+            "name": "DS_PROM",
+            "query": "prometheus",
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-6h", "to": "now" },
+      "timepicker": {},
+      "timezone": "utc",
+      "title": "Minted — Logging Overview",
+      "uid": "minted-logging-overview",
+      "version": 1
+    }
