@@ -5,6 +5,9 @@ typechain-types/
 .daml/
 install.sh
 
+# Certora Prover build artifacts (contains anonymous URL tokens)
+.certora_internal/
+
 # Coverage reports (auto-generated)
 coverage/
 coverage.json
