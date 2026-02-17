@@ -342,6 +342,7 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Withdraw all USDC from strategy
+     * @dev SOL-M-2: Verifies position is fully unwound after deleverage
      * @return withdrawn Total amount withdrawn
      */
     function withdrawAll() 
@@ -353,6 +354,18 @@ contract MorphoLoopStrategy is
     {
         // Full deleverage
         withdrawn = _fullDeleverage();
+
+        // SOL-M-2: Verify position is fully unwound before zeroing principal
+        IMorphoBlue.Position memory finalPos = morpho.position(marketId, address(this));
+        (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
+        uint256 remainingBorrow = 0;
+        if (totalBorrowShares > 0) {
+            remainingBorrow = (uint256(finalPos.borrowShares) * totalBorrowAssets) / totalBorrowShares;
+        }
+        // Allow dust (< $0.01 = 1e4 USDC units) but not material positions
+        if (remainingBorrow > 1e4 || finalPos.collateral > 1e4) {
+            revert PositionNotCleared();
+        }
         totalPrincipal = 0;
 
         // Transfer all USDC back to Treasury

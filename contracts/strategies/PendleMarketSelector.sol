@@ -138,6 +138,8 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
     event MarketWhitelisted(address indexed market, string category);
     event MarketRemoved(address indexed market);
+    /// @dev SOL-L-6: Emitted when oracle cardinality is insufficient at whitelist time
+    event OracleCardinalityWarning(address indexed market);
     event BestMarketSelected(address indexed market, uint256 tvl, uint256 impliedAPY, uint256 score);
     event ParamsUpdated(uint256 minTimeToExpiry, uint256 minTvlUsd, uint256 tvlWeight, uint256 apyWeight);
 
@@ -148,6 +150,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     error NoValidMarkets();
     error MarketNotWhitelisted();
     error InvalidWeights();
+    error OracleNotReady();
 
     // ═══════════════════════════════════════════════════════════════════════
     // INITIALIZER
@@ -313,6 +316,9 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
     /**
      * @notice Get full market info
+     * @dev SOL-M-6: Converts TVL from SY terms to USD using SY exchange rate
+     * @dev SOL-M-7: Oracle calls wrapped in try/catch; spot lastLnImpliedRate is
+     *      intentionally used for scoring (TWAP would need Pendle's internal oracle accumulator)
      */
     function _getMarketInfo(address market) internal view returns (MarketInfo memory info) {
         IPendleMarket pendleMarket = IPendleMarket(market);
@@ -334,15 +340,37 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
 
         // Calculate TVL in SY terms (totalPt converted + totalSy)
         // PT trades at discount, so we use oracle rate
+        // SOL-M-7: Wrap oracle call in try/catch — return 0 TVL if oracle fails
+        uint256 tvlSy;
         // slither-disable-next-line calls-loop
-        uint256 ptToSyRate = IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION);
-        uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;
-        uint256 tvlSy = ptValueInSy + uint256(uint128(totalSy));
+        try IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION) returns (uint256 ptToSyRate) {
+            uint256 ptValueInSy = (uint256(uint128(totalPt)) * ptToSyRate) / 1e18;
+            tvlSy = ptValueInSy + uint256(uint128(totalSy));
+        } catch {
+            // Oracle failure — set TVL to 0 (will be filtered out by minTvlUsd check)
+            tvlSy = 0;
+        }
+
+        // SOL-M-6: Convert tvlSy to approximate USD value using SY exchange rate
+        // SY.exchangeRate() returns the rate of 1 SY in terms of underlying (18 decimals)
+        // For USDC-based SY, this converts to USDC (6 decimals), so we normalize.
+        uint256 tvlUsd = tvlSy;
+        if (tvlSy > 0) {
+            // slither-disable-next-line calls-loop
+            try ISY(sy).exchangeRate() returns (uint256 syRate) {
+                // syRate is in 1e18 scale. tvlSy * syRate / 1e18 = tvl in underlying units
+                tvlUsd = (tvlSy * syRate) / 1e18;
+            } catch {
+                // If exchange rate call fails, use raw SY value as fallback
+                tvlUsd = tvlSy;
+            }
+        }
 
         // Convert lnImpliedRate to APY
-        // lnImpliedRate is stored as ln(1 + rate) scaled by 1e18
-        // APY = exp(lnImpliedRate * timeToExpiry / SECONDS_PER_YEAR) - 1
-        // Simplified: APY ≈ lnImpliedRate for small rates (first-order approximation)
+        // SOL-M-7: lastLnImpliedRate is a spot value from market storage.
+        // This is intentional for scoring — a TWAP-based APY would need Pendle's internal
+        // observation accumulator which is not exposed via standard interface.
+        // The per-sync rate limit in SMUSD.sol and market whitelist provide sufficient protection.
         uint256 impliedAPY = _lnRateToAPY(uint256(lastLnImpliedRate), timeToExpiry);
 
         info = MarketInfo({
@@ -353,7 +381,7 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
             timeToExpiry: timeToExpiry,
             totalPt: uint256(uint128(totalPt)),
             totalSy: uint256(uint128(totalSy)),
-            tvlSy: tvlSy,
+            tvlSy: tvlUsd, // SOL-M-6: Now stores USD-denominated TVL
             impliedRate: uint256(lastLnImpliedRate),
             impliedAPY: impliedAPY,
             score: 0 // Calculated separately
@@ -433,6 +461,22 @@ contract PendleMarketSelector is AccessControlUpgradeable, UUPSUpgradeable {
     /// @dev Requires TIMELOCK_ROLE (48h governance delay) — whitelisted markets control where funds are deployed
     function whitelistMarket(address market, string calldata category) external onlyRole(TIMELOCK_ROLE) {
         if (market == address(0)) revert ZeroAddress();
+
+        // SOL-L-6: Best-effort oracle cardinality validation.
+        // If the oracle isn't ready (cardinality too low or not initialized),
+        // getPtToSyRate reverts with "OLD". We emit a warning but still allow
+        // whitelisting — the market will be skipped in _isValidMarket at selection time.
+        // Check code exists at PENDLE_ORACLE first to avoid ABI decode failures on testnets.
+        uint256 oracleCodeSize;
+        address oracleAddr = PENDLE_ORACLE;
+        assembly { oracleCodeSize := extcodesize(oracleAddr) }
+        if (oracleCodeSize > 0) {
+            try IPendleOracle(PENDLE_ORACLE).getPtToSyRate(market, TWAP_DURATION) {}
+            catch {
+                emit OracleCardinalityWarning(market);
+            }
+        }
+
         if (!isWhitelisted[market]) {
             if (whitelistedMarkets.length >= MAX_WHITELISTED_MARKETS) revert MaxMarketsReached();
             whitelistedMarkets.push(market);

@@ -167,6 +167,8 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
     );
 
     event EmergencyRepayFailed(address indexed user, uint256 debtAmount, uint256 musdAvailable);
+    /// @dev SOL-M-4: Emitted when swap fails during emergency close
+    event EmergencySwapFailed(address indexed user, address collateralToken, uint256 swapAmount);
 
     // ============================================================
     //                  CONSTRUCTOR
@@ -547,6 +549,13 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
         return collateralReceived;
     }
 
+    /// @notice SOL-M-4: External wrapper for _swapCollateralToMusd to enable try/catch
+    /// @dev Only callable by this contract itself (used in emergencyClosePosition try/catch)
+    function externalSwapCollateralToMusd(address collateralToken, uint256 amount) external returns (uint256) {
+        if (msg.sender != address(this)) revert Unauthorized();
+        return _swapCollateralToMusd(collateralToken, amount, 0, 0);
+    }
+
     /// @notice Swap collateral to mUSD via Uniswap V3
     /// @param userMinOut User-supplied minimum output (0 = oracle only)
     /// @param userDeadline User-supplied deadline (0 = default 300s)
@@ -734,13 +743,19 @@ contract LeverageVault is AccessControl, ReentrancyGuard, Pausable, TimelockGove
             // Cap at available collateral
             uint256 swapAmount = collateralNeeded < totalCollateralInVault ? collateralNeeded : totalCollateralInVault;
 
-            uint256 musdReceived = _swapCollateralToMusd(collateralToken, swapAmount, 0, 0);
-            if (musdReceived > 0) {
-                uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
-                IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
-                try borrowModule.repayFor(user, repayAmount) {} catch {
-                    emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+            // SOL-M-4: Wrap swap in try/catch — if swap fails, skip debt repayment
+            // and return raw collateral to user. Emergency close must not revert.
+            try this.externalSwapCollateralToMusd(collateralToken, swapAmount) returns (uint256 musdReceived) {
+                if (musdReceived > 0) {
+                    uint256 repayAmount = musdReceived < debtToRepay ? musdReceived : debtToRepay;
+                    IERC20(address(musd)).forceApprove(address(borrowModule), repayAmount);
+                    try borrowModule.repayFor(user, repayAmount) {} catch {
+                        emit EmergencyRepayFailed(user, repayAmount, musdReceived);
+                    }
                 }
+            } catch {
+                // Swap failed — skip debt repayment, return raw collateral below
+                emit EmergencySwapFailed(user, collateralToken, swapAmount);
             }
         }
 

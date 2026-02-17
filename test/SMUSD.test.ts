@@ -215,6 +215,9 @@ describe("SMUSD", function () {
     it("should increase share value after yield", async function () {
       const assetsBefore = await smusd.convertToAssets(ethers.parseEther("1"));
       await smusd.connect(yieldManager).distributeYield(ethers.parseEther("100"));
+      // SOL-M-9: Yield is now vested over 12h, so fast-forward past vesting
+      await ethers.provider.send("evm_increaseTime", [43200]); // 12 hours
+      await ethers.provider.send("evm_mine", []);
       const assetsAfter = await smusd.convertToAssets(ethers.parseEther("1"));
       expect(assetsAfter).to.be.gt(assetsBefore);
     });
@@ -345,6 +348,8 @@ describe("SMUSD", function () {
   describe("Canton Shares Sync", function () {
     beforeEach(async function () {
       await smusd.grantRole(await smusd.BRIDGE_ROLE(), bridge.address);
+      // SOL-H-4: First sync requires Ethereum deposits to exist
+      await smusd.connect(user1).deposit(ethers.parseEther("5000"), user1.address);
     });
 
     it("should sync Canton shares from bridge", async function () {
@@ -357,9 +362,12 @@ describe("SMUSD", function () {
 
     it("should reject non-sequential epoch", async function () {
       await smusd.connect(bridge).syncCantonShares(ethers.parseEther("1000"), 1);
+      // Wait for MIN_SYNC_INTERVAL (1 hour)
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
 
       await expect(
-        smusd.connect(bridge).syncCantonShares(ethers.parseEther("2000"), 1)
+        smusd.connect(bridge).syncCantonShares(ethers.parseEther("1000"), 1)
       ).to.be.revertedWithCustomError(smusd, "EpochNotSequential");
     });
 

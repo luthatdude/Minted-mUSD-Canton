@@ -104,11 +104,18 @@ contract PriceOracle is AccessControl {
     }
 
     /// @dev SOL-H-04: Kept on KEEPER_ROLE (not timelock) for emergency circuit breaker recovery
+    /// @dev SOL-L-8: Now validates staleness and round completeness (matching getPrice checks)
+    ///      Intentionally NO deviation check — this function's purpose is to recover from
+    ///      circuit breaker trips by resetting the anchor to the current valid feed price.
     function resetLastKnownPrice(address token) external onlyRole(KEEPER_ROLE) {
         FeedConfig storage config = feeds[token];
         if (!config.enabled) revert FeedNotEnabled();
-        (, int256 answer, , , ) = config.feed.latestRoundData();
+        (uint80 roundId, int256 answer, , uint256 updatedAt, uint80 answeredInRound) = config.feed.latestRoundData();
         if (answer <= 0) revert InvalidPrice();
+        // SOL-L-8: Staleness check — same as getPrice()
+        if (block.timestamp - updatedAt > config.stalePeriod) revert StalePrice();
+        // SOL-L-8: Round completeness check — same as getPrice()
+        if (answeredInRound < roundId) revert StaleRound();
         lastKnownPrice[token] = uint256(answer) * (10 ** (18 - config.feedDecimals));
     }
 
