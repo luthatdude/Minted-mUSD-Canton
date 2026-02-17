@@ -98,10 +98,16 @@ metadata:
     app.kubernetes.io/name: liquidation-bot
     app.kubernetes.io/component: bot
     app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
 spec:
   replicas: 1
   strategy:
-    type: Recreate  # Avoid duplicate liquidation attempts
+    type: RollingUpdate    # maxSurge:0 prevents duplicate liquidation attempts
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: liquidation-bot
@@ -115,6 +121,20 @@ spec:
         prometheus.io/port: "8080"
     spec:
       serviceAccountName: liquidation-bot
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 1
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
@@ -328,6 +348,7 @@ metadata:
   name: liquidation-bot-pdb
   namespace: musd-canton
 spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
   maxUnavailable: 1
   selector:
     matchLabels:

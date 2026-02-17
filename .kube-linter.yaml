@@ -9,3 +9,9 @@ checks:
     - "no-read-only-root-fs"
     # We use emptyDir for temp volumes in init containers — acceptable
     - "writable-host-mount"
+    # Relay, bot, validators, and participant are singletons by design:
+    # - Relay: duplicate instances cause duplicate attestation submissions
+    # - Bot: duplicate instances cause duplicate liquidation attempts
+    # - Validators: each is a unique identity (separate Deployment per validator)
+    # - Participant: stateful — requires domain sequencer for HA, not replica scaling
+    - "minimum-three-replicas"
