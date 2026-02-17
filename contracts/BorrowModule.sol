@@ -103,6 +103,16 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// Retried on next accrual to prevent phantom debt accumulation
     uint256 public pendingInterest;
 
+    /// @notice Bad debt that must be absorbed by future supplier interest.
+    ///         This is populated when LiquidationEngine socializes debt beyond reserves.
+    uint256 public badDebtQueuedForSuppliers;
+
+    /// @notice Cumulative bad debt absorbed by protocol reserves.
+    uint256 public totalBadDebtAbsorbedByReserves;
+
+    /// @notice Cumulative bad debt absorbed by supplier interest haircuts.
+    uint256 public totalBadDebtAbsorbedBySuppliers;
+
     /// @notice SOL-M-02: Cached total supply for fallback when Treasury call fails.
     ///         Updated on every successful _getTotalSupply() call via _accrueGlobalInterest().
     ///         Prevents arbitrary 2x multiplier when Treasury is temporarily unavailable.
@@ -144,6 +154,8 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     event ReservesWithdrawn(address indexed to, uint256 amount);
     event InterestRoutingFailed(uint256 supplierAmount, bytes reason);
     event ReservesMintFailed(address indexed to, uint256 amount);
+    event BadDebtAbsorbed(uint256 amount, uint256 reserveAbsorbed, uint256 supplierQueued, uint256 remainingReserveBalance);
+    event SupplierBadDebtRealized(uint256 amount, uint256 remainingQueued);
 
     constructor(
         address _vault,
@@ -472,6 +484,18 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
             // Add reserves to protocol
             protocolReserves += reserveAmount;
 
+            // Realize queued supplier loss before routing new supplier interest.
+            // Reserves are consumed first in absorbBadDebt(); only residual loss is queued here.
+            if (supplierAmount > 0 && badDebtQueuedForSuppliers > 0) {
+                uint256 supplierAbsorb = supplierAmount > badDebtQueuedForSuppliers
+                    ? badDebtQueuedForSuppliers
+                    : supplierAmount;
+                supplierAmount -= supplierAbsorb;
+                badDebtQueuedForSuppliers -= supplierAbsorb;
+                totalBadDebtAbsorbedBySuppliers += supplierAbsorb;
+                emit SupplierBadDebtRealized(supplierAbsorb, badDebtQueuedForSuppliers);
+            }
+
             // Route supplier portion to SMUSD. Buffer unrouted interest
             // so totalBorrows only increases when routing succeeds, preventing phantom debt.
             bool routingSucceeded = false;
@@ -687,6 +711,26 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         emit DebtAdjusted(user, totalDebt(user), "LIQUIDATION");
+    }
+
+    /// @notice Realize socialized bad debt economically.
+    /// @dev Reserves absorb losses first; residual is queued to haircut future supplier interest.
+    ///      Called by LiquidationEngine during socializeBadDebt().
+    function absorbBadDebt(uint256 amount) external nonReentrant onlyRole(LIQUIDATION_ROLE) {
+        if (amount == 0) revert InvalidAmount();
+
+        uint256 reserveAbsorbed = amount > protocolReserves ? protocolReserves : amount;
+        if (reserveAbsorbed > 0) {
+            protocolReserves -= reserveAbsorbed;
+            totalBadDebtAbsorbedByReserves += reserveAbsorbed;
+        }
+
+        uint256 supplierQueued = amount - reserveAbsorbed;
+        if (supplierQueued > 0) {
+            badDebtQueuedForSuppliers += supplierQueued;
+        }
+
+        emit BadDebtAbsorbed(amount, reserveAbsorbed, supplierQueued, protocolReserves);
     }
 
     // ============================================================
