@@ -4,7 +4,7 @@
 import { ethers } from "hardhat";
 
 // Deployed contract addresses on Sepolia (updated 2026-02-17)
-// NOTE: Update MockWETH/MockWBTC/feeds after running deploy-mock-oracles.ts
+// NOTE: MockWETH/MockWBTC/feeds updated from deploy-mock-oracles.ts output (2026-02-17)
 const CONTRACTS = {
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
   MUSD: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
@@ -12,17 +12,16 @@ const CONTRACTS = {
   CollateralVault: "0x155d6618dcdeb2F4145395CA57C80e6931D7941e",
   BorrowModule: "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8",
   LiquidationEngine: "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8",
-  // Fill in after deploy-mock-oracles.ts
-  MockWETH: "", // UPDATE THIS
-  MockWBTC: "", // UPDATE THIS
+  MockWETH: "0x7999F2894290F2Ce34a508eeff776126D9a7D46e",
+  MockWBTC: "0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F",
   // Deployed LeverageVault
   LeverageVault: "0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC",
 };
 
-// Mock Chainlink feeds - UPDATE after deploy-mock-oracles.ts
+// Mock Chainlink feeds from deploy-mock-oracles.ts
 const MOCK_FEEDS = {
-  ETH_USD: "", // UPDATE THIS
-  BTC_USD: "", // UPDATE THIS
+  ETH_USD: "0xc82116f198C582C2570712Cbe514e17dC9E8e01A",
+  BTC_USD: "0xE9A0164efA641Aa14142aF3754545A61cD224106",
 };
 
 async function main() {

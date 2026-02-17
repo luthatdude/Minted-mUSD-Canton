@@ -138,10 +138,67 @@ async function main() {
   }
 
   console.log("\n" + "═".repeat(60));
-  console.log(`Results: ${success} succeeded, ${failed} failed`);
+  console.log(`Admin role results: ${success} succeeded, ${failed} failed`);
   console.log("═".repeat(60));
 
-  if (failed === 0) {
+  // ══════════════════════════════════════════════════════════
+  // Phase 2: Cross-contract role grants
+  // These roles let contracts call each other (e.g. DirectMintV2 → MUSD.mint)
+  // ══════════════════════════════════════════════════════════
+  console.log("\n══════════════════════════════════════════════════════════");
+  console.log("Phase 2: Cross-Contract Role Grants");
+  console.log("══════════════════════════════════════════════════════════");
+
+  const crossRoles: { contract: string; addr: string; role: string; grantee: string; granteeName: string }[] = [
+    // DirectMintV2 needs BRIDGE_ROLE on MUSD to call musd.mint() / musd.burn()
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "BRIDGE_ROLE", grantee: CONTRACTS.DirectMintV2.address, granteeName: "DirectMintV2" },
+    // BLEBridgeV9 needs BRIDGE_ROLE on MUSD to call musd.mint()
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "BRIDGE_ROLE", grantee: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125", granteeName: "BLEBridgeV9" },
+    // LiquidationEngine needs LIQUIDATOR_ROLE on MUSD for liquidation burns
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "LIQUIDATOR_ROLE", grantee: CONTRACTS.LiquidationEngine.address, granteeName: "LiquidationEngine" },
+    // BorrowModule needs BORROW_MODULE_ROLE on CollateralVault for seizure
+    { contract: "CollateralVault", addr: CONTRACTS.CollateralVault.address, role: "BORROW_MODULE_ROLE", grantee: CONTRACTS.BorrowModule.address, granteeName: "BorrowModule" },
+    // LiquidationEngine needs LIQUIDATION_ROLE on CollateralVault for seizing collateral
+    { contract: "CollateralVault", addr: CONTRACTS.CollateralVault.address, role: "LIQUIDATION_ROLE", grantee: CONTRACTS.LiquidationEngine.address, granteeName: "LiquidationEngine" },
+    // LeverageVault needs LEVERAGE_VAULT_ROLE on CollateralVault for depositFor
+    { contract: "CollateralVault", addr: CONTRACTS.CollateralVault.address, role: "LEVERAGE_VAULT_ROLE", grantee: CONTRACTS.LeverageVault.address, granteeName: "LeverageVault" },
+    // BLEBridgeV9 needs CAP_MANAGER_ROLE on MUSD for supply cap updates
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "CAP_MANAGER_ROLE", grantee: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125", granteeName: "BLEBridgeV9" },
+  ];
+
+  let crossSuccess = 0;
+  let crossFailed = 0;
+
+  for (const cr of crossRoles) {
+    console.log(`\n  ${cr.contract}.${cr.role} → ${cr.granteeName}`);
+    try {
+      const contract = await ethers.getContractAt(
+        CONTRACTS[cr.contract as keyof typeof CONTRACTS]?.artifact || cr.contract,
+        cr.addr
+      );
+      const roleHash = await (contract as any)[cr.role]();
+      const already = await contract.hasRole(roleHash, cr.grantee);
+      if (already) {
+        console.log(`    ✅ Already granted`);
+        crossSuccess++;
+        continue;
+      }
+      const tx = await contract.grantRole(roleHash, cr.grantee);
+      await tx.wait();
+      console.log(`    ✅ Granted`);
+      crossSuccess++;
+    } catch (e: any) {
+      console.error(`    ❌ FAILED: ${e.message.slice(0, 120)}`);
+      crossFailed++;
+    }
+  }
+
+  console.log("\n" + "═".repeat(60));
+  console.log(`Cross-role results: ${crossSuccess} succeeded, ${crossFailed} failed`);
+  console.log("═".repeat(60));
+
+  const totalFailed = failed + crossFailed;
+  if (totalFailed === 0) {
     console.log("\n✅ All admin roles transferred successfully!");
     console.log("Next steps:");
     console.log("  1. Restore DEPLOYER_PRIVATE_KEY in .env to the NEW key (0xe640...)");

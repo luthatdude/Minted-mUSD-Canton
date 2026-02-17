@@ -23,6 +23,7 @@ import { formatKMSSignature } from "./signer";
 export class KMSEthereumSigner extends ethers.AbstractSigner {
   private kmsClient: KMSClient;
   private kmsKeyId: string;
+  private region: string;
   private _address: string = "";
   provider: ethers.Provider;
 
@@ -33,6 +34,7 @@ export class KMSEthereumSigner extends ethers.AbstractSigner {
   ) {
     super(provider);
     this.kmsKeyId = kmsKeyId;
+    this.region = region;
     this.provider = provider;
     this.kmsClient = new KMSClient({ region });
   }
@@ -85,7 +87,8 @@ export class KMSEthereumSigner extends ethers.AbstractSigner {
   }
 
   connect(provider: ethers.Provider): KMSEthereumSigner {
-    return new KMSEthereumSigner(this.kmsKeyId, "", provider);
+    // HIGH-01 FIX: Preserve AWS region on provider reconnect (was hardcoded to "")
+    return new KMSEthereumSigner(this.kmsKeyId, this.region, provider);
   }
 
   /**
