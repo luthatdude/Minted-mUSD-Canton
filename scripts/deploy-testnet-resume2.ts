@@ -88,6 +88,44 @@ async function main() {
   await (await bridge.grantRole(VALIDATOR_ROLE, deployer.address)).wait();
   console.log("BLEBridgeV9: deployer registered as validator");
 
+  // BorrowModule: LIQUIDATION_ROLE → LiquidationEngine
+  const borrow = await ethers.getContractAt("BorrowModule", borrowAddress);
+  const LIQUIDATION_ROLE = await borrow.LIQUIDATION_ROLE();
+  await (await borrow.grantRole(LIQUIDATION_ROLE, liquidationAddress)).wait();
+  console.log("BorrowModule: LIQUIDATION_ROLE -> LiquidationEngine");
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // TIMELOCK GOVERNANCE WIRING
+  // Grant TIMELOCK_ROLE to MintedTimelockController on all contracts that
+  // use onlyRole(TIMELOCK_ROLE) for admin functions (unpause, setters, etc).
+  // Without this, the timelock cannot call governance functions.
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log("\n=== Wiring TIMELOCK_ROLE → MintedTimelockController ===");
+  const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+  const timelockContracts = [
+    { name: "MUSD",              addr: musdAddress },
+    { name: "SMUSD",             addr: smusdAddress },
+    { name: "PriceOracle",       addr: oracleAddress },
+    { name: "InterestRateModel", addr: irmAddress },
+    { name: "CollateralVault",   addr: vaultAddress },
+    { name: "BorrowModule",      addr: borrowAddress },
+    { name: "LiquidationEngine", addr: liquidationAddress },
+    { name: "DirectMintV2",      addr: directMintAddress },
+    { name: "TreasuryV2",        addr: treasuryAddress },
+    { name: "BLEBridgeV9",       addr: bridgeAddress },
+    { name: "LeverageVault",     addr: leverageAddress },
+  ];
+  for (const { name, addr } of timelockContracts) {
+    const c = await ethers.getContractAt("AccessControl", addr);
+    const already = await c.hasRole(TIMELOCK_ROLE, timelockAddress);
+    if (!already) {
+      await (await c.grantRole(TIMELOCK_ROLE, timelockAddress)).wait();
+      console.log(`  ${name}: TIMELOCK_ROLE → timelock ✅`);
+    } else {
+      console.log(`  ${name}: already has TIMELOCK_ROLE ✅`);
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   const remaining = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
   console.log("\n========== SEPOLIA DEPLOYMENT COMPLETE ==========");

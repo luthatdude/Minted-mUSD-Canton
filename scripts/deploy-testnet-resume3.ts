@@ -63,6 +63,37 @@ async function main() {
   await (await bridge.grantRole(VALIDATOR_ROLE, deployer.address)).wait();
   console.log("  BLEBridgeV9: VALIDATOR_ROLE -> deployer");
 
+  // BorrowModule: LIQUIDATION_ROLE → LiquidationEngine
+  const borrow = await ethers.getContractAt("BorrowModule", borrowAddress);
+  const LIQUIDATION_ROLE = await borrow.LIQUIDATION_ROLE();
+  await (await borrow.grantRole(LIQUIDATION_ROLE, liquidationAddress)).wait();
+  console.log("  BorrowModule: LIQUIDATION_ROLE -> LiquidationEngine");
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // TIMELOCK GOVERNANCE WIRING
+  // ═══════════════════════════════════════════════════════════════════════
+  console.log("\n=== Wiring TIMELOCK_ROLE → MintedTimelockController ===");
+  const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+  const timelockContracts = [
+    { name: "MUSD",              addr: musdAddress },
+    { name: "CollateralVault",   addr: vaultAddress },
+    { name: "BorrowModule",      addr: borrowAddress },
+    { name: "LiquidationEngine", addr: liquidationAddress },
+    { name: "DirectMintV2",      addr: "0x064842e7f14e2Ff497Cc203aB8Dc0D2003d45548" },
+    { name: "BLEBridgeV9",       addr: bridgeAddress },
+    { name: "LeverageVault",     addr: leverageAddress },
+  ];
+  for (const { name, addr } of timelockContracts) {
+    const c = await ethers.getContractAt("AccessControl", addr);
+    const already = await c.hasRole(TIMELOCK_ROLE, timelockAddress);
+    if (!already) {
+      await (await c.grantRole(TIMELOCK_ROLE, timelockAddress)).wait();
+      console.log(`  ${name}: TIMELOCK_ROLE → timelock ✅`);
+    } else {
+      console.log(`  ${name}: already wired ✅`);
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════
   const remaining = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
   console.log("\n========== SEPOLIA DEPLOYMENT COMPLETE ==========");
