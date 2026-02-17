@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "BLEBridgeV9",
-    "specfile": "certora/specs/BLEBridgeV9.spec",
-    "specfileOrigRelpath": "certora/specs/BLEBridgeV9.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}
