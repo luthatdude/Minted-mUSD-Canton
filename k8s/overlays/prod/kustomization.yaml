@@ -70,25 +70,30 @@ patches:
         value: 8Gi
 
   # ── Canton Participant: full resources ──
+  # Using strategic merge patch (named env vars) to avoid fragile positional indices
   - target:
       kind: Deployment
       name: canton-participant
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: "2"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 4Gi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: "4"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 8Gi
-      - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "-Xmx6g -Xms4g -XX:+UseG1GC -XX:+UseStringDeduplication"
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: canton-participant
+      spec:
+        template:
+          spec:
+            containers:
+              - name: canton-participant
+                resources:
+                  requests:
+                    cpu: "2"
+                    memory: 4Gi
+                  limits:
+                    cpu: "4"
+                    memory: 8Gi
+                env:
+                  - name: JAVA_OPTS
+                    value: "-Xmx6g -Xms4g -XX:+UseG1GC -XX:+UseStringDeduplication"
 
   # ── NGINX Proxy: 2 replicas, LoadBalancer with WAF ──
   - target:
@@ -191,44 +196,53 @@ patches:
         value: "https://relay.flashbots.net"
 
   # ── Validators: production resources with KMS ──
+  # Using strategic merge patch (named env vars) to avoid fragile positional indices
   - target:
       kind: Deployment
       name: bridge-validator-1
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: 100m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 256Mi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: 500m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 512Mi
-      - op: replace
-        path: /spec/template/spec/containers/0/env/6/value
-        value: "us-east-1"
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bridge-validator-1
+      spec:
+        template:
+          spec:
+            containers:
+              - name: bridge-validator
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                env:
+                  - name: AWS_REGION
+                    value: "us-east-1"
   - target:
       kind: Deployment
       name: bridge-validator-2
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: 100m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 256Mi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: 500m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 512Mi
-      - op: replace
-        path: /spec/template/spec/containers/0/env/6/value
-        value: "us-east-1"
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: bridge-validator-2
+      spec:
+        template:
+          spec:
+            containers:
+              - name: bridge-validator
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                env:
+                  - name: AWS_REGION
+                    value: "us-east-1"
 
   # ── External Secrets: production paths ──
   - target:
