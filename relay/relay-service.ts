@@ -12,6 +12,12 @@
  *   3. Exercise Bridge_ReceiveFromEthereum on BridgeService
  */
 
+// Load environment variables BEFORE any config initialization
+import * as path from "path";
+import * as dotenv from "dotenv";
+const envFile = process.env.NODE_ENV === "production" ? ".env" : ".env.development";
+dotenv.config({ path: path.resolve(__dirname, envFile) });
+
 import { ethers } from "ethers";
 import { CantonClient, ActiveContract, TEMPLATES } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
