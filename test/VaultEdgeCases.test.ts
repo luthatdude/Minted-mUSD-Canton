@@ -1,11 +1,13 @@
 /**
  * Vault Edge-Case Test Suite
  *
- * Covers 4 identified testing gaps:
+ * Covers identified testing gaps:
  *   1. Multi-collateral liquidation (WETH + WBTC, choose seizure token)
  *   2. Bad debt / insolvency (seized collateral < debt owed)
- *   3. LeverageVault swap revert mid-loop
- *   4. SMUSD flash-loan donation attack resistance
+ *   3. SMUSD donation attack resistance (decimalsOffset=3 proof)
+ *   4. Bad-debt socialization — sMUSD-holder impact
+ *
+ * Note: LeverageVault swap-revert coverage lives in LeverageVault.test.ts
  */
 
 import { expect } from "chai";
