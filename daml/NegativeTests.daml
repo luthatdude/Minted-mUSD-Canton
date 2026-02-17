@@ -194,6 +194,29 @@ test_FrozenPartyCannotOperate = do
 
   return ()
 
+-- | Test: ValidateMint fails explicitly for blacklisted minter.
+-- This isolates the blacklist guard path so the failure reason is unambiguous.
+test_BlacklistedMinterCannotValidateMint : Script ()
+test_BlacklistedMinterCannotValidateMint = do
+  regulator <- allocateParty "Regulator"
+  operator <- allocateParty "Operator"
+  badMinter <- allocateParty "BadMinter"
+  now <- getTime
+
+  registryCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.singleton badMinter
+      frozen = Set.empty
+      lastUpdated = now
+
+  submitMustFail operator do
+    exerciseCmd registryCid ValidateMint with
+      minter = badMinter
+
+  return ()
+
 -- ============================================================
 --                     3. STATE VALIDATION TESTS
 -- ============================================================
@@ -493,6 +516,9 @@ runAllNegativeTests = do
   
   test_FrozenPartyCannotOperate
   debug "  ✓ test_FrozenPartyCannotOperate"
+
+  test_BlacklistedMinterCannotValidateMint
+  debug "  ✓ test_BlacklistedMinterCannotValidateMint"
   
   debug "3. State Validation Tests"
   test_InvalidAmountRejected
@@ -522,5 +548,5 @@ runAllNegativeTests = do
   test_DoubleSpendPrevented
   debug "  ✓ test_DoubleSpendPrevented"
   
-  debug "=== ALL 13 NEGATIVE TESTS PASSED ==="
+  debug "=== ALL 14 NEGATIVE TESTS PASSED ==="
   return ()
