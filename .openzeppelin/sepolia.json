@@ -679,6 +679,323 @@
           ]
         }
       }
+    },
+    "68b7aa3b56e29ec9398b9b90880adddd8cb558c61357e17488ca62c60b8e6653": {
+      "address": "0x559fb6e7aA104498c3b6cE4D563BeC7828AcE62D",
+      "txHash": "0x32bc285aa5f1eb855b24b920cc7a860a3dca8ed6a12c5421b5d1ffd57e73063b",
+      "layout": {
+        "solcVersion": "0.8.26",
+        "storage": [
+          {
+            "label": "musdToken",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_contract(IMUSD)8125",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:59"
+          },
+          {
+            "label": "attestedCantonAssets",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:60"
+          },
+          {
+            "label": "collateralRatioBps",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:61"
+          },
+          {
+            "label": "currentNonce",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:62"
+          },
+          {
+            "label": "minSignatures",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:62"
+          },
+          {
+            "label": "lastAttestationTime",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:62"
+          },
+          {
+            "label": "lastRatioChangeTime",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:63"
+          },
+          {
+            "label": "dailyCapIncreaseLimit",
+            "offset": 0,
+            "slot": "7",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:65"
+          },
+          {
+            "label": "dailyCapIncreased",
+            "offset": 0,
+            "slot": "8",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:66"
+          },
+          {
+            "label": "dailyCapDecreased",
+            "offset": 0,
+            "slot": "9",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:69"
+          },
+          {
+            "label": "lastRateLimitReset",
+            "offset": 0,
+            "slot": "10",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:71"
+          },
+          {
+            "label": "unpauseRequestTime",
+            "offset": 0,
+            "slot": "11",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:75"
+          },
+          {
+            "label": "usedAttestationIds",
+            "offset": 0,
+            "slot": "12",
+            "type": "t_mapping(t_bytes32,t_bool)",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:83"
+          },
+          {
+            "label": "lastCantonStateHash",
+            "offset": 0,
+            "slot": "13",
+            "type": "t_bytes32",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:95"
+          },
+          {
+            "label": "verifiedStateHashes",
+            "offset": 0,
+            "slot": "14",
+            "type": "t_mapping(t_bytes32,t_bool)",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:100"
+          },
+          {
+            "label": "bridgeOutNonce",
+            "offset": 0,
+            "slot": "15",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:109"
+          },
+          {
+            "label": "bridgeOutMinAmount",
+            "offset": 0,
+            "slot": "16",
+            "type": "t_uint256",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:112"
+          },
+          {
+            "label": "__gap",
+            "offset": 0,
+            "slot": "17",
+            "type": "t_array(t_uint256)33_storage",
+            "contract": "BLEBridgeV9",
+            "src": "contracts/BLEBridgeV9.sol:618"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_bool)": {
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_bytes32,t_struct(RoleData)26_storage)": {
+            "label": "mapping(bytes32 => struct AccessControlUpgradeable.RoleData)",
+            "numberOfBytes": "32"
+          },
+          "t_struct(AccessControlStorage)36_storage": {
+            "label": "struct AccessControlUpgradeable.AccessControlStorage",
+            "members": [
+              {
+                "label": "_roles",
+                "type": "t_mapping(t_bytes32,t_struct(RoleData)26_storage)",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(InitializableStorage)147_storage": {
+            "label": "struct Initializable.InitializableStorage",
+            "members": [
+              {
+                "label": "_initialized",
+                "type": "t_uint64",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "_initializing",
+                "type": "t_bool",
+                "offset": 8,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(PausableStorage)298_storage": {
+            "label": "struct PausableUpgradeable.PausableStorage",
+            "members": [
+              {
+                "label": "_paused",
+                "type": "t_bool",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(ReentrancyGuardStorage)362_storage": {
+            "label": "struct ReentrancyGuardUpgradeable.ReentrancyGuardStorage",
+            "members": [
+              {
+                "label": "_status",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(RoleData)26_storage": {
+            "label": "struct AccessControlUpgradeable.RoleData",
+            "members": [
+              {
+                "label": "hasRole",
+                "type": "t_mapping(t_address,t_bool)",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "adminRole",
+                "type": "t_bytes32",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          },
+          "t_uint64": {
+            "label": "uint64",
+            "numberOfBytes": "8"
+          },
+          "t_array(t_uint256)33_storage": {
+            "label": "uint256[33]",
+            "numberOfBytes": "1056"
+          },
+          "t_contract(IMUSD)8125": {
+            "label": "contract IMUSD",
+            "numberOfBytes": "20"
+          },
+          "t_mapping(t_bytes32,t_bool)": {
+            "label": "mapping(bytes32 => bool)",
+            "numberOfBytes": "32"
+          }
+        },
+        "namespaces": {
+          "erc7201:openzeppelin.storage.Pausable": [
+            {
+              "contract": "PausableUpgradeable",
+              "label": "_paused",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol:21",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.ReentrancyGuard": [
+            {
+              "contract": "ReentrancyGuardUpgradeable",
+              "label": "_status",
+              "type": "t_uint256",
+              "src": "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol:43",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.AccessControl": [
+            {
+              "contract": "AccessControlUpgradeable",
+              "label": "_roles",
+              "type": "t_mapping(t_bytes32,t_struct(RoleData)26_storage)",
+              "src": "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol:62",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:69",
+              "offset": 0,
+              "slot": "0"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol:73",
+              "offset": 8,
+              "slot": "0"
+            }
+          ]
+        }
+      }
     }
   }
 }
