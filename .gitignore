@@ -15,6 +15,8 @@ coverage.json
 # FIX C-10: Exclude sensitive files
 .env
 .env.*
+!.env.example
+!.env.*.example
 .env.local
 .env.production
 *.pem
