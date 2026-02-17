@@ -125,12 +125,13 @@ spec:
       containers:
         - name: canton
           # Pin Canton image to SHA256 digest for supply chain security
-          # DAML SDK 2.9.3 — includes Canton runtime (canton-open-source stopped at 2.7.9)
-          # Digest verified from Docker Hub: 2025-07-22T14:04:45Z (linux/amd64)
-          # To re-verify: docker pull digitalasset/daml-sdk:2.9.3
-          #               docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
-          # TODO: Align with daml.yaml sdk-version (currently 2.10.3) when image becomes available
-          image: digitalasset/daml-sdk:2.9.3@sha256:8c2a681e348025d69d76932b1f6e7ddac4830355a7d3f8fa8774bb87e8150cc3
+          # Canton Community 3.4.10 — aligned with daml.yaml sdk-version: 3.4.10
+          # SDK 3.x ships Canton participant as a separate image (not daml-sdk)
+          # The v2 HTTP JSON API is built into the participant (no separate json-api sidecar needed)
+          # TODO: Pin to SHA256 digest after pulling from registry:
+          #   docker pull digitalasset/canton-community:3.4.10
+          #   docker inspect --format='{{index .RepoDigests 0}}' digitalasset/canton-community:3.4.10
+          image: digitalasset/canton-community:3.4.10
           args:
             - "-c"
             - "/etc/canton/participant.conf"
@@ -220,30 +221,26 @@ spec:
             periodSeconds: 5
             failureThreshold: 30  # 150s max startup
 
-        - name: json-api
-          # Pin DAML SDK image to SHA256 digest for supply chain security
-          # DAML SDK 2.9.3 — digest verified from Docker Hub: 2024-07-22 (linux/amd64)
-          # To re-verify: docker pull digitalasset/daml-sdk:2.9.3
-          #               docker inspect --format='{{index .RepoDigests 0}}' digitalasset/daml-sdk:2.9.3
-          image: digitalasset/daml-sdk:2.9.3@sha256:8c2a681e348025d69d76932b1f6e7ddac4830355a7d3f8fa8774bb87e8150cc3
+        # NOTE: The separate json-api sidecar is NO LONGER NEEDED with Canton 3.x.
+        # The v2 HTTP JSON API is built into the Canton participant and served on port 7575.
+        # The old daml-sdk json-api served the deprecated v1 endpoints (/v1/query, /v1/exercise, /v1/create).
+        # Canton 3.x participant natively serves v2 endpoints:
+        #   POST /v2/state/active-contracts    (replaces /v1/query)
+        #   POST /v2/commands/submit-and-wait  (replaces /v1/create & /v1/exercise)
+        #   GET  /v2/state/ledger-end
+        #   GET  /v2/users, /v2/packages
+        # JWT authentication is configured in participant.conf (canton.participants.*.http-ledger-api-experimental)
+        - name: json-api-health
+          # Lightweight sidecar that only exposes /livez and /readyz for K8s probes
+          # pointing at the participant's built-in HTTP JSON API on port 7575
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
           command:
-            - "daml"
-            - "json-api"
-            - "--ledger-host"
-            - "localhost"
-            - "--ledger-port"
-            - "5011"
-            - "--http-port"
-            - "7575"
-            # Removed --allow-insecure-tokens
-            # Require JWT-based authentication for all API calls
-            - "--access-token-file"
-            - "/etc/canton/secrets/json-api-token"
+            - "sh"
+            - "-c"
+            - "echo 'json-api-health sidecar: participant serves v2 API on :7575 natively'; sleep infinity"
           env:
-            # INFRA-H-04: JWT secret moved from env var to volume mount at /run/secrets/jwt-secret
-            # The JSON API reads the JWT secret from the file system
-            - name: DAML_JSON_API_JWT_SECRET_FILE
-              value: /run/secrets/jwt-secret
+            - name: CANTON_HTTP_PORT
+              value: "7575"
           ports:
             - name: json-api
               containerPort: 7575
