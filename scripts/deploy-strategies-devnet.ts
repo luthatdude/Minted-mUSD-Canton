@@ -375,6 +375,75 @@ async function main() {
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // PHASE 10: STRATEGY REGISTRATION WITH TREASURYV2
+  // ═══════════════════════════════════════════════════════════════════
+  console.log("\n" + "─".repeat(70));
+  console.log("  PHASE 10: Register Strategies with TreasuryV2");
+  console.log("─".repeat(70));
+
+  const treasury = await ethers.getContractAt("TreasuryV2", CORE.treasuryV2Address);
+  const registrations = [
+    // name, contract, targetBps, minBps, maxBps, autoAllocate
+    { name: "MetaVault",                 addr: results["MetaVault"],                 target: 3000, min: 1000, max: 5000, auto: true },
+    { name: "MorphoLoopStrategy",        addr: results["MorphoLoopStrategy"],        target: 1500, min: 500,  max: 2500, auto: false },
+    { name: "SkySUSDSStrategy",          addr: results["SkySUSDSStrategy"],          target: 1500, min: 500,  max: 2500, auto: false },
+    { name: "FluidLoopStrategy",         addr: results["FluidLoopStrategy"],         target: 1000, min: 300,  max: 2000, auto: false },
+    { name: "PendleStrategyV2",          addr: results["PendleStrategyV2"],          target: 1000, min: 500,  max: 1500, auto: false },
+    { name: "EulerV2LoopStrategy",       addr: results["EulerV2LoopStrategy"],       target: 500,  min: 200,  max: 800,  auto: false },
+    { name: "EulerV2CrossStableLoop",    addr: results["EulerV2CrossStableLoopStrategy"], target: 500,  min: 200,  max: 800,  auto: false },
+  ];
+
+  for (const r of registrations) {
+    try {
+      const isStrat = await treasury.isStrategy(r.addr);
+      if (isStrat) {
+        console.log(`    ${r.name}: already registered ✅`);
+        continue;
+      }
+      const tx = await treasury.addStrategy(r.addr, r.target, r.min, r.max, r.auto);
+      await tx.wait();
+      console.log(`    ${r.name}: registered (${r.target}bps) ✅`);
+    } catch (e: any) {
+      console.log(`    ${r.name}: registration failed — ${e.message?.slice(0, 80)}`);
+    }
+  }
+  const count = await treasury.strategyCount();
+  console.log(`    Total strategies: ${count}`);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 11: TIMELOCK_ROLE GOVERNANCE WIRING
+  // ═══════════════════════════════════════════════════════════════════
+  console.log("\n" + "─".repeat(70));
+  console.log("  PHASE 11: Wire TIMELOCK_ROLE → MintedTimelockController");
+  console.log("─".repeat(70));
+
+  const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
+  const strategyContracts = [
+    { name: "MorphoLoopStrategy",     addr: results["MorphoLoopStrategy"] },
+    { name: "FluidLoopStrategy",      addr: results["FluidLoopStrategy"] },
+    { name: "EulerV2LoopStrategy",    addr: results["EulerV2LoopStrategy"] },
+    { name: "EulerV2CrossStableLoop", addr: results["EulerV2CrossStableLoopStrategy"] },
+    { name: "MetaVault",              addr: results["MetaVault"] },
+    { name: "SkySUSDSStrategy",       addr: results["SkySUSDSStrategy"] },
+    { name: "TreasuryV2",            addr: CORE.treasuryV2Address },
+  ];
+
+  for (const { name, addr } of strategyContracts) {
+    try {
+      const c = await ethers.getContractAt("AccessControl", addr);
+      const has = await c.hasRole(TIMELOCK_ROLE, CORE.timelockAddress);
+      if (!has) {
+        await (await c.grantRole(TIMELOCK_ROLE, CORE.timelockAddress)).wait();
+        console.log(`    ${name}: TIMELOCK_ROLE → timelock ✅`);
+      } else {
+        console.log(`    ${name}: already wired ✅`);
+      }
+    } catch (e: any) {
+      console.log(`    ${name}: failed — ${e.message?.slice(0, 80)}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // SUMMARY
   // ═══════════════════════════════════════════════════════════════════
   const remaining = ethers.formatEther(await ethers.provider.getBalance(deployer.address));
