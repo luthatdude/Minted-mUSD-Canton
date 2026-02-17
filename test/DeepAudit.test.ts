@@ -140,7 +140,8 @@ describe("DEEP AUDIT – Full Protocol Integration", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000 // 50% close factor
+      5000, // 50% close factor
+      admin.address // timelockController
     );
 
     // Deploy MockStrategy (constructor: asset, treasury)

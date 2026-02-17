@@ -102,6 +102,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     /// @notice Buffered interest that failed to route to SMUSD
     /// Retried on next accrual to prevent phantom debt accumulation
     uint256 public pendingInterest;
+
+    /// @notice SOL-M-02: Cached total supply for fallback when Treasury call fails.
+    ///         Updated on every successful _getTotalSupply() call via _accrueGlobalInterest().
+    ///         Prevents arbitrary 2x multiplier when Treasury is temporarily unavailable.
+    uint256 public lastKnownTotalSupply;
     
     /// @notice Fallback fixed rate if model not set (legacy compatibility)
     uint256 public interestRateBps;
@@ -390,18 +395,21 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
     // ============================================================
 
     /// @notice Get total supply for utilization calculation
-    /// @dev Uses Treasury.totalValue() if available, otherwise returns totalBorrows * 2 as fallback
+    /// @dev Uses Treasury.totalValue() if available, falls back to cached value.
+    ///      SOL-M-02: Replaced arbitrary totalBorrows*2 fallback with lastKnownTotalSupply cache.
     ///      is in mUSD (18 decimals). Must scale by 1e12 for correct utilization.
     function _getTotalSupply() internal view returns (uint256) {
         if (address(treasury) != address(0)) {
             try treasury.totalValue() returns (uint256 value) {
                 return value * 1e12;
             } catch {
-                // Fallback: assume 50% utilization
+                // SOL-M-02: Use cached value if available, otherwise conservative estimate
+                if (lastKnownTotalSupply > 0) return lastKnownTotalSupply;
                 return totalBorrows * 2;
             }
         }
-        // No treasury set: assume 50% utilization
+        // No treasury set: use cached value or conservative estimate
+        if (lastKnownTotalSupply > 0) return lastKnownTotalSupply;
         return totalBorrows > 0 ? totalBorrows * 2 : 1e18;
     }
 
@@ -424,6 +432,10 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         }
 
         uint256 totalSupply = _getTotalSupply();
+        // SOL-M-02: Cache successful treasury value for fallback
+        if (totalSupply > 0) {
+            lastKnownTotalSupply = totalSupply;
+        }
         uint256 interest = 0;
 
         if (address(interestRateModel) != address(0)) {
@@ -689,7 +701,7 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
         uint256 elapsed = block.timestamp - pos.lastAccrualTime;
         uint256 userTotal = pos.principal + pos.accruedInterest;
         
-        uint256 pendingInterest;
+        uint256 pendingUserInterest;
         if (address(interestRateModel) != address(0)) {
             uint256 globalInterest = interestRateModel.calculateInterest(
                 totalBorrows,
@@ -698,11 +710,11 @@ contract BorrowModule is AccessControl, ReentrancyGuard, Pausable {
                 elapsed
             );
             // User's proportional share of global interest (same formula as _accrueInterest)
-            pendingInterest = totalBorrows > 0 ? (globalInterest * userTotal) / totalBorrows : 0;
+            pendingUserInterest = totalBorrows > 0 ? (globalInterest * userTotal) / totalBorrows : 0;
         } else {
-            pendingInterest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
+            pendingUserInterest = (userTotal * interestRateBps * elapsed) / (BPS * SECONDS_PER_YEAR);
         }
-        return userTotal + pendingInterest;
+        return userTotal + pendingUserInterest;
     }
 
     /// @notice Get health factor for a user (public view)

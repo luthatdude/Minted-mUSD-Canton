@@ -1,0 +1,16 @@
+fix: resolve CRITICAL/HIGH/MEDIUM audit findings across 8 contracts
+
+HIGH findings fixed:
+- H-01: SMUSD setTreasury -> TIMELOCK_ROLE (was DEFAULT_ADMIN_ROLE)
+- H-02: RedemptionQueue setMaxDailyRedemption/setMinRequestAge -> TIMELOCK_ROLE
+- H-03: LiquidationEngine/TreasuryV2/LeverageVault unpause -> TIMELOCK_ROLE
+- H-03: BLEBridgeV9 setBridgeOutMinAmount -> TIMELOCK_ROLE
+- H-10: BLEBridgeV9 migrateUsedAttestations: MAX_MIGRATION_BATCH=200
+
+MEDIUM findings fixed:
+- M-02: BorrowModule lastKnownTotalSupply cache (replaces 2x fallback)
+- M-19: MUSD setLocalCapBps -> TIMELOCK_ROLE
+- M-21: LiquidationEngine socializeBadDebt -> TIMELOCK_ROLE
+
+LiquidationEngine constructor now requires _timelockController param.
+Updated 11 test/deploy files. All 1717 tests passing.

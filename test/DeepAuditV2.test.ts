@@ -149,7 +149,8 @@ describe("DEEP AUDIT V2 – Verification & Hack Vectors", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000
+      5000,
+      admin.address // timelockController
     );
 
     // Deploy MockStrategies

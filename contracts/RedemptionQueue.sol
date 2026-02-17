@@ -224,13 +224,15 @@ contract RedemptionQueue is AccessControl, ReentrancyGuard, Pausable {
     function pendingCount() external view returns (uint256) { return queue.length - nextFulfillIndex; }
 
     // Admin
-    function setMaxDailyRedemption(uint256 newLimit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — rate limits are critical parameters
+    function setMaxDailyRedemption(uint256 newLimit) external onlyRole(TIMELOCK_ROLE) {
         uint256 old = maxDailyRedemption;
         maxDailyRedemption = newLimit;
         emit DailyLimitUpdated(old, newLimit);
     }
 
-    function setMinRequestAge(uint256 newAge) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — cooldown is a critical parameter
+    function setMinRequestAge(uint256 newAge) external onlyRole(TIMELOCK_ROLE) {
         minRequestAge = newAge;
     }
 

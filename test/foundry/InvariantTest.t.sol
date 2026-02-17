@@ -51,7 +51,7 @@ contract InvariantTest is Test {
         );
         liquidation = new LiquidationEngine(
             address(vault), address(borrowModule), address(oracle),
-            address(musd), 5000
+            address(musd), 5000, address(this)
         );
 
         // Oracle setup

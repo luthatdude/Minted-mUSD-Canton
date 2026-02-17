@@ -198,7 +198,8 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Set the treasury address for global asset calculation
-    function setTreasury(address _treasury) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-01: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — critical parameter
+    function setTreasury(address _treasury) external onlyRole(TIMELOCK_ROLE) {
         if (_treasury == address(0)) revert ZeroAddress();
         address oldTreasury = treasury;
         treasury = _treasury;
