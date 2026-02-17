@@ -64,8 +64,6 @@ template GovernanceConfig
     elevatedThreshold : Int             -- M-of-N for emergency/upgrades
     timelockDuration : RelTime          -- Delay between approval and execution
     proposalExpiry : RelTime            -- How long proposals remain valid
-    maxActiveProposals : Int            -- Prevent proposal spam
-    activeProposalCount : Int
     observers : [Party]
   where
     signatory operator
@@ -75,7 +73,6 @@ template GovernanceConfig
         && elevatedThreshold >= standardThreshold
         && standardThreshold <= length governors
         && elevatedThreshold <= length governors
-        && maxActiveProposals > 0
 
     -- | Add a new governor (requires proposal, not direct)
     nonconsuming choice GovConfig_GetThreshold : Int
@@ -192,6 +189,7 @@ template MultiSigProposal
         assertMsg "NOT_GOVERNOR" (executor `elem` governors || executor == operator)
         assertMsg "NOT_APPROVED" (status == Approved)
         now <- getTime
+        assertMsg "PROPOSAL_EXPIRED" (now < expiresAt)
         
         case timelockEndsAt of
           None -> abort "TIMELOCK_NOT_SET"
@@ -283,6 +281,7 @@ template MinterRegistry
       controller operator
       do
         assertMsg "NOT_AUTHORIZED_MINTER" (minter `elem` map fst minters)
+        assertMsg "AMOUNT_MUST_BE_POSITIVE" (amount > 0.0)
         
         let currentQuota = case lookup minter minters of
               None -> 0.0

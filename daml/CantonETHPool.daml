@@ -86,10 +86,10 @@ template CantonSMUSD_E
 
     -- | Update observers from user privacy settings
     choice SMUSDE_UpdateObservers : ContractId CantonSMUSD_E
-      with
-        newObservers : [Party]
       controller owner
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers issuer owner
+        create this with privacyObservers = newObservers
 
     -- | Transfer smUSD-E (for lending/borrowing collateral use).
     -- Freely transferable via propose-accept pattern.

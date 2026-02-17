@@ -103,10 +103,10 @@ template CantonLoopPosition
 
     -- | Update observers from user's privacy settings
     choice LoopPosition_UpdateObservers : ContractId CantonLoopPosition
-      with
-        newObservers : [Party]
       controller user
-      do create this with privacyObservers = newObservers
+      do
+        newObservers <- lookupUserObservers operator user
+        create this with privacyObservers = newObservers
 
     -- | Record a completed loop iteration (operator only).
     choice LoopPosition_RecordLoop : ContractId CantonLoopPosition
