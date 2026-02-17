@@ -71,6 +71,7 @@ template UpgradeProposal
 
     ensure approvalThreshold > 0
         && approvalThreshold <= length governance
+        && length governance == length (dedup governance)
         && T.length sourceVersion > 0
         && T.length targetVersion > 0
         && T.length migrationScriptHash == 64  -- SHA-256 hex
@@ -120,14 +121,21 @@ template UpgradeProposal
           status = Active
 
     -- | Cancel the upgrade proposal
-    choice UpgradeProposal_Cancel : ()
+    choice UpgradeProposal_Cancel : ContractId UpgradeCancellationLog
       with
         reason : Text
       controller operator
       do
         assertMsg "CANNOT_CANCEL_ACTIVE" (status == Proposed || status == Approved)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
-        return ()
+        now <- getTime
+        create UpgradeCancellationLog with
+          operator
+          sourceVersion
+          targetVersion
+          cancelledBy = operator
+          reason
+          cancelledAt = now
 
 -- ============================================================
 --                     2. UPGRADE REGISTRY
@@ -161,16 +169,15 @@ template UpgradeRegistry
         direction : MigrationDirection
       controller operator
       do
-        -- FIX M-10: Enforce state machine — only Active registries accept migrations
-        assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
-        -- FIX L-19: Prevent zero/negative counts from corrupting totals
         assertMsg "COUNT_MUST_BE_POSITIVE" (count > 0)
         now <- getTime
         case direction of
           Forward -> do
+            assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
             assertMsg "MIGRATION_WINDOW_CLOSED" (now <= migrationDeadline)
             create this with totalMigrated = totalMigrated + count
           Backward -> do
+            assertMsg "UPGRADE_NOT_ACTIVE" (status == Active || status == RolledBack)
             assertMsg "ROLLBACK_WINDOW_CLOSED" (now <= rollbackDeadline)
             create this with totalRolledBack = totalRolledBack + count
 
@@ -178,7 +185,6 @@ template UpgradeRegistry
     choice UpgradeRegistry_Complete : ContractId UpgradeRegistry
       controller operator
       do
-        -- FIX M-10: Only Active registries can be completed
         assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
         now <- getTime
         assertMsg "MIGRATION_WINDOW_NOT_ENDED" (now > migrationDeadline)
@@ -238,6 +244,7 @@ template MigrationTicket
         registryCid : ContractId UpgradeRegistry  -- LF 2.x: explicit CID instead of fetchByKey
       controller operator
       do
+        assertMsg "BATCH_TOO_LARGE" (length contractsToMigrate <= batchSize)
         now <- getTime
         
         -- FIX M-9: Enforce batchSize limit on contracts per migration transaction
@@ -289,6 +296,19 @@ template UpgradeMigrationLog
 
     -- No choices - immutable audit record
     -- This contract remains on the ledger permanently for compliance
+
+-- | UpgradeCancellationLog - Immutable cancellation record.
+template UpgradeCancellationLog
+  with
+    operator : Party
+    sourceVersion : Text
+    targetVersion : Text
+    cancelledBy : Party
+    reason : Text
+    cancelledAt : Time
+  where
+    signatory operator
+    observer cancelledBy
 
 -- ============================================================
 --                     5. NOTES
