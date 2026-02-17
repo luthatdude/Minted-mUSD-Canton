@@ -218,6 +218,19 @@ const BRIDGE_ABI = [
     "outputs": [{ "type": "bool" }],
     "stateMutability": "view",
     "type": "function"
+  },
+  // Event: AttestationReceived (for loading processed attestation history)
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "attestationId", "type": "bytes32" },
+      { "indexed": false, "name": "cantonAssets", "type": "uint256" },
+      { "indexed": false, "name": "nonce", "type": "uint256" },
+      { "indexed": false, "name": "newSupplyCap", "type": "uint256" },
+      { "indexed": false, "name": "submitter", "type": "address" }
+    ],
+    "name": "AttestationReceived",
+    "type": "event"
   }
 ];
 

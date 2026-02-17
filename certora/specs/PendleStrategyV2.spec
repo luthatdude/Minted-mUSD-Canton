@@ -24,7 +24,7 @@ methods {
     function currentMarket()         external returns (address) envfree;
     function currentPT()             external returns (address) envfree;
     function currentExpiry()         external returns (uint256) envfree;
-    function totalValue()            external returns (uint256) envfree;
+    function totalValue()            external returns (uint256);
     function asset()                 external returns (address) envfree;
     function positionCount()         external returns (uint256) envfree;
     function BPS()                   external returns (uint256) envfree;
