@@ -52,6 +52,14 @@ interface IWormholeTokenBridge {
     ) external payable returns (uint64 sequence);
 
     function wrappedAsset(uint16 tokenChainId, bytes32 tokenAddress) external view returns (address);
+
+    /// @notice SOL-M-1: Get the Wormhole core contract to query messageFee
+    function wormhole() external view returns (IWormhole);
+}
+
+/// @notice SOL-M-1: Minimal Wormhole core interface for message fee
+interface IWormhole {
+    function messageFee() external view returns (uint256);
 }
 
 /**
@@ -225,15 +233,14 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Get quote for Wormhole delivery cost
+     * @notice Get quote for Wormhole bridge cost
+     * @dev SOL-M-1: Uses tokenBridge.wormhole().messageFee() since _deposit() uses
+     *      tokenBridge.transferTokensWithPayload (not wormholeRelayer). The old code
+     *      quoted from wormholeRelayer which has a different fee structure.
      * @return nativeCost Amount of native token needed for bridge
      */
     function quoteBridgeCost() public view returns (uint256 nativeCost) {
-        (nativeCost, ) = wormholeRelayer.quoteEVMDeliveryPrice(
-            ETHEREUM_CHAIN_ID,
-            0, // No native token to send
-            GAS_LIMIT
-        );
+        nativeCost = tokenBridge.wormhole().messageFee();
     }
     
     /**
@@ -356,6 +363,11 @@ contract DepositRouter is AccessControl, ReentrancyGuard, Pausable {
             if (!success) revert TransferFailed();
         } else {
             IERC20(token).safeTransfer(to, amount);
+            // SOL-L-1: Sync accumulatedFees when USDC is emergency-withdrawn
+            // to prevent withdrawFees() from reverting on stale balance
+            if (token == address(usdc) && accumulatedFees > 0) {
+                accumulatedFees = accumulatedFees > amount ? accumulatedFees - amount : 0;
+            }
         }
         emit EmergencyWithdrawn(token, to, amount, msg.sender);
     }

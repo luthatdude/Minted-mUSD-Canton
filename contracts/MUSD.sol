@@ -137,6 +137,9 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
             }
         }
         if (isBlacklisted[from] || isBlacklisted[to]) revert ComplianceReject();
+        // SOL-M-5: Also check msg.sender (operator/spender) for blacklist
+        // This prevents blacklisted addresses from using transferFrom via approval
+        if (from != address(0) && to != address(0) && isBlacklisted[msg.sender]) revert ComplianceReject();
         super._update(from, to, value);
     }
 

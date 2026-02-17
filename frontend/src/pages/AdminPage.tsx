@@ -619,7 +619,7 @@ export function AdminPage() {
             </TxButton>
           </div>
           <div className="card">
-            <label className="label">Blacklist Address</label>
+            <label className="label">Compliance — Freeze / Permit Address</label>
             <input className="input" type="text" placeholder="0x..." value={blacklistAddr} onChange={(e) => setBlacklistAddr(e.target.value)} />
             <div className="mt-2 flex gap-2">
               <TxButton
@@ -629,16 +629,16 @@ export function AdminPage() {
                 disabled={!musd || !blacklistAddr || !isAddr(blacklistAddr)}
                 variant="danger"
               >
-                Blacklist
+                🔒 FREEZE
               </TxButton>
               <TxButton
                 className="flex-1"
                 onClick={() => tx.send(() => musd!.setBlacklist(blacklistAddr, false))}
                 loading={tx.loading}
                 disabled={!musd || !blacklistAddr || !isAddr(blacklistAddr)}
-                variant="secondary"
+                variant="success"
               >
-                Unblacklist
+                ✅ PERMIT
               </TxButton>
             </div>
           </div>

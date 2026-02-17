@@ -22,6 +22,7 @@ contract MockWormhole {
     
     bool public shouldValidate = true;
     string public invalidReason = "";
+    uint256 public messageFee_ = 0.001 ether;
     
     VM private _mockVM;
     
@@ -61,5 +62,14 @@ contract MockWormhole {
     function setInvalidReason(string memory _reason) external {
         invalidReason = _reason;
         shouldValidate = false;
+    }
+
+    /// @notice SOL-M-1: Mock messageFee for DepositRouter quoteBridgeCost
+    function messageFee() external view returns (uint256) {
+        return messageFee_;
+    }
+
+    function setMessageFee(uint256 _fee) external {
+        messageFee_ = _fee;
     }
 }
