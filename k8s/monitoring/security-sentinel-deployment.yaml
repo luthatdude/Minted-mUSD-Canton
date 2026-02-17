@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: security-sentinel
-  namespace: minted
+  namespace: musd-canton
   labels:
     app: security-sentinel
     component: monitoring
