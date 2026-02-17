@@ -21,7 +21,14 @@ export const BLE_BRIDGE_V9_ABI = [
   "function emergencyReduceCap(uint256 _newCap, string _reason)",
   "function forceUpdateNonce(uint256 _newNonce, string _reason)",
   "function invalidateAttestationId(bytes32 _attestationId)",
+  // Bridge-out (ETH → Canton) functions
+  "function bridgeToCanton(uint256 _amount, string _cantonRecipient)",
+  "function bridgeOutNonce() view returns (uint256)",
+  "function bridgeOutMinAmount() view returns (uint256)",
+  "function setBridgeOutMinAmount(uint256 _minAmount)",
+  // Events
   "event AttestationReceived(bytes32 indexed id, uint256 cantonAssets, uint256 newSupplyCap, uint256 nonce, uint256 timestamp)",
   "event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets)",
   "event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason)",
+  "event BridgeToCantonRequested(bytes32 indexed requestId, address indexed sender, uint256 amount, uint256 nonce, string cantonRecipient, uint256 timestamp)",
 ] as const;

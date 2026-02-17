@@ -1495,6 +1495,8 @@ template BridgeService
     -- DAML-C-02: Route minting through MUSDSupplyService to enforce
     -- global supply cap. Previously minted mUSD directly without cap check, allowing
     -- unbounded minting via bridge.
+    -- DAML-COMPLY-01: Added ComplianceRegistry check to prevent blacklisted/frozen
+    -- parties from receiving mUSD via bridge. Previously skipped compliance entirely.
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD, ContractId MUSDSupplyService)
       with
         attestationCid : ContractId AttestationRequest
@@ -1503,9 +1505,14 @@ template BridgeService
         mpaHash : Text
         mpaUri : Text
         supplyServiceCid : ContractId MUSDSupplyService  -- DAML-C-02: Required for supply cap check
+        complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-COMPLY-01: Required for compliance check
       controller operator
       do
         assertMsg "BRIDGE_PAUSED" (not paused)
+
+        -- DAML-COMPLY-01: Validate recipient against ComplianceRegistry before minting.
+        -- Blacklisted parties cannot receive mUSD via bridge (sanctions/OFAC compliance).
+        exercise complianceRegistryCid ValidateMint with minter = recipient
 
         attestation <- fetch attestationCid
         -- DAML-M-01: Verify attestation aggregator matches bridge operator to prevent

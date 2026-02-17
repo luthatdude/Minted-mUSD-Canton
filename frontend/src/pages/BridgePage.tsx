@@ -6,6 +6,7 @@ import { formatUSD, formatBps, formatHealthFactor, formatTimestamp, shortenAddre
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import BridgeOutPanel from "@/components/BridgeOutPanel";
 
 export function BridgePage() {
   const { isConnected } = useWalletConnect();
@@ -127,6 +128,9 @@ export function BridgePage() {
         badge={data.paused ? "PAUSED" : "Active"}
         badgeColor={data.paused ? "warning" : "emerald"}
       />
+
+      {/* ── Bridge to Canton (ETH → Canton) ── */}
+      <BridgeOutPanel />
 
       {/* Paused Alert */}
       {data.paused && (

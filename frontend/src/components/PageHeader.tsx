@@ -5,7 +5,7 @@ interface PageHeaderProps {
   subtitle?: string;
   description?: string;
   badge?: string;
-  badgeColor?: "brand" | "emerald" | "warning";
+  badgeColor?: "brand" | "emerald" | "warning" | "purple";
   action?: React.ReactNode;
 }
 
@@ -13,6 +13,7 @@ const badgeColors = {
   brand: "bg-brand-500/20 text-brand-400 border-brand-500/30",
   emerald: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
   warning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+  purple: "bg-purple-500/20 text-purple-400 border-purple-500/30",
 };
 
 export function PageHeader({ title, subtitle, description, badge, badgeColor = "brand", action }: PageHeaderProps) {
