@@ -42,8 +42,26 @@ spec:
                 secretKeyRef:
                   name: minted-telegram
                   key: chat-id
+            - name: AUTHORIZED_CHAT_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: minted-telegram
+                  key: chat-ids
+            - name: AUTHORIZED_USER_IDS
+              valueFrom:
+                secretKeyRef:
+                  name: minted-telegram
+                  key: user-ids
+            - name: GUARDIAN_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minted-guardian
+                  key: private-key
+                  optional: true
             - name: DEPLOYER_ADDRESS
               value: "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0"
+            - name: TRUSTED_ADDRESSES
+              value: "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0,0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410"
             - name: LARGE_MINT_THRESHOLD_USD
               value: "100000"
           resources:
