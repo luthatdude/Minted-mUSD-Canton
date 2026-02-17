@@ -1,0 +1,550 @@
+# Minted Protocol — Loki Logging Stack
+# Deploys Loki (single-binary mode) + Promtail for centralized log aggregation.
+# All pods in the musd-canton namespace ship stdout/stderr to Loki.
+#
+# Prerequisites:
+#   - PV provisioner (default StorageClass) for Loki data
+#   - Grafana instance with Loki datasource (see grafana-dashboards.yaml)
+#
+# AUDIT TRAIL: INFRA-H-02 — Centralized, tamper-evident logging for compliance.
+# Promtail labels every log line with pod, container, namespace, and app labels
+# so Grafana LogQL queries can slice by service (relay, bot, canton, etc.).
+---
+# ============================================================
+# 1. LOKI — Log Aggregation Backend (single-binary mode)
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: minted-musd
+data:
+  loki.yaml: |
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+      log_level: warn
+
+    common:
+      path_prefix: /loki
+      storage:
+        filesystem:
+          chunks_directory: /loki/chunks
+          rules_directory: /loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: "2026-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    storage_config:
+      filesystem:
+        directory: /loki/chunks
+
+    limits_config:
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h        # 7 days
+      max_query_length: 720h                   # 30 days
+      ingestion_rate_mb: 10
+      ingestion_burst_size_mb: 20
+      per_stream_rate_limit: 5MB
+      per_stream_rate_limit_burst: 15MB
+      max_entries_limit_per_query: 10000
+      retention_period: 720h                   # 30 days retention
+
+    compactor:
+      working_directory: /loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true
+      retention_delete_delay: 2h
+      delete_request_store: filesystem
+
+    query_range:
+      results_cache:
+        cache:
+          embedded_cache:
+            enabled: true
+            max_size_mb: 100
+
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  serviceName: loki
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: loki
+        app.kubernetes.io/component: logging
+        app.kubernetes.io/part-of: minted-musd
+      annotations:
+        checksum/config: "REPLACE_WITH_HASH"   # Forces rollout on config change
+    spec:
+      serviceAccountName: loki
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: loki
+          image: grafana/loki:3.3.2
+          args:
+            - -config.file=/etc/loki/loki.yaml
+            - -target=all
+          ports:
+            - name: http
+              containerPort: 3100
+              protocol: TCP
+            - name: grpc
+              containerPort: 9096
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+              readOnly: true
+            - name: data
+              mountPath: /loki
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: loki
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9096
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: loki
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loki
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: minted-musd
+automountServiceAccountToken: false
+---
+# ============================================================
+# 2. PROMTAIL — Log Collector (DaemonSet)
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: minted-musd
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 3101
+      grpc_listen_port: 0
+      log_level: warn
+
+    positions:
+      filename: /run/promtail/positions.yaml
+
+    clients:
+      - url: http://loki.musd-canton.svc.cluster.local:3100/loki/api/v1/push
+        tenant_id: minted
+        batchwait: 1s
+        batchsize: 1048576        # 1 MiB
+        timeout: 10s
+        backoff_config:
+          min_period: 500ms
+          max_period: 5m
+          max_retries: 10
+        external_labels:
+          cluster: "${CLUSTER_NAME}"
+
+    scrape_configs:
+      # ── Scrape all musd-canton pods via container log files ──
+      - job_name: musd-canton-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - musd-canton
+        relabel_configs:
+          # Only scrape pods in musd-canton namespace
+          - source_labels: [__meta_kubernetes_namespace]
+            action: keep
+            regex: musd-canton
+
+          # Use pod name as instance label
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+          # Container name
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+
+          # App label (bridge-relay, liquidation-bot, canton-participant, etc.)
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: app
+
+          # Component label
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: component
+
+          # Node name for topology-aware queries
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+
+          # Build the container log path
+          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            replacement: /var/log/pods/*$1/$2/*.log
+
+        pipeline_stages:
+          # ── Parse CRI / containerd log format ──
+          - cri: {}
+
+          # ── Extract severity from relay logs: [Relay], [RateLimit], [PauseGuardian] ──
+          - regex:
+              expression: '^\[(?P<relay_tag>[A-Za-z]+)\]'
+          - labels:
+              relay_tag:
+
+          # ── Extract severity from Winston-formatted bot logs ──
+          # Format: 2026-02-17T10:30:00.000Z [INFO] [ORACLE-KEEPER] message
+          - regex:
+              expression: '\[(?P<level>INFO|WARN|ERROR|DEBUG)\]'
+          - labels:
+              level:
+
+          # ── Tag bridge events for dashboard filtering ──
+          - match:
+              selector: '{app="bridge-relay"}'
+              stages:
+                - regex:
+                    expression: '(?P<bridge_event>AttestationReceived|bridge-out|bridged successfully|Rejecting|replay attack|nonce mismatch)'
+                - labels:
+                    bridge_event:
+
+          # ── Tag bot events ──
+          - match:
+              selector: '{app="liquidation-bot"}'
+              stages:
+                - regex:
+                    expression: '(?P<bot_event>Liquidation succeeded|Liquidation failed|Circuit breaker|Rebalance|Gas too high|Emergency)'
+                - labels:
+                    bot_event:
+
+          # ── Drop noisy health-check lines to save storage ──
+          - match:
+              selector: '{app=~"bridge-relay|liquidation-bot"}'
+              stages:
+                - drop:
+                    expression: 'GET /health(z)? (200|HTTP/1\\.1)'
+                    drop_counter_reason: health_check_noise
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/component: logging
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/component: logging
+        app.kubernetes.io/part-of: minted-musd
+    spec:
+      serviceAccountName: promtail
+      # Promtail needs host-level log access — runs as privileged reader
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 0       # Required to read /var/log/pods
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.3.2
+          args:
+            - -config.file=/etc/promtail/promtail.yaml
+            - -config.expand-env=true
+          env:
+            - name: CLUSTER_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http
+              containerPort: 3101
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["DAC_READ_SEARCH"]   # Read container log files
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+              readOnly: true
+            - name: run
+              mountPath: /run/promtail
+            - name: pods-logs
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: docker-logs
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: run
+          hostPath:
+            path: /run/promtail
+            type: DirectoryOrCreate
+        - name: pods-logs
+          hostPath:
+            path: /var/log/pods
+        - name: docker-logs
+          hostPath:
+            path: /var/lib/docker/containers
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: minted-musd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail-musd
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: minted-musd
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+    verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail-musd
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: minted-musd
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: musd-canton
+roleRef:
+  kind: ClusterRole
+  name: promtail-musd
+  apiGroup: rbac.authorization.k8s.io
+---
+# ============================================================
+# 3. NETWORK POLICY — Restrict Loki/Promtail Traffic
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-network-policy
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow Promtail to push logs
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: promtail
+      ports:
+        - port: 3100
+          protocol: TCP
+    # Allow Grafana to query logs
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - port: 3100
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# ============================================================
+# 4. GRAFANA LOKI DATASOURCE (provision via ConfigMap sidecar)
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-loki
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: datasource
+    app.kubernetes.io/part-of: minted-musd
+    # Grafana sidecar label — auto-provision datasources
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.musd-canton.svc.cluster.local:3100
+        isDefault: false
+        jsonData:
+          maxLines: 5000
+          timeout: 60
+          derivedFields:
+            # Link bridge attestation IDs to traces (if Tempo is added later)
+            - name: AttestationID
+              matcherRegex: 'Attestation\s+(\S+)'
+              url: ''
+              datasourceUid: ''
+        editable: false
