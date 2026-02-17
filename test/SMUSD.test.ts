@@ -98,6 +98,35 @@ describe("SMUSD", function () {
   });
 
   // ============================================================
+  //  DONATION ATTACK RESISTANCE
+  // ============================================================
+
+  describe("Donation Attack Resistance", function () {
+    it("should be economically unprofitable for first depositor to donate then redeem", async function () {
+      const attacker = user1;
+      const victim = user2;
+      const attackerBalanceBefore = await musd.balanceOf(attacker.address);
+
+      // Attacker becomes first depositor with tiny amount, then donates directly.
+      await smusd.connect(attacker).deposit(1n, attacker.address);
+      await musd.connect(attacker).transfer(await smusd.getAddress(), ethers.parseEther("5000"));
+
+      // Victim still receives shares (not rounded to zero).
+      const victimPreviewShares = await smusd.previewDeposit(ethers.parseEther("1000"));
+      expect(victimPreviewShares).to.be.gt(0);
+      await smusd.connect(victim).deposit(ethers.parseEther("1000"), victim.address);
+
+      // After cooldown, attacker exits and should end with less mUSD than started.
+      await time.increase(COOLDOWN + 1);
+      const attackerShares = await smusd.balanceOf(attacker.address);
+      await smusd.connect(attacker).redeem(attackerShares, attacker.address, attacker.address);
+
+      const attackerBalanceAfter = await musd.balanceOf(attacker.address);
+      expect(attackerBalanceAfter).to.be.lt(attackerBalanceBefore);
+    });
+  });
+
+  // ============================================================
   //  WITHDRAWAL + COOLDOWN ENFORCEMENT
   // ============================================================
 
