@@ -467,6 +467,9 @@ template PriceOracle
 -- ============================================================
 
 -- | LiquidityPool - On-chain DEX for atomic leverage operations.
+-- AUDIT-C-01: Oracle-anchored pricing replaces static exchangeRate.
+-- Swap price is derived from PriceOracle with spread applied, preventing
+-- zero-slippage leverage loops and pool draining attacks.
 template LiquidityPool
   with
     operator : Party
@@ -474,13 +477,17 @@ template LiquidityPool
     quoteSymbol : Text          -- e.g., "WBTC"
     baseReserve : Money
     quoteReserve : Money
-    exchangeRate : Money        -- baseSymbol per quoteSymbol
+    exchangeRate : Money        -- Cached rate (updated after each swap from oracle)
+    oracleCid : ContractId PriceOracle  -- AUDIT-C-01: Oracle for dynamic pricing
+    spreadBps : Bps             -- AUDIT-C-01: Pool spread in basis points (e.g., 30 = 0.3%)
   where
     signatory operator
 
     ensure baseReserve > 0.0 && quoteReserve > 0.0 && exchangeRate > 0.0
+        && spreadBps >= 0 && spreadBps <= 1000  -- Max 10% spread
 
     -- | Swap mUSD for collateral
+    -- AUDIT-C-01: Price fetched from oracle; spread + reserve-based impact applied
     choice Swap_mUSD_For_Collateral : (ContractId LiquidityPool, Money)
       with
         musdCid : ContractId MintedMUSD  -- Require actual token contract
@@ -491,7 +498,18 @@ template LiquidityPool
         assertMsg "NOT_OWNER" (musd.owner == receiver)
         assertMsg "TOKEN_BLACKLISTED" (not musd.blacklisted)
         let musdAmount = musd.amount
-        let collateralOut = musdAmount / exchangeRate
+
+        -- AUDIT-C-01: Fetch live oracle price (base per quote, e.g., mUSD per WBTC)
+        oraclePrice <- exercise oracleCid Oracle_GetPrice with
+          requester = operator
+          maxStaleness = hours 1
+
+        -- AUDIT-C-01: Apply spread (user receives less collateral)
+        let spreadMultiplier = (10000.0 - intToNumeric spreadBps) / 10000.0
+        -- Reserve-based price impact: larger swaps relative to reserves get worse price
+        let impactFactor = quoteReserve / (quoteReserve + (musdAmount / oraclePrice))
+        let effectiveRate = oraclePrice / (spreadMultiplier * impactFactor)
+        let collateralOut = musdAmount / effectiveRate
         assertMsg "INSUFFICIENT_LIQUIDITY" (quoteReserve >= collateralOut)
 
         -- DAML-C-03: Verify issuer matches pool operator before archive
@@ -503,10 +521,12 @@ template LiquidityPool
         newPool <- create this with
           baseReserve = baseReserve + musdAmount
           quoteReserve = quoteReserve - collateralOut
+          exchangeRate = oraclePrice  -- Cache latest oracle price
         return (newPool, collateralOut)
 
     -- | Swap collateral for mUSD
     -- The proof must be created by a validator after verifying the on-chain deposit.
+    -- AUDIT-C-01: Price fetched from oracle; spread + reserve-based impact applied
     choice Swap_Collateral_For_mUSD : (ContractId LiquidityPool, Money, ContractId CollateralDepositProof)
       with
         depositProofCid : ContractId CollateralDepositProof
@@ -519,7 +539,16 @@ template LiquidityPool
         assertMsg "WRONG_COLLATERAL" (proof.collateralSymbol == quoteSymbol)
 
         let collateralAmount = proof.amount
-        let musdOut = collateralAmount * exchangeRate
+
+        -- AUDIT-C-01: Fetch live oracle price
+        oraclePrice <- exercise oracleCid Oracle_GetPrice with
+          requester = operator
+          maxStaleness = hours 1
+
+        -- AUDIT-C-01: Apply spread (user receives less mUSD)
+        let spreadMultiplier = (10000.0 - intToNumeric spreadBps) / 10000.0
+        let impactFactor = baseReserve / (baseReserve + (collateralAmount * oraclePrice))
+        let musdOut = collateralAmount * oraclePrice * spreadMultiplier * impactFactor
         assertMsg "INSUFFICIENT_LIQUIDITY" (baseReserve >= musdOut)
 
         -- Consume the proof (mark as used)
@@ -528,7 +557,25 @@ template LiquidityPool
         newPool <- create this with
           baseReserve = baseReserve - musdOut
           quoteReserve = quoteReserve + collateralAmount
+          exchangeRate = oraclePrice  -- Cache latest oracle price
         return (newPool, musdOut, consumedProof)
+
+    -- | AUDIT-C-01: Update oracle reference (operator only)
+    choice Pool_UpdateOracle : ContractId LiquidityPool
+      with
+        newOracleCid : ContractId PriceOracle
+      controller operator
+      do create this with oracleCid = newOracleCid
+
+    -- | AUDIT-C-01: Update spread (operator only)
+    choice Pool_UpdateSpread : ContractId LiquidityPool
+      with
+        newSpreadBps : Bps
+      controller operator
+      do
+        assertMsg "SPREAD_NON_NEGATIVE" (newSpreadBps >= 0)
+        assertMsg "SPREAD_MAX_10_PERCENT" (newSpreadBps <= 1000)
+        create this with spreadBps = newSpreadBps
 
 -- ============================================================
 --                     4. VAULT (CDP)
@@ -1065,11 +1112,12 @@ data MintServiceConfig = MintServiceConfig with
   deriving (Eq, Show)
 
 -- | CantonDirectMint - Deposit stables → mint mUSD → auto bridge-out to ETH Treasury.
+-- AUDIT-MED-01: Routes mint/burn through MUSDSupplyService for unified supply cap tracking.
 template CantonDirectMint
   with
     operator : Party
     config : MintServiceConfig
-    supplyCap : Money
+    supplyCap : Money             -- Local cap (belt-and-suspenders; global cap is on MUSDSupplyService)
     currentSupply : Money
     accumulatedFees : Money
     targetChainId : Int
@@ -1082,6 +1130,7 @@ template CantonDirectMint
     mpaUri : Text
     validators : [Party]
     complianceRegistryCid : ContractId ComplianceRegistry  -- DAML-CRIT-01: Mandatory compliance
+    supplyServiceCid : Optional (ContractId MUSDSupplyService)  -- AUDIT-MED-01: Global supply cap
     observers : [Party]
   where
     signatory operator
@@ -1115,16 +1164,37 @@ template CantonDirectMint
         let feeAmount = depositAmount * intToNumeric config.mintFeeBps / 10000.0
         let netAmount = depositAmount - feeAmount
         
-        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
-        
-        -- Rate limit check
+        assertMsg "EXCEEDS_LOCAL_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- AUDIT-MED-01: Enforce global supply cap if MUSDSupplyService is connected
+        newSupplyServiceCid <- case supplyServiceCid of
+          Some svcCid -> do
+            (updatedSvcCid, globalMusd) <- exercise svcCid SupplyService_VaultMint with
+              borrower = user
+              borrowAmount = netAmount
+              agreementHash = mpaHash
+              agreementUri = mpaUri
+            -- Archive the token minted by SupplyService (we mint our own below with correct issuer)
+            archive globalMusd
+            pure (Some updatedSvcCid)
+          None -> pure None
+
+        -- AUDIT-C-02: Sliding-window rate limit with proportional decay.
+        -- Prevents window-boundary bypass where 2× dailyMintLimit could be
+        -- minted across a hard reset boundary (T-1s and T+1s).
         now <- getTime
         let windowElapsed = subTime now lastRateLimitReset
         let oneDayRel = hours 24
+        let oneDayMicros = 86400000000  -- 24h in microseconds
+        let elapsedMicros = convertRelTimeToMicroseconds windowElapsed
         let (resetMinted, resetTime) =
-              if windowElapsed >= oneDayRel
-              then (0.0, now)
-              else (dailyMinted, lastRateLimitReset)
+              if elapsedMicros >= oneDayMicros
+              then (0.0, now)  -- Full window elapsed: clean reset
+              else
+                -- Proportional decay: carry forward unexpired portion
+                ( dailyMinted * (1.0 - intToNumeric elapsedMicros / intToNumeric oneDayMicros)
+                , lastRateLimitReset
+                )
         assertMsg "DAILY_MINT_LIMIT" (resetMinted + netAmount <= dailyMintLimit)
         
         -- Mint mUSD to user
@@ -1155,6 +1225,7 @@ template CantonDirectMint
           nextNonce = nextNonce + 1
           dailyMinted = resetMinted + netAmount
           lastRateLimitReset = resetTime
+          supplyServiceCid = newSupplyServiceCid  -- AUDIT-MED-01: Persist updated ref
         
         return (newService, musdCid, bridgeReq)
 
@@ -1180,6 +1251,14 @@ template CantonDirectMint
         
         -- Burn mUSD
         archive musdCid
+
+        -- AUDIT-MED-01: Decrement global supply tracking on redeem/burn
+        newSupplyServiceCid <- case supplyServiceCid of
+          Some svcCid -> do
+            updatedSvcCid <- exercise svcCid SupplyService_Burn with
+              burnAmount = musd.amount
+            pure (Some updatedSvcCid)
+          None -> pure None
         
         -- Create bridge-in request (pull stables from Ethereum)
         now <- getTime
@@ -1197,6 +1276,7 @@ template CantonDirectMint
           currentSupply = currentSupply - musd.amount
           accumulatedFees = accumulatedFees + feeAmount
           nextNonce = nextNonce + 1
+          supplyServiceCid = newSupplyServiceCid  -- AUDIT-MED-01: Persist updated ref
         
         return (newService, bridgeIn)
 

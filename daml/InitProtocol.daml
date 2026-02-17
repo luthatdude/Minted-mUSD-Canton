@@ -144,6 +144,25 @@ initProtocol = do
           paused = False
           observers = [validator1]
 
+  -- 6. LiquidityPool (skip if exists) — AUDIT-C-01: Oracle-anchored pricing
+  existingPool <- query @LiquidityPool operator
+  poolCid <- case existingPool of
+    ((cid, _) :: _) -> do
+      debug "LiquidityPool already exists, skipping."
+      pure cid
+    [] -> do
+      debug "Creating LiquidityPool (mUSD/ETH)..."
+      submit operator do
+        createCmd LiquidityPool with
+          operator
+          baseSymbol = "mUSD"
+          quoteSymbol = "ETH"
+          baseReserve = 1000000.0       -- 1M mUSD initial liquidity
+          quoteReserve = 333.33         -- ~333 ETH at $3000
+          exchangeRate = 3000.0         -- Cached rate
+          oracleCid                     -- Uses the ETH/USD oracle created above
+          spreadBps = 30                -- 0.3% spread
+
   debug "=========================================="
   debug "Canton Protocol Initialized!"
   debug "=========================================="
@@ -152,5 +171,6 @@ initProtocol = do
   debug $ "PriceOracle:        " <> show oracleCid
   debug $ "VaultManager:       " <> show vaultManagerCid
   debug $ "BridgeService:      " <> show bridgeServiceCid
+  debug $ "LiquidityPool:      " <> show poolCid
 
   pure ()
