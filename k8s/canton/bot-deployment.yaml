@@ -1,0 +1,331 @@
+# Minted Liquidation Bot — K8s Deployment
+# Services: liquidation-bot, oracle-keeper, fluid-rebalancer
+#
+# Prerequisites:
+#   - bot-secrets created (PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN)
+#   - Contract addresses in bot-config ConfigMap
+#   - KMS key OR funded hot wallet
+---
+# ============================================================
+# BOT CONFIGMAP — Non-sensitive contract addresses & config
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bot-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: liquidation-bot
+    app.kubernetes.io/part-of: minted-musd
+data:
+  # Sepolia testnet — update for mainnet deployment
+  BORROW_MODULE_ADDRESS: "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8"
+  LIQUIDATION_ENGINE_ADDRESS: "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8"
+  COLLATERAL_VAULT_ADDRESS: "0x155d6618dcdeb2F4145395CA57C80e6931D7941e"
+  PRICE_ORACLE_ADDRESS: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025"
+  MUSD_ADDRESS: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B"
+  CHAIN_ID: "11155111"  # Sepolia; use 1 for mainnet
+  POLL_INTERVAL_MS: "5000"
+  MIN_PROFIT_USD: "50"
+  GAS_PRICE_BUFFER_PERCENT: "20"
+  MAX_GAS_PRICE_GWEI: "100"
+  USE_FLASHBOTS: "false"
+  FLASHBOTS_RELAY_URL: "https://relay.flashbots.net"
+  BOT_PORT: "8080"
+---
+# ============================================================
+# BOT SERVICE ACCOUNT
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: liquidation-bot
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: liquidation-bot
+    app.kubernetes.io/part-of: minted-musd
+  annotations:
+    kubernetes.io/enforce-mountable-secrets: "true"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: liquidation-bot-binding
+  namespace: musd-canton
+subjects:
+  - kind: ServiceAccount
+    name: liquidation-bot
+    namespace: musd-canton
+roleRef:
+  kind: Role
+  name: canton-minimal
+  apiGroup: rbac.authorization.k8s.io
+---
+# ============================================================
+# BOT SERVICE — Health-check endpoint
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: liquidation-bot
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: liquidation-bot
+    app.kubernetes.io/component: bot
+spec:
+  type: ClusterIP
+  ports:
+    - name: health
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: liquidation-bot
+---
+# ============================================================
+# LIQUIDATION BOT DEPLOYMENT
+# Monitors positions and executes profitable liquidations
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liquidation-bot
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: liquidation-bot
+    app.kubernetes.io/component: bot
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Avoid duplicate liquidation attempts
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: liquidation-bot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: liquidation-bot
+        app.kubernetes.io/component: bot
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: liquidation-bot
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bot
+          # C-2: Pin to immutable SHA256 digest from CI build
+          image: ghcr.io/minted-protocol/liquidation-bot@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/index.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: RPC_URL
+              value: "file:///run/secrets/rpc_url"
+            - name: BORROW_MODULE_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: BORROW_MODULE_ADDRESS
+            - name: LIQUIDATION_ENGINE_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: LIQUIDATION_ENGINE_ADDRESS
+            - name: COLLATERAL_VAULT_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: COLLATERAL_VAULT_ADDRESS
+            - name: PRICE_ORACLE_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: PRICE_ORACLE_ADDRESS
+            - name: MUSD_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: MUSD_ADDRESS
+            - name: CHAIN_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: CHAIN_ID
+            - name: POLL_INTERVAL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: POLL_INTERVAL_MS
+            - name: MIN_PROFIT_USD
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: MIN_PROFIT_USD
+            - name: MAX_GAS_PRICE_GWEI
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: MAX_GAS_PRICE_GWEI
+            - name: USE_FLASHBOTS
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: USE_FLASHBOTS
+            - name: BOT_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: bot-config
+                  key: BOT_PORT
+          volumeMounts:
+            - name: bot-secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: bot-secrets
+          projected:
+            sources:
+              - secret:
+                  name: bot-secrets
+                  items:
+                    - key: PRIVATE_KEY
+                      path: bot_private_key
+                    - key: RPC_URL
+                      path: rpc_url
+              # Telegram token is optional
+              - secret:
+                  name: bot-telegram-secrets
+                  optional: true
+                  items:
+                    - key: TELEGRAM_BOT_TOKEN
+                      path: telegram_bot_token
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# ============================================================
+# BOT NETWORKPOLICY
+# Egress to Ethereum RPC only — no Canton access needed
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: liquidation-bot-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: liquidation-bot
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Health-check from monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Kubelet probes
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Ethereum RPC (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # Flashbots relay (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # Telegram API (alerts)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: liquidation-bot-pdb
+  namespace: musd-canton
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: liquidation-bot
