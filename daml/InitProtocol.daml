@@ -138,6 +138,7 @@ initProtocol = do
           governance
           validators = [validator1]
           requiredSignatures = 1         -- Devnet: single validator
+          minValidators = 1              -- AUDIT-H-03: Devnet allows single validator
           totalBridgedIn = 0.0
           totalBridgedOut = 0.0
           lastNonce = 0

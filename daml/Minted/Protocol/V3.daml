@@ -1208,6 +1208,7 @@ template CantonDirectMint
           observers = []
         
         -- Create bridge-out request to pipe backing to Ethereum
+        -- AUDIT-H-04: Include validator snapshot for attestation-gated completion
         bridgeReq <- create BridgeOutRequest with
           operator
           user
@@ -1217,6 +1218,8 @@ template CantonDirectMint
           nonce = nextNonce
           createdAt = now
           status = "pending"
+          validators = validators
+          requiredSignatures = 1  -- Inherits from CantonDirectMint config
         
         -- Update service state
         newService <- create this with
@@ -1549,12 +1552,14 @@ template TicketTransferProposal
 
 -- | BridgeService - Coordinates all bridge operations.
 -- DAML-CRIT-03: Added governance co-signatory for admin choices
+-- AUDIT-H-03: Added minValidators governance parameter for environment-specific BFT enforcement
 template BridgeService
   with
     operator : Party
     governance : Party
     validators : [Party]
     requiredSignatures : Int
+    minValidators : Int          -- AUDIT-H-03: Governance-set minimum (devnet=1, testnet=3, mainnet=5)
     totalBridgedIn : Money
     totalBridgedOut : Money
     lastNonce : Int
@@ -1566,7 +1571,8 @@ template BridgeService
 
     ensure requiredSignatures > 0
       && requiredSignatures <= length validators
-      && length validators > 0
+      && length validators >= minValidators  -- AUDIT-H-03: Enforce minimum
+      && minValidators > 0
       && totalBridgedIn >= 0.0
       && totalBridgedOut >= 0.0
       && lastNonce >= 0
@@ -1661,6 +1667,7 @@ template BridgeService
       do create this with paused = False
 
     -- | Update validators (requires governance approval)
+    -- AUDIT-H-03: Also enforces minValidators floor
     choice Bridge_UpdateValidators : ContractId BridgeService
       with
         newValidators : [Party]
@@ -1668,9 +1675,23 @@ template BridgeService
       controller operator, governance
       do
         assertMsg "INVALID_REQUIRED_SIGS" (newRequiredSigs > 0 && newRequiredSigs <= length newValidators)
+        -- AUDIT-H-03: Cannot reduce validator set below governance-set minimum
+        assertMsg "BELOW_MIN_VALIDATORS" (length newValidators >= minValidators)
         create this with 
           validators = newValidators
           requiredSignatures = newRequiredSigs
+
+    -- | AUDIT-H-03: Update minimum validator count (governance only, one-way ratchet up)
+    -- Can only increase the minimum, never decrease. This prevents governance from
+    -- lowering the BFT threshold after mainnet launch.
+    choice Bridge_UpdateMinValidators : ContractId BridgeService
+      with
+        newMinValidators : Int
+      controller governance
+      do
+        assertMsg "MIN_MUST_INCREASE" (newMinValidators > minValidators)
+        assertMsg "MIN_EXCEEDS_CURRENT" (length validators >= newMinValidators)
+        create this with minValidators = newMinValidators
 
 -- ============================================================
 --                     12. ATTESTATION REQUEST
@@ -1763,6 +1784,8 @@ template AttestationRequest
 -- ============================================================
 
 -- | BridgeOutRequest - Canton → ETH transfer.
+-- AUDIT-H-04: Now carries validator set and requires attestation for completion,
+-- mirroring the inbound flow to prevent unilateral operator completion.
 template BridgeOutRequest
   with
     operator : Party
@@ -1773,9 +1796,13 @@ template BridgeOutRequest
     nonce : Int
     createdAt : Time
     status : Text
+    validators : [Party]         -- AUDIT-H-04: Validator set snapshot from BridgeService
+    requiredSignatures : Int     -- AUDIT-H-04: Threshold snapshot from BridgeService
   where
     signatory operator
-    observer user
+    observer user, validators    -- AUDIT-H-04: Validators can see outbound requests
+
+    ensure requiredSignatures > 0
 
     -- | User sets target ETH address
     choice BridgeOut_SetTarget : ContractId BridgeOutRequest
@@ -1793,11 +1820,34 @@ template BridgeOutRequest
       controller operator
       do create this with nonce = newNonce
 
-    -- | Complete after Ethereum confirmation
+    -- | Complete after Ethereum confirmation — AUDIT-H-04: requires attested proof
+    -- Mirrors Bridge_ReceiveFromEthereum: validates attestation signatures,
+    -- direction, amount, and expiry before marking as bridged.
     choice BridgeOut_Complete : ContractId BridgeOutRequest
+      with
+        attestationCid : ContractId AttestationRequest
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
+
+        -- AUDIT-H-04: Verify attestation matches this request
+        attestation <- fetch attestationCid
+        assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
+        assertMsg "WRONG_DIRECTION" (attestation.direction == CantonToEthereum)
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+
+        -- AUDIT-H-04: Verify threshold signatures from authorized validators
+        let sigParties = Set.toList attestation.collectedSignatures
+        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
+        let sigCount = Set.size attestation.collectedSignatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
+
+        -- Consume attestation
+        archive attestationCid
+
         create this with status = "bridged"
 
     -- | Cancel request
