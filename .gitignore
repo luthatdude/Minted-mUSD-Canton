@@ -31,3 +31,5 @@ relay/secrets/
 .vscode/
 .idea/
 yield-scanner.log
+subgraph/build/
+subgraph/generated/
