@@ -583,7 +583,7 @@ contract TreasuryV2 is
             address strat = strategies[i].strategy;
             // slither-disable-next-line calls-loop
             // Use try/catch for strategy value query
-            uint256 stratValue;
+            uint256 stratValue = 0;
             try IStrategy(strat).totalValue() returns (uint256 val) {
                 stratValue = val;
             } catch {
@@ -749,7 +749,7 @@ contract TreasuryV2 is
         // Try to withdraw, but don't let failure permanently block removal.
         // If withdrawAll() fails, force-deactivate to prevent permanent DoS.
         if (strategies[idx].active) {
-            uint256 stratValue;
+            uint256 stratValue = 0;
             try IStrategy(strategy).totalValue() returns (uint256 val) {
                 stratValue = val;
             } catch {
