@@ -35,10 +35,12 @@
  *
  * Requires:
  *   - RPC_URL (or ETHEREUM_RPC_URL)
- *   - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (for alerts + buttons)
- *   - AUTHORIZED_CHAT_IDS + AUTHORIZED_USER_IDS (recommended for command auth)
+ *   - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (your personal DM chat ID)
  *   - TRUSTED_ADDRESSES (optional CSV for known safe proposers/actors)
  *   - GUARDIAN_PRIVATE_KEY (for on-chain pause/cancel — optional but recommended)
+ *
+ * NOTE: Alerts and commands are sent/accepted ONLY in your private DM.
+ *       Group chats are rejected outright.
  */
 
 import { ethers } from "ethers";
@@ -82,21 +84,8 @@ const LARGE_MINT_THRESHOLD = ethers.parseUnits(
   18
 );
 
-// Restrict who can use Telegram buttons (only your chat ID)
-const AUTHORIZED_CHAT_IDS = new Set(
-  (process.env.AUTHORIZED_CHAT_IDS || TELEGRAM_CHAT_ID)
-    .split(",")
-    .map((id: string) => id.trim())
-    .filter(Boolean)
-);
-
-// Restrict who can execute sensitive Telegram actions (chat + user must both match)
-const AUTHORIZED_USER_IDS = new Set(
-  (process.env.AUTHORIZED_USER_IDS || process.env.AUTHORIZED_CHAT_IDS || TELEGRAM_CHAT_ID)
-    .split(",")
-    .map((id: string) => id.trim())
-    .filter(Boolean)
-);
+// Auth is simple: only your private DM (TELEGRAM_CHAT_ID) can interact.
+// Group/supergroup/channel messages are silently ignored.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GLOBAL STATE
@@ -201,8 +190,10 @@ function isTrustedAddress(addr: string): boolean {
   return TRUSTED_ADDRESSES.has(addr.toLowerCase());
 }
 
-function isAuthorizedActor(chatId: string, userId: string): boolean {
-  return AUTHORIZED_CHAT_IDS.has(chatId) && AUTHORIZED_USER_IDS.has(userId);
+function isOwnerChat(chatId: string, chatType?: string): boolean {
+  // Reject group chats outright — this bot is private DM only
+  if (chatType && chatType !== "private") return false;
+  return chatId === TELEGRAM_CHAT_ID;
 }
 
 function sanitizeTelegramText(text: string): string {
@@ -464,28 +455,21 @@ let telegramOffset = 0;
 
 async function handleCallbackQuery(callbackQuery: any): Promise<void> {
   const chatId = String(callbackQuery.message?.chat?.id || "");
-  const userId = String(callbackQuery.from?.id || "");
+  const chatType = callbackQuery.message?.chat?.type;
   const callbackId = callbackQuery.id;
   const isSyntheticCallback = callbackId === "cmd";
   const data = callbackQuery.data as string;
 
-  // Authorization check — chat and user must both be allowlisted.
-  if (!isAuthorizedActor(chatId, userId)) {
-    if (isSyntheticCallback) {
-      await telegramAPI("sendMessage", {
-        chat_id: chatId,
-        text: "⛔ Unauthorized. This incident has been logged.",
-      });
-    } else {
+  // Only accept interactions from your private DM
+  if (!isOwnerChat(chatId, chatType)) {
+    if (!isSyntheticCallback) {
       await telegramAPI("answerCallbackQuery", {
         callback_query_id: callbackId,
-        text: "⛔ Unauthorized. This incident has been logged.",
+        text: "⛔ This bot only works in private DM.",
         show_alert: true,
       });
     }
-    console.log(
-      `\x1b[31m[SECURITY]\x1b[0m Unauthorized callback from chat ${chatId}, user ${userId}: ${data}`
-    );
+    console.log(`\x1b[31m[SECURITY]\x1b[0m Rejected interaction from chat ${chatId} (type: ${chatType || "unknown"})`);
     return;
   }
 
@@ -658,11 +642,11 @@ async function handleCallbackQuery(callbackQuery: any): Promise<void> {
 
 async function handleCommand(message: any): Promise<void> {
   const chatId = String(message.chat?.id || "");
-  const userId = String(message.from?.id || "");
+  const chatType = message.chat?.type;
   const text = (message.text || "").trim();
 
-  if (!isAuthorizedActor(chatId, userId)) {
-    console.log(`\x1b[31m[SECURITY]\x1b[0m Unauthorized command from chat ${chatId}, user ${userId}: ${text}`);
+  if (!isOwnerChat(chatId, chatType)) {
+    console.log(`\x1b[31m[SECURITY]\x1b[0m Rejected command from chat ${chatId} (type: ${chatType || "unknown"}): ${text}`);
     return;
   }
 
@@ -689,8 +673,7 @@ async function handleCommand(message: any): Promise<void> {
   if (text === "/pause") {
     await handleCallbackQuery({
       id: "cmd",
-      message: { chat: { id: chatId }, message_id: 0 },
-      from: { id: userId },
+      message: { chat: { id: chatId, type: "private" }, message_id: 0 },
       data: "pause_confirm",
     });
     return;
@@ -699,8 +682,7 @@ async function handleCommand(message: any): Promise<void> {
   if (text === "/unpause") {
     await handleCallbackQuery({
       id: "cmd",
-      message: { chat: { id: chatId }, message_id: 0 },
-      from: { id: userId },
+      message: { chat: { id: chatId, type: "private" }, message_id: 0 },
       data: "unpause_confirm",
     });
     return;
@@ -717,8 +699,7 @@ async function handleCommand(message: any): Promise<void> {
     }
     await handleCallbackQuery({
       id: "cmd",
-      message: { chat: { id: chatId }, message_id: 0 },
-      from: { id: userId },
+      message: { chat: { id: chatId, type: "private" }, message_id: 0 },
       data: `cancel_confirm:${operationId}`,
     });
     return;
@@ -1060,9 +1041,8 @@ async function main(): Promise<void> {
 
   // ── Telegram ──
   if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
-    console.log("[Telegram] ✅ Configured — alerts + interactive buttons enabled");
-    console.log(`[Telegram] Authorized chats: ${[...AUTHORIZED_CHAT_IDS].join(", ")}`);
-    console.log(`[Telegram] Authorized users: ${[...AUTHORIZED_USER_IDS].join(", ")}`);
+    console.log("[Telegram] ✅ Configured — private DM only");
+    console.log(`[Telegram] Owner chat: ${TELEGRAM_CHAT_ID}`);
   } else {
     console.log("[Telegram] ⚠️  Not configured — console-only mode");
     console.log("  Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID for mobile alerts.");
