@@ -30,6 +30,8 @@ relay/secrets/
 # IDE
 .vscode/
 .idea/
-yield-scanner.log
+
+# Logs
+*.log
 subgraph/build/
 subgraph/generated/

@@ -91,8 +91,14 @@ export class YieldScanner {
     }
   }
 
-  /** Placeholder protocol scanner — returns empty array in test/dev. */
+  /** Placeholder protocol scanner — returns empty array in test/dev.
+   *  INFO-02: Callers should check result length and log if empty.
+   *  In production, integrate with DeFi Llama / on-chain strategy queries. */
   private async scanProtocols(): Promise<YieldOpportunity[]> {
+    console.warn(
+      "[YieldScanner] scanProtocols() is a stub — returning empty array. " +
+      "Integrate with DeFi Llama or on-chain queries for production use."
+    );
     return [];
   }
 }
