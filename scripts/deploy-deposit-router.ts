@@ -20,7 +20,8 @@ const CONFIG: Record<string, {
   treasuryAddress: string;
   directMintAddress: string;
   feeBps: number;
-  wormholeCore?: string; // Only for TreasuryReceiver on mainnet
+  wormholeCore?: string; // Only for TreasuryReceiver on mainnet/sepolia
+  timelockController?: string; // For DepositRouter admin timelock
 }> = {
   // Base Mainnet
   base: {
@@ -68,7 +69,7 @@ const CONFIG: Record<string, {
     wormholeCore: "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
     feeBps: 0,
   },
-  // Sepolia (for TreasuryReceiver testnet)
+  // Sepolia (TreasuryReceiver + DepositRouter for testnet)
   sepolia: {
     usdc: process.env.SEPOLIA_USDC || "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
     wormholeRelayer: "0x7B1bD7a6b4E61c2a123AC6BC2cbfC614437D0470",
@@ -76,6 +77,7 @@ const CONFIG: Record<string, {
     treasuryAddress: process.env.SEPOLIA_TREASURY_ADDRESS || "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
     directMintAddress: process.env.SEPOLIA_DIRECT_MINT_ADDRESS || "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
     wormholeCore: "0x4a8bc80Ed5a4067f1CCf107057b8270E0cC11A78",
+    timelockController: "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
     feeBps: 0,
   },
 };
@@ -116,11 +118,18 @@ async function main() {
   }
 
   // Deploy based on network type
-  if (networkName === "mainnet" || networkName === "sepolia") {
-    // Deploy TreasuryReceiver on Ethereum
+  if (networkName === "sepolia") {
+    // Sepolia testnet: deploy both for end-to-end testing on one chain
+    const routerAddr = await deployDepositRouter(config);
+    const receiverAddr = await deployTreasuryReceiver(config);
+    console.log("\n📋 Update frontend/.env.sepolia:");
+    console.log(`NEXT_PUBLIC_SEPOLIA_DEPOSIT_ROUTER_ADDRESS=${routerAddr}`);
+    console.log(`NEXT_PUBLIC_SEPOLIA_TREASURY_RECEIVER_ADDRESS=${receiverAddr}`);
+  } else if (networkName === "mainnet") {
+    // Mainnet: only TreasuryReceiver (DepositRouter lives on L2s)
     await deployTreasuryReceiver(config);
   } else {
-    // Deploy DepositRouter on L2s
+    // L2s: deploy DepositRouter
     await deployDepositRouter(config);
   }
 }
@@ -135,6 +144,11 @@ async function deployDepositRouter(config: typeof CONFIG[string]) {
   console.log(`  DirectMint: ${config.directMintAddress}`);
   console.log(`  Fee: ${config.feeBps} bps (${config.feeBps / 100}%)\n`);
 
+  const [signer] = await ethers.getSigners();
+  const timelockAddr = config.timelockController || signer.address;
+  console.log(`  Admin: ${signer.address}`);
+  console.log(`  Timelock: ${timelockAddr}\n`);
+
   const DepositRouter = await ethers.getContractFactory("DepositRouter");
   const router = await DepositRouter.deploy(
     config.usdc,
@@ -143,8 +157,8 @@ async function deployDepositRouter(config: typeof CONFIG[string]) {
     config.treasuryAddress,
     config.directMintAddress,
     config.feeBps,
-    (await ethers.getSigners())[0].address, // admin
-    config.timelockController || (await ethers.getSigners())[0].address // timelockController
+    signer.address,       // admin
+    timelockAddr           // timelockController
   );
 
   await router.waitForDeployment();
@@ -192,13 +206,18 @@ async function deployTreasuryReceiver(config: typeof CONFIG[string]) {
   console.log(`  DirectMint: ${config.directMintAddress}`);
   console.log(`  Treasury: ${config.treasuryAddress}\n`);
 
+  const [signer] = await ethers.getSigners();
+  const timelockAddr = config.timelockController || signer.address;
+  console.log(`  Timelock: ${timelockAddr}\n`);
+
   const TreasuryReceiver = await ethers.getContractFactory("TreasuryReceiver");
   const receiver = await TreasuryReceiver.deploy(
     config.usdc,
     config.wormholeCore!,
     config.tokenBridge,
     config.directMintAddress,
-    config.treasuryAddress
+    config.treasuryAddress,
+    timelockAddr            // _timelock (S-H-01)
   );
 
   await receiver.waitForDeployment();
