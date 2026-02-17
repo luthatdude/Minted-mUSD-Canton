@@ -1,8 +1,0 @@
-{
-    "importFilesToOrigRelpaths": {},
-    "primary_contract": "DirectMintV2",
-    "specfile": "certora/specs/DirectMintV2.spec",
-    "specfileOrigRelpath": "certora/specs/DirectMintV2.spec",
-    "specfilesToImportDecls": {},
-    "type": "spec"
-}
