@@ -1019,3 +1019,628 @@ data:
       "uid": "minted-logging-overview",
       "version": 1
     }
+---
+# ============================================================
+# 4. INFRASTRUCTURE & PROMQL METRICS DASHBOARD
+# ============================================================
+# Visualizes the 16+ Prometheus metrics scraped by ServiceMonitors
+# and PodMonitors. Covers Canton participant, NGINX gateway,
+# PostgreSQL, bridge relay, price oracle, and pod health.
+#
+# AUDIT TRAIL: M-1 — Fill the gap between Prometheus alerts and
+# Grafana visualization. All PromQL expressions align with the
+# metrics referenced in prometheus-rules.yaml.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-infrastructure
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: minted-musd
+    grafana_dashboard: "1"
+data:
+  infrastructure-metrics.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "description": "Minted Protocol — PromQL infrastructure metrics: Canton participant, NGINX, PostgreSQL, bridge relay, price oracle, pod health",
+      "editable": true,
+      "fiscalYearStartMonth": 0,
+      "graphTooltip": 1,
+      "id": null,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 400,
+          "title": "🏛️ Service Availability",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+              "mappings": [{ "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } }, "type": "value" }]
+            }
+          },
+          "gridPos": { "h": 4, "w": 24, "x": 0, "y": 1 },
+          "id": 401,
+          "options": { "colorMode": "background", "graphMode": "none", "orientation": "horizontal", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Service Health — up{} targets",
+          "type": "stat",
+          "targets": [
+            { "expr": "up{job=\"canton-participant\"}", "legendFormat": "Canton Participant", "refId": "A" },
+            { "expr": "up{job=\"bridge-relay\"}", "legendFormat": "Bridge Relay", "refId": "B" },
+            { "expr": "up{job=\"nginx-proxy\"}", "legendFormat": "NGINX Proxy", "refId": "C" },
+            { "expr": "up{job=\"postgres\"}", "legendFormat": "PostgreSQL", "refId": "D" },
+            { "expr": "up{job=\"price-oracle\"}", "legendFormat": "Price Oracle", "refId": "E" }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "id": 410,
+          "title": "⛓️ Canton Participant",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+              "color": { "mode": "palette-classic" },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "id": 411,
+          "title": "Ledger API Latency (P50 / P95 / P99)",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(canton_ledger_api_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, rate(canton_ledger_api_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p95",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(canton_ledger_api_request_duration_seconds_bucket[5m]))",
+              "legendFormat": "p99",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }] },
+              "unit": "percent",
+              "min": 0,
+              "max": 100
+            }
+          },
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 6 },
+          "id": 412,
+          "options": { "reduceOptions": { "calcs": ["last"] }, "orientation": "horizontal", "showThresholdLabels": false },
+          "title": "DB Connection Pool Utilization",
+          "type": "gauge",
+          "targets": [
+            {
+              "expr": "(canton_db_pool_active_connections / canton_db_pool_max_connections) * 100",
+              "legendFormat": "pool_usage",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 15 },
+              "color": { "mode": "palette-classic" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 6 },
+          "id": 413,
+          "title": "DB Pool Connections (active / max)",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "canton_db_pool_active_connections",
+              "legendFormat": "active",
+              "refId": "A"
+            },
+            {
+              "expr": "canton_db_pool_max_connections",
+              "legendFormat": "max",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+          "id": 420,
+          "title": "🌐 NGINX Gateway",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } },
+              "color": { "mode": "palette-classic" },
+              "unit": "reqps"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+          "id": 421,
+          "title": "Request Rate by Status Code",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (status) (rate(nginx_http_requests_total{namespace=\"musd-canton\"}[5m]))",
+              "legendFormat": "{{status}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 50 },
+              "color": { "fixedColor": "orange", "mode": "fixed" },
+              "unit": "reqps"
+            }
+          },
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 15 },
+          "id": 422,
+          "title": "Rate Limited (429) Requests",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(nginx_http_requests_total{status=\"429\"}[5m]))",
+              "legendFormat": "429_rate",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 15 },
+          "id": 423,
+          "title": "TLS Handshake Failures & 401/403",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(nginx_ssl_handshakes_failed[5m]))",
+              "legendFormat": "tls_failures",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(nginx_http_requests_total{status=\"401\"}[5m]))",
+              "legendFormat": "401_unauthorized",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(nginx_http_requests_total{status=\"403\"}[5m]))",
+              "legendFormat": "403_forbidden",
+              "refId": "C"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.05 }] },
+              "unit": "percentunit"
+            }
+          },
+          "gridPos": { "h": 4, "w": 8, "x": 0, "y": 23 },
+          "id": 424,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["last"] } },
+          "title": "5xx Error Rate",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "sum(rate(nginx_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(nginx_http_requests_total[5m]))",
+              "legendFormat": "5xx_rate",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+          "id": 430,
+          "title": "🔗 Bridge Relay Metrics",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 20 },
+              "color": { "mode": "palette-classic" },
+              "unit": "ops"
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+          "id": 431,
+          "title": "Bridge Request Rate",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(bridge_requests_total[5m]))",
+              "legendFormat": "bridge_req/s",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 50 },
+              "color": { "fixedColor": "red", "mode": "fixed" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+          "id": 432,
+          "title": "Bridge Validation Failures",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(bridge_validation_failures_total[5m]))",
+              "legendFormat": "validation_failures",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 40 },
+              "color": { "fixedColor": "yellow", "mode": "fixed" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 28 },
+          "id": 433,
+          "title": "Validator Signing Rate Limit Hits",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum(rate(validator_signing_rate_limit_hits_total[5m]))",
+              "legendFormat": "signing_rate_limit_hits",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+          "id": 440,
+          "title": "🔮 Price Oracle",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+              "mappings": [{ "options": { "0": { "text": "CLOSED", "color": "green" }, "1": { "text": "OPEN", "color": "red" } }, "type": "value" }]
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 37 },
+          "id": 441,
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Circuit Breaker State",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "price_oracle_circuit_breaker_open",
+              "legendFormat": "circuit_breaker",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1800 }, { "color": "red", "value": 3600 }] },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 37 },
+          "id": 442,
+          "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Price Feed Staleness",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "time() - price_feed_last_update_timestamp",
+              "legendFormat": "age_seconds",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 },
+              "color": { "mode": "palette-classic" },
+              "unit": "currencyUSD"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+          "id": 443,
+          "title": "Price Source Comparison (Tradecraft vs Temple)",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "tradecraft_price",
+              "legendFormat": "tradecraft",
+              "refId": "A"
+            },
+            {
+              "expr": "temple_price",
+              "legendFormat": "temple",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 }] },
+              "unit": "percentunit"
+            }
+          },
+          "gridPos": { "h": 4, "w": 12, "x": 0, "y": 41 },
+          "id": 444,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Price Source Divergence",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "abs(tradecraft_price - temple_price) / tradecraft_price",
+              "legendFormat": "divergence_pct",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+          "id": 450,
+          "title": "🗄️ PostgreSQL",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 80 }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 46 },
+          "id": 451,
+          "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["last"] } },
+          "title": "Active Connections",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "pg_stat_activity_count",
+              "legendFormat": "connections",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 85 }] },
+              "unit": "percent",
+              "min": 0,
+              "max": 100
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 46 },
+          "id": 452,
+          "options": { "reduceOptions": { "calcs": ["last"] }, "orientation": "horizontal", "showThresholdLabels": false },
+          "title": "Disk Usage (/var/lib/postgresql)",
+          "type": "gauge",
+          "targets": [
+            {
+              "expr": "((node_filesystem_size_bytes{mountpoint=\"/var/lib/postgresql\"} - node_filesystem_avail_bytes{mountpoint=\"/var/lib/postgresql\"}) / node_filesystem_size_bytes{mountpoint=\"/var/lib/postgresql\"}) * 100",
+              "legendFormat": "disk_pct",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+          "id": 453,
+          "title": "Active Connections Over Time",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "pg_stat_activity_count",
+              "legendFormat": "active_connections",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 },
+          "id": 460,
+          "title": "📦 Pod Resources",
+          "type": "row"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 55 },
+          "id": 461,
+          "title": "CPU Usage by Container",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "sum by (pod, container) (rate(container_cpu_usage_seconds_total{namespace=\"musd-canton\", container!=\"\"}[5m])) * 100",
+              "legendFormat": "{{pod}}/{{container}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "line", "fillOpacity": 10 },
+              "color": { "mode": "palette-classic" },
+              "unit": "bytes"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 55 },
+          "id": 462,
+          "title": "Memory Usage by Container",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "container_memory_working_set_bytes{namespace=\"musd-canton\", container!=\"\"}",
+              "legendFormat": "{{pod}}/{{container}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "drawStyle": "bars", "fillOpacity": 40 },
+              "color": { "fixedColor": "red", "mode": "fixed" },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 0, "y": 63 },
+          "id": 463,
+          "title": "Pod Restarts (1h rolling)",
+          "type": "timeseries",
+          "targets": [
+            {
+              "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"musd-canton\"}[1h])",
+              "legendFormat": "{{pod}}/{{container}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] },
+              "mappings": [{ "options": { "0": { "text": "OK" }, "1": { "text": "OOM KILLED", "color": "red" } }, "type": "value" }]
+            }
+          },
+          "gridPos": { "h": 6, "w": 12, "x": 12, "y": 63 },
+          "id": 464,
+          "options": { "colorMode": "background", "graphMode": "none", "orientation": "horizontal", "reduceOptions": { "calcs": ["last"] } },
+          "title": "OOM Killed Containers",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "kube_pod_container_status_last_terminated_reason{namespace=\"musd-canton\", reason=\"OOMKilled\"}",
+              "legendFormat": "{{pod}}/{{container}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "tags": ["minted", "infrastructure", "prometheus", "canton", "nginx", "postgres"],
+      "templating": {
+        "list": [
+          {
+            "current": { "selected": false, "text": "Prometheus", "value": "prometheus" },
+            "hide": 0,
+            "includeAll": false,
+            "label": "Prometheus Datasource",
+            "multi": false,
+            "name": "DS_PROM",
+            "options": [],
+            "query": "prometheus",
+            "type": "datasource"
+          }
+        ]
+      },
+      "time": { "from": "now-3h", "to": "now" },
+      "timepicker": {},
+      "timezone": "utc",
+      "title": "Minted — Infrastructure & Metrics",
+      "uid": "minted-infra-metrics",
+      "version": 1
+    }
