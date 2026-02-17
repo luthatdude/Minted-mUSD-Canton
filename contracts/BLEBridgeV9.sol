@@ -45,6 +45,10 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
+    /// @notice BRIDGE-M-04: Only addresses with RELAYER_ROLE can call processAttestation.
+    /// Defense-in-depth against griefing attacks where adversaries submit invalid
+    /// signature sets to burn gas. Validators sign off-chain; relayers submit on-chain.
+    bytes32 public constant RELAYER_ROLE = keccak256("RELAYER_ROLE");
 
     IMUSD public musdToken;
 
@@ -154,6 +158,7 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(EMERGENCY_ROLE, msg.sender);
+        _grantRole(RELAYER_ROLE, msg.sender);  // BRIDGE-M-04: deployer is initial relayer
         _grantRole(TIMELOCK_ROLE, _timelockController);
         // Make TIMELOCK_ROLE its own admin — DEFAULT_ADMIN cannot grant/revoke it
         _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
@@ -333,10 +338,13 @@ contract BLEBridgeV9 is Initializable, AccessControlUpgradeable, UUPSUpgradeable
     /// @notice Process Canton attestation and update mUSD supply cap
     /// @param att The attestation data from Canton validators
     /// @param signatures Validator signatures
+    /// @dev BRIDGE-M-04: Restricted to RELAYER_ROLE to prevent griefing via invalid
+    ///      signature submissions that waste gas. Signature validity is still verified
+    ///      on-chain against VALIDATOR_ROLE holders.
     function processAttestation(
         Attestation calldata att,
         bytes[] calldata signatures
-    ) external nonReentrant whenNotPaused {
+    ) external nonReentrant whenNotPaused onlyRole(RELAYER_ROLE) {
         if (signatures.length < minSignatures) revert InsufficientSignatures();
         if (att.nonce != currentNonce + 1) revert InvalidNonce();
         if (usedAttestationIds[att.id]) revert AttestationReused();

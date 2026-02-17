@@ -1165,16 +1165,15 @@ class RelayService {
       );
 
       // Submit transaction
-      // BRIDGE-M-04: SECURITY NOTE — processAttestation() on BLEBridgeV9 is permissionless
-      // (any address can call it). This means anyone with valid signatures can submit.
-      // This is mitigated by:
+      // BRIDGE-M-04: RESOLVED — processAttestation() now requires RELAYER_ROLE
+      // (onlyRole(RELAYER_ROLE) modifier added in BLEBridgeV9 upgrade).
+      // The relay EOA must be granted RELAYER_ROLE on the deployed proxy after upgrade.
+      // Defense-in-depth layers remain:
       //   1. The relay pre-verifies all ECDSA signatures via ecrecover before submitting
       //   2. BLEBridgeV9 verifies signatures on-chain against VALIDATOR_ROLE holders
       //   3. Attestation IDs are derived from nonce+entropy and checked for uniqueness
       //   4. Pre-flight simulation catches front-running/replay attempts
-      // TODO(BRIDGE-M-04): Add access control (e.g., RELAYER_ROLE) to processAttestation
-      //   in the next BLEBridgeV9 Solidity upgrade to defense-in-depth against
-      //   griefing attacks where adversaries submit invalid signature sets to burn gas.
+      //   5. RELAYER_ROLE access control prevents griefing by unauthorized callers
       console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
 
       // H-3: Mark nonce as submitted before tx (in-flight dedup)
