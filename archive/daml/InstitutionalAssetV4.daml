@@ -132,9 +132,11 @@ template Asset with
         assertMsg "Merge Fail: Owner mismatch" (other.owner == owner)
         assertMsg "Merge Fail: Other asset is locked" (isNone other.lock)
         archive otherCid
+        let mergedObservers = dedup (sort (observers ++ other.observers))
+        assertMsg "TOO_MANY_OBSERVERS" (length mergedObservers <= 50)
         create this with
             amount = amount + other.amount
-            observers = dedup (sort (observers ++ other.observers))
+            observers = mergedObservers
 
     -- --- REGULATORY / EMERGENCY ---
     -- Allows the issuer (the debtor) to move the asset under court order or regulatory requirement.
