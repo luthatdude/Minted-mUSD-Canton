@@ -2,18 +2,23 @@
 
 ## Deployed Contracts (Sepolia)
 
-| Contract | Address |
-|----------|---------|
-| MockUSDC | `0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474` |
-| MUSD | `0x2bD1671c378A525dDA911Cc53eE9E8929D54fd9b` |
-| SMUSD | `0xbe47E05f8aE025D03D034a50bE0Efd23E591AA68` |
-| PriceOracle | `0x3F761A52091DB1349aF08C54336d1E5Ae6636901` |
-| CollateralVault | `0x3a11571879f5CAEB2CA881E8899303453a800C8c` |
-| BorrowModule | `0x114109F3555Ee75DD343710a63926B9899A6A4a8` |
-| LiquidationEngine | `0x4cF182a0E3440175338033B49E84d0d5b55d987E` |
-| TreasuryV2 (proxy) | `0x76c6bFB36931293D3e4BAC6564074d5B5C494EB5` |
-| DirectMintV2 | `0x14a728791716d3898d073eA408B458773F7ABeC1` |
-| BLEBridgeV9 (proxy) | `0xF5D1584c281F12a1a99b5Fa76a6CeD674e041005` |
+> **Updated 2026-02-16** — Redeployed with audit fixes (commit `041d154`). All verified on Etherscan.
+
+| Contract | Address | Verified |
+|----------|---------|----------|
+| GlobalPauseRegistry | [`0x471e9dceB2AB7398b63677C70c6C638c7AEA375F`](https://sepolia.etherscan.io/address/0x471e9dceB2AB7398b63677C70c6C638c7AEA375F#code) | ✅ |
+| MintedTimelockController | [`0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410`](https://sepolia.etherscan.io/address/0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410#code) | ✅ |
+| MUSD | [`0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B`](https://sepolia.etherscan.io/address/0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B#code) | ✅ |
+| PriceOracle | [`0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025`](https://sepolia.etherscan.io/address/0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025#code) | ✅ |
+| InterestRateModel | [`0x501265BeF81E6E96e4150661e2b9278272e9177B`](https://sepolia.etherscan.io/address/0x501265BeF81E6E96e4150661e2b9278272e9177B#code) | ✅ |
+| CollateralVault | [`0x155d6618dcdeb2F4145395CA57C80e6931D7941e`](https://sepolia.etherscan.io/address/0x155d6618dcdeb2F4145395CA57C80e6931D7941e#code) | ✅ |
+| BorrowModule | [`0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8`](https://sepolia.etherscan.io/address/0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8#code) | ✅ |
+| SMUSD | [`0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540`](https://sepolia.etherscan.io/address/0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540#code) | ✅ |
+| LiquidationEngine | [`0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8`](https://sepolia.etherscan.io/address/0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8#code) | ✅ |
+| DirectMintV2 | [`0xa869f58c213634Dda2Ef522b66E9587b953279C2`](https://sepolia.etherscan.io/address/0xa869f58c213634Dda2Ef522b66E9587b953279C2#code) | ✅ |
+| LeverageVault | [`0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC`](https://sepolia.etherscan.io/address/0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC#code) | ✅ |
+| TreasuryV2 (proxy) | [`0x11Cc7750F2033d21FC3762b94D1355eD15F7913d`](https://sepolia.etherscan.io/address/0x11Cc7750F2033d21FC3762b94D1355eD15F7913d) | ⏳ upgrade via timelock |
+| BLEBridgeV9 (proxy) | [`0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125`](https://sepolia.etherscan.io/address/0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125) | ⏳ upgrade via timelock |
 
 ---
 
