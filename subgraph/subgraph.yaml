@@ -161,7 +161,7 @@ dataSources:
     name: DirectMintV2
     network: sepolia
     source:
-      address: "0xa869f58c213634Dda2Ef522b66E9587b953279C2"
+      address: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7"
       abi: DirectMintV2
       startBlock: 10276940
     mapping:

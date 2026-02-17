@@ -76,7 +76,7 @@ async function main() {
   console.log("SMUSD:                    0xa789a008212DAe30CBD381D7B0c1dcFC570a2A78");
   console.log("LiquidationEngine:       ", liquidationAddress);
   console.log("DirectMintV2:             0x064842e7f14e2Ff497Cc203aB8Dc0D2003d45548");
-  console.log("TreasuryV2 (proxy):       0x11Cc7750F2033d21FC3762b94D1355eD15F7913d");
+  console.log("TreasuryV2 (proxy):       0xf2051bDfc738f638668DF2f8c00d01ba6338C513");
   console.log("BLEBridgeV9 (proxy):     ", bridgeAddress);
   console.log("LeverageVault:           ", leverageAddress);
   console.log("=================================================");

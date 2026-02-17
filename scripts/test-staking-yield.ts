@@ -8,8 +8,8 @@ const CONTRACTS = {
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
   MUSD: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
   SMUSD: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540",
-  DirectMintV2: "0xa869f58c213634Dda2Ef522b66E9587b953279C2",
-  TreasuryV2: "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d",
+  DirectMintV2: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
+  TreasuryV2: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
 };
 
 async function main() {
@@ -134,10 +134,11 @@ async function main() {
   }
 
   // Approve SMUSD to pull yield
-  await musd.approve(CONTRACTS.SMUSD, yieldAmount);
+  const approveYieldTx = await musd.approve(CONTRACTS.SMUSD, yieldAmount);
+  await approveYieldTx.wait();
   
-  // Distribute yield
-  const yieldTx = await smusd.distributeYield(yieldAmount);
+  // Distribute yield (explicit gasLimit to avoid estimateGas issues on public RPCs)
+  const yieldTx = await smusd.distributeYield(yieldAmount, { gasLimit: 200_000 });
   await yieldTx.wait();
   console.log(`   ✅ Distributed ${ethers.formatUnits(yieldAmount, 18)} mUSD yield`);
 
