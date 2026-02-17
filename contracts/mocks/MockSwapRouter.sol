@@ -24,6 +24,7 @@ contract MockSwapRouter {
     IERC20 public immutable musd;
     IERC20 public immutable weth;
     IPriceOracle public immutable oracle;
+    bool public shouldRevert;
 
     struct ExactInputSingleParams {
         address tokenIn;
@@ -42,8 +43,14 @@ contract MockSwapRouter {
         oracle = IPriceOracle(_oracle);
     }
 
+    /// @notice Test helper to force a swap revert
+    function setShouldRevert(bool value) external {
+        shouldRevert = value;
+    }
+
     /// @notice Mock swap implementation using oracle prices
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut) {
+        require(!shouldRevert, "MOCK_SWAP_REVERT");
         require(block.timestamp <= params.deadline, "EXPIRED");
 
         // Transfer tokens in
