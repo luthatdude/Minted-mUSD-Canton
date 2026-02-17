@@ -10,7 +10,7 @@ export default function App({ Component, pageProps }: AppProps) {
     <WalletConnectProvider>
       <MetaMaskProvider>
         <UnifiedWalletProvider>
-          <LoopWalletProvider>
+          <LoopWalletProvider appName="Minted mUSD">
             <Component {...pageProps} />
           </LoopWalletProvider>
         </UnifiedWalletProvider>
