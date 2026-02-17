@@ -3,13 +3,13 @@
 
 import { ethers } from "hardhat";
 
-// Deployed contract addresses on Sepolia
+// Deployed contract addresses on Sepolia (updated 2026-02-17)
 const CONTRACTS = {
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
-  MUSD: "0x2bD1671c378A525dDA911Cc53eE9E8929D54fd9b",
-  SMUSD: "0xbe47E05f8aE025D03D034a50bE0Efd23E591AA68",
-  TreasuryV2: "0x76c6bFB36931293D3e4BAC6564074d5B5C55d987E",
-  DirectMintV2: "0x14a728791716d3898d073eA408B458773F7ABeC1",
+  MUSD: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
+  SMUSD: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540",
+  TreasuryV2: "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d",
+  DirectMintV2: "0xa869f58c213634Dda2Ef522b66E9587b953279C2",
 };
 
 async function main() {
