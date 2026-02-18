@@ -17,10 +17,27 @@ spec:
         app: security-sentinel
         component: monitoring
     spec:
+      # INFRA-C-01 FIX: Dedicated ServiceAccount with zero permissions
+      serviceAccountName: liquidation-bot
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sentinel
-          image: minted/bot:latest
+          # INFRA-C-01 FIX: Pin image by SHA256 digest (same build as liquidation-bot)
+          # Previously used mutable 'minted/bot:latest' — supply-chain risk
+          image: ghcr.io/minted-protocol/liquidation-bot@sha256:49d1cbc0d8f39bf7fe7d86769522b2acea68eee6e092e0311145760691580588
           command: ["node", "dist/security-sentinel.js"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: RPC_URL
               valueFrom:
@@ -66,4 +83,11 @@ spec:
               command: ["pgrep", "-f", "security-sentinel"]
             initialDelaySeconds: 10
             periodSeconds: 30
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       restartPolicy: Always
