@@ -216,7 +216,12 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   }, [address, signer, contracts]);
 
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Dashboard" subtitle="Overview of the Minted Protocol" badge="Dashboard" badgeColor="brand" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
   }
 
   if (loading) {

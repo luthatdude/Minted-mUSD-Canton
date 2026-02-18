@@ -155,7 +155,12 @@ export function MintPage() {
   }
 
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Mint & Redeem" subtitle="Convert between USDC and mUSD at 1:1 ratio" badge="Mint" badgeColor="brand" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
   }
 
   return (

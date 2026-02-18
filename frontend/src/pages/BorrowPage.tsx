@@ -189,7 +189,12 @@ export function BorrowPage() {
   const hfGaugeColor = hfValue < 1.2 ? "from-red-500 to-red-400" : hfValue < 1.5 ? "from-yellow-500 to-yellow-400" : "from-emerald-500 to-teal-400";
 
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Borrow & Lend" subtitle="Deposit collateral to borrow mUSD with overcollateralization" badge="Borrow" badgeColor="brand" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
   }
 
   return (

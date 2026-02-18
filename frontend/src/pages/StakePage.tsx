@@ -230,7 +230,14 @@ export function StakePage() {
   // ═══════════════════════════════════════════════════════════════════════════
   //  Render
   // ═══════════════════════════════════════════════════════════════════════════
-  if (!isConnected) return <WalletConnector mode="ethereum" />;
+  if (!isConnected) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Stake & Earn" subtitle="Earn yield by staking into mUSD vaults" badge="Staking" badgeColor="emerald" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
