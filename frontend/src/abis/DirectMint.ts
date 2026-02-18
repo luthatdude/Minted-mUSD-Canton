@@ -4,7 +4,7 @@ export const DIRECT_MINT_ABI = [
   "function treasury() view returns (address)",
   "function mintFeeBps() view returns (uint256)",
   "function redeemFeeBps() view returns (uint256)",
-  "function accumulatedFees() view returns (uint256)",
+  "function totalAccumulatedFees() view returns (uint256)",
   "function feeRecipient() view returns (address)",
   "function minMintAmount() view returns (uint256)",
   "function maxMintAmount() view returns (uint256)",
