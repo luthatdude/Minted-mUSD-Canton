@@ -233,6 +233,14 @@ error SharePriceChangeTooLarge();
 error MultiplierTooLow();
 error MultiplierTooHigh();
 
+// ─── ETH Pool Yield Distributor ─────────────────────────────────────────
+error NoYieldAvailable();
+error BelowMinYield();
+error RecipientNotSet();
+error YieldExceedsEpochCap();
+error YieldNotMature();
+error CannotRescueMusd();
+
 // ─── Miscellaneous ──────────────────────────────────────────────────────
 error InvalidCloseFactor();
 error NoBadDebt();

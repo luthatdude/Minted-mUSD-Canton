@@ -13,12 +13,19 @@ import "./Errors.sol";
 
 /**
  * @title TreasuryV2
- * @notice USDC treasury with manual admin-driven deployment to strategies.
- *         Deposits stay idle in reserve until ALLOCATOR_ROLE calls deployToStrategy().
- *         Auto-allocation only fires if strategies are registered with autoAllocate=true
- *         (production default: false).
- * @dev When USDC comes in, it's automatically split according to target allocations.
- *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
+ * @notice USDC treasury with manual admin-driven deployment and auto-distributing yield.
+ *
+ *         Deposit flow:  USDC deposits stay idle in reserve. ALLOCATOR_ROLE manually
+ *                        calls deployToStrategy() to move funds into strategies.
+ *
+ *         Yield flow:    Strategy yields auto-compound in place → totalValue() rises →
+ *                        smUSD.globalTotalAssets() increases → share price goes up
+ *                        automatically. YieldDistributor separately routes mUSD-denominated
+ *                        yield to SMUSD (ETH pool) and BLEBridge (Canton pool).
+ *
+ * @dev Strategies are dynamically added/removed via addStrategy()/removeStrategy().
+ *      The per-strategy `autoAllocate` flag controls whether _autoAllocate() routes
+ *      to that strategy. Production default: false (all deployment is manual).
  *
  * Available Strategies (contracts/strategies/):
  *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping (RLUSD/USDC)
@@ -479,6 +486,43 @@ contract TreasuryV2 is
     }
 
     /**
+     * @notice Deposit USDC and route it to a specific strategy (no auto-allocation)
+     * @dev Used by the relay to direct ETH Pool deposits to MetaVault #3 (Fluid).
+     *      Pulls USDC from caller, deposits directly into the target strategy,
+     *      bypassing the general _autoAllocate distribution.
+     * @param strategy Address of the target strategy (must be registered & active)
+     * @param amount USDC amount to deposit
+     * @return deposited Actual amount deposited into the strategy
+     */
+    function depositToStrategy(
+        address strategy,
+        uint256 amount
+    ) external nonReentrant whenNotPaused onlyRole(VAULT_ROLE) returns (uint256 deposited) {
+        if (amount == 0) revert ZeroAmount();
+        if (!isStrategy[strategy]) revert StrategyNotFound();
+
+        uint256 idx = strategyIndex[strategy];
+        if (!strategies[idx].active) revert StrategyNotFound();
+
+        _accrueFees();
+
+        // Pull USDC from caller
+        asset.safeTransferFrom(msg.sender, address(this), amount);
+
+        // Deploy directly to target strategy (bypasses auto-allocate)
+        asset.forceApprove(strategy, amount);
+        deposited = IStrategy(strategy).deposit(amount);
+        asset.forceApprove(strategy, 0);
+
+        lastRecordedValue = totalValue();
+
+        uint256[] memory allocs = new uint256[](strategies.length);
+        allocs[idx] = deposited;
+        emit Deposited(msg.sender, amount, allocs);
+        return deposited;
+    }
+
+    /**
      * @notice Withdraw USDC to a recipient (legacy interface)
      * @param to Address to send USDC to
      * @param amount Amount of USDC to withdraw
@@ -775,8 +819,9 @@ contract TreasuryV2 is
             emit FeesClaimed(fees.feeRecipient, toSend);
         }
 
-        // 4. Reserve stays idle — admin deploys manually via deployToStrategy()
-        // (Removed auto-redeploy: funds must not leave reserve without explicit admin action)
+        // 4. 80% net yield auto-distributes back through strategies:
+        //    strategy.totalAssets() rises → totalValue() rises → smUSD share price rises.
+        //    Reserve stays idle — ALLOCATOR_ROLE deploys via deployToStrategy().
 
         lastRecordedValue = totalValue();
 

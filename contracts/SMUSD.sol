@@ -392,10 +392,12 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     }
 
     /// @notice CRIT-01 FIX: Update the distributed yield offset
-    /// @dev Called by YieldDistributor when it withdraws USDC from Treasury.
-    ///      Set to the USDC amount withdrawn for distribution. Keeper decrements
-    ///      after yield finishes vesting / is confirmed bridged to Canton.
-    /// @param _offset USDC amount (6 decimals) that has been withdrawn from Treasury
+    /// @dev Safety valve for any residual Treasury.totalValue() discrepancy
+    ///      during yield distribution. With the DirectMint swap path, USDC
+    ///      round-trips back to Treasury so the net change is only the mint fee.
+    ///      This offset is typically 0 or near-zero when DirectMint.mintFeeBps = 0.
+    ///      Retained for edge cases (e.g., partial failures, manual adjustments).
+    /// @param _offset USDC amount (6 decimals) to add to globalTotalAssets
     function setDistributedYieldOffset(uint256 _offset) external onlyRole(YIELD_MANAGER_ROLE) {
         uint256 oldOffset = distributedYieldOffset;
         distributedYieldOffset = _offset;

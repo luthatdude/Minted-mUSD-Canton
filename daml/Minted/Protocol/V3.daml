@@ -1331,7 +1331,8 @@ template CantonSMUSD
     operator : Party
     governance : Party
     totalShares : Money
-    totalAssets : Money
+    totalAssets : Money       -- Informational: total assets for cross-chain validation
+    pooledMusd : Money        -- Actual mUSD backing in pool (deposits + yield)
     lastYieldEpoch : Int
     config : SmUSDConfig
     mpaHash : Text
@@ -1342,9 +1343,9 @@ template CantonSMUSD
     signatory operator, governance
     observer observers
 
-    ensure totalShares >= 0.0 && totalAssets >= 0.0
+    ensure totalShares >= 0.0 && totalAssets >= 0.0 && pooledMusd >= 0.0
 
-    -- | Get current share price
+    -- | Get current share price (pool-derived, mirrors ERC-4626)
     nonconsuming choice SMUSD_GetSharePrice : Money
       with
         requester : Party
@@ -1352,7 +1353,7 @@ template CantonSMUSD
       do
         assertMsg "NOT_AUTHORIZED" (requester == operator || requester `elem` observers)
         let virtualShares = totalShares + 1000.0
-        let virtualAssets = totalAssets + 1000.0
+        let virtualAssets = pooledMusd + 1000.0
         return (virtualAssets / virtualShares)
 
     -- | Deposit mUSD → receive smUSD shares
@@ -1367,14 +1368,15 @@ template CantonSMUSD
         musd <- fetch musdCid
         assertMsg "ISSUER_MISMATCH" (musd.issuer == operator)
         assertMsg "OWNER_MISMATCH" (musd.owner == user)
-        assertMsg "MAX_DEPOSITS_EXCEEDED" (totalAssets + musd.amount <= config.maxTotalDeposits)
+        assertMsg "MAX_DEPOSITS_EXCEEDED" (pooledMusd + musd.amount <= config.maxTotalDeposits)
         
+        -- Pool-derived share price (mirrors ERC-4626 deposit pattern)
         let virtualShares = totalShares + 1000.0
-        let virtualAssets = totalAssets + 1000.0
+        let virtualAssets = pooledMusd + 1000.0
         let sharePrice = virtualAssets / virtualShares
         let newShares = musd.amount / sharePrice
         
-        -- Burn mUSD
+        -- Pool the mUSD (archive contract, value tracked in pooledMusd)
         archive musdCid
         
         -- Issue cooldown ticket (tracks stake time)
@@ -1388,10 +1390,11 @@ template CantonSMUSD
           cooldownSeconds = config.cooldownSeconds
           complianceRegistryCid = complianceRegistryCid
         
-        -- Update pool
+        -- Update pool: mUSD pooled, shares issued
         newService <- create this with
           totalShares = totalShares + newShares
           totalAssets = totalAssets + musd.amount
+          pooledMusd = pooledMusd + musd.amount
         
         return (newService, ticket)
 
@@ -1413,22 +1416,20 @@ template CantonSMUSD
         let cooldownMicros = ticket.cooldownSeconds * 1000000
         assertMsg "COOLDOWN_NOT_ELAPSED" (elapsed >= cooldownMicros)
         
-        -- DAML-H-05 / D-H-02: Use virtual shares for withdrawal (matching SMUSD_Deposit).
-        -- Previously used raw division: totalAssets / totalShares
-        -- Deposit used virtual offset: (totalAssets + 1000.0) / (totalShares + 1000.0)
-        -- This asymmetry meant depositors paid a higher price than withdrawers received,
-        -- creating systematically extractable value in early pool phases.
+        -- Pool-derived share price (matches SMUSD_Deposit virtual offset)
         let virtualShares = totalShares + 1000.0
-        let virtualAssets = totalAssets + 1000.0
+        let virtualAssets = pooledMusd + 1000.0
         let sharePrice = virtualAssets / virtualShares
         let musdAmount = ticket.shares * sharePrice
         
-        assertMsg "INSUFFICIENT_POOL_ASSETS" (totalAssets >= musdAmount)
+        -- Withdrawal capped by pool balance (fully backed, no minting from nothing)
+        assertMsg "INSUFFICIENT_POOL_BALANCE" (pooledMusd >= musdAmount)
+        assertMsg "ZERO_WITHDRAWAL" (musdAmount > 0.0)
         
-        -- Burn ticket
+        -- Burn ticket (smUSD shares destroyed on exit)
         archive ticketCid
         
-        -- Mint mUSD to user (includes yield)
+        -- Return mUSD from pool (backed by pooledMusd, not minted from nothing)
         musdCid <- create MintedMUSD with
           issuer = operator
           owner = user
@@ -1438,15 +1439,18 @@ template CantonSMUSD
           agreementUri = mpaUri
           observers = []
         
-        -- Update pool
+        -- Update pool: remove shares and mUSD from pool
         newService <- create this with
           totalShares = totalShares - ticket.shares
           totalAssets = totalAssets - musdAmount
+          pooledMusd = pooledMusd - musdAmount
         
         return (newService, musdCid)
 
     -- | Sync yield from Ethereum via attestation
     -- DAML-H-06: Added yield bounds and epoch gap limit
+    -- Yield is added to both totalAssets (informational) and pooledMusd (backing)
+    -- This increases the pool → share price rises → users withdraw more mUSD
     choice SMUSD_SyncYield : ContractId CantonSMUSD
       with
         yieldAccrued : Money
@@ -1456,11 +1460,12 @@ template CantonSMUSD
         assertMsg "EPOCH_NOT_SEQUENTIAL" (epochNumber > lastYieldEpoch)
         assertMsg "YIELD_MUST_BE_NONNEG" (yieldAccrued >= 0.0)
         -- DAML-H-06: Prevent unbounded yield injection
-        let maxYield = totalAssets * intToNumeric config.maxYieldBps / 10000.0
+        let maxYield = pooledMusd * intToNumeric config.maxYieldBps / 10000.0
         assertMsg "YIELD_EXCEEDS_MAX_PER_EPOCH" (yieldAccrued <= maxYield)
         assertMsg "EPOCH_GAP_TOO_LARGE" (epochNumber <= lastYieldEpoch + config.maxEpochGap)
         create this with
           totalAssets = totalAssets + yieldAccrued
+          pooledMusd = pooledMusd + yieldAccrued
           lastYieldEpoch = epochNumber
 
     -- | Update config

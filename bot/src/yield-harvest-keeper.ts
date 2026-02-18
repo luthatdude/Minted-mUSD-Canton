@@ -2,18 +2,28 @@
  * Minted Protocol — Yield Harvest Keeper
  *
  * Automatically harvests yield from TreasuryV2 strategies and distributes
- * the net 80% to smUSD holders via SMUSD.distributeYield() (12h vesting).
+ * the net 80% to smUSD holders via YieldDistributor.distributeYield().
  *
  * Cycle:
  *   1. Read TreasuryV2.pendingYield() → (netYield, grossYield, protocolFee)
  *   2. If netYield > MIN_HARVEST_USD → call TreasuryV2.harvestYield()
- *   3. Optionally trigger MetaVault.rebalance() on each vault if drift > threshold
- *   4. Snapshot totalValue() per vault for APY calculation
- *   5. Expose /health + /apy for K8s probes and frontend consumption
+ *   3. Call YieldDistributor.distributeYield(netYield) — splits ETH/Canton by share weight
+ *   4. Optionally trigger MetaVault.rebalance() on each vault if drift > threshold
+ *   5. Snapshot totalValue() per vault for APY calculation
+ *   6. Expose /health + /apy for K8s probes and frontend consumption
+ *
+ * Yield Distribution Flow (after harvest):
+ *   YieldDistributor.distributeYield(netYieldUsdc):
+ *     - Reads ETH vs Canton share ratio from SMUSD
+ *     - ETH portion → SMUSD.distributeYield() (12h linear vesting)
+ *     - Canton portion → BLEBridge.bridgeToCanton() (burn ETH, relay credits Canton)
+ *   The relay then picks up the BridgeToCantonRequested event and exercises
+ *   ReceiveYield on the Canton CantonStakingService.
  *
  * Env vars:
  *   RPC_URL, CHAIN_ID, KEEPER_PRIVATE_KEY,
- *   TREASURY_ADDRESS, SMUSD_ADDRESS,
+ *   TREASURY_ADDRESS, SMUSD_ADDRESS, YIELD_DISTRIBUTOR_ADDRESS,
+ *   ETH_POOL_YIELD_DISTRIBUTOR_ADDRESS (optional — bridges MetaVault #3 yield to Canton ETH Pool),
  *   META_VAULT_ADDRESSES (comma-separated — vault1,vault2,vault3),
  *   YIELD_POLL_MS (default 300_000 — 5 min),
  *   MIN_HARVEST_USD (default "50" — USDC 6 decimals = 50e6),
@@ -53,7 +63,10 @@ export interface YieldKeeperConfig {
   keeperPrivateKey: string;
   treasuryAddress: string;
   smusdAddress: string;
+  yieldDistributorAddress: string;
   metaVaultAddresses: string[];
+  /** ETH Pool yield distributor — bridges MetaVault #3 yield to Canton ETH Pool */
+  ethPoolYieldDistributorAddress: string;
   pollIntervalMs: number;
   /** Minimum net yield (in USDC raw units, 6 decimals) to trigger harvest */
   minHarvestAmount: bigint;
@@ -116,6 +129,29 @@ const SMUSD_ABI = [
   "function convertToAssets(uint256 shares) external view returns (uint256)",
   "function unvestedYield() external view returns (uint256)",
   "function yieldVestingEnd() external view returns (uint256)",
+];
+
+const YIELD_DISTRIBUTOR_ABI = [
+  "function distributeYield(uint256 yieldUsdc) external",
+  "function canDistribute() external view returns (bool)",
+  "function previewDistribution(uint256 yieldUsdc) external view returns (uint256 ethMusd, uint256 cantonMusd, uint256 ethShareBps, uint256 cantonShareBps)",
+  "function minDistributionUsdc() external view returns (uint256)",
+  "function distributionCount() external view returns (uint256)",
+  "function totalDistributedEth() external view returns (uint256)",
+  "function totalDistributedCanton() external view returns (uint256)",
+  "event YieldDistributed(uint256 indexed epoch, uint256 yieldUsdc, uint256 musdMinted, uint256 ethMusd, uint256 cantonMusd, uint256 ethSharesBps, uint256 cantonSharesBps)",
+  "event CantonYieldBridged(uint256 indexed epoch, uint256 musdAmount, string cantonRecipient)",
+];
+
+const ETH_POOL_YIELD_DISTRIBUTOR_ABI = [
+  "function distributeETHPoolYield() external",
+  "function previewYield() external view returns (uint256 yieldUsdc, bool canDistribute)",
+  "function distributionCount() external view returns (uint256)",
+  "function totalDistributed() external view returns (uint256)",
+  "function lastDistributionTime() external view returns (uint256)",
+  "function distributionCooldown() external view returns (uint256)",
+  "function minYieldUsdc() external view returns (uint256)",
+  "event ETHPoolYieldBridged(uint256 indexed epoch, uint256 yieldUsdc, uint256 musdBridged, string ethPoolRecipient)",
 ];
 
 const VAULT_LABELS: Record<number, string> = {
@@ -214,6 +250,8 @@ export class YieldHarvestKeeper {
   private keeperWallet: Wallet;
   private treasury: ethers.Contract;
   private smusd: ethers.Contract;
+  private yieldDistributor: ethers.Contract | null = null;
+  private ethPoolYieldDistributor: ethers.Contract | null = null;
   private metaVaults: Map<string, ethers.Contract> = new Map();
   private running = false;
   private consecutiveErrors = 0;
@@ -261,6 +299,24 @@ export class YieldHarvestKeeper {
       this.provider // read-only for SMUSD
     );
 
+    // YieldDistributor — proportional yield distribution to ETH + Canton pools
+    if (config.yieldDistributorAddress) {
+      this.yieldDistributor = new ethers.Contract(
+        config.yieldDistributorAddress,
+        YIELD_DISTRIBUTOR_ABI,
+        this.keeperWallet
+      );
+    }
+
+    // ETH Pool YieldDistributor — MetaVault #3 yield → Canton ETH Pool
+    if (config.ethPoolYieldDistributorAddress) {
+      this.ethPoolYieldDistributor = new ethers.Contract(
+        config.ethPoolYieldDistributorAddress,
+        ETH_POOL_YIELD_DISTRIBUTOR_ABI,
+        this.keeperWallet
+      );
+    }
+
     for (let i = 0; i < config.metaVaultAddresses.length; i++) {
       const addr = config.metaVaultAddresses[i];
       this.metaVaults.set(
@@ -278,6 +334,8 @@ export class YieldHarvestKeeper {
     logger.info(`  Keeper:    ${this.keeperWallet.address}`);
     logger.info(`  Treasury:  ${this.config.treasuryAddress}`);
     logger.info(`  SMUSD:     ${this.config.smusdAddress}`);
+    logger.info(`  YieldDist: ${this.config.yieldDistributorAddress || "(not configured)"}`);
+    logger.info(`  ETHPoolDist: ${this.config.ethPoolYieldDistributorAddress || "(not configured)"}`);
     logger.info(`  MetaVaults: ${this.config.metaVaultAddresses.length}`);
     for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
       logger.info(`    • ${VAULT_LABELS[i] || `Vault #${i + 1}`}: ${this.config.metaVaultAddresses[i]}`);
@@ -395,6 +453,11 @@ export class YieldHarvestKeeper {
     // 3. Harvest if above minimum
     if (netYield > this.config.minHarvestAmount) {
       await this.executeHarvest(netYield, grossYield, protocolFee);
+
+      // 3b. Distribute yield to all pools (ETH smUSD + Canton via bridge)
+      if (this.yieldDistributor) {
+        await this.executeDistribution(netYield);
+      }
     } else if (netYield > 0n) {
       logger.debug(
         `Net yield ${formatUsdc(netYield)} below minimum ${formatUsdc(this.config.minHarvestAmount)} — skipping harvest`
@@ -403,6 +466,11 @@ export class YieldHarvestKeeper {
 
     // 4. Check MetaVault rebalance opportunities
     await this.checkRebalances();
+
+    // 5. ETH Pool yield distribution (independent of smUSD harvest)
+    if (this.ethPoolYieldDistributor) {
+      await this.executeETHPoolDistribution();
+    }
   }
 
   private async takeSnapshots(now: number): Promise<void> {
@@ -537,6 +605,203 @@ export class YieldHarvestKeeper {
   }
 
   // ─── MetaVault Rebalance ────────────────────────────────────
+
+  /**
+   * Distribute net yield to all pools (ETH smUSD stakers + Canton via bridge).
+   *
+   * Called after TreasuryV2.harvestYield() succeeds. The net yield (80% after
+   * protocol fee) is distributed proportionally by share weight:
+   *   - ETH portion → SMUSD.distributeYield() (12h linear vesting)
+   *   - Canton portion → BLEBridge.bridgeToCanton() (relay credits Canton)
+   */
+  private async executeDistribution(netYield: bigint): Promise<void> {
+    if (!this.yieldDistributor) return;
+
+    try {
+      // Check cooldown
+      const canDistribute: boolean = await this.yieldDistributor.canDistribute();
+      if (!canDistribute) {
+        logger.debug("YieldDistributor cooldown active — skipping distribution");
+        return;
+      }
+
+      // Check minimum
+      const minDistribution: bigint = await this.yieldDistributor.minDistributionUsdc();
+      if (netYield < minDistribution) {
+        logger.debug(
+          `Net yield ${formatUsdc(netYield)} below distributor minimum ${formatUsdc(minDistribution)} — skipping`
+        );
+        return;
+      }
+
+      // Preview the split
+      const [ethMusd, cantonMusd, ethBps, cantonBps] =
+        await this.yieldDistributor.previewDistribution(netYield);
+
+      logger.info(
+        `📤 Distributing ${formatUsdc(netYield)} yield → ` +
+        `ETH: ${ethers.formatEther(ethMusd)} mUSD (${ethBps}bps) | ` +
+        `Canton: ${ethers.formatEther(cantonMusd)} mUSD (${cantonBps}bps)`
+      );
+
+      // Execute distribution
+      const tx = await this.yieldDistributor.distributeYield(netYield);
+      const receipt = await tx.wait();
+
+      // Parse events
+      let distributedEthMusd = 0n;
+      let distributedCantonMusd = 0n;
+      for (const log of receipt.logs) {
+        try {
+          const parsed = this.yieldDistributor!.interface.parseLog(log);
+          if (parsed?.name === "YieldDistributed") {
+            distributedEthMusd = parsed.args.ethMusd;
+            distributedCantonMusd = parsed.args.cantonMusd;
+          }
+        } catch {
+          /* Not our event */
+        }
+      }
+
+      logger.info(
+        `✅ Yield distributed — ` +
+        `ETH: ${ethers.formatEther(distributedEthMusd)} mUSD (12h vesting) | ` +
+        `Canton: ${ethers.formatEther(distributedCantonMusd)} mUSD (bridged) | ` +
+        `tx: ${receipt.hash}`
+      );
+
+      await this.sendAlert(
+        `📤 *Yield Distributed*\n` +
+        `Input: ${formatUsdc(netYield)} USDC\n` +
+        `ETH pool: ${ethers.formatEther(distributedEthMusd)} mUSD (12h vesting)\n` +
+        `Canton pool: ${ethers.formatEther(distributedCantonMusd)} mUSD (bridged)\n` +
+        `Tx: \`${receipt.hash}\``
+      );
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      logger.error(`❌ Yield distribution FAILED: ${errMsg}`);
+
+      await this.sendAlert(
+        `🔴 *Yield Distribution FAILED*\n` +
+        `Net yield: ${formatUsdc(netYield)}\n` +
+        `Error: ${errMsg.slice(0, 300)}\n` +
+        `⚠️ Harvest succeeded but distribution failed — yield stays in Treasury reserve.`
+      );
+    }
+  }
+
+  // ─── ETH Pool Yield Distribution ────────────────────────────
+
+  /**
+   * Distribute MetaVault #3 yield to Canton ETH Pool via mUSD bridge.
+   *
+   * Independent of smUSD harvest — this reads MetaVault #3's totalValue()
+   * delta and bridges the yield as mUSD to Canton, where the relay exercises
+   * ETHPool_ReceiveYield to increment pooledUsdc.
+   */
+  private async executeETHPoolDistribution(): Promise<void> {
+    if (!this.ethPoolYieldDistributor) return;
+
+    try {
+      // MEDIUM-01: Check HWM desync and alert
+      try {
+        const [desynced, currentValue, hwm]: [boolean, bigint, bigint] =
+          await this.ethPoolYieldDistributor.checkHwmDesync();
+        if (desynced) {
+          const deficit = hwm - currentValue;
+          logger.warn(
+            `⚠️ ETH Pool HWM DESYNC: strategy value ${formatUsdc(currentValue)} < HWM ${formatUsdc(hwm)} ` +
+            `(deficit: ${formatUsdc(deficit)}). Yield distribution blocked. Call syncHighWaterMark() to resolve.`
+          );
+          await this.sendAlert(
+            `⚠️ *ETH Pool HWM Desync Detected*\n` +
+            `Strategy value: ${formatUsdc(currentValue)} USDC\n` +
+            `High-water mark: ${formatUsdc(hwm)} USDC\n` +
+            `Deficit: ${formatUsdc(deficit)} USDC\n` +
+            `Action: Call \`syncHighWaterMark()\` if this is due to manual withdrawal/rebalance.`
+          );
+          return;
+        }
+      } catch (hwmErr) {
+        logger.debug(`HWM desync check failed (non-critical): ${(hwmErr as Error).message}`);
+      }
+
+      // Preview yield
+      const [yieldUsdc, canDistribute]: [bigint, boolean] =
+        await this.ethPoolYieldDistributor.previewYield();
+
+      if (!canDistribute) {
+        if (yieldUsdc > 0n) {
+          // HIGH-01: Try to observe yield to start maturity timer
+          try {
+            await this.ethPoolYieldDistributor.observeYield();
+            logger.debug(
+              `ETH Pool yield: ${formatUsdc(yieldUsdc)} observed — waiting for maturity`
+            );
+          } catch {
+            logger.debug(
+              `ETH Pool yield: ${formatUsdc(yieldUsdc)} available but not distributable (cooldown, maturity, or below minimum)`
+            );
+          }
+        }
+        return;
+      }
+
+      logger.info(
+        `🏊 ETH Pool yield: ${formatUsdc(yieldUsdc)} USDC from MetaVault #3 — distributing to Canton ETH Pool`
+      );
+
+      // LOW-02: Gas estimation before sending tx
+      try {
+        await this.ethPoolYieldDistributor.distributeETHPoolYield.estimateGas();
+      } catch (gasErr) {
+        logger.warn(`ETH Pool distribution gas estimation failed — skipping: ${(gasErr as Error).message}`);
+        return;
+      }
+
+      const tx = await this.ethPoolYieldDistributor.distributeETHPoolYield();
+      const receipt = await tx.wait();
+
+      // Parse ETHPoolYieldBridged event
+      let bridgedMusd = 0n;
+      let epoch = 0n;
+      for (const log of receipt.logs) {
+        try {
+          const parsed = this.ethPoolYieldDistributor!.interface.parseLog(log);
+          if (parsed?.name === "ETHPoolYieldBridged") {
+            epoch = parsed.args.epoch;
+            bridgedMusd = parsed.args.musdBridged;
+          }
+        } catch {
+          /* Not our event */
+        }
+      }
+
+      logger.info(
+        `✅ ETH Pool yield bridged — epoch: ${epoch} | ` +
+        `yield: ${formatUsdc(yieldUsdc)} USDC | ` +
+        `bridged: ${ethers.formatEther(bridgedMusd)} mUSD | ` +
+        `tx: ${receipt.hash}`
+      );
+
+      await this.sendAlert(
+        `🏊 *ETH Pool Yield Bridged*\n` +
+        `Epoch: ${epoch}\n` +
+        `Yield: ${formatUsdc(yieldUsdc)} USDC\n` +
+        `Bridged: ${ethers.formatEther(bridgedMusd)} mUSD → Canton ETH Pool\n` +
+        `Tx: \`${receipt.hash}\``
+      );
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      logger.error(`❌ ETH Pool yield distribution FAILED: ${errMsg}`);
+
+      await this.sendAlert(
+        `🔴 *ETH Pool Yield Distribution FAILED*\n` +
+        `Error: ${errMsg.slice(0, 300)}\n` +
+        `⚠️ MetaVault #3 yield was not bridged to Canton ETH Pool.`
+      );
+    }
+  }
 
   private async checkRebalances(): Promise<void> {
     for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
@@ -698,6 +963,20 @@ async function main(): Promise<void> {
     throw new Error("Insecure RPC transport in production. RPC_URL must use https:// or wss://");
   }
 
+  // YieldDistributor (optional — keeper works without it but won't distribute)
+  const yieldDistAddr = process.env.YIELD_DISTRIBUTOR_ADDRESS || "";
+  if (yieldDistAddr && !ethers.isAddress(yieldDistAddr)) {
+    console.error("FATAL: YIELD_DISTRIBUTOR_ADDRESS must be a valid address");
+    process.exit(1);
+  }
+
+  // ETH Pool YieldDistributor (optional — bridges MetaVault #3 yield to Canton ETH Pool)
+  const ethPoolDistAddr = process.env.ETH_POOL_YIELD_DISTRIBUTOR_ADDRESS || "";
+  if (ethPoolDistAddr && !ethers.isAddress(ethPoolDistAddr)) {
+    console.error("FATAL: ETH_POOL_YIELD_DISTRIBUTOR_ADDRESS must be a valid address");
+    process.exit(1);
+  }
+
   // Min harvest: default 50 USDC
   const minHarvestRaw = process.env.MIN_HARVEST_USD
     ? BigInt(process.env.MIN_HARVEST_USD) * 10n ** BigInt(USDC_DECIMALS)
@@ -709,6 +988,8 @@ async function main(): Promise<void> {
     keeperPrivateKey: keeperKey,
     treasuryAddress: treasuryAddr,
     smusdAddress: smusdAddr,
+    yieldDistributorAddress: yieldDistAddr,
+    ethPoolYieldDistributorAddress: ethPoolDistAddr,
     metaVaultAddresses,
     pollIntervalMs: parseInt(process.env.YIELD_POLL_MS || "300000", 10), // 5 min default
     minHarvestAmount: minHarvestRaw,

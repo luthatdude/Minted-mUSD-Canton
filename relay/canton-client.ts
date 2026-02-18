@@ -396,4 +396,12 @@ export const TEMPLATES = {
   BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
   BridgeInRequest:    { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" } as TemplateId,
   MUSDSupplyService:  { moduleName: "Minted.Protocol.V3", entityName: "MUSDSupplyService" } as TemplateId,
+  // Standalone module bridge-out requests (from CantonDirectMint USDC/USDCx minting)
+  StandaloneBridgeOutRequest: { moduleName: "CantonDirectMint", entityName: "BridgeOutRequest" } as TemplateId,
+  // Canton mUSD token (CantonDirectMint module)
+  CantonMUSD:             { moduleName: "CantonDirectMint", entityName: "CantonMUSD" } as TemplateId,
+  // smUSD staking service (yield → pooledMusd, share price ↑)
+  CantonStakingService:   { moduleName: "CantonSMUSD", entityName: "CantonStakingService" } as TemplateId,
+  // ETH Pool service (yield → pooledUsdc counter, share price ↑)
+  CantonETHPoolService:   { moduleName: "CantonETHPool", entityName: "CantonETHPoolService" } as TemplateId,
 } as const;
