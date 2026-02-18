@@ -1420,22 +1420,34 @@ class RelayService {
       }
 
       try {
-        // Create BridgeInRequest on Canton
-        await this.canton.createContract(
-          TEMPLATES.BridgeInRequest,
-          {
-            operator: this.config.cantonParty,
-            user: cantonRecipient,
-            amount: ethers.formatEther(amount),
-            feeAmount: "0.0",
-            sourceChainId: Number((await this.provider.getNetwork()).chainId),
-            nonce: Number(nonce),
-            createdAt: new Date(Number(timestamp) * 1000).toISOString(),
-            status: "pending",
-          }
-        );
+        const chainId = Number((await this.provider.getNetwork()).chainId);
+        const payload = {
+          operator: this.config.cantonParty,
+          user: cantonRecipient,
+          amount: ethers.formatEther(amount),
+          feeAmount: "0.0",
+          sourceChainId: chainId,
+          nonce: Number(nonce),
+          createdAt: new Date(Number(timestamp) * 1000).toISOString(),
+          status: "pending",
+        };
 
-        console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+        try {
+          // Create BridgeInRequest on Canton with the original user party
+          await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
+          console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+        } catch (innerError: any) {
+          const errMsg = innerError?.message || "";
+          // If user party is unknown on this participant, fallback to operator as user
+          if (errMsg.includes("UNKNOWN_INFORMEES") || errMsg.includes("NO_SYNCHRONIZER") || errMsg.includes("PARTY_NOT_KNOWN")) {
+            console.warn(`[Relay] User party not on this participant for bridge-out #${nonce}, using operator as user fallback`);
+            payload.user = this.config.cantonParty;
+            await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
+            console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
+          } else {
+            throw innerError; // Re-throw non-party errors
+          }
+        }
 
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
