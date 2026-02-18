@@ -41,8 +41,8 @@ describe("PriceOracle mainnet fork", function () {
 
     // 7-day stale window for deterministic fork stability.
     const stalePeriod = 7 * 24 * 60 * 60;
-    await oracle.setFeed(WETH_MAINNET, ETH_USD_FEED_MAINNET, stalePeriod, 18);
-    await oracle.setFeed(WBTC_MAINNET, BTC_USD_FEED_MAINNET, stalePeriod, 8);
+    await oracle.setFeed(WETH_MAINNET, ETH_USD_FEED_MAINNET, stalePeriod, 18, 0);
+    await oracle.setFeed(WBTC_MAINNET, BTC_USD_FEED_MAINNET, stalePeriod, 8, 0);
 
     const ethPrice = await oracle.getPrice(WETH_MAINNET);
     const btcPrice = await oracle.getPrice(WBTC_MAINNET);
