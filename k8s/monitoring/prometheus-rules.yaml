@@ -124,6 +124,7 @@ spec:
           annotations:
             summary: "Bridge relay service is down"
             description: "Bridge attestations are not being processed."
+            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#9-relay-service-recovery"
 
         - alert: HighBridgeVolume
           expr: |
@@ -135,6 +136,7 @@ spec:
           annotations:
             summary: "Abnormally high bridge request volume"
             description: "Possible bridge exploitation or unusually high mint/redeem activity."
+            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9"
 
         - alert: BridgeValidationFailures
           expr: |
@@ -146,6 +148,7 @@ spec:
           annotations:
             summary: "Bridge validation failures detected"
             description: "Attestations failing validation — possible forgery attempt."
+            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9"
 
         - alert: ValidatorSigningRateLimitHit
           expr: |
@@ -157,6 +160,7 @@ spec:
           annotations:
             summary: "Validator signing rate limit triggered"
             description: "A validator node hit its per-hour signing limit (50/hr)."
+            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#9-relay-service-recovery"
 
     # ──────────────────────────────────────────────────
     #  4. Price Oracle Alerts
@@ -277,7 +281,7 @@ metadata:
     app.kubernetes.io/name: minted-monitoring
     app.kubernetes.io/component: runbooks
   annotations:
-    musd.io/runbook-location: "https://your-docs-platform.example.com/minted/runbooks"
+    musd.io/runbook-location: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md"
     musd.io/escalation-policy: "PagerDuty service: minted-musd-production"
     musd.io/last-review-date: "YYYY-MM-DD — update after each review cycle"
 data:
@@ -292,20 +296,20 @@ data:
     # Format: AlertName: <URL>
     #
     # --- Critical Alerts (P1 - respond within 15 minutes) ---
-    # CantonParticipantDown: https://docs.example.com/runbooks/canton-participant-down
-    # PostgresDown: https://docs.example.com/runbooks/postgres-down
-    # BridgeRelayDown: https://docs.example.com/runbooks/bridge-relay-down
-    # BridgeValidationFailures: https://docs.example.com/runbooks/bridge-validation-failures
-    # PriceOracleCircuitBreakerOpen: https://docs.example.com/runbooks/price-oracle-circuit-breaker
-    # HTTP5xxSpike: https://docs.example.com/runbooks/http-5xx-spike
+    # CantonParticipantDown: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#8-canton-participant-recovery
+    # PostgresDown: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#7-database-failover-postgresql
+    # BridgeRelayDown: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#9-relay-service-recovery
+    # BridgeValidationFailures: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9
+    # PriceOracleCircuitBreakerOpen: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#4-oracle-failure--stale-price
+    # HTTP5xxSpike: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#1-incident-response--general
     #
     # --- Warning Alerts (P2 - respond within 1 hour) ---
-    # HighRateLimitHits: https://docs.example.com/runbooks/rate-limit-hits
-    # CantonHighLatency: https://docs.example.com/runbooks/canton-high-latency
-    # CantonDBConnectionPoolExhausted: https://docs.example.com/runbooks/db-pool-exhausted
-    # PostgresHighConnections: https://docs.example.com/runbooks/postgres-high-connections
-    # PostgresDiskUsageHigh: https://docs.example.com/runbooks/postgres-disk-usage
-    # PodRestartLoop: https://docs.example.com/runbooks/pod-restart-loop
+    # HighRateLimitHits: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#1-incident-response--general
+    # CantonHighLatency: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#8-canton-participant-recovery
+    # CantonDBConnectionPoolExhausted: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#7-database-failover-postgresql
+    # PostgresHighConnections: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#7-database-failover-postgresql
+    # PostgresDiskUsageHigh: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#7-database-failover-postgresql
+    # PodRestartLoop: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#1-incident-response--general
     #
     # --- Review Cadence ---
     # Runbooks must be reviewed quarterly and after every P1 incident.

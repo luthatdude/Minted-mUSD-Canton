@@ -1,9 +1,9 @@
-monitoring_drill_timestamp=2026-02-18T06:23:46Z
+monitoring_drill_timestamp=2026-02-18T16:59:19Z
 scenario=bridge_validation_failure_alert_path
 check=prometheus_rule_metric_names
-130:            sum(rate(minted_attestations_processed_total{status="success"}[1h])) > 100
-141:            sum(rate(minted_bridge_validation_failures_total[5m])) > 0
-152:            sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
+131:            sum(rate(minted_attestations_processed_total{status="success"}[1h])) > 100
+143:            sum(rate(minted_bridge_validation_failures_total[5m])) > 0
+155:            sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
 check=grafana_queries_metric_names
 101:              "expr": "sum(increase(minted_attestations_processed_total{status=\"success\"}[24h]))",
 121:              "expr": "sum(increase(minted_tx_reverts_total{operation=\"processAttestation\"}[24h]))",
@@ -18,9 +18,22 @@ check=grafana_queries_metric_names
 1328:              "expr": "sum(rate(minted_bridge_validation_failures_total[5m]))",
 1349:              "expr": "sum(rate(minted_validator_rate_limit_hits_total[5m]))",
 check=runbook_index_present
-k8s/monitoring/prometheus-rules.yaml:139:        - alert: BridgeValidationFailures
-k8s/monitoring/prometheus-rules.yaml:281:    musd.io/escalation-policy: "PagerDuty service: minted-musd-production"
-k8s/monitoring/prometheus-rules.yaml:286:  runbook-index: |
-k8s/monitoring/prometheus-rules.yaml:298:    # BridgeValidationFailures: https://docs.example.com/runbooks/bridge-validation-failures
-docs/RUNBOOKS.md:37:1. DETECT   → Alert fires (Prometheus / PagerDuty) OR user report
-docs/RUNBOOKS.md:40:4. NOTIFY   → Slack #incident channel + PagerDuty escalation
+127:            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#9-relay-service-recovery"
+139:            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9"
+141:        - alert: BridgeValidationFailures
+151:            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9"
+163:            runbook_url: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#9-relay-service-recovery"
+273:# Each PrometheusRule alert above should have a runbook_url annotation linking to the
+274:# corresponding procedure. Add runbook_url annotations to alerts as runbooks are created.
+284:    musd.io/runbook-location: "https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md"
+289:  # These are referenced by Prometheus alert annotations (runbook_url field).
+290:  runbook-index: |
+302:    # BridgeValidationFailures: https://github.com/luthatdude/Minted-mUSD-Canton/blob/main/docs/RUNBOOKS.md#3-bridge-pause--unpause-blebridgev9
+13:3. [Bridge Pause / Unpause (BLEBridgeV9)](#3-bridge-pause--unpause-blebridgev9)
+18:8. [Canton Participant Recovery](#8-canton-participant-recovery)
+19:9. [Relay Service Recovery](#9-relay-service-recovery)
+37:1. DETECT   → Alert fires (Prometheus / PagerDuty) OR user report
+40:4. NOTIFY   → Slack #incident channel + PagerDuty escalation
+127:## 3. Bridge Pause / Unpause (BLEBridgeV9)
+421:## 8. Canton Participant Recovery
+465:## 9. Relay Service Recovery

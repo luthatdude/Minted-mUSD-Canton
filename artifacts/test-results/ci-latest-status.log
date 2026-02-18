@@ -1,0 +1,12 @@
+timestamp=2026-02-18T16:57:13.991Z
+repo=luthatdude/Minted-mUSD-Canton
+branch=codex/audit-remediation-2026-02-18
+workflow=CI
+run_id=22148655080
+status=completed
+conclusion=failure
+head_sha=35c16d7ae1017df9c66e0ea7afa42634006fe1d4
+created_at=2026-02-18T16:40:11Z
+updated_at=2026-02-18T16:49:11Z
+run_url=https://github.com/luthatdude/Minted-mUSD-Canton/actions/runs/22148655080
+status_gate=FAIL
