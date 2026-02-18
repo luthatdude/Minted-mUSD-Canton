@@ -27,7 +27,8 @@ commonAnnotations:
 
 resources:
   - ../../base
-  # Staging-only: include External Secrets Operator CRDs
+  # Staging: ExternalSecret objects + environment-specific ClusterSecretStore.
+  - ../../canton/external-secrets.yaml
   - external-secrets-staging.yaml
 
 patches:
