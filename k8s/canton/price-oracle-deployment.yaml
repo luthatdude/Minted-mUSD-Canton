@@ -1,0 +1,340 @@
+# Minted Canton Price Oracle Service — K8s Deployment
+# Polls Tradecraft DEX (primary) and Temple DEX (fallback) for CC/USDCx price,
+# then pushes updates to CantonPriceFeed contracts on the Canton ledger.
+#
+# CRITICAL: Without this service, CantonLending PriceFeeds go stale.
+# Stale feeds (>1h) block new borrows and may cause incorrect liquidations.
+#
+# Prerequisites:
+#   - Canton participant running (canton-participant service)
+#   - price-oracle-secrets created (CANTON_TOKEN, TEMPLE_EMAIL, TEMPLE_PASSWORD)
+#   - CantonPriceFeed templates initialized on ledger (via canton-init.sh)
+#   - Tradecraft API reachable (https://api.tradecraft.fi/v1)
+---
+# ============================================================
+# PRICE ORACLE CONFIGMAP
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: price-oracle-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: price-oracle
+    app.kubernetes.io/component: oracle
+    app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "0.0.0"  # Replaced by CI with git SHA
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # Canton Ledger API (in-cluster)
+  CANTON_HOST: "canton-participant.musd-canton.svc.cluster.local"
+  CANTON_PORT: "5011"
+  CANTON_USE_TLS: "true"
+  # Operator party — must match DAR initialization
+  CANTON_PARTY: ""        # Set via overlay per environment
+  # DEX data sources
+  TRADECRAFT_URL: "https://api.tradecraft.fi/v1"
+  TEMPLE_URL: "https://api.templedigitalgroup.com"
+  # Polling parameters
+  ORACLE_POLL_MS: "30000"           # 30s poll interval
+  DIVERGENCE_ALERT_PCT: "5.0"      # Alert if Tradecraft vs Temple >5% divergence
+  CIRCUIT_BREAKER_THRESHOLD: "10"  # Pause after 10 consecutive failures
+  MIN_PRICE: "0.001"               # Absolute price floor
+  MAX_PRICE: "1000.0"              # Absolute price ceiling
+  MAX_PRICE_CHANGE_PCT: "25.0"     # Max 25% change per update
+---
+# ============================================================
+# PRICE ORACLE SERVICE ACCOUNT
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: price-oracle
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: price-oracle
+    app.kubernetes.io/component: oracle
+    app.kubernetes.io/part-of: minted-musd
+  annotations:
+    kubernetes.io/enforce-mountable-secrets: "true"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: price-oracle-binding
+  namespace: musd-canton
+subjects:
+  - kind: ServiceAccount
+    name: price-oracle
+    namespace: musd-canton
+roleRef:
+  kind: Role
+  name: canton-minimal
+  apiGroup: rbac.authorization.k8s.io
+---
+# ============================================================
+# PRICE ORACLE DEPLOYMENT
+# Single replica — must not push duplicate price updates
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: price-oracle
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: price-oracle
+    app.kubernetes.io/component: oracle
+    app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # No concurrent instances — avoid double-push of prices
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: price-oracle
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: price-oracle
+        app.kubernetes.io/component: oracle
+        app.kubernetes.io/part-of: minted-musd
+      annotations:
+        prometheus.io/scrape: "false"  # No HTTP metrics endpoint (polling loop)
+    spec:
+      serviceAccountName: price-oracle
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Wait for Canton participant to be reachable
+      initContainers:
+        - name: wait-for-canton
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Canton participant Ledger API..."
+              until nc -z canton-participant.musd-canton.svc.cluster.local 5011; do
+                echo "  participant:5011 not ready, retrying in 3s..."
+                sleep 3
+              done
+              echo "Canton participant is reachable."
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: price-oracle
+          # Uses relay image (same Dockerfile as bridge-relay)
+          # INFRA-C-01: Pin to immutable SHA256 digest
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/price-oracle.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CANTON_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: CANTON_HOST
+            - name: CANTON_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: CANTON_PORT
+            - name: CANTON_USE_TLS
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: CANTON_USE_TLS
+            - name: CANTON_PARTY
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: CANTON_PARTY
+            - name: TRADECRAFT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: TRADECRAFT_URL
+            - name: TEMPLE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: TEMPLE_URL
+            - name: ORACLE_POLL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: ORACLE_POLL_MS
+            - name: DIVERGENCE_ALERT_PCT
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: DIVERGENCE_ALERT_PCT
+            - name: CIRCUIT_BREAKER_THRESHOLD
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: CIRCUIT_BREAKER_THRESHOLD
+            - name: MIN_PRICE
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: MIN_PRICE
+            - name: MAX_PRICE
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: MAX_PRICE
+            - name: MAX_PRICE_CHANGE_PCT
+              valueFrom:
+                configMapKeyRef:
+                  name: price-oracle-config
+                  key: MAX_PRICE_CHANGE_PCT
+            # Secrets mounted as files — never env vars
+            - name: CANTON_TOKEN
+              value: "file:///run/secrets/canton_token"
+            - name: TEMPLE_EMAIL
+              value: "file:///run/secrets/temple_email"
+            - name: TEMPLE_PASSWORD
+              value: "file:///run/secrets/temple_password"
+          volumeMounts:
+            - name: oracle-secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          # No HTTP health endpoint — pure polling loop.
+          # Use exec probe to verify Node.js process is alive.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f 'price-oracle' > /dev/null"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f 'price-oracle' > /dev/null"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: oracle-secrets
+          projected:
+            sources:
+              - secret:
+                  name: price-oracle-secrets
+                  items:
+                    - key: CANTON_TOKEN
+                      path: canton_token
+                    - key: TEMPLE_EMAIL
+                      path: temple_email
+                    - key: TEMPLE_PASSWORD
+                      path: temple_password
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# ============================================================
+# NETWORK POLICY — Canton internal + Tradecraft/Temple HTTPS
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: price-oracle-netpol
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: price-oracle
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: price-oracle
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # No inbound traffic — pure outbound worker
+  egress:
+    # Canton participant (in-cluster Ledger API)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 5011
+          protocol: TCP
+    # Tradecraft + Temple DEX APIs (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# PDB — allow eviction during rolling upgrades
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: price-oracle-pdb
+  namespace: musd-canton
+spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: price-oracle
