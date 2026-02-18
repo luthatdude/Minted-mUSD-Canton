@@ -9,6 +9,11 @@ import { CONTRACTS, MUSD_DECIMALS, USDC_DECIMALS } from "@/lib/config";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+// smUSD has _decimalsOffset(3) in its ERC-4626 vault, so ERC20 decimals = 18 + 3 = 21
+const SMUSD_DECIMALS = 21;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 type PoolTab = "smusd" | "ethpool";
@@ -44,6 +49,11 @@ export function StakePage() {
   const { address, isConnected, provider } = useUnifiedWallet();
   const contracts = useWCContracts();
   const tx = useTx();
+  const [slippageBps, setSlippageBps] = useState(50);
+
+  // Current timestamp (client-only to avoid hydration mismatch)
+  const [nowSeconds, setNowSeconds] = useState(0);
+  useEffect(() => { setNowSeconds(Math.floor(Date.now() / 1000)); }, []);
 
   // Shared state
   const [pool, setPool] = useState<PoolTab>("smusd");
@@ -94,7 +104,7 @@ export function StakePage() {
         return;
       }
       try {
-        const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
+        const parsed = ethers.parseUnits(amount, tab === "stake" ? MUSD_DECIMALS : SMUSD_DECIMALS);
         if (tab === "stake") {
           const shares = await smusd.previewDeposit(parsed);
           setSmusdStats(s => ({ ...s, previewDeposit: shares }));
@@ -170,7 +180,7 @@ export function StakePage() {
 
   async function handleSmusdUnstake() {
     if (!smusd || !address) return;
-    const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
+    const parsed = ethers.parseUnits(amount, SMUSD_DECIMALS);
     await tx.send(() => smusd.redeem(parsed, address, address));
     setAmount("");
   }
@@ -205,15 +215,21 @@ export function StakePage() {
 
   // ═══════════════════════════════════════════════════════════════════════════
   //  Derived values
+  //  NOTE: SMUSD.sol has _decimalsOffset() = 3, meaning smUSD shares have
+  //  3 extra decimal places (21 effective vs 18 for mUSD). We must multiply
+  //  totalAssets by 10^3 when computing per-share values to compensate.
   // ═══════════════════════════════════════════════════════════════════════════
+  const SMUSD_OFFSET = 1000n; // 10^_decimalsOffset() = 10^3
   const smusdExchangeRate = smusdStats.totalSupply > 0n
-    ? (Number(smusdStats.totalAssets) / Number(smusdStats.totalSupply)).toFixed(4) : "1.0000";
+    ? (Number(smusdStats.totalAssets * SMUSD_OFFSET) / Number(smusdStats.totalSupply)).toFixed(4) : "1.0000";
   const smusdSharePrice = smusdStats.totalSupply > 0n
-    ? Number(smusdStats.totalAssets) / Number(smusdStats.totalSupply) : 1;
+    ? Number(smusdStats.totalAssets * SMUSD_OFFSET) / Number(smusdStats.totalSupply) : 1;
   const smusdApy = Math.max(0, (smusdSharePrice - 1) * 100);
   const smusdPositionValue = smusdStats.smusdBal > 0n && smusdStats.totalSupply > 0n
     ? (smusdStats.smusdBal * smusdStats.totalAssets) / smusdStats.totalSupply : 0n;
-  const smusdYieldEarned = smusdPositionValue > smusdStats.smusdBal ? smusdPositionValue - smusdStats.smusdBal : 0n;
+  // Yield = positionValue - (smusdBal adjusted back to mUSD decimals)
+  const smusdBalAsMuSD = smusdStats.smusdBal / SMUSD_OFFSET;
+  const smusdYieldEarned = smusdPositionValue > smusdBalAsMuSD ? smusdPositionValue - smusdBalAsMuSD : 0n;
   const cooldownSeconds = Number(smusdStats.cooldownRemaining);
   const cooldownHours = cooldownSeconds / 3600;
   const cooldownPct = Math.max(0, Math.min(100, ((86400 - cooldownSeconds) / 86400) * 100));
@@ -311,7 +327,7 @@ export function StakePage() {
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <label className="text-sm font-medium text-gray-400">{tab === "stake" ? "You Stake" : "You Unstake"}</label>
-                      <span className="text-xs text-gray-500">Balance: {formatToken(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal)}</span>
+                      <span className="text-xs text-gray-500">Balance: {formatToken(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal, tab === "stake" ? MUSD_DECIMALS : SMUSD_DECIMALS)}</span>
                     </div>
                     <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
                       <div className="flex items-center gap-4">
@@ -325,7 +341,7 @@ export function StakePage() {
                         <div className="flex items-center gap-2">
                           <button
                             className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
-                            onClick={() => setAmount(ethers.formatUnits(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal, MUSD_DECIMALS))}
+                            onClick={() => setAmount(ethers.formatUnits(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal, tab === "stake" ? MUSD_DECIMALS : SMUSD_DECIMALS))}
                           >MAX</button>
                           <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                             <div className={`h-6 w-6 rounded-full ${tab === "stake" ? "bg-gradient-to-br from-brand-500 to-purple-500" : "bg-gradient-to-br from-emerald-500 to-teal-500"}`} />
@@ -350,7 +366,7 @@ export function StakePage() {
                       <div className="flex items-center justify-between">
                         <span className="text-2xl font-semibold text-white">
                           {amount && parseFloat(amount) > 0
-                            ? (tab === "stake" ? formatToken(smusdStats.previewDeposit) : formatToken(smusdStats.previewRedeem))
+                            ? (tab === "stake" ? formatToken(smusdStats.previewDeposit, SMUSD_DECIMALS) : formatToken(smusdStats.previewRedeem))
                             : "0.00"}
                         </span>
                         <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
@@ -390,6 +406,11 @@ export function StakePage() {
                     </div>
                   )}
 
+                  {/* Slippage Tolerance (unstake tab) */}
+                  {tab === "unstake" && (
+                    <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
+                  )}
+
                   {/* Action Button */}
                   <TxButton
                     onClick={tab === "stake" ? handleSmusdStake : handleSmusdUnstake}
@@ -423,7 +444,7 @@ export function StakePage() {
                     <div className="alert-success flex items-center gap-3">
                       <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                       <span className="text-sm">Transaction confirmed!{" "}
-                        {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
+                        {tx.hash && <a href={`https://sepolia.etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
                       </span>
                     </div>
                   )}
@@ -458,7 +479,7 @@ export function StakePage() {
                 />
                 <StatCard
                   label="Total smUSD"
-                  value={formatToken(smusdStats.totalSupply)}
+                  value={formatToken(smusdStats.totalSupply, SMUSD_DECIMALS)}
                   color="purple"
                   icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
                 />
@@ -481,7 +502,7 @@ export function StakePage() {
                   <div className="grid gap-4 grid-cols-3">
                     <div className="space-y-1">
                       <p className="text-sm text-gray-400">smUSD Balance</p>
-                      <p className="text-xl font-bold text-white">{formatToken(smusdStats.smusdBal)}</p>
+                      <p className="text-xl font-bold text-white">{formatToken(smusdStats.smusdBal, SMUSD_DECIMALS)}</p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-sm text-gray-400">Position Value</p>
@@ -532,7 +553,7 @@ export function StakePage() {
                 />
                 <StatCard
                   label="Your smUSD Balance"
-                  value={formatToken(smusdStats.smusdBal)}
+                  value={formatToken(smusdStats.smusdBal, SMUSD_DECIMALS)}
                   color="purple"
                   subValue={smusdStats.smusdBal > 0n ? `≈ ${formatToken(smusdPositionValue)} mUSD` : undefined}
                   icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
@@ -740,7 +761,7 @@ export function StakePage() {
                           {positions.map(pos => {
                             const isETH = pos.depositAsset === ethers.ZeroAddress;
                             const assetLabel = isETH ? "ETH" : "Stablecoin";
-                            const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - Math.floor(Date.now() / 1000)) : 0;
+                            const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - nowSeconds) : 0;
                             const isLocked = lockRemaining > 0;
                             const daysLeft = Math.ceil(lockRemaining / 86400);
                             return (
@@ -814,7 +835,7 @@ export function StakePage() {
                     <div className="alert-success flex items-center gap-3">
                       <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                       <span className="text-sm">Transaction confirmed!{" "}
-                        {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
+                        {tx.hash && <a href={`https://sepolia.etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
                       </span>
                     </div>
                   )}
