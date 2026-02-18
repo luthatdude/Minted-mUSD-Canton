@@ -7,13 +7,13 @@ describe("UUPS upgrade regression", function () {
     const [admin, emergency] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    const musd = (await MUSDFactory.deploy(ethers.parseEther("10000000"))) as MUSD;
+    const musd = (await MUSDFactory.deploy(ethers.parseEther("10000000"), ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
     const bridge = (await upgrades.deployProxy(
       BridgeFactory,
-      [2, await musd.getAddress(), 11000, ethers.parseEther("1000000")],
+      [2, await musd.getAddress(), 11000, ethers.parseEther("1000000"), admin.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
@@ -47,13 +47,13 @@ describe("UUPS upgrade regression", function () {
     const [admin, unauthorized] = await ethers.getSigners();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    const musd = (await MUSDFactory.connect(admin).deploy(ethers.parseEther("10000000"))) as MUSD;
+    const musd = (await MUSDFactory.connect(admin).deploy(ethers.parseEther("10000000"), ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9", admin);
     const bridge = (await upgrades.deployProxy(
       BridgeFactory,
-      [2, await musd.getAddress(), 11000, ethers.parseEther("1000000")],
+      [2, await musd.getAddress(), 11000, ethers.parseEther("1000000"), admin.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as BLEBridgeV9;
     await bridge.waitForDeployment();
@@ -74,7 +74,7 @@ describe("UUPS upgrade regression", function () {
     const TreasuryFactory = await ethers.getContractFactory("TreasuryV2");
     const treasury = (await upgrades.deployProxy(
       TreasuryFactory,
-      [await usdc.getAddress(), vault.address, admin.address, feeRecipient.address],
+      [await usdc.getAddress(), vault.address, admin.address, feeRecipient.address, admin.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
@@ -114,7 +114,7 @@ describe("UUPS upgrade regression", function () {
     const TreasuryFactory = await ethers.getContractFactory("TreasuryV2", admin);
     const treasury = (await upgrades.deployProxy(
       TreasuryFactory,
-      [await usdc.getAddress(), vault.address, admin.address, feeRecipient.address],
+      [await usdc.getAddress(), vault.address, admin.address, feeRecipient.address, admin.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
