@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Contract } from "ethers";
-import { useWalletConnect } from "./useWalletConnect";
+import { useUnifiedWallet } from "./useUnifiedWallet";
 import { CONTRACTS, CHAIN_ID } from "@/lib/config";
 import { MUSD_ABI } from "@/abis/MUSD";
 import { SMUSD_ABI } from "@/abis/SMUSD";
@@ -45,7 +45,7 @@ const ABI_MAP: Record<string, readonly string[]> = {
  * Returns null if the wallet is on the wrong network.
  */
 export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
-  const { signer, provider, isConnected, chainId } = useWalletConnect();
+  const { signer, provider, isConnected, chainId } = useUnifiedWallet();
 
   return useMemo(() => {
     // Block contract creation when wallet is on the wrong chain
@@ -70,7 +70,7 @@ export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
  * preventing accidental cross-chain transactions.
  */
 export function useWCContracts() {
-  const { signer, provider, isConnected, chainId } = useWalletConnect();
+  const { signer, provider, isConnected, chainId } = useUnifiedWallet();
 
   return useMemo(() => {
     const signerOrProvider = signer || provider;

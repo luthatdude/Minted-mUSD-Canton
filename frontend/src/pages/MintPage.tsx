@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps } from "@/lib/format";
 import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 import ChainSelector from "@/components/ChainSelector";
@@ -14,7 +14,7 @@ import { useMultiChainDeposit, DepositQuote } from "@/hooks/useMultiChainDeposit
 import { ChainConfig, requiresBridging, estimateBridgeTime, getUSDCDecimals, USDC_DECIMALS_BY_CHAIN } from "@/lib/chains";
 
 export function MintPage() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
   const multiChain = useMultiChainDeposit();
 
