@@ -7,7 +7,7 @@ async function main() {
   const [signer] = await ethers.getSigners();
   console.log("Signer:", signer.address);
 
-  const BRIDGE = "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125";
+  const BRIDGE = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
   const NEW_RELAYER = "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0";
   const OLD_RELAYER = "0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36";
 

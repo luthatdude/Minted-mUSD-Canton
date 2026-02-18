@@ -63,7 +63,7 @@ async function main() {
     liquidationEngine:   "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8",
     directMintV2:        "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
     treasuryV2:          "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
-    bleBridgeV9:         "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+    bleBridgeV9:         "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",
     leverageVault:       "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
     depositRouter:       "0x531e95585bcDfcB2303511483F232EEF4a0Cd2de",
     mockUSDC:            "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",

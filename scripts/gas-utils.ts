@@ -91,7 +91,7 @@ export const SEPOLIA_CONTRACTS = {
   DirectMintV2:            "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
   LeverageVault:           "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
   TreasuryV2Proxy:         "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
-  BLEBridgeV9Proxy:        "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+  BLEBridgeV9Proxy:        "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",
   MockUSDC:                "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
   MockWETH:                "0x7999F2894290F2Ce34a508eeff776126D9a7D46e",
   MockWBTC:                "0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F",
