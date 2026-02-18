@@ -8,10 +8,10 @@
 #
 # AUDIT TRAIL: INFRA-H-02 — Operational visibility for bridge and bot services.
 #
-# NOTE: Relay and bot services currently emit unstructured logs (console.log /
-# Winston) rather than Prometheus counters. These dashboards use LogQL count_over_time
-# queries against Loki to derive throughput metrics. When prom-client is added to
-# the relay/bot services, panels can be migrated to PromQL for higher fidelity.
+# NOTE: Bridge Relay dashboard (1) now uses PromQL against prom-client counters.
+# Bot Operations dashboard (2) still uses LogQL against Loki (pending prom-client
+# integration in bot services).
+# Logging Overview dashboard (3) uses Loki for log search (as intended).
 ---
 # ============================================================
 # DASHBOARD PROVISIONER CONFIG
@@ -85,7 +85,7 @@ data:
           "type": "row"
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -99,13 +99,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |= \"bridged successfully\" [24h])",
+              "expr": "sum(increase(minted_attestations_processed_total{status=\"success\"}[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -119,13 +119,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |= \"Transaction reverted\" [24h])",
+              "expr": "sum(increase(minted_tx_reverts_total[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -139,13 +139,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |= \"RateLimit\" [24h])",
+              "expr": "sum(increase(minted_validator_rate_limit_hits_total[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -159,13 +159,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |~ \"Rejecting|replay attack|possible attack\" [24h])",
+              "expr": "sum(increase(minted_bridge_validation_failures_total[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -179,13 +179,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |= \"Bridge-out #\" [24h])",
+              "expr": "sum(increase(minted_bridge_outs_total[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -199,7 +199,7 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "count_over_time({app=\"bridge-relay\"} |= \"PauseGuardian\" |= \"PAUSING\" [1h])",
+              "expr": "minted_anomaly_detector_pause_triggered",
               "refId": "A"
             }
           ]
@@ -230,17 +230,17 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"bridged successfully\" [$__interval]))",
+              "expr": "sum(rate(minted_attestations_processed_total{status=\"success\"}[$__rate_interval]))",
               "legendFormat": "success",
               "refId": "A"
             },
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Transaction reverted\" [$__interval]))",
+              "expr": "sum(rate(minted_tx_reverts_total[$__rate_interval]))",
               "legendFormat": "revert",
               "refId": "B"
             },
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Bridge-out #\" [$__interval]))",
+              "expr": "sum(rate(minted_bridge_outs_total[$__rate_interval]))",
               "legendFormat": "bridge_out",
               "refId": "C"
             }
@@ -260,18 +260,18 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"RateLimit\" [$__interval]))",
+              "expr": "sum(rate(minted_validator_rate_limit_hits_total[$__rate_interval]))",
               "legendFormat": "rate_limit",
               "refId": "A"
             },
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"nonce mismatch\" [$__interval]))",
-              "legendFormat": "nonce_mismatch",
+              "expr": "sum(rate(minted_nonce_collisions_total[$__rate_interval]))",
+              "legendFormat": "nonce_collision",
               "refId": "B"
             },
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |= \"Switching to fallback RPC\" [$__interval]))",
-              "legendFormat": "rpc_failover",
+              "expr": "minted_relay_consecutive_failures",
+              "legendFormat": "consecutive_failures",
               "refId": "C"
             }
           ]
@@ -297,7 +297,7 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(count_over_time({app=\"bridge-relay\"} |~ \"Rejecting invalid signature|cross-chain replay|possible attack\" [$__interval]))",
+              "expr": "sum(rate(minted_bridge_validation_failures_total[$__rate_interval]))",
               "legendFormat": "rejections",
               "refId": "A"
             }
@@ -357,6 +357,17 @@ data:
       "templating": {
         "list": [
           {
+            "current": { "selected": false, "text": "Prometheus", "value": "prometheus" },
+            "hide": 0,
+            "includeAll": false,
+            "label": "Prometheus Datasource",
+            "multi": false,
+            "name": "DS_PROMETHEUS",
+            "options": [],
+            "query": "prometheus",
+            "type": "datasource"
+          },
+          {
             "current": { "selected": false, "text": "Loki", "value": "loki" },
             "hide": 0,
             "includeAll": false,
@@ -383,7 +394,7 @@ data:
       "timezone": "utc",
       "title": "Minted — Bridge Relay Throughput",
       "uid": "minted-relay-throughput",
-      "version": 1
+      "version": 2
     }
 ---
 # ============================================================
