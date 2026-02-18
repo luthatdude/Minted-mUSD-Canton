@@ -1,20 +1,18 @@
-# mUSD Protocol — Designer Handoff v2
+# mUSD Protocol — Frontend Handoff v2
 
-> Complete section-by-section breakdown for designing the mUSD dApp.
-> Dark theme only. Single-page application. Two-chain architecture (Ethereum + Canton).
+> Section-by-section breakdown of the mUSD dApp.
+> Single-page application. Two-chain architecture (Ethereum + Canton).
 >
 > **v2 — Feb 2026:** Updated to reflect actual coded state. Sections marked [LIVE] are implemented and wired. Sections marked [SPEC] are design targets not yet built.
 
 ---
 
-## Brand Identity
+## Product Context
 
 - **Product Name:** mUSD
 - **Tagline:** "The Institutional Ownership Reserve Currency, powered by Canton Network"
-- **Hero Headline:** "The currency for the Web3 Ownership Economy"
 - **Tokens:** mUSD (stablecoin), smUSD (staked mUSD), $MINT (governance — future TGE)
 - **Chains:** Ethereum (primary) and Canton Network (institutional DeFi chain)
-- **Tone:** Institutional but approachable. Think Bloomberg Terminal meets modern DeFi — clean, data-dense, trustworthy.
 
 ---
 
@@ -25,7 +23,7 @@ The app has two layers:
 1. **Landing Page** — a cinematic pre-app gate. Full viewport. No scroll. One CTA. [SPEC — stub exists]
 2. **Main App** — entered via "Enter App" button. 7 pages, top navbar, SPA routing. [LIVE]
 
-Within the main app, every page has an **Ethereum variant** and a **Canton variant**. A pill toggle in the navbar switches between them. When Canton is selected, the visual theme shifts (amber/yellow) so users always know which chain they're operating on.
+Within the main app, every page has an **Ethereum variant** and a **Canton variant**. A toggle in the navbar switches between them. The two chains must be visually distinguishable.
 
 ---
 
@@ -43,7 +41,7 @@ Within the main app, every page has an **Ethereum variant** and a **Canton varia
 
 **Elements:**
 - **Logo:** Left-aligned. "Minted Protocol" wordmark. Clicking returns to Dashboard.
-- **Nav Tabs:** 7 horizontal items. Active tab has an underline indicator color-matched to chain (brand-500 for Ethereum, emerald-500 for Canton).
+- **Nav Tabs:** 7 horizontal items. Active tab has an indicator.
   - Dashboard, Mint, Stake, Borrow & Lend, Bridge, Points, Admin
 - **Chain Toggle:** Pill-style toggle between "Ethereum" and "Canton". Entire app swaps chain context.
 - **Connect Wallet:** MetaMask/WalletConnect button. Connected state shows truncated address + green dot. Canton shows Loop party ID.
@@ -87,23 +85,21 @@ Shown before the user enters the app. Full-screen, no scrollable content below.
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  THREE.js Animated Scene (full viewport, behind all content)     │
-│  • 2000 particles (spherical distribution, additive blending)    │
-│  • Central glowing orb (fresnel shader, pulsing)                 │
-│  • 3 orbiting torus rings (brand-blue, purple, amber)            │
+│  • Particle system                                                │
 │  • Neural-network connection lines between nearby particles      │
 │  • Mouse-follow camera (smooth lerp)                             │
-│  • Dark vignette overlay for text legibility                     │
+│  • Overlay for text legibility                                    │
 ├──────────────────────────────────────────────────────────────────┤
 │  NAV BAR (z-20, minimal)                                         │
 │  ┌──────────┐                                    ┌─────────────┐│
 │  │ Logo     │                                    │ [Enter App] ││
-│  │ Minted   │                                    │  gradient    ││
+│  │ Minted   │                                    │             ││
 │  │ Protocol │                                    │  button      ││
 │  └──────────┘                                    └─────────────┘│
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │          "The currency for the"                                  │
-│          "Web3 Ownership Economy"   (gradient text)              │
+│          "Web3 Ownership Economy"                                │
 │                                                                  │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────────────┐│
 │  │ mUSD     │ │ Staking  │ │ Active   │ │ Canton Attestation  ││
@@ -135,10 +131,10 @@ PageHeader: "Dashboard" · badge: chain name
 
 ═══ PORTFOLIO TAB ═══ [LIVE]
   4 StatCards (sm:2 lg:4):
-    • mUSD Balance     (blue, glow)
-    • smUSD Balance    (green)
-    • Staking Yield    (purple)
-    • Borrow Health    (default)
+    • mUSD Balance
+    • smUSD Balance
+    • Staking Yield
+    • Borrow Health
 
   Section: "Your Positions"
     Position cards showing active stakes, borrows, collateral
@@ -147,7 +143,7 @@ PageHeader: "Dashboard" · badge: chain name
     4 ActionCards → navigate to Mint / Stake / Borrow / Bridge
 
   ┌── Referral Widget (compact) ─────────────────────────────────┐  [LIVE]
-  │  card-gradient-border                                         │
+  │                                                               │
   │  ┌ Header ────────────────────────────────────────────────┐  │
   │  │  🔶 Referral Program    [X.Xx BOOST badge]              │  │
   │  │  "Earn boosted points for every friend who adds TVL"    │  │
@@ -177,7 +173,6 @@ PageHeader: "Dashboard" · badge: chain name
 ```
 
 ### Canton Variant (`CantonDashboard`)
-- Amber/yellow color scheme throughout
 - Collateral dropdown replaced by DAML contract selector
 - Stat cards show Canton contract counts and totals
 - Protocol services status grid (DirectMint, Staking, Oracle, Issuer, Pool)
@@ -192,12 +187,12 @@ PageHeader: "Dashboard" · badge: chain name
 PageHeader: "Mint & Redeem mUSD"
 
 4 StatCards (sm:2 lg:4):
-  • mUSD Balance      (blue, glow)
-  • USDC Balance      (green)
-  • Exchange Rate     (purple, "1:1")
-  • Supply Cap Usage  (default, %)
+  • mUSD Balance
+  • USDC Balance
+  • Exchange Rate ("1:1")
+  • Supply Cap Usage (%)
 
-Mint/Redeem Widget (card-gradient-border):
+Mint/Redeem Widget (prominent card):
   ┌─ [Mint]  [Redeem] ───────────────────────────────────────────┐
   │                                                               │
   │  ChainSelector: [Ethereum ▾] [Base] [Arbitrum] [Solana]     │
@@ -233,7 +228,7 @@ PageHeader: "Stake & Earn"
 Pool Tabs: [smUSD Vault] [ETH Pool (smUSD-E)]
 
 ═══ smUSD Vault Tab ═══
-  Stake / Unstake Widget (card-gradient-border):
+  Stake / Unstake Widget (prominent card):
     ┌─ [➕ Stake mUSD]  [🔄 Unstake smUSD] ───────────────┐
     │  2 Balance Cards (mUSD, smUSD with ≈ mUSD equivalent) │
     │  Input → Output preview → Exchange info → TxButton     │
@@ -274,7 +269,7 @@ Health Factor & Position Summary (conditional on debt > 0):
   [████████████████░░░] gauge
   Collateral: $XX · Debt: $XX · Utilization: XX%
 
-Action Card (card-gradient-border):
+Action Card (prominent card):
   ┌─ [➕ Deposit] [💰 Borrow] [🔄 Repay] [⬆ Withdraw] [⚡ Loop] ────┐
   │  Deposit/Borrow/Repay/Withdraw: Collateral selector + amount      │
   │                                                                     │
@@ -339,10 +334,10 @@ Subtitle: "Earn points by minting, staking, borrowing, and referring friends.
            Referred TVL unlocks boosted multipliers."
 
 4 StatCards (sm:2 lg:4):                                          [LIVE]
-  • Total Points    (blue)
-  • Rank            (default)
-  • Referrals       (green, from referral dashboard)
-  • Referral Boost  (yellow, glow, multiplier e.g. "1.5x")
+  • Total Points
+  • Rank
+  • Referrals (from referral dashboard)
+  • Referral Boost (multiplier e.g. "1.5x")
 
 Season Progress Bar (card):                                       [SPEC]
   ┌───────────────────────────────────────────────────┐
@@ -395,7 +390,7 @@ Tab Nav: [Overview] [My Referrals] [Leaderboard]              [LIVE]
 ═══ LEADERBOARD TAB ═══ [LIVE] — ReferralLeaderboard component
   Time range filter: [All Time] [30D] [7D]
 
-  Your Position (sticky banner, amber gradient):
+  Your Position (sticky banner):
     #Rank · Referees · TVL · Multiplier · Bonus Points
 
   Top 50 Table:
@@ -422,7 +417,7 @@ Tab Nav: [Overview] [My Referrals] [Leaderboard]              [LIVE]
 
 **Purpose:** Internal operations console. Wallet-gated to admin role holders.
 
-**Design philosophy:** Dense, functional — think Grafana not Dribbble. Collapsible accordion sections, confirmation modals, decoded revert reasons.
+Collapsible accordion sections, confirmation modals, decoded revert reasons.
 
 ```
 Tab bar: [Emergency] [mUSD] [DirectMint] [Treasury] [Vaults] [Bridge] [Borrow] [Oracle]
@@ -475,7 +470,7 @@ The referral system spans three dedicated components plus an on-chain `ReferralR
 **Used on:** PointsPage (Leaderboard tab)
 
 - Top 50 referrers by referred TVL (from on-chain `ReferralLinked` events)
-- Medal icons for top 3 (gold, silver, bronze gradient circles)
+- Distinction for top 3
 - Time range filter (All Time, 30D, 7D)
 - Sticky "Your Position" banner
 - "YOU" badge on user's own row
@@ -487,7 +482,7 @@ The referral system spans three dedicated components plus an on-chain `ReferralR
 
 | Component | Used On | Status | Notes |
 |-----------|---------|--------|-------|
-| **StatCard** | Every page | LIVE | Metric card with icon, value, label, optional sub-text, trend. Colors: blue, green, purple, red, yellow, default. Variants: glow. |
+| **StatCard** | Every page | LIVE | Metric card with icon, value, label, optional sub-text and trend indicator. |
 | **PageHeader** | Every page | LIVE | Title + subtitle + optional badge |
 | **TxButton** | Mint, Stake, Borrow, Admin | LIVE | Action button. States: default → loading → success → error. Variants: primary, secondary, danger, success. Sizes: default, sm. |
 | **Section** | Dashboard | LIVE | Content section wrapper with title, subtitle, optional icon |
@@ -644,7 +639,7 @@ Layout (shown when appLaunched=true)
 │       └── AIYieldOptimizer (Treasury section)
 │
 └── Footer
-    ├── Status indicator (green dot)
+    ├── Status indicator
     ├── Links (Docs · GitHub · Discord)
     └── Copyright
 ```
@@ -672,12 +667,12 @@ frontend/src/
 │       └── prices.ts          — API route: crypto prices
 │
 ├── components/
-│   ├── Layout.tsx             — Shell: animated bg (chain-aware), navbar, main, footer
+│   ├── Layout.tsx             — Shell: navbar, main content, footer
 │   ├── Navbar.tsx             — Top nav: 7 items + chain toggle + wallet button
 │   ├── LandingPage.tsx        — Pre-app gate (stub: headline + CTAs + 3 cards)
 │   ├── ChainToggle.tsx        — ETH ⟷ Canton pill switch
 │   ├── ChainSelector.tsx      — Multi-chain dropdown (Base/Arbitrum/Solana/Ethereum)
-│   ├── StatCard.tsx           — Metric card (6 colors, glow variant, icon, trend)
+│   ├── StatCard.tsx           — Metric card (icon, trend)
 │   ├── PageHeader.tsx         — Title + subtitle + badge
 │   ├── Section.tsx            — Content section wrapper
 │   ├── TxButton.tsx           — Transaction button (4 variants, 2 sizes, loading state)
@@ -749,7 +744,7 @@ frontend/src/
 
 | Feature | Page | Priority | Description |
 |---------|------|----------|-------------|
-| Landing Page THREE.js scene | Landing | P1 | Particle system, glowing orb, orbiting rings, neural lines, mouse-follow camera |
+| Landing Page THREE.js scene | Landing | P1 | Particle system, mouse-follow camera |
 | Landing Page stat cards | Landing | P1 | Live protocol stats (supply, APY, users, Canton value) |
 | Season Progress Bar | Points | P2 | Season timeline with progress, multiplier, days remaining |
 | Points Calculator tab | Points | P2 | Implied APY, scenarios table, multiplier schedule |
@@ -759,15 +754,3 @@ frontend/src/
 | Maximize Your Points tips | Points | P3 | 4 strategy tips for maximizing points |
 | Airdrop Info Card | Points | P3 | Points → $MINT token conversion details |
 
----
-
-## Design Principles
-
-1. **Dark theme only** — no light mode toggle
-2. **Data-forward** — stat cards, tables, and charts should be prominent. Users are here for numbers.
-3. **Ethereum vs Canton must feel distinct** — Ethereum = blue/brand palette, Canton = amber/yellow palette. Chain toggle shifts entire visual identity.
-4. **Institutional trust** — clean typography, precise alignment, restrained animation. Not playful/meme. This is institutional DeFi.
-5. **Action widgets are the hero** — the mint/stake/borrow cards are the most important UI elements per page. Visually elevated with gradient borders.
-6. **Explainer cards are secondary** — educational content sits below the fold. Present but not dominant.
-7. **Mobile-first responsive** — everything must work on mobile. Widgets go full-width, stat cards stack vertically.
-8. **Referral system is prominent** — the ReferralWidget appears on both Dashboard and Points pages. It should feel rewarding and gamified (progress bars, tier unlocks, amber/gold accents).
