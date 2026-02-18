@@ -34,6 +34,7 @@
 import { ethers, Wallet } from "ethers";
 import * as fs from "fs";
 import { createBotSigner } from "./signer";
+import { TxQueue } from "./tx-queue";
 import http from "http";
 import { createLogger, format, transports } from "winston";
 
@@ -256,6 +257,7 @@ export class YieldHarvestKeeper {
   private metaVaults: Map<string, ethers.Contract> = new Map();
   private running = false;
   private consecutiveErrors = 0;
+  public readonly txQueue = new TxQueue({ maxTxPerMinute: 8, maxRetries: 2 });
 
   /** Rolling snapshots for APY calculation — per vault address */
   private snapshots: Map<string, VaultSnapshot[]> = new Map();

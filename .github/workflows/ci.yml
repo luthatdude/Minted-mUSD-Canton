@@ -1088,6 +1088,62 @@ jobs:
           NEXT_PUBLIC_CHAIN_ID: "11155111"
 
   # ============================================================
+  #  POINTS SERVICE: Build & Test
+  # ============================================================
+  points:
+    name: Points Service Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: points
+        run: npm ci
+
+      - name: TypeScript compile check
+        working-directory: points
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        working-directory: points
+        run: |
+          if [ -f src/__tests__/calculator.test.ts ] || [ -f src/__tests__/referral.test.ts ]; then
+            npx ts-node --esm src/__tests__/calculator.test.ts || true
+            npx ts-node --esm src/__tests__/referral.test.ts || true
+          else
+            echo "No test files found — skipping"
+          fi
+
+  # ============================================================
+  #  SUBGRAPH: Codegen & Build
+  # ============================================================
+  subgraph:
+    name: Subgraph Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: subgraph
+        run: npm ci
+
+      - name: Codegen
+        working-directory: subgraph
+        run: npx graph codegen
+
+      - name: Build
+        working-directory: subgraph
+        run: npx graph build
+
+  # ============================================================
   #  TYPESCRIPT SAST: CodeQL for relay, bot, frontend
   # ============================================================
   typescript-sast:

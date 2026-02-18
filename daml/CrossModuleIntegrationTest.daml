@@ -431,8 +431,9 @@ testLiquidationFlow = do
       priceFeedCids = [ctnFeedCid]
 
   -- Crash price → position undercollateralized
-  passTime (minutes 31)
+  passTime (hours 1)
   -- DAML-M-06: Create governance proof for emergency update
+  now <- getTime
   govProofCid <- submit operator do
     createCmd GovernanceActionLog with
       operator
@@ -444,7 +445,7 @@ testLiquidationFlow = do
       targetModule = "CantonLending"
       approvers = [operator]
       executedBy = operator
-      executedAt = datetime 2026 Feb 6 12 6 0
+      executedAt = now
   crashedFeedCid <- submit operator do
     exerciseCmd ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10

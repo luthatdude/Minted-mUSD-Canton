@@ -1190,8 +1190,10 @@ test_LPTransfer = script do
       cantonCid
       smusdCid
 
-  -- Alice transfers LP to Bob (readAs operator needed to see ComplianceRegistry)
-  proposalCid <- submitMulti [alice] [operator] do
+  -- Alice transfers LP to Bob
+  -- Canton 3.x / LF 2.x: operator must be actAs for inner exercise visibility
+  -- on ComplianceRegistry within BPLP_Transfer choice body.
+  proposalCid <- submitMulti [alice, operator] [] do
     exerciseCmd lpCid BPLP_Transfer with newOwner = bob
 
   -- Bob accepts
