@@ -1,0 +1,514 @@
+-- | Canton edge-case scenarios for launch-readiness backlog.
+-- Each script corresponds to one recommendation in SECURITY_AUDIT.md.
+
+module CantonEdgeCasesTest where
+
+import Daml.Script
+import DA.Optional (fromSome)
+import DA.Set qualified as Set
+import DA.Text qualified as T
+import DA.Time (hours, addRelTime)
+import BLEBridgeProtocol
+import CantonDirectMint
+import Compliance
+import InstitutionalAssetV4 qualified as IA
+import MintedMUSD qualified as Legacy
+
+hash64 : Text
+hash64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+mpaDocumentUri : Text
+mpaDocumentUri = "https://minted.app/terms"
+
+test_bridgeQuorumBoundary : Script ()
+test_bridgeQuorumBoundary = do
+  aggregator <- allocateParty "EdgeQuorumAggregator"
+  v1 <- allocateParty "EdgeQuorumV1"
+  v2 <- allocateParty "EdgeQuorumV2"
+  v3 <- allocateParty "EdgeQuorumV3"
+  v4 <- allocateParty "EdgeQuorumV4"
+  v5 <- allocateParty "EdgeQuorumV5"
+  recipient <- allocateParty "EdgeQuorumRecipient"
+
+  now <- getTime
+  let payload = BridgeInPayload with
+        attestationId = "bridge-in-boundary"
+        sourceChainId = 1
+        sourceTxHash = "0xquorumboundary"
+        amount = 100.0
+        recipient
+        nonce = 9001
+        expiresAt = addRelTime now (hours 2)
+
+  att0 <- submit aggregator do
+    createCmd BridgeInAttestation with
+      aggregator
+      validatorGroup = [v1, v2, v3, v4, v5]
+      payload
+      signedValidators = []
+
+  (att1, sig1) <- submit v1 do
+    exerciseCmd att0 BridgeIn_Sign with validator = v1; ecdsaSignature = "sig-v1"
+  (att2, sig2) <- submit v2 do
+    exerciseCmd att1 BridgeIn_Sign with validator = v2; ecdsaSignature = "sig-v2"
+  (att3, sig3) <- submit v3 do
+    exerciseCmd att2 BridgeIn_Sign with validator = v3; ecdsaSignature = "sig-v3"
+
+  -- 5 validators => BFT threshold is 4. Quorum-1 must fail.
+  submitMustFail aggregator do
+    exerciseCmd att3 BridgeIn_Finalize with signatureCids = [sig1, sig2, sig3]
+
+  (att4, sig4) <- submit v4 do
+    exerciseCmd att3 BridgeIn_Sign with validator = v4; ecdsaSignature = "sig-v4"
+
+  finalized <- submit aggregator do
+    exerciseCmd att4 BridgeIn_Finalize with signatureCids = [sig1, sig2, sig3, sig4]
+  assertMsg "Exactly quorum signatures finalize successfully" (length finalized == 4)
+
+test_rateLimitWindowReset : Script ()
+test_rateLimitWindowReset = do
+  operator <- allocateParty "EdgeRateOperator"
+  usdcIssuer <- allocateParty "EdgeRateUSDCIssuer"
+  user <- allocateParty "EdgeRateUser"
+  validator <- allocateParty "EdgeRateValidator"
+
+  now <- getTime
+  service0 <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      usdcxIssuer = None
+      mintFeeBps = 0
+      redeemFeeBps = 0
+      minAmount = 1.0
+      maxAmount = 1_000_000.0
+      supplyCap = 10_000_000.0
+      currentSupply = 0.0
+      accumulatedFees = 0.0
+      paused = False
+      validators = [validator]
+      targetChainId = 1
+      targetTreasury = "0xRateLimitTreasury"
+      nextNonce = 1
+      dailyMintLimit = 100.0
+      dailyMinted = 0.0
+      dailyBurned = 0.0
+      lastRateLimitReset = now
+      complianceRegistryCid = None
+      mpaHash = hash64
+      mpaUri = mpaDocumentUri
+      authorizedMinters = [user]
+
+  usdc60 <- submitMulti [usdcIssuer, user] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = user
+      amount = 60.0
+      privacyObservers = []
+
+  (service1, _, _) <- submit user do
+    exerciseCmd service0 DirectMint_Mint with user; usdcCid = usdc60
+
+  usdc50 <- submitMulti [usdcIssuer, user] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = user
+      amount = 50.0
+      privacyObservers = []
+
+  -- Same window: 60 + 50 > 100 daily limit, so second mint fails.
+  submitMustFail user do
+    exerciseCmd service1 DirectMint_Mint with user; usdcCid = usdc50
+
+  passTime (hours 25)
+
+  usdc80 <- submitMulti [usdcIssuer, user] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = user
+      amount = 80.0
+      privacyObservers = []
+
+  (service2, _, _) <- submit user do
+    exerciseCmd service1 DirectMint_Mint with user; usdcCid = usdc80
+
+  state2 <- queryContractId operator service2
+  let s2 = fromSome state2
+  assertMsg "Window reset allows mint in new period" (s2.dailyMinted == 80.0)
+  assertMsg "Burn counter reset with new window" (s2.dailyBurned == 0.0)
+
+test_concurrentOverlappingAttestations : Script ()
+test_concurrentOverlappingAttestations = do
+  aggregator <- allocateParty "EdgeConcurrentAggregator"
+  bank <- allocateParty "EdgeConcurrentBank"
+  v1 <- allocateParty "EdgeConcurrentV1"
+  v2 <- allocateParty "EdgeConcurrentV2"
+  v3 <- allocateParty "EdgeConcurrentV3"
+  v4 <- allocateParty "EdgeConcurrentV4"
+  v5 <- allocateParty "EdgeConcurrentV5"
+  v6 <- allocateParty "EdgeConcurrentV6"
+  v7 <- allocateParty "EdgeConcurrentV7"
+
+  now <- getTime
+  equityCid <- submit bank do
+    createCmd InstitutionalEquityPosition with
+      bank
+      validatorGroup = [v1, v2, v3, v4, v5, v6, v7]
+      aggregator
+      totalValue = 50_000.0
+      referenceId = "edge-overlap-eq"
+      lastUpdated = now
+
+  let payloadA = BridgeOutPayload with
+        attestationId = "bridge-out-A"
+        cantonReserveTotal = 12_000.0
+        ethereumTreasuryAddr = "0xTreasuryA"
+        amount = 100.0
+        nonce = 7001
+        chainId = 1
+        expiresAt = addRelTime now (hours 2)
+
+  let payloadB = BridgeOutPayload with
+        attestationId = "bridge-out-B"
+        cantonReserveTotal = 12_000.0
+        ethereumTreasuryAddr = "0xTreasuryB"
+        amount = 120.0
+        nonce = 7002
+        chainId = 1
+        expiresAt = addRelTime now (hours 2)
+
+  attA0 <- submit aggregator do
+    createCmd BridgeOutAttestation with
+      aggregator
+      validatorGroup = [v1, v2, v3, v4, v5]
+      payload = payloadA
+      positionCids = [equityCid]
+      signedValidators = []
+
+  attB0 <- submit aggregator do
+    createCmd BridgeOutAttestation with
+      aggregator
+      validatorGroup = [v3, v4, v5, v6, v7]
+      payload = payloadB
+      positionCids = [equityCid]
+      signedValidators = []
+
+  (attA1, sigA3) <- submit v3 do
+    exerciseCmd attA0 BridgeOut_Sign with validator = v3; ecdsaSignature = "A-v3"
+  (attB1, sigB3) <- submit v3 do
+    exerciseCmd attB0 BridgeOut_Sign with validator = v3; ecdsaSignature = "B-v3"
+  (attA2, sigA1) <- submit v1 do
+    exerciseCmd attA1 BridgeOut_Sign with validator = v1; ecdsaSignature = "A-v1"
+  (attB2, sigB4) <- submit v4 do
+    exerciseCmd attB1 BridgeOut_Sign with validator = v4; ecdsaSignature = "B-v4"
+  (attA3, sigA2) <- submit v2 do
+    exerciseCmd attA2 BridgeOut_Sign with validator = v2; ecdsaSignature = "A-v2"
+  (attB3, sigB5) <- submit v5 do
+    exerciseCmd attB2 BridgeOut_Sign with validator = v5; ecdsaSignature = "B-v5"
+  (attA4, sigA4) <- submit v4 do
+    exerciseCmd attA3 BridgeOut_Sign with validator = v4; ecdsaSignature = "A-v4"
+  (attB4, sigB6) <- submit v6 do
+    exerciseCmd attB3 BridgeOut_Sign with validator = v6; ecdsaSignature = "B-v6"
+
+  sigA3View <- queryContractId aggregator sigA3
+  sigB3View <- queryContractId aggregator sigB3
+  assertMsg "Overlapping validator signs attestation A nonce" ((fromSome sigA3View).nonce == 7001)
+  assertMsg "Overlapping validator signs attestation B nonce" ((fromSome sigB3View).nonce == 7002)
+
+  finalA <- submit aggregator do
+    exerciseCmd attA4 BridgeOut_Finalize with signatureCids = [sigA3, sigA1, sigA2, sigA4]
+  finalB <- submit aggregator do
+    exerciseCmd attB4 BridgeOut_Finalize with signatureCids = [sigB3, sigB4, sigB5, sigB6]
+
+  assertMsg "Attestation A finalized with 4-of-5 signatures" (length finalA == 4)
+  assertMsg "Attestation B finalized with 4-of-5 signatures" (length finalB == 4)
+
+test_complianceAllMintPaths : Script ()
+test_complianceAllMintPaths = do
+  regulator <- allocateParty "EdgeCompRegulator"
+  operator <- allocateParty "EdgeCompOperator"
+  usdcIssuer <- allocateParty "EdgeCompUSDCIssuer"
+  usdcxIssuer <- allocateParty "EdgeCompUSDCxIssuer"
+  blockedUser <- allocateParty "EdgeCompBlockedUser"
+  goodUser <- allocateParty "EdgeCompGoodUser"
+  validator <- allocateParty "EdgeCompValidator"
+
+  now <- getTime
+  registryCid <- submit regulator do
+    createCmd ComplianceRegistry with
+      regulator
+      operator
+      blacklisted = Set.singleton blockedUser
+      frozen = Set.empty
+      lastUpdated = now
+
+  service0 <- submit operator do
+    createCmd CantonDirectMintService with
+      operator
+      usdcIssuer
+      usdcxIssuer = Some usdcxIssuer
+      mintFeeBps = 0
+      redeemFeeBps = 0
+      minAmount = 1.0
+      maxAmount = 1_000_000.0
+      supplyCap = 10_000_000.0
+      currentSupply = 0.0
+      accumulatedFees = 0.0
+      paused = False
+      validators = [validator]
+      targetChainId = 1
+      targetTreasury = "0xComplianceTreasury"
+      nextNonce = 1
+      dailyMintLimit = 1_000_000.0
+      dailyMinted = 0.0
+      dailyBurned = 0.0
+      lastRateLimitReset = now
+      complianceRegistryCid = Some registryCid
+      mpaHash = hash64
+      mpaUri = mpaDocumentUri
+      authorizedMinters = [blockedUser, goodUser]
+
+  blockedUsdc <- submitMulti [usdcIssuer, blockedUser] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = blockedUser
+      amount = 100.0
+      privacyObservers = []
+
+  blockedUsdcx <- submitMulti [usdcxIssuer, blockedUser] [] do
+    createCmd USDCx with
+      issuer = usdcxIssuer
+      owner = blockedUser
+      amount = 100.0
+      sourceChain = "ethereum"
+      cctpNonce = 1
+      privacyObservers = []
+
+  goodUsdc <- submitMulti [usdcIssuer, goodUser] [] do
+    createCmd CantonUSDC with
+      issuer = usdcIssuer
+      owner = goodUser
+      amount = 100.0
+      privacyObservers = []
+
+  goodUsdcx <- submitMulti [usdcxIssuer, goodUser] [] do
+    createCmd USDCx with
+      issuer = usdcxIssuer
+      owner = goodUser
+      amount = 175.0
+      sourceChain = "ethereum"
+      cctpNonce = 2
+      privacyObservers = []
+
+  -- ValidateMint runs on both mint paths and must block blacklisted users.
+  submitMultiMustFail [blockedUser, operator] [] do
+    exerciseCmd service0 DirectMint_Mint with user = blockedUser; usdcCid = blockedUsdc
+
+  submitMultiMustFail [blockedUser, operator] [] do
+    exerciseCmd service0 DirectMint_MintWithUSDCx with user = blockedUser; usdcxCid = blockedUsdcx
+
+  (service1, _, _) <- submitMulti [goodUser, operator] [] do
+    exerciseCmd service0 DirectMint_Mint with user = goodUser; usdcCid = goodUsdc
+
+  (service2, _, _) <- submitMulti [goodUser, operator] [] do
+    exerciseCmd service1 DirectMint_MintWithUSDCx with user = goodUser; usdcxCid = goodUsdcx
+
+  state2 <- queryContractId operator service2
+  assertMsg "Compliant user can mint on both paths" ((fromSome state2).currentSupply == 275.0)
+
+test_precisionConsistency : Script ()
+test_precisionConsistency = do
+  provider <- allocateParty "EdgePrecisionProvider"
+  owner <- allocateParty "EdgePrecisionOwner"
+
+  legacyCid <- submitMulti [provider, owner] [] do
+    createCmd Legacy.MUSD with
+      provider
+      owner
+      amount = 123.4567890123
+      currency = "USD"
+      observers = []
+
+  cantonCid <- submitMulti [provider, owner] [] do
+    createCmd CantonMUSD with
+      issuer = provider
+      owner
+      amount = 123.456789012300000000
+      agreementHash = hash64
+      agreementUri = mpaDocumentUri
+      privacyObservers = []
+
+  legacyView <- queryContractId provider legacyCid
+  cantonView <- queryContractId provider cantonCid
+  let legacyAmount = (fromSome legacyView).amount
+  let cantonAmount = (fromSome cantonView).amount
+
+  assertMsg "Legacy Decimal keeps canonical 10dp value" (show legacyAmount == "123.4567890123")
+  assertMsg "Numeric18 preserves Decimal prefix" (T.take 14 (show cantonAmount) == show legacyAmount)
+
+  let legacyFee : Decimal = legacyAmount * intToDecimal 37 / 10000.0
+  let cantonFee = cantonAmount * intToNumeric 37 / 10000.0
+  let legacyFeeText = show legacyFee
+  let cantonFeeText = show cantonFee
+  assertMsg "Fee math is prefix-consistent across Decimal and Numeric18"
+    (T.take (T.length legacyFeeText) cantonFeeText == legacyFeeText)
+
+test_rejectZeroOrNegative : Script ()
+test_rejectZeroOrNegative = do
+  issuer <- allocateParty "EdgeAmountIssuer"
+  user <- allocateParty "EdgeAmountUser"
+
+  submitMultiMustFail [issuer, user] [] do
+    createCmd CantonUSDC with
+      issuer
+      owner = user
+      amount = 0.0
+      privacyObservers = []
+
+  submitMultiMustFail [issuer, user] [] do
+    createCmd USDCx with
+      issuer
+      owner = user
+      amount = -1.0
+      sourceChain = "ethereum"
+      cctpNonce = 10
+      privacyObservers = []
+
+  submitMultiMustFail [issuer, user] [] do
+    createCmd CantonMUSD with
+      issuer
+      owner = user
+      amount = 0.0
+      agreementHash = hash64
+      agreementUri = mpaDocumentUri
+      privacyObservers = []
+
+  submitMultiMustFail [issuer, user] [] do
+    createCmd Legacy.MUSD with
+      provider = issuer
+      owner = user
+      amount = 0.0
+      currency = "USD"
+      observers = []
+
+test_emergencyTransferAuditTrail : Script ()
+test_emergencyTransferAuditTrail = do
+  depository <- allocateParty "EdgeEmergencyDepository"
+  issuer <- allocateParty "EdgeEmergencyIssuer"
+  owner <- allocateParty "EdgeEmergencyOwner"
+  receiver <- allocateParty "EdgeEmergencyReceiver"
+  let authority = issuer
+  let instrumentId = "EDGE-USD"
+  let reason = "court-order-2026-02-18"
+
+  _instrumentCid <- submitMulti [depository, issuer] [] do
+    createCmd IA.Instrument with
+      depository
+      issuer
+      id = instrumentId
+      decimalScale = 2
+      registryAuthority = authority
+
+  registryCid <- submit authority do
+    createCmd IA.AssetRegistry with
+      authority
+      instrumentId
+      authorizedParties = [owner, receiver]
+
+  assetCid <- submitMulti [issuer, owner] [] do
+    createCmd IA.Asset with
+      issuer
+      owner
+      instrumentId
+      depository
+      amount = 1000.0
+      lock = None
+      observers = [receiver]
+      metadata = [("source", "custody")]
+
+  movedCid <- submit issuer do
+    exerciseCmd assetCid IA.Asset_EmergencyTransfer with
+      targetOwner = owner
+      reason
+      registryCid
+
+  movedView <- queryContractId issuer movedCid
+  let moved = fromSome movedView
+  assertMsg "Emergency transfer executes under issuer authority" (moved.owner == owner)
+  assertMsg "Emergency transfer clears lock" (moved.lock == None)
+  case moved.metadata of
+    [] -> assertMsg "Emergency transfer must write metadata" False
+    (k, v) :: _ -> do
+      assertMsg "Audit key is present" (k == "emergency_transfer_reason")
+      assertMsg "Audit reason is persisted" (v == reason)
+
+test_yieldAttestationEpochGap : Script ()
+test_yieldAttestationEpochGap = do
+  aggregator <- allocateParty "EdgeYieldAggregator"
+  v1 <- allocateParty "EdgeYieldV1"
+  v2 <- allocateParty "EdgeYieldV2"
+  v3 <- allocateParty "EdgeYieldV3"
+  v4 <- allocateParty "EdgeYieldV4"
+  v5 <- allocateParty "EdgeYieldV5"
+  let validators = [v1, v2, v3, v4, v5]
+
+  now <- getTime
+
+  let payload1 = YieldPayload with
+        attestationId = "yield-epoch-1"
+        totalTreasuryAssets = 10_500.0
+        totalMUSDSupply = 10_000.0
+        yieldAccrued = 500.0
+        epochNumber = 1
+        timestamp = now
+        nonce = 8001
+
+  att1_0 <- submit aggregator do
+    createCmd YieldAttestation with
+      aggregator
+      validatorGroup = validators
+      payload = payload1
+      signedValidators = []
+
+  (att1_1, y1) <- submit v1 do
+    exerciseCmd att1_0 Yield_Sign with validator = v1; ecdsaSignature = "y1"
+  (att1_2, y2) <- submit v2 do
+    exerciseCmd att1_1 Yield_Sign with validator = v2; ecdsaSignature = "y2"
+  (att1_3, y3) <- submit v3 do
+    exerciseCmd att1_2 Yield_Sign with validator = v3; ecdsaSignature = "y3"
+  (att1_4, y4) <- submit v4 do
+    exerciseCmd att1_3 Yield_Sign with validator = v4; ecdsaSignature = "y4"
+
+  finalized1 <- submit aggregator do
+    exerciseCmd att1_4 Yield_Finalize with signatureCids = [y1, y2, y3, y4]
+  assertMsg "First attestation finalized at epoch 1" (finalized1.epochNumber == 1)
+
+  let payloadGap = YieldPayload with
+        attestationId = "yield-epoch-100"
+        totalTreasuryAssets = 12_200.0
+        totalMUSDSupply = 11_600.0
+        yieldAccrued = 600.0
+        epochNumber = 100
+        timestamp = addRelTime now (hours 72)
+        nonce = 8002
+
+  att2_0 <- submit aggregator do
+    createCmd YieldAttestation with
+      aggregator
+      validatorGroup = validators
+      payload = payloadGap
+      signedValidators = []
+
+  (att2_1, z2) <- submit v2 do
+    exerciseCmd att2_0 Yield_Sign with validator = v2; ecdsaSignature = "z2"
+  (att2_2, z3) <- submit v3 do
+    exerciseCmd att2_1 Yield_Sign with validator = v3; ecdsaSignature = "z3"
+  (att2_3, z4) <- submit v4 do
+    exerciseCmd att2_2 Yield_Sign with validator = v4; ecdsaSignature = "z4"
+  (att2_4, z5) <- submit v5 do
+    exerciseCmd att2_3 Yield_Sign with validator = v5; ecdsaSignature = "z5"
+
+  finalized2 <- submit aggregator do
+    exerciseCmd att2_4 Yield_Finalize with signatureCids = [z2, z3, z4, z5]
+  assertMsg "Large epoch gap currently finalizes" (finalized2.epochNumber == 100)
+  assertMsg "Gap between epochs is observable in-state" (finalized2.epochNumber - finalized1.epochNumber == 99)
