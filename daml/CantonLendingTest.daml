@@ -161,8 +161,8 @@ testPriceFeedMovementCap = do
 testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
-  -- Advance time past the 30-minute emergency update cooldown
-  passTime (minutes 31)
+  -- Advance time well past the 30-minute emergency update cooldown
+  passTime (hours 1)
   -- Create governance proof for emergency update
   govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-update"
   -- Emergency update bypasses movement cap
@@ -467,8 +467,8 @@ testLiquidation = do
   -- 10000 CTN * $0.10 = $1000 raw value
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
-  -- Advance time past the 30-minute emergency update cooldown
-  passTime (minutes 31)
+  -- Advance time well past the 30-minute emergency update cooldown
+  passTime (hours 1)
   govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "emergency-price-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with

@@ -9,6 +9,7 @@ import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
+import { getDefaultChain } from "@/lib/chains";
 import WalletConnector from "@/components/WalletConnector";
 import { SlippageInput } from "@/components/SlippageInput";
 
@@ -137,9 +138,11 @@ export function BorrowPage() {
     if (!borrow || !musd || !address) return;
     const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
     await tx.send(async () => {
+      // Approve MaxUint256: BorrowModule's minDebt dust protection may force
+      // a higher repayAmount than entered (e.g. full debt) after interest accrues.
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < parsed) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, parsed);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
         await approveTx.wait();
       }
       return borrow.repay(parsed);
@@ -153,9 +156,11 @@ export function BorrowPage() {
     if (repayAmount === 0n) return;
 
     await tx.send(async () => {
+      // Approve MaxUint256: interest accrues between approval and execution,
+      // so the actual burn amount may exceed the read debt amount.
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < repayAmount) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, repayAmount);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
         await approveTx.wait();
       }
       return borrow.repay(repayAmount);
@@ -171,8 +176,8 @@ export function BorrowPage() {
     setAmount("");
   }
 
-  // Health factor thresholds
-  const hfValue = Number(ethers.formatUnits(healthFactor, 18));
+  // Health factor thresholds (contract returns bps: 10000 = 1.0)
+  const hfValue = healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff") ? 999 : Number(healthFactor) / 10000;
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
   const isAtRisk = hfValue < 1.5 && debt > 0n;
   const isCritical = hfValue < 1.2 && debt > 0n;
@@ -349,8 +354,8 @@ export function BorrowPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
-                  {/* Testnet Faucet */}
-                  {action === "deposit" && selectedToken && (
+                  {/* Testnet Faucet — hidden on mainnet */}
+                  {action === "deposit" && selectedToken && getDefaultChain().isTestnet && (
                     <button
                       className="mt-2 w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
                       onClick={handleFaucetMint}

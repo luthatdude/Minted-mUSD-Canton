@@ -7,6 +7,8 @@ import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
 import { createBotSigner, readAndValidatePrivateKey as signerReadKey } from "./signer";
 import { validateDistinctRoleKeys, BOT_ROLE_KEYS } from "./config";
+import { startHealthServer } from "./server";
+import { TxQueue } from "./tx-queue";
 
 // INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
 // Prevents NODE_TLS_REJECT_UNAUTHORIZED=0 from disabling cert validation in production
@@ -214,11 +216,12 @@ class LiquidationBot {
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
   
-  private isRunning = false;
+  public isRunning = false;
   private liquidationCount = 0;
   private totalProfitUsd = 0;
   private nonceMutex: Promise<void> = Promise.resolve();
   private walletAddress: string = "";
+  public readonly txQueue = new TxQueue({ maxTxPerMinute: 10, maxRetries: 3 });
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
@@ -687,15 +690,24 @@ async function main() {
   validateDistinctRoleKeys(BOT_ROLE_KEYS);
 
   const bot = new LiquidationBot();
+
+  // Priority 5: Wire K8s health server — K8s deployment expects /health on port 8080
+  const healthServer = startHealthServer(
+    { port: Number(process.env.BOT_PORT) || 8080, healthPath: "/health" },
+    () => bot.isRunning,
+  );
   
   // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    logger.info("Received SIGINT, shutting down...");
+  const shutdown = () => {
+    logger.info("Received shutdown signal, shutting down...");
     bot.stop();
+    healthServer.stop();
     const stats = bot.getStats();
     logger.info(`Final stats: ${stats.liquidations} liquidations, $${stats.profitUsd.toFixed(2)} profit`);
     process.exit(0);
-  });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   
   await bot.initialize();
   
