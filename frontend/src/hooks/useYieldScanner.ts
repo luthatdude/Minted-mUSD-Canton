@@ -92,13 +92,17 @@ export function useYieldScanner(): UseYieldScannerReturn {
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s client timeout
+
     try {
       const params = new URLSearchParams({ limit: "30", loops: "true" });
       if (filters.chain) params.set("chain", filters.chain);
       params.set("minTvl", String(filters.minTvl));
       params.set("minApy", String(filters.minApy));
 
-      const resp = await fetch(`/api/yields?${params}`);
+      const resp = await fetch(`/api/yields?${params}`, { signal: controller.signal });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data: YieldScanResponse = await resp.json();
 
@@ -108,8 +112,13 @@ export function useYieldScanner(): UseYieldScannerReturn {
       setPoolsScanned(data.poolsScanned);
       setChainsScanned(data.chainsScanned);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof DOMException && e.name === "AbortError") {
+        setError("Scan timed out — DefiLlama may be slow. Click Scan Now to retry.");
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      clearTimeout(timeout);
       setLoading(false);
     }
   }, [filters.chain, filters.minTvl, filters.minApy]);
