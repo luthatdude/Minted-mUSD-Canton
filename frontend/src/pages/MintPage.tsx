@@ -13,6 +13,7 @@ import ChainSelector from "@/components/ChainSelector";
 import { useMultiChainDeposit, DepositQuote } from "@/hooks/useMultiChainDeposit";
 import { ChainConfig, requiresBridging, estimateBridgeTime, getUSDCDecimals, USDC_DECIMALS_BY_CHAIN } from "@/lib/chains";
 import { SlippageInput } from "@/components/SlippageInput";
+import { ClearTestnetBalances } from "@/components/ClearTestnetBalances";
 
 export function MintPage() {
   const { address, isConnected } = useUnifiedWallet();
@@ -216,6 +217,9 @@ export function MintPage() {
         badge={showCrossChain ? (multiChain.selectedChain?.name || "Select Chain") : "Ethereum"}
         badgeColor="brand"
       />
+
+      {/* Testnet Reset */}
+      <ClearTestnetBalances address={address ?? null} musd={musd} />
 
       {/* Cross-Chain Toggle */}
       <div className="flex items-center justify-between rounded-xl bg-surface-800/50 p-4 border border-white/10">

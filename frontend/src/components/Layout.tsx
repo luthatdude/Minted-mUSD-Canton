@@ -7,6 +7,7 @@ interface LayoutProps {
   address: string | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onCantonDisconnect: () => void;
   activePage: string;
   onNavigate: (page: string) => void;
   chain: ActiveChain;
@@ -19,6 +20,7 @@ export function Layout({
   address,
   onConnect,
   onDisconnect,
+  onCantonDisconnect,
   activePage,
   onNavigate,
   chain,
@@ -70,6 +72,7 @@ export function Layout({
           address={address}
           onConnect={onConnect}
           onDisconnect={onDisconnect}
+          onCantonDisconnect={onCantonDisconnect}
           activePage={activePage}
           onNavigate={onNavigate}
           chain={chain}

@@ -62,6 +62,8 @@ export interface CantonClientConfig {
   readAs?: string[];
   /** Request timeout in milliseconds */
   timeoutMs?: number;
+  /** Default DAML package ID for template resolution */
+  defaultPackageId?: string;
 }
 
 // ============================================================
@@ -75,6 +77,7 @@ export class CantonClient {
   private actAs: string;
   private readAs: string[];
   private timeoutMs: number;
+  private defaultPackageId: string;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -84,6 +87,7 @@ export class CantonClient {
     this.actAs = config.actAs;
     this.readAs = config.readAs || [];
     this.timeoutMs = config.timeoutMs || 30_000;
+    this.defaultPackageId = config.defaultPackageId || "";
   }
 
   // ----------------------------------------------------------
@@ -261,19 +265,26 @@ export class CantonClient {
    * @param payload      Contract payload (create arguments)
    * @returns The contract creation result (transaction events)
    */
+  /**
+   * Format a TemplateId as the string "packageId:moduleName:entityName"
+   * required by the Canton v2 JSON API.
+   */
+  private formatTemplateId(templateId: TemplateId): string {
+    const pkg = templateId.packageId || this.defaultPackageId;
+    if (!pkg) {
+      throw new Error(
+        `No packageId for template ${templateId.moduleName}:${templateId.entityName}. ` +
+        `Set CANTON_PACKAGE_ID env or provide packageId in TemplateId.`
+      );
+    }
+    return `${pkg}:${templateId.moduleName}:${templateId.entityName}`;
+  }
+
   async createContract<T = Record<string, unknown>>(
     templateId: TemplateId,
     payload: T
   ): Promise<unknown> {
     const commandId = `relay-create-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-
-    const tid: Record<string, string> = {
-      moduleName: templateId.moduleName,
-      entityName: templateId.entityName,
-    };
-    if (templateId.packageId) {
-      tid.packageId = templateId.packageId;
-    }
 
     const body = {
       userId: this.userId,
@@ -282,9 +293,9 @@ export class CantonClient {
       commandId,
       commands: [
         {
-          createCommand: {
-            templateId: tid,
-            createArgument: payload,
+          CreateCommand: {
+            templateId: this.formatTemplateId(templateId),
+            createArguments: payload,
           },
         },
       ],
@@ -310,14 +321,6 @@ export class CantonClient {
   ): Promise<unknown> {
     const commandId = `relay-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
-    const tid: Record<string, string> = {
-      moduleName: templateId.moduleName,
-      entityName: templateId.entityName,
-    };
-    if (templateId.packageId) {
-      tid.packageId = templateId.packageId;
-    }
-
     const body = {
       userId: this.userId,
       actAs: [this.actAs],
@@ -325,8 +328,8 @@ export class CantonClient {
       commandId,
       commands: [
         {
-          exerciseCommand: {
-            templateId: tid,
+          ExerciseCommand: {
+            templateId: this.formatTemplateId(templateId),
             contractId,
             choice,
             choiceArgument,

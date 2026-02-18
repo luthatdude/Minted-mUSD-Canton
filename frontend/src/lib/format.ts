@@ -23,7 +23,9 @@ export function formatBps(bps: bigint | number): string {
 }
 
 export function formatHealthFactor(hf: bigint): string {
-  const num = parseFloat(ethers.formatUnits(hf, 18));
+  // Contract returns health factor in basis points (10000 = 1.0)
+  if (hf >= BigInt("0xffffffffffffffffffffffffffffffff")) return "∞";
+  const num = Number(hf) / 10000;
   if (num > 100) return ">100";
   return num.toFixed(2);
 }

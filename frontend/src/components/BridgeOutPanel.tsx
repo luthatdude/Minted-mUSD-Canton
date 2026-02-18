@@ -34,6 +34,13 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   );
   const [showOnboarding, setShowOnboarding] = useState(false);
 
+  // Keep cantonParty in sync with Loop Wallet connection
+  useEffect(() => {
+    if (existingCantonParty && !cantonParty) {
+      setCantonParty(existingCantonParty);
+    }
+  }, [existingCantonParty]);
+
   // Contract state
   const [musdBalance, setMusdBalance] = useState<bigint>(0n);
   const [allowance, setAllowance] = useState<bigint>(0n);
