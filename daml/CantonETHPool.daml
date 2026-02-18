@@ -37,7 +37,7 @@ import CantonDirectMint
   )
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..))
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 
 -- ============================================================
 --                     SECTION 1: TIME-LOCK TIERS
@@ -92,10 +92,13 @@ template CantonSMUSD_E
     ensure shares > 0.0
 
     -- | Update observers from user privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice SMUSDE_UpdateObservers : ContractId CantonSMUSD_E
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     -- | Transfer smUSD-E (for lending/borrowing collateral use).
@@ -413,7 +416,7 @@ template CantonETHPoolService
         archive smusdeCid
 
         -- Mint CantonMUSD to user (backed by USDC in Fluid strategy on Ethereum)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -545,7 +548,7 @@ _mintSmUsdE service user usdcValue boostedShares selectedTier = do
         then service.pooledUsdc / service.totalShares
         else service.sharePrice
 
-  userObs <- lookupUserObservers service.operator user
+  userObs <- lookupUserObservers service.operator user None
   smusdeCid <- create CantonSMUSD_E with
     issuer = service.operator
     owner = user

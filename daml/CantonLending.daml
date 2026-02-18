@@ -36,7 +36,7 @@ import CantonETHPool (CantonSMUSD_E(..), TimeLockTier(..))
 import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), IsCompliant(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 
 -- ============================================================
 --                     SECTION 1: COLLATERAL CONFIG
@@ -216,10 +216,13 @@ template EscrowedCollateral
     ensure amount > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice Escrow_UpdateObservers : ContractId EscrowedCollateral
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers operator owner
+        newObservers <- lookupUserObservers operator owner settingsCid
         create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
@@ -304,10 +307,13 @@ template CantonDebtPosition
     ensure principalDebt >= 0.0 && accruedInterest >= 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice Debt_UpdateObservers : ContractId CantonDebtPosition
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller borrower
       do
-        newObservers <- lookupUserObservers operator borrower
+        newObservers <- lookupUserObservers operator borrower settingsCid
         create this with privacyObservers = newObservers
 
     -- | Calculate total debt (principal + accrued + new interest)
@@ -553,7 +559,7 @@ template CantonLendingService
         archive coinCid
 
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed, caller should pass CID
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -610,7 +616,7 @@ template CantonLendingService
 
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -667,7 +673,7 @@ template CantonLendingService
 
         now <- getTime
         -- smUSD-E amount = shares (valued at smUSD-E share price via price feed)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -759,7 +765,7 @@ template CantonLendingService
         assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
 
         -- Mint mUSD to borrower
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -883,7 +889,7 @@ template CantonLendingService
           pure ()
 
         -- Recreate the CantonCoin token for the user
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         coinCid <- create CantonCoin with
           issuer = operator
           owner = user
@@ -952,7 +958,7 @@ template CantonLendingService
         -- rather than resetting to now (which would unfairly restart cooldown timers)
         -- DAML-M-03: Use current sMUSD price from feed instead of hardcoded 1.0
         currentSharePrice <- getCtxPrice operator "sMUSD" priceFeedCids True (seconds (getConfig CTN_SMUSD configs).maxStalenessSecs)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
@@ -1020,7 +1026,7 @@ template CantonLendingService
         -- Recreate CantonSMUSD_E with current share price from feed
         currentSharePrice <- getCtxPrice operator "sMUSD-E" priceFeedCids True (seconds (getConfig CTN_SMUSDE configs).maxStalenessSecs)
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         smusdeCid <- create CantonSMUSD_E with
           issuer = operator
           owner = user
@@ -1133,7 +1139,7 @@ template CantonLendingService
           exercise musdCid CantonMUSD_Burn
 
         -- (Seized amount is now minted as a new token for the liquidator)
-        userObs <- lookupUserObservers operator liquidator
+        userObs <- lookupUserObservers operator liquidator None
         case targetEscrow.collateralType of
           CTN_Coin -> do
             create CantonCoin with

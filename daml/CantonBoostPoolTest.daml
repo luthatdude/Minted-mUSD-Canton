@@ -13,7 +13,7 @@ import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..), CantonSMUSDTransferProposal(..), CantonSMUSDTransferProposal_Accept(..), CantonSMUSDTransferProposal_Reject(..), CantonSMUSDTransferProposal_Cancel(..), SMUSD_Transfer(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..), CantonCoin_Transfer(..), CantonCoin_Split(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
