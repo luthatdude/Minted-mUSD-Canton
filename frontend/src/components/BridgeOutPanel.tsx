@@ -46,6 +46,8 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   const [allowance, setAllowance] = useState<bigint>(0n);
   const [minAmount, setMinAmount] = useState<bigint>(0n);
   const [bridgePaused, setBridgePaused] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   // Transaction state
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
@@ -59,6 +61,8 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   const refreshData = useCallback(async () => {
     if (!isConnected || !address || !provider || !bridgeAddress || !musdAddress) return;
 
+    setDataLoading(true);
+    setDataError(null);
     try {
       const musdContract = new ethers.Contract(musdAddress, MUSD_ABI, provider);
       const bridgeContract = new ethers.Contract(bridgeAddress, BLE_BRIDGE_V9_ABI, provider);
@@ -74,8 +78,11 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
       setAllowance(allow);
       setMinAmount(minAmt);
       setBridgePaused(paused);
+      setDataLoading(false);
     } catch (err) {
       console.error("[BridgeOut] Failed to load contract data:", err);
+      setDataError("Failed to load mUSD data. Check your network connection.");
+      setDataLoading(false);
     }
   }, [isConnected, address, provider, bridgeAddress, musdAddress]);
 
@@ -106,6 +113,27 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
     !bridgePaused &&
     !needsApproval &&
     txStatus === "idle";
+
+  // ── Add mUSD token to MetaMask ────────────────────────────
+  const handleAddToWallet = async () => {
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) return;
+      await ethereum.request({
+        method: "wallet_watchAsset",
+        params: {
+          type: "ERC20",
+          options: {
+            address: musdAddress,
+            symbol: "mUSD",
+            decimals: 18,
+          },
+        },
+      });
+    } catch (err) {
+      console.error("[BridgeOut] Failed to add token to wallet:", err);
+    }
+  };
 
   // ── Approve mUSD spending ─────────────────────────────────
   const handleApprove = async () => {
@@ -251,6 +279,58 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
           </p>
         </div>
       )}
+
+      {/* Data Error Warning */}
+      {dataError && (
+        <div className="mb-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20 p-3">
+          <div className="flex items-center gap-2">
+            <svg className="h-4 w-4 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+            <p className="text-sm text-yellow-300 font-medium">{dataError}</p>
+          </div>
+          <button onClick={refreshData} className="mt-2 text-xs text-yellow-400 hover:text-yellow-300 underline">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* mUSD Balance Card */}
+      <div className="mb-6 rounded-xl bg-gradient-to-r from-brand-500/10 to-purple-500/10 border border-brand-500/20 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Your mUSD Balance (Sepolia)</p>
+            {dataLoading ? (
+              <div className="flex items-center gap-2 mt-1">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-400 border-t-transparent" />
+                <span className="text-sm text-gray-400">Loading…</span>
+              </div>
+            ) : (
+              <p className="text-2xl font-bold text-white mt-1">
+                {Number(ethers.formatEther(musdBalance)).toLocaleString(undefined, {
+                  maximumFractionDigits: 2,
+                })}{" "}
+                <span className="text-base font-medium text-gray-400">mUSD</span>
+              </p>
+            )}
+          </div>
+          <button
+            onClick={handleAddToWallet}
+            className="flex items-center gap-1.5 rounded-lg bg-surface-700 border border-white/10 px-3 py-2 text-xs font-medium text-gray-300 hover:text-white hover:border-white/20 transition-all"
+            title="Add mUSD token to MetaMask"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
+            </svg>
+            Add to Wallet
+          </button>
+        </div>
+        {musdAddress && (
+          <p className="mt-2 text-xs text-gray-500 font-mono">
+            Token: {musdAddress.slice(0, 6)}…{musdAddress.slice(-4)}
+          </p>
+        )}
+      </div>
 
       {/* Canton Party Status */}
       <div className="mb-6">
