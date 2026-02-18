@@ -79,8 +79,11 @@ const COLLATERAL_CONFIG = {
     liquidationBps:   8000,   // 80%
     penaltyBps:       500,    // 5%
     feed:             MAINNET_FEEDS.ETH_USD,
-    decimals:         8,      // Chainlink feed decimals
+    feedDecimals:     8,      // Chainlink ETH/USD decimals
+    tokenDecimals:    18,     // Collateral token decimals
     heartbeat:        3600,   // 1 h staleness
+    maxDeviationBps:  2000,   // 20% per-asset circuit-breaker threshold
+    dryRunPrice:      2500_00000000n, // $2,500.00000000
   },
   WBTC: {
     address:          MAINNET_TOKENS.WBTC,
@@ -88,8 +91,11 @@ const COLLATERAL_CONFIG = {
     liquidationBps:   7500,   // 75%
     penaltyBps:       500,    // 5%
     feed:             MAINNET_FEEDS.BTC_USD,
-    decimals:         8,
+    feedDecimals:     8,
+    tokenDecimals:    8,
     heartbeat:        3600,
+    maxDeviationBps:  1500,   // 15% tighter bound for BTC
+    dryRunPrice:      60000_00000000n, // $60,000.00000000
   },
 } as const;
 
@@ -549,8 +555,37 @@ async function main() {
   const oracleContract = await ethers.getContractAt("PriceOracle", oracleAddr, deployer);
 
   for (const [name, cfg] of Object.entries(COLLATERAL_CONFIG)) {
+    let feedAddress = cfg.feed;
+    const feedCode = await ethers.provider.getCode(feedAddress);
+    if (feedCode === "0x") {
+      if (!DRY_RUN) {
+        throw new Error(
+          `Missing on-chain feed code for ${name} at ${feedAddress}. ` +
+          "Refusing live deploy without a real Chainlink feed."
+        );
+      }
+
+      console.log(`⚠️  ${name} feed ${feedAddress} not deployed on chain ${chainId}; deploying dry-run mock feed.`);
+      const MockAggregator = await ethers.getContractFactory("MockAggregatorV3", deployer);
+      const mockFeed = await MockAggregator.deploy(cfg.feedDecimals, cfg.dryRunPrice);
+      await mockFeed.waitForDeployment();
+      feedAddress = await mockFeed.getAddress();
+      manifest.contracts[`Mock${name}Feed`] = {
+        address: feedAddress,
+        txHash: mockFeed.deploymentTransaction()?.hash || "",
+        type: "regular",
+      };
+      console.log(`  Mock${name}Feed: ${feedAddress}`);
+    }
+
     console.log(`Setting ${name} feed…`);
-    const tx = await oracleContract.setFeed(cfg.address, cfg.feed, cfg.heartbeat);
+    const tx = await oracleContract.setFeed(
+      cfg.address,
+      feedAddress,
+      cfg.heartbeat,
+      cfg.tokenDecimals,
+      cfg.maxDeviationBps,
+    );
     await waitTx(tx, `PriceOracle.setFeed(${name})`, gasTracker);
   }
 
