@@ -219,6 +219,60 @@ export async function createSigner(
 }
 
 // ============================================================
+//  TS-C-01 FIX: Production .env File Guard
+// ============================================================
+
+const PRIVATE_KEY_PATTERNS = [
+  /PRIVATE_KEY\s*=\s*[0-9a-fA-F]{64}/,      // Raw hex private key
+  /PRIVATE_KEY\s*=\s*0x[0-9a-fA-F]{64}/,     // 0x-prefixed private key
+  /SECRET_KEY\s*=\s*[0-9a-fA-F]{32,}/,       // Any secret key
+];
+
+/**
+ * TS-C-01 FIX: Defense-in-depth guard for production deployments.
+ *
+ * Scans for .env files in the application directory that contain
+ * plaintext private keys. In production, secrets MUST be mounted
+ * via Docker secrets (/run/secrets/) or injected by K8s ExternalSecrets.
+ *
+ * This guard:
+ *   - FATAL in production: refuses to start if .env files with keys exist
+ *   - WARNING in staging: logs a security warning
+ *   - No-op in development: .env files are expected for local dev
+ */
+export function rejectDotenvPrivateKeys(appDir: string): void {
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
+    return; // .env files are expected in development
+  }
+
+  const envFiles = [".env", ".env.production", ".env.local"];
+  for (const envFile of envFiles) {
+    const envPath = `${appDir}/${envFile}`;
+    try {
+      if (!fs.existsSync(envPath)) continue;
+      const content = fs.readFileSync(envPath, "utf-8");
+      for (const pattern of PRIVATE_KEY_PATTERNS) {
+        if (pattern.test(content)) {
+          const msg =
+            `[SECURITY] TS-C-01: Found plaintext private key in ${envFile}. ` +
+            `This is FORBIDDEN in production. Secrets must be provided via ` +
+            `Docker secrets (/run/secrets/) or AWS KMS. ` +
+            `Remove the .env file or strip all secret values from it.`;
+          if (process.env.NODE_ENV === "production") {
+            throw new Error(msg);
+          }
+          // Staging: warn but don't block
+          console.error(`⚠️  ${msg}`);
+        }
+      }
+    } catch (err) {
+      if ((err as Error).message?.includes("TS-C-01")) throw err;
+      // Can't read file — skip (e.g., permission denied on read-only rootfs)
+    }
+  }
+}
+
+// ============================================================
 //  TS-M-01 FIX: Canton Party ID Validation
 // ============================================================
 

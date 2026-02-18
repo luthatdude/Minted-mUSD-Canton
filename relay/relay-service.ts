@@ -14,9 +14,22 @@
 
 // Load environment variables BEFORE any config initialization
 import * as path from "path";
-import * as dotenv from "dotenv";
-const envFile = process.env.NODE_ENV === "production" ? ".env" : ".env.development";
-dotenv.config({ path: path.resolve(__dirname, envFile) });
+
+// TS-C-01 FIX: NEVER load dotenv in production.
+// Production secrets are mounted at /run/secrets/ by Docker/K8s and read via readSecret().
+// Loading .env files in production risks exposing plaintext private keys on disk,
+// in container image layers, CI logs, and backup archives.
+if (process.env.NODE_ENV !== "production") {
+  try {
+    // Dynamic require so dotenv is not imported at all in production bundles
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const dotenv = require("dotenv");
+    dotenv.config({ path: path.resolve(__dirname, ".env.development") });
+    console.log("[Config] Loaded .env.development (non-production mode)");
+  } catch {
+    // dotenv not installed — env vars must be set externally
+  }
+}
 
 import { ethers } from "ethers";
 import { CantonClient, ActiveContract, TEMPLATES } from "./canton-client";
@@ -24,7 +37,7 @@ import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // Use shared readSecret utility
 // Use readAndValidatePrivateKey for secp256k1 range validation
 // INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
-import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl, validateCantonPartyId } from "./utils";
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl, validateCantonPartyId, rejectDotenvPrivateKeys } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
 // KMS-based Ethereum transaction signer (key never enters Node.js memory)
@@ -53,6 +66,9 @@ import {
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
+
+// TS-C-01: Block startup if .env files on disk contain plaintext private keys in production
+rejectDotenvPrivateKeys(__dirname);
 
 // ============================================================
 //                     CONFIGURATION
