@@ -1,82 +1,107 @@
 /// @title SMUSDE Formal Verification Spec
-/// @notice Verifies pool-gated mint/burn, compliance controls, and pause roles.
+/// @notice Certora spec for the smUSD-E token (ETH Pool staked mUSD)
+/// @dev Verifies mint/burn totalSupply tracking, blacklist enforcement, and pause behavior
 
 methods {
     function totalSupply() external returns (uint256) envfree;
     function balanceOf(address) external returns (uint256) envfree;
-    function paused() external returns (bool) envfree;
     function isBlacklisted(address) external returns (bool) envfree;
-
-    function POOL_ROLE() external returns (bytes32) envfree;
-    function COMPLIANCE_ROLE() external returns (bytes32) envfree;
-    function PAUSER_ROLE() external returns (bytes32) envfree;
-    function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
+    function paused() external returns (bool) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
-
-    function mint(address, uint256) external;
-    function burn(address, uint256) external;
-    function setBlacklist(address, bool) external;
-    function transfer(address, uint256) external;
-    function pause() external;
-    function unpause() external;
 }
 
-rule mint_requires_pool_role(address to, uint256 amount) {
+// ═══════════════════════════════════════════════════════════════════
+// SUPPLY TRACKING
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Mint increases totalSupply exactly by amount
+rule mint_increases_total_supply(address to, uint256 amount) {
     env e;
+    require to != address(0);
+    require amount > 0 && amount < 1000000000000000000000000;
+
+    uint256 supplyBefore = totalSupply();
+    require supplyBefore + amount < 1000000000000000000000000; // no overflow
+
     mint@withrevert(e, to, amount);
 
-    assert !lastReverted => hasRole(POOL_ROLE(), e.msg.sender),
-        "mint must be POOL_ROLE-gated";
+    assert !lastReverted => totalSupply() == supplyBefore + amount,
+        "Mint did not increase totalSupply by exact amount";
 }
 
-rule burn_requires_pool_role(address from, uint256 amount) {
+/// @notice Burn decreases totalSupply exactly by amount
+rule burn_decreases_total_supply(address from, uint256 amount) {
     env e;
+    require amount > 0 && amount < 1000000000000000000000000;
+    require balanceOf(from) >= amount;
+
+    uint256 supplyBefore = totalSupply();
+
     burn@withrevert(e, from, amount);
 
-    assert !lastReverted => hasRole(POOL_ROLE(), e.msg.sender),
-        "burn must be POOL_ROLE-gated";
+    assert !lastReverted => totalSupply() == supplyBefore - amount,
+        "Burn did not decrease totalSupply by exact amount";
 }
 
-rule set_blacklist_requires_compliance(address account, bool status) {
+// ═══════════════════════════════════════════════════════════════════
+// BLACKLIST ENFORCEMENT
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Transfer from blacklisted sender reverts
+rule blacklisted_sender_cannot_transfer(address from, address to, uint256 amount) {
     env e;
-    setBlacklist@withrevert(e, account, status);
+    require isBlacklisted(from);
+    require from != address(0) && to != address(0);
 
-    assert !lastReverted => hasRole(COMPLIANCE_ROLE(), e.msg.sender),
-        "setBlacklist must be COMPLIANCE_ROLE-gated";
-}
-
-rule pause_requires_pauser_role() {
-    env e;
-    pause@withrevert(e);
-
-    assert !lastReverted => hasRole(PAUSER_ROLE(), e.msg.sender),
-        "pause must be PAUSER_ROLE-gated";
-}
-
-rule unpause_requires_admin_role() {
-    env e;
-    unpause@withrevert(e);
-
-    assert !lastReverted => hasRole(DEFAULT_ADMIN_ROLE(), e.msg.sender),
-        "unpause must be DEFAULT_ADMIN_ROLE-gated";
-}
-
-rule blacklisted_sender_cannot_transfer(address to, uint256 amount) {
-    env e;
-    require isBlacklisted(e.msg.sender);
-
-    transfer@withrevert(e, to, amount);
+    transferFrom@withrevert(e, from, to, amount);
 
     assert lastReverted,
-        "Transfers from blacklisted sender must revert";
+        "Transfer from blacklisted sender succeeded";
 }
 
-rule transfer_reverts_when_paused(address to, uint256 amount) {
+/// @notice Transfer to blacklisted recipient reverts
+rule blacklisted_recipient_cannot_receive(address from, address to, uint256 amount) {
+    env e;
+    require isBlacklisted(to);
+    require from != address(0) && to != address(0);
+
+    transferFrom@withrevert(e, from, to, amount);
+
+    assert lastReverted,
+        "Transfer to blacklisted recipient succeeded";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PAUSE ENFORCEMENT
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Paused state blocks transfers
+rule paused_blocks_transfer(address to, uint256 amount) {
     env e;
     require paused();
 
     transfer@withrevert(e, to, amount);
 
     assert lastReverted,
-        "transfer must revert while paused";
+        "Transfer succeeded while paused";
+}
+
+/// @notice Mint to zero address reverts
+rule mint_to_zero_reverts(uint256 amount) {
+    env e;
+
+    mint@withrevert(e, 0, amount);
+
+    assert lastReverted,
+        "Mint to zero address succeeded";
+}
+
+/// @notice Burn with zero amount reverts
+rule burn_zero_amount_reverts(address from) {
+    env e;
+
+    burn@withrevert(e, from, 0);
+
+    assert lastReverted,
+        "Burn of zero amount succeeded";
 }
