@@ -11,6 +11,7 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 import { AIYieldOptimizer } from "@/components/AIYieldOptimizer";
 import { YieldScanner } from "@/components/YieldScanner";
+import { useVaultAPY } from "@/hooks/useVaultAPY";
 
 type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle";
 
@@ -219,6 +220,7 @@ export function AdminPage() {
   const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
   const [section, setSection] = useState<AdminSection>("musd");
   const tx = useTx();
+  const { vaultAPYs, treasuryAPY, pendingYield, loading: apyLoading } = useVaultAPY();
 
   // ── All state hooks (must precede conditional returns — Rules of Hooks) ──
 
@@ -1119,7 +1121,7 @@ export function AdminPage() {
       {section === "vaults" && (
         <div className="space-y-6">
           {/* Overview stats */}
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-4">
             <StatCard
               label="Total Across Vaults"
               value={formatUSD(
@@ -1139,6 +1141,66 @@ export function AdminPage() {
                 6
               )}
             />
+            <StatCard
+              label="Treasury APY (7d)"
+              value={treasuryAPY != null ? `${treasuryAPY.toFixed(2)}%` : apyLoading ? "Loading…" : "Collecting…"}
+              color={treasuryAPY != null && treasuryAPY > 0 ? "green" : undefined}
+            />
+          </div>
+
+          {/* ── Yield Harvest Status ── */}
+          <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/20 px-5 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-emerald-300">📊 Yield Harvest</h3>
+              {pendingYield && (
+                <span className="text-xs text-gray-400">
+                  Auto-distributes 80% to smUSD holders | 20% protocol fee
+                </span>
+              )}
+            </div>
+            {pendingYield ? (
+              <div className="grid gap-3 sm:grid-cols-4">
+                <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-500">Gross Yield</p>
+                  <p className="text-sm font-medium text-white">${pendingYield.gross}</p>
+                </div>
+                <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-500">Net Yield (80%)</p>
+                  <p className="text-sm font-medium text-emerald-400">${pendingYield.net}</p>
+                </div>
+                <div className="rounded-lg bg-gray-800/40 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-500">Protocol Fee (20%)</p>
+                  <p className="text-sm font-medium text-yellow-400">${pendingYield.fee}</p>
+                </div>
+                <div className="flex items-end">
+                  <TxButton
+                    size="sm"
+                    onClick={() => tx.send(() => contracts.treasury!.harvestYield())}
+                    loading={tx.loading}
+                    disabled={!contracts.treasury || pendingYield.net === "0.00"}
+                  >
+                    Harvest Now
+                  </TxButton>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">
+                {apyLoading ? "Loading yield data…" : "Connect wallet & deploy TreasuryV2 upgrade to see pending yield."}
+              </p>
+            )}
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {(["vault1", "vault2", "vault3"] as VaultAssignment[]).map((vk) => (
+                <div key={vk} className="rounded-lg bg-gray-800/30 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-500">{VAULT_LABELS[vk].label.split("—")[0].trim()} APY</p>
+                  <p className={`text-lg font-bold ${vaultAPYs[vk] != null && vaultAPYs[vk]! > 0 ? "text-emerald-400" : "text-gray-400"}`}>
+                    {vaultAPYs[vk] != null ? `${vaultAPYs[vk]!.toFixed(2)}%` : "—"}
+                  </p>
+                  <p className="text-[10px] text-gray-600">
+                    {vaultAPYs[vk] != null ? "7-day annualized" : "Collecting data…"}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Per-vault cards */}
@@ -1314,7 +1376,7 @@ export function AdminPage() {
                         <div key={i} className="flex items-center gap-2 text-xs text-gray-400">
                           <div className="h-2 w-2 rounded-full" style={{ backgroundColor: ks.color }} />
                           <span>{ks.shortName}</span>
-                          <span className="text-gray-600">— {ks.apy}</span>
+                          <span className="text-gray-600">— {vaultAPYs[vk] != null ? `${vaultAPYs[vk]!.toFixed(1)}% live` : ks.apy}</span>
                           <span className="text-gray-600">({ks.targetBps / 100}%)</span>
                         </div>
                       ))}

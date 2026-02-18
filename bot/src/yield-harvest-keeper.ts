@@ -1,0 +1,746 @@
+/**
+ * Minted Protocol — Yield Harvest Keeper
+ *
+ * Automatically harvests yield from TreasuryV2 strategies and distributes
+ * the net 80% to smUSD holders via SMUSD.distributeYield() (12h vesting).
+ *
+ * Cycle:
+ *   1. Read TreasuryV2.pendingYield() → (netYield, grossYield, protocolFee)
+ *   2. If netYield > MIN_HARVEST_USD → call TreasuryV2.harvestYield()
+ *   3. Optionally trigger MetaVault.rebalance() on each vault if drift > threshold
+ *   4. Snapshot totalValue() per vault for APY calculation
+ *   5. Expose /health + /apy for K8s probes and frontend consumption
+ *
+ * Env vars:
+ *   RPC_URL, CHAIN_ID, KEEPER_PRIVATE_KEY,
+ *   TREASURY_ADDRESS, SMUSD_ADDRESS,
+ *   META_VAULT_ADDRESSES (comma-separated — vault1,vault2,vault3),
+ *   YIELD_POLL_MS (default 300_000 — 5 min),
+ *   MIN_HARVEST_USD (default "50" — USDC 6 decimals = 50e6),
+ *   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+ *   BOT_PORT (default 8082)
+ */
+
+import { ethers, Wallet } from "ethers";
+import * as fs from "fs";
+import http from "http";
+import { createLogger, format, transports } from "winston";
+
+// ─── Security: enforce TLS in non-dev environments ──────────
+if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    console.error("[SECURITY] NODE_TLS_REJECT_UNAUTHORIZED=0 is FORBIDDEN in production. Overriding to 1.");
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "1";
+  }
+}
+
+process.on("unhandledRejection", (reason) => {
+  console.error("FATAL: Unhandled promise rejection:", reason);
+  process.exit(1);
+});
+process.on("uncaughtException", (error) => {
+  console.error("FATAL: Uncaught exception:", error);
+  process.exit(1);
+});
+
+// ═══════════════════════════════════════════════════════════════
+//                          TYPES
+// ═══════════════════════════════════════════════════════════════
+
+export interface YieldKeeperConfig {
+  rpcUrl: string;
+  chainId: number;
+  keeperPrivateKey: string;
+  treasuryAddress: string;
+  smusdAddress: string;
+  metaVaultAddresses: string[];
+  pollIntervalMs: number;
+  /** Minimum net yield (in USDC raw units, 6 decimals) to trigger harvest */
+  minHarvestAmount: bigint;
+  telegramBotToken: string;
+  telegramChatId: string;
+  httpPort: number;
+}
+
+interface VaultSnapshot {
+  address: string;
+  label: string;
+  totalValue: bigint;
+  timestamp: number;
+}
+
+interface APYData {
+  vaultAddress: string;
+  label: string;
+  currentTotalValue: string;
+  apy7d: number | null;
+  apy30d: number | null;
+  lastUpdated: number;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//                          CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+
+const USDC_DECIMALS = 6;
+const SECONDS_PER_YEAR = 365.25 * 24 * 3600;
+
+const TREASURY_ABI = [
+  "function totalValue() external view returns (uint256)",
+  "function totalValueNet() external view returns (uint256)",
+  "function pendingYield() external view returns (uint256 netYield, uint256 grossYield, uint256 protocolFee)",
+  "function harvestYield() external returns (uint256 claimedFees)",
+  "function accrueFees() external",
+  "function pendingFees() external view returns (uint256)",
+  "function peakRecordedValue() external view returns (uint256)",
+  "function lastRecordedValue() external view returns (uint256)",
+  "function lastFeeAccrual() external view returns (uint256)",
+  "function getAllStrategies() external view returns (tuple(address strategy, uint256 targetBps, uint256 minBps, uint256 maxBps, bool active, bool autoAllocate)[])",
+  "event YieldHarvested(uint256 netYield, uint256 protocolFee)",
+  "event FeesClaimed(address indexed recipient, uint256 amount)",
+];
+
+const META_VAULT_ABI = [
+  "function totalValue() external view returns (uint256)",
+  "function rebalance() external",
+  "function driftThresholdBps() external view returns (uint256)",
+  "function lastRebalanceAt() external view returns (uint256)",
+  "function rebalanceCooldown() external view returns (uint256)",
+  "function paused() external view returns (bool)",
+  "function getSubStrategies() external view returns (tuple(address strategy, uint256 weightBps, uint256 capUsd, bool enabled)[])",
+];
+
+const SMUSD_ABI = [
+  "function totalAssets() external view returns (uint256)",
+  "function totalSupply() external view returns (uint256)",
+  "function convertToAssets(uint256 shares) external view returns (uint256)",
+  "function unvestedYield() external view returns (uint256)",
+  "function yieldVestingEnd() external view returns (uint256)",
+];
+
+const VAULT_LABELS: Record<number, string> = {
+  0: "Vault #1 — Diversified Yield",
+  1: "Vault #2 — Fluid Syrup",
+  2: "Vault #3 — ETH Pool",
+};
+
+// ═══════════════════════════════════════════════════════════════
+//                          LOGGER
+// ═══════════════════════════════════════════════════════════════
+
+const logger = createLogger({
+  level: process.env.LOG_LEVEL || "info",
+  format: format.combine(
+    format.timestamp(),
+    format.printf(
+      ({ timestamp, level, message }) =>
+        `${timestamp} [${level.toUpperCase()}] [YIELD-KEEPER] ${message}`
+    )
+  ),
+  transports: [
+    new transports.Console(),
+    new transports.File({ filename: "yield-harvest-keeper.log" }),
+  ],
+});
+
+// ═══════════════════════════════════════════════════════════════
+//                     SECRET / KEY HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+function readSecret(name: string, envVar: string): string {
+  const secretPath = `/run/secrets/${name}`;
+  try {
+    if (fs.existsSync(secretPath)) {
+      return fs.readFileSync(secretPath, "utf-8").trim();
+    }
+  } catch {
+    /* Fall through to env var */
+  }
+  return process.env[envVar] || "";
+}
+
+const SECP256K1_N = BigInt(
+  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+);
+
+function readAndValidatePrivateKey(secretName: string, envVar: string): string {
+  const key = readSecret(secretName, envVar);
+  if (!key) return "";
+  const normalized = key.startsWith("0x") ? key.slice(2) : key;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error(`SECURITY: ${envVar} is not a valid private key (expected 64 hex chars)`);
+  }
+  const keyValue = BigInt("0x" + normalized);
+  if (keyValue === 0n || keyValue >= SECP256K1_N) {
+    throw new Error(`SECURITY: ${envVar} is not a valid secp256k1 private key.`);
+  }
+  return key;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//                      HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+function formatUsdc(raw: bigint): string {
+  return `$${ethers.formatUnits(raw, USDC_DECIMALS)}`;
+}
+
+/**
+ * Compute annualized yield from two snapshots.
+ * Returns null if insufficient data or zero elapsed time.
+ */
+function computeAPY(
+  earlierValue: bigint,
+  laterValue: bigint,
+  elapsedSeconds: number
+): number | null {
+  if (earlierValue === 0n || elapsedSeconds < 3600) return null; // Need at least 1h of data
+  if (laterValue <= earlierValue) return 0;
+
+  const yieldRatio = Number(laterValue - earlierValue) / Number(earlierValue);
+  const annualized = Math.pow(1 + yieldRatio, SECONDS_PER_YEAR / elapsedSeconds) - 1;
+
+  // Sanity cap — >500% APY is almost certainly a data glitch
+  return annualized > 5 ? null : annualized * 100;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//                   YIELD HARVEST KEEPER
+// ═══════════════════════════════════════════════════════════════
+
+export class YieldHarvestKeeper {
+  private config: YieldKeeperConfig;
+  private provider: ethers.JsonRpcProvider;
+  private keeperWallet: Wallet;
+  private treasury: ethers.Contract;
+  private smusd: ethers.Contract;
+  private metaVaults: Map<string, ethers.Contract> = new Map();
+  private running = false;
+  private consecutiveErrors = 0;
+
+  /** Rolling snapshots for APY calculation — per vault address */
+  private snapshots: Map<string, VaultSnapshot[]> = new Map();
+  /** Treasury-level snapshots */
+  private treasurySnapshots: VaultSnapshot[] = [];
+
+  /** Max consecutive errors before self-reporting unhealthy */
+  private static readonly MAX_CONSECUTIVE_ERRORS = 5;
+  /** Keep 30 days of snapshots max */
+  private static readonly MAX_SNAPSHOT_AGE_S = 30 * 24 * 3600;
+  /** Minimum snapshots for APY calculation */
+  private static readonly MIN_SNAPSHOTS = 2;
+
+  constructor(config: YieldKeeperConfig) {
+    this.config = config;
+
+    const fetchReq = new ethers.FetchRequest(config.rpcUrl);
+    fetchReq.timeout = parseInt(process.env.RPC_TIMEOUT_MS || "30000", 10);
+    this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, {
+      staticNetwork: true,
+      batchMaxCount: 1,
+    });
+
+    // Guard against raw private key usage in production
+    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
+      throw new Error(
+        "SECURITY: Raw private key usage is forbidden in production. " +
+          "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables."
+      );
+    }
+
+    this.keeperWallet = new Wallet(config.keeperPrivateKey, this.provider);
+
+    this.treasury = new ethers.Contract(
+      config.treasuryAddress,
+      TREASURY_ABI,
+      this.keeperWallet
+    );
+    this.smusd = new ethers.Contract(
+      config.smusdAddress,
+      SMUSD_ABI,
+      this.provider // read-only for SMUSD
+    );
+
+    for (let i = 0; i < config.metaVaultAddresses.length; i++) {
+      const addr = config.metaVaultAddresses[i];
+      this.metaVaults.set(
+        addr.toLowerCase(),
+        new ethers.Contract(addr, META_VAULT_ABI, this.keeperWallet)
+      );
+    }
+  }
+
+  // ─── Public API ─────────────────────────────────────────────
+
+  async start(): Promise<void> {
+    logger.info("═══════════════════════════════════════════════════");
+    logger.info("  YIELD HARVEST KEEPER — Starting");
+    logger.info(`  Keeper:    ${this.keeperWallet.address}`);
+    logger.info(`  Treasury:  ${this.config.treasuryAddress}`);
+    logger.info(`  SMUSD:     ${this.config.smusdAddress}`);
+    logger.info(`  MetaVaults: ${this.config.metaVaultAddresses.length}`);
+    for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
+      logger.info(`    • ${VAULT_LABELS[i] || `Vault #${i + 1}`}: ${this.config.metaVaultAddresses[i]}`);
+    }
+    logger.info(`  Poll interval: ${this.config.pollIntervalMs / 1000}s`);
+    logger.info(`  Min harvest: ${formatUsdc(this.config.minHarvestAmount)}`);
+    logger.info("═══════════════════════════════════════════════════");
+
+    this.running = true;
+
+    await this.sendAlert(
+      "🟢 *Yield Harvest Keeper Started*\n" +
+        `Monitoring ${this.config.metaVaultAddresses.length} vaults\n` +
+        `Poll: ${this.config.pollIntervalMs / 1000}s | Min harvest: ${formatUsdc(this.config.minHarvestAmount)}`
+    );
+
+    while (this.running) {
+      try {
+        await this.runCycle();
+        this.consecutiveErrors = 0;
+      } catch (err) {
+        this.consecutiveErrors++;
+        logger.error(
+          `Cycle failed (${this.consecutiveErrors}/${YieldHarvestKeeper.MAX_CONSECUTIVE_ERRORS}): ${(err as Error).message}`
+        );
+        if (this.consecutiveErrors >= YieldHarvestKeeper.MAX_CONSECUTIVE_ERRORS) {
+          await this.sendAlert(
+            `🔴 *Yield Keeper Degraded*\n${this.consecutiveErrors} consecutive failures\nLast: ${(err as Error).message}`
+          );
+        }
+      }
+      await new Promise((r) => setTimeout(r, this.config.pollIntervalMs));
+    }
+  }
+
+  stop(): void {
+    this.running = false;
+    logger.info("Yield harvest keeper stopped.");
+  }
+
+  isHealthy(): boolean {
+    return this.consecutiveErrors < YieldHarvestKeeper.MAX_CONSECUTIVE_ERRORS;
+  }
+
+  /** Return current APY data for all vaults + treasury aggregate */
+  getAPYData(): APYData[] {
+    const now = Date.now() / 1000;
+    const results: APYData[] = [];
+
+    // Treasury aggregate
+    const tSnaps = this.treasurySnapshots;
+    if (tSnaps.length >= YieldHarvestKeeper.MIN_SNAPSHOTS) {
+      const latest = tSnaps[tSnaps.length - 1];
+      const snap7d = this.findSnapshotAtAge(tSnaps, 7 * 24 * 3600);
+      const snap30d = this.findSnapshotAtAge(tSnaps, 30 * 24 * 3600);
+
+      results.push({
+        vaultAddress: this.config.treasuryAddress,
+        label: "Treasury (Aggregate)",
+        currentTotalValue: ethers.formatUnits(latest.totalValue, USDC_DECIMALS),
+        apy7d: snap7d ? computeAPY(snap7d.totalValue, latest.totalValue, latest.timestamp - snap7d.timestamp) : null,
+        apy30d: snap30d ? computeAPY(snap30d.totalValue, latest.totalValue, latest.timestamp - snap30d.timestamp) : null,
+        lastUpdated: latest.timestamp,
+      });
+    }
+
+    // Per-vault APY
+    for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
+      const addr = this.config.metaVaultAddresses[i].toLowerCase();
+      const snaps = this.snapshots.get(addr) || [];
+      if (snaps.length < YieldHarvestKeeper.MIN_SNAPSHOTS) {
+        results.push({
+          vaultAddress: addr,
+          label: VAULT_LABELS[i] || `Vault #${i + 1}`,
+          currentTotalValue: "0",
+          apy7d: null,
+          apy30d: null,
+          lastUpdated: 0,
+        });
+        continue;
+      }
+
+      const latest = snaps[snaps.length - 1];
+      const snap7d = this.findSnapshotAtAge(snaps, 7 * 24 * 3600);
+      const snap30d = this.findSnapshotAtAge(snaps, 30 * 24 * 3600);
+
+      results.push({
+        vaultAddress: addr,
+        label: VAULT_LABELS[i] || `Vault #${i + 1}`,
+        currentTotalValue: ethers.formatUnits(latest.totalValue, USDC_DECIMALS),
+        apy7d: snap7d ? computeAPY(snap7d.totalValue, latest.totalValue, latest.timestamp - snap7d.timestamp) : null,
+        apy30d: snap30d ? computeAPY(snap30d.totalValue, latest.totalValue, latest.timestamp - snap30d.timestamp) : null,
+        lastUpdated: latest.timestamp,
+      });
+    }
+
+    return results;
+  }
+
+  // ─── Core Loop ──────────────────────────────────────────────
+
+  private async runCycle(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+
+    // 1. Snapshot all vaults + treasury for APY tracking
+    await this.takeSnapshots(now);
+
+    // 2. Check for harvestable yield
+    const [netYield, grossYield, protocolFee] = await this.treasury.pendingYield();
+
+    logger.info(
+      `Yield check — gross: ${formatUsdc(grossYield)} | net (80%): ${formatUsdc(netYield)} | fee (20%): ${formatUsdc(protocolFee)}`
+    );
+
+    // 3. Harvest if above minimum
+    if (netYield > this.config.minHarvestAmount) {
+      await this.executeHarvest(netYield, grossYield, protocolFee);
+    } else if (netYield > 0n) {
+      logger.debug(
+        `Net yield ${formatUsdc(netYield)} below minimum ${formatUsdc(this.config.minHarvestAmount)} — skipping harvest`
+      );
+    }
+
+    // 4. Check MetaVault rebalance opportunities
+    await this.checkRebalances();
+  }
+
+  private async takeSnapshots(now: number): Promise<void> {
+    // Treasury aggregate
+    try {
+      const tv: bigint = await this.treasury.totalValue();
+      this.addSnapshot(this.treasurySnapshots, {
+        address: this.config.treasuryAddress,
+        label: "Treasury",
+        totalValue: tv,
+        timestamp: now,
+      });
+      logger.debug(`Treasury totalValue: ${formatUsdc(tv)}`);
+    } catch (err) {
+      logger.warn(`Treasury snapshot failed: ${(err as Error).message}`);
+    }
+
+    // Per-vault
+    for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
+      const addr = this.config.metaVaultAddresses[i].toLowerCase();
+      const contract = this.metaVaults.get(addr);
+      if (!contract) continue;
+
+      try {
+        const tv: bigint = await contract.totalValue();
+        const snaps = this.snapshots.get(addr) || [];
+        this.addSnapshot(snaps, {
+          address: addr,
+          label: VAULT_LABELS[i] || `Vault #${i + 1}`,
+          totalValue: tv,
+          timestamp: now,
+        });
+        this.snapshots.set(addr, snaps);
+        logger.debug(`${VAULT_LABELS[i]}: ${formatUsdc(tv)}`);
+      } catch (err) {
+        logger.warn(`${VAULT_LABELS[i] || addr.slice(0, 10)} snapshot failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private addSnapshot(arr: VaultSnapshot[], snap: VaultSnapshot): void {
+    arr.push(snap);
+    // Prune old snapshots
+    const cutoff = snap.timestamp - YieldHarvestKeeper.MAX_SNAPSHOT_AGE_S;
+    while (arr.length > 0 && arr[0].timestamp < cutoff) {
+      arr.shift();
+    }
+  }
+
+  private findSnapshotAtAge(snaps: VaultSnapshot[], ageSeconds: number): VaultSnapshot | null {
+    if (snaps.length < 2) return null;
+    const target = snaps[snaps.length - 1].timestamp - ageSeconds;
+    // Find closest snapshot to target time
+    let closest: VaultSnapshot | null = null;
+    let closestDiff = Infinity;
+    for (const s of snaps) {
+      const diff = Math.abs(s.timestamp - target);
+      if (diff < closestDiff) {
+        closestDiff = diff;
+        closest = s;
+      }
+    }
+    // Only use if within 20% of target age
+    if (closest && closestDiff < ageSeconds * 0.2) return closest;
+    return null;
+  }
+
+  // ─── Harvest ────────────────────────────────────────────────
+
+  private async executeHarvest(
+    netYield: bigint,
+    grossYield: bigint,
+    protocolFee: bigint
+  ): Promise<void> {
+    logger.info(
+      `📊 Harvesting — gross: ${formatUsdc(grossYield)} | net (auto-compounds): ${formatUsdc(netYield)} | claiming fee: ${formatUsdc(protocolFee)}`
+    );
+
+    try {
+      const tx = await this.treasury.harvestYield();
+      const receipt = await tx.wait();
+
+      // Parse events to get actual claimed fees
+      let claimedFees = 0n;
+      for (const log of receipt.logs) {
+        try {
+          const parsed = this.treasury.interface.parseLog(log);
+          if (parsed && parsed.name === "FeesClaimed") {
+            claimedFees = parsed.args[1]; // amount
+          }
+        } catch {
+          // Not our event
+        }
+      }
+
+      // Read post-harvest state
+      let smUSDInfo = "";
+      try {
+        const totalAssets: bigint = await this.smusd.totalAssets();
+        const totalSupply: bigint = await this.smusd.totalSupply();
+        if (totalSupply > 0n) {
+          const sharePrice = await this.smusd.convertToAssets(ethers.parseEther("1"));
+          smUSDInfo = `\nsmUSD share price: ${ethers.formatEther(sharePrice)}`;
+        }
+      } catch {
+        /* smUSD read optional */
+      }
+
+      logger.info(
+        `✅ Harvest complete — fees claimed: ${formatUsdc(claimedFees)} | net yield compounds in strategies | tx: ${receipt.hash} | gas: ${receipt.gasUsed}`
+      );
+
+      await this.sendAlert(
+        `✅ *Yield Harvested*\n` +
+          `Gross yield: ${formatUsdc(grossYield)}\n` +
+          `Net yield (80% auto-compounds): ${formatUsdc(netYield)}\n` +
+          `Protocol fees claimed (20%): ${formatUsdc(claimedFees)}\n` +
+          `Gas: ${receipt.gasUsed.toString()}${smUSDInfo}\n` +
+          `Tx: \`${receipt.hash}\``
+      );
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      logger.error(`❌ Harvest FAILED: ${errMsg}`);
+
+      await this.sendAlert(
+        `🔴 *Harvest FAILED*\n` +
+          `Gross yield: ${formatUsdc(grossYield)}\n` +
+          `Error: ${errMsg.slice(0, 300)}\n` +
+          `⚠️ Manual intervention may be needed.`
+      );
+    }
+  }
+
+  // ─── MetaVault Rebalance ────────────────────────────────────
+
+  private async checkRebalances(): Promise<void> {
+    for (let i = 0; i < this.config.metaVaultAddresses.length; i++) {
+      const addr = this.config.metaVaultAddresses[i].toLowerCase();
+      const contract = this.metaVaults.get(addr);
+      if (!contract) continue;
+
+      try {
+        const [paused, lastRebalance, cooldown] = await Promise.all([
+          contract.paused() as Promise<boolean>,
+          contract.lastRebalanceAt() as Promise<bigint>,
+          contract.rebalanceCooldown() as Promise<bigint>,
+        ]);
+
+        if (paused) {
+          logger.debug(`${VAULT_LABELS[i]} paused — skip rebalance`);
+          continue;
+        }
+
+        const now = BigInt(Math.floor(Date.now() / 1000));
+        if (now < lastRebalance + cooldown) {
+          logger.debug(`${VAULT_LABELS[i]} cooldown active — skip rebalance`);
+          continue;
+        }
+
+        // Attempt rebalance — will revert with DriftBelowThreshold if not needed
+        try {
+          const tx = await contract.rebalance();
+          const receipt = await tx.wait();
+          logger.info(
+            `🔄 ${VAULT_LABELS[i]} rebalanced — tx: ${receipt.hash} | gas: ${receipt.gasUsed}`
+          );
+          await this.sendAlert(
+            `🔄 *MetaVault Rebalanced*\n` +
+              `${VAULT_LABELS[i]}\n` +
+              `Gas: ${receipt.gasUsed.toString()}\n` +
+              `Tx: \`${receipt.hash}\``
+          );
+        } catch (err) {
+          const msg = (err as Error).message;
+          // DriftBelowThreshold is expected — means rebalance not needed
+          if (msg.includes("DriftBelowThreshold") || msg.includes("0x")) {
+            logger.debug(`${VAULT_LABELS[i]} drift below threshold — no rebalance needed`);
+          } else {
+            logger.warn(`${VAULT_LABELS[i]} rebalance failed: ${msg.slice(0, 200)}`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`${VAULT_LABELS[i]} check failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  // ─── Telegram Alerts ────────────────────────────────────────
+
+  private async sendAlert(message: string): Promise<void> {
+    if (!this.config.telegramBotToken || !this.config.telegramChatId) return;
+    try {
+      const url = `https://api.telegram.org/bot${this.config.telegramBotToken}/sendMessage`;
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: this.config.telegramChatId,
+          text: message,
+          parse_mode: "Markdown",
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      logger.debug("Telegram alert sent");
+    } catch (err) {
+      logger.warn(`Telegram alert failed: ${(err as Error).message}`);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//                 HTTP SERVER (Health + APY)
+// ═══════════════════════════════════════════════════════════════
+
+function startYieldKeeperServer(
+  port: number,
+  keeper: YieldHarvestKeeper
+): { stop: () => void } {
+  const server = http.createServer((req, res) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET",
+      "Content-Type": "application/json",
+    };
+
+    if (req.url === "/health" && req.method === "GET") {
+      const healthy = keeper.isHealthy();
+      res.writeHead(healthy ? 200 : 503, corsHeaders);
+      res.end(JSON.stringify({ status: healthy ? "ok" : "unhealthy", timestamp: Date.now() }));
+    } else if (req.url === "/apy" && req.method === "GET") {
+      const data = keeper.getAPYData();
+      res.writeHead(200, corsHeaders);
+      res.end(JSON.stringify({ vaults: data, timestamp: Date.now() }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  server.listen(port, () => {
+    logger.info(`Health+APY server listening on port ${port}`);
+  });
+
+  return { stop: () => server.close() };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//                        ENTRYPOINT
+// ═══════════════════════════════════════════════════════════════
+
+async function main(): Promise<void> {
+  const keeperKey = readAndValidatePrivateKey("keeper_private_key", "KEEPER_PRIVATE_KEY");
+  if (!keeperKey) {
+    console.error("FATAL: KEEPER_PRIVATE_KEY is required");
+    process.exit(1);
+  }
+
+  const treasuryAddr = process.env.TREASURY_ADDRESS;
+  if (!treasuryAddr || !ethers.isAddress(treasuryAddr)) {
+    console.error("FATAL: TREASURY_ADDRESS is required and must be a valid address");
+    process.exit(1);
+  }
+
+  const smusdAddr = process.env.SMUSD_ADDRESS;
+  if (!smusdAddr || !ethers.isAddress(smusdAddr)) {
+    console.error("FATAL: SMUSD_ADDRESS is required and must be a valid address");
+    process.exit(1);
+  }
+
+  const vaultsEnv = process.env.META_VAULT_ADDRESSES || "";
+  const metaVaultAddresses = vaultsEnv.split(",").map((s) => s.trim()).filter(Boolean);
+  if (metaVaultAddresses.length === 0) {
+    console.error("FATAL: META_VAULT_ADDRESSES is required (comma-separated)");
+    process.exit(1);
+  }
+  for (const addr of metaVaultAddresses) {
+    if (!ethers.isAddress(addr)) {
+      console.error(`FATAL: Invalid MetaVault address: ${addr}`);
+      process.exit(1);
+    }
+  }
+
+  const rpcUrl = process.env.RPC_URL || "";
+  if (!rpcUrl) {
+    console.error("FATAL: RPC_URL is required");
+    process.exit(1);
+  }
+  if (
+    process.env.NODE_ENV === "production" &&
+    !rpcUrl.startsWith("https://") &&
+    !rpcUrl.startsWith("wss://")
+  ) {
+    throw new Error("Insecure RPC transport in production. RPC_URL must use https:// or wss://");
+  }
+
+  // Min harvest: default 50 USDC
+  const minHarvestRaw = process.env.MIN_HARVEST_USD
+    ? BigInt(process.env.MIN_HARVEST_USD) * 10n ** BigInt(USDC_DECIMALS)
+    : 50n * 10n ** BigInt(USDC_DECIMALS);
+
+  const config: YieldKeeperConfig = {
+    rpcUrl,
+    chainId: parseInt(process.env.CHAIN_ID || "1", 10),
+    keeperPrivateKey: keeperKey,
+    treasuryAddress: treasuryAddr,
+    smusdAddress: smusdAddr,
+    metaVaultAddresses,
+    pollIntervalMs: parseInt(process.env.YIELD_POLL_MS || "300000", 10), // 5 min default
+    minHarvestAmount: minHarvestRaw,
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
+    telegramChatId: process.env.TELEGRAM_CHAT_ID || "",
+    httpPort: Number(process.env.BOT_PORT) || 8082,
+  };
+
+  if (config.pollIntervalMs < 30_000) {
+    throw new Error("YIELD_POLL_MS must be >= 30000ms (30s)");
+  }
+
+  const keeper = new YieldHarvestKeeper(config);
+
+  // Start HTTP server (health + APY endpoint)
+  const httpServer = startYieldKeeperServer(config.httpPort, keeper);
+
+  // Graceful shutdown
+  const shutdown = () => {
+    keeper.stop();
+    httpServer.stop();
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  await keeper.start();
+}
+
+// Only run main when executed directly
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Yield harvest keeper crashed:", err);
+    process.exit(1);
+  });
+}

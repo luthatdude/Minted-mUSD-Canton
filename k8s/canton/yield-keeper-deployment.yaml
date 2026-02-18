@@ -1,0 +1,261 @@
+# Minted Yield Harvest Keeper — K8s Deployment
+# Automatically harvests yield from TreasuryV2 and distributes to smUSD holders.
+# Also triggers MetaVault rebalances when drift exceeds threshold.
+#
+# Prerequisites:
+#   - yield-keeper-secrets created (KEEPER_PRIVATE_KEY, RPC_URL)
+#   - TREASURY_ADDRESS, SMUSD_ADDRESS, META_VAULT_ADDRESSES in yield-keeper-config
+#   - Keeper wallet must have ALLOCATOR_ROLE on TreasuryV2
+#   - TreasuryV2 must have YIELD_MANAGER_ROLE on SMUSD
+#   - Keeper wallet must have KEEPER_ROLE on each MetaVault
+---
+# ============================================================
+# YIELD KEEPER CONFIGMAP
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yield-keeper-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: yield-harvest-keeper
+    app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "0.0.0"  # Replaced by CI with git SHA
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # Contract addresses — update for mainnet
+  TREASURY_ADDRESS: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513"
+  SMUSD_ADDRESS: "0x8d93F7096e7B91e02a4Ca81bDbCd03c8C2E20A0b"
+  META_VAULT_ADDRESSES: "0xMETAVAULT1,0xMETAVAULT2,0xMETAVAULT3"
+  CHAIN_ID: "11155111"  # Sepolia; use 1 for mainnet
+  YIELD_POLL_MS: "300000"  # 5 minutes
+  MIN_HARVEST_USD: "50"  # Minimum $50 USDC to trigger harvest
+  BOT_PORT: "8082"
+---
+# ============================================================
+# YIELD KEEPER SERVICE — Health + APY endpoint
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: yield-harvest-keeper
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: yield-harvest-keeper
+    app.kubernetes.io/component: keeper
+spec:
+  type: ClusterIP
+  ports:
+    - name: health
+      port: 8082
+      targetPort: 8082
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: yield-harvest-keeper
+---
+# ============================================================
+# YIELD HARVEST KEEPER DEPLOYMENT
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yield-harvest-keeper
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: yield-harvest-keeper
+    app.kubernetes.io/component: keeper
+    app.kubernetes.io/part-of: minted-musd
+spec:
+  replicas: 1
+  # Only ONE replica — must not double-harvest
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yield-harvest-keeper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: yield-harvest-keeper
+        app.kubernetes.io/component: keeper
+        app.kubernetes.io/part-of: minted-musd
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/health"
+    spec:
+      serviceAccountName: liquidation-bot
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: yield-harvest-keeper
+          image: ghcr.io/luthatdude/minted-bot:latest
+          command: ["node", "dist/yield-harvest-keeper.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: KEEPER_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: yield-keeper-secrets
+                  key: KEEPER_PRIVATE_KEY
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: yield-keeper-secrets
+                  key: RPC_URL
+            - name: TREASURY_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: TREASURY_ADDRESS
+            - name: SMUSD_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: SMUSD_ADDRESS
+            - name: META_VAULT_ADDRESSES
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: META_VAULT_ADDRESSES
+            - name: CHAIN_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: CHAIN_ID
+            - name: YIELD_POLL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: YIELD_POLL_MS
+            - name: MIN_HARVEST_USD
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: MIN_HARVEST_USD
+            - name: BOT_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: yield-keeper-config
+                  key: BOT_PORT
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bot-telegram-secrets
+                  key: TELEGRAM_BOT_TOKEN
+                  optional: true
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: bot-telegram-secrets
+                  key: TELEGRAM_CHAT_ID
+                  optional: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          ports:
+            - name: health
+              containerPort: 8082
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# ============================================================
+# NETWORK POLICY — Egress to Ethereum RPC + Telegram only
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: yield-keeper-netpol
+  namespace: musd-canton
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: yield-harvest-keeper
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Health-check from monitoring
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8082
+          protocol: TCP
+    # Kubelet probes + frontend APY fetches (within cluster)
+    - ports:
+        - port: 8082
+          protocol: TCP
+  egress:
+    # Ethereum RPC + Telegram (external HTTPS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# PDB
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: yield-keeper-pdb
+  namespace: musd-canton
+spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: yield-harvest-keeper

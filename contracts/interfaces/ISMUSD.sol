@@ -9,6 +9,9 @@ interface ISMUSD {
     // ── Interest routing (BorrowModule) ────────────────────────────────
     function receiveInterest(uint256 amount) external;
 
+    // ── Yield distribution (YIELD_MANAGER_ROLE callers) ───────────────
+    function distributeYield(uint256 amount) external;
+
     // ── ERC-4626 reads (SMUSDPriceAdapter) ─────────────────────────────
     function convertToAssets(uint256 shares) external view returns (uint256);
     function convertToShares(uint256 assets) external view returns (uint256);
