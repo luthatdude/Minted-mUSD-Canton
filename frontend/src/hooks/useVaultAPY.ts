@@ -114,7 +114,12 @@ export function useVaultAPY(): VaultAPYResult {
     pendingYield: null,
     loading: true,
   });
-  const storeRef = useRef<SnapshotStore>(loadSnapshots());
+  const storeRef = useRef<SnapshotStore | null>(null);
+
+  // Hydrate from localStorage on mount (client-only)
+  useEffect(() => {
+    storeRef.current = loadSnapshots();
+  }, []);
 
   const refresh = useCallback(async () => {
     const vaultContracts: [VaultKey, any][] = [
@@ -124,6 +129,7 @@ export function useVaultAPY(): VaultAPYResult {
     ];
     const now = Math.floor(Date.now() / 1000);
     const store = storeRef.current;
+    if (!store) return; // not yet hydrated from localStorage
 
     // Take snapshots
     for (const [key, contract] of vaultContracts) {

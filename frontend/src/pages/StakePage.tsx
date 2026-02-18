@@ -45,6 +45,10 @@ export function StakePage() {
   const contracts = useWCContracts();
   const tx = useTx();
 
+  // Current timestamp (client-only to avoid hydration mismatch)
+  const [nowSeconds, setNowSeconds] = useState(0);
+  useEffect(() => { setNowSeconds(Math.floor(Date.now() / 1000)); }, []);
+
   // Shared state
   const [pool, setPool] = useState<PoolTab>("smusd");
   const [tab, setTab] = useState<StakeAction>("stake");
@@ -740,7 +744,7 @@ export function StakePage() {
                           {positions.map(pos => {
                             const isETH = pos.depositAsset === ethers.ZeroAddress;
                             const assetLabel = isETH ? "ETH" : "Stablecoin";
-                            const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - Math.floor(Date.now() / 1000)) : 0;
+                            const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - nowSeconds) : 0;
                             const isLocked = lockRemaining > 0;
                             const daysLeft = Math.ceil(lockRemaining / 86400);
                             return (
