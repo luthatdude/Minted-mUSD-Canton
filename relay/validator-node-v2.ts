@@ -128,6 +128,8 @@ interface AttestationPayload {
   collateralRatioBps: string;
   nonce: string;
   expiresAt: string;
+  entropy: string;            // CRIT-04 FIX: Required hex-encoded entropy (was accessed via unsafe cast)
+  cantonStateHash: string;    // CRIT-04 FIX: Required Canton state hash (was accessed via unsafe cast)
 }
 
 interface AttestationRequest {
@@ -631,7 +633,27 @@ class ValidatorNode {
       // Sign with KMS
       const signature = await this.signWithKMS(messageHash);
 
-      // Submit to Canton
+      // CRIT-01 FIX: Create ValidatorSelfAttestation before signing the AttestationRequest.
+      // This is a contract where the validator is the sole signatory, proving independent
+      // commitment. The aggregator cannot forge this because only this participant can
+      // create contracts where this validator party is signatory.
+      const selfAttestationCid = await this.canton.createContract(
+        { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSelfAttestation" },
+        {
+          validator: this.config.validatorParty,
+          aggregator: payload.attestationId.startsWith("bridge-") ? this.config.validatorParty : this.config.validatorParty,
+          attestationId: attestationId,
+          ecdsaSignature: signature,
+          signedAt: new Date().toISOString(),
+        }
+      );
+
+      // Extract the contract ID from the creation response
+      const selfAttestCid = typeof selfAttestationCid === "string"
+        ? selfAttestationCid
+        : (selfAttestationCid as any)?.contractId || selfAttestationCid;
+
+      // Submit to Canton — now includes selfAttestationCid for CRIT-01 compliance
       await this.canton.exerciseChoice(
         TEMPLATES.AttestationRequest,
         contractId,
@@ -639,7 +661,7 @@ class ValidatorNode {
         {
           validator: this.config.validatorParty,
           ecdsaSignature: signature,
-          cantonStateHash: cantonStateHash,  // Include hash of verified state
+          selfAttestationCid: selfAttestCid,
         }
       );
 
@@ -674,15 +696,27 @@ class ValidatorNode {
     const nonce = BigInt(payload.nonce);
     const timestamp = BigInt(Math.max(1, Math.floor(new Date(payload.expiresAt).getTime() / 1000) - 3600));
 
-    // Include entropy in hash (matches BLEBridgeV9 signature verification)
-    const entropy = (payload as any).entropy
-      ? ((payload as any).entropy.startsWith("0x") ? (payload as any).entropy : "0x" + (payload as any).entropy)
-      : ethers.ZeroHash;
+    // CRIT-04 FIX: Reject missing entropy instead of silently falling back to ZeroHash.
+    // BLEBridgeV9 reverts with MissingEntropy() if entropy == bytes32(0), so signing
+    // over ZeroHash produces a signature that will always revert on-chain.
+    if (!payload.entropy || payload.entropy.length < 64) {
+      throw new Error(
+        `CRIT-04: Missing or invalid entropy in attestation ${payload.attestationId}. ` +
+        `BLEBridgeV9 requires non-zero entropy. Got: '${payload.entropy || "(empty)"}'`
+      );
+    }
+    const entropy = payload.entropy.startsWith("0x") ? payload.entropy : "0x" + payload.entropy;
 
-    // Include Canton state hash for on-ledger verification
-    const stateHash = cantonStateHash
-      ? (cantonStateHash.startsWith("0x") ? cantonStateHash : "0x" + cantonStateHash)
-      : ethers.ZeroHash;
+    // CRIT-04 FIX: Reject missing cantonStateHash instead of silently falling back to ZeroHash.
+    // BLEBridgeV9 reverts with MissingStateHash() if cantonStateHash == bytes32(0).
+    const effectiveStateHash = cantonStateHash || payload.cantonStateHash;
+    if (!effectiveStateHash || effectiveStateHash.length < 64) {
+      throw new Error(
+        `CRIT-04: Missing or invalid cantonStateHash in attestation ${payload.attestationId}. ` +
+        `BLEBridgeV9 requires non-zero state hash. Got: '${effectiveStateHash || "(empty)"}'`
+      );
+    }
+    const stateHash = effectiveStateHash.startsWith("0x") ? effectiveStateHash : "0x" + effectiveStateHash;
 
     // Derive attestation ID matching BLEBridgeV9.computeAttestationId()
     // Previously used ethers.id(payload.attestationId) which is keccak256(utf8) — wrong.

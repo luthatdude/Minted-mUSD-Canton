@@ -1618,7 +1618,8 @@ template BridgeService
     requiredSignatures : Int
     totalBridgedIn : Money
     totalBridgedOut : Money
-    lastNonce : Int
+    lastBridgeOutNonce : Int       -- CRIT-05: Separate nonce for Canton→ETH (bridge-out / attestation)
+    lastBridgeInNonce : Int        -- CRIT-05: Separate nonce for ETH→Canton (bridge-in)
     paused : Bool
     observers : [Party]
     minValidators : Optional Int  -- AUDIT-H-03: Governance-set minimum (appended for upgrade compat)
@@ -1632,7 +1633,8 @@ template BridgeService
       && fromOptional 1 minValidators > 0
       && totalBridgedIn >= 0.0
       && totalBridgedOut >= 0.0
-      && lastNonce >= 0
+      && lastBridgeOutNonce >= 0
+      && lastBridgeInNonce >= 0
 
     -- | Receive mUSD from Ethereum (mints on Canton after attestation validation)
     -- DAML-C-02: Route minting through MUSDSupplyService to enforce
@@ -1666,8 +1668,8 @@ template BridgeService
         assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
         assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
 
-        -- DAML-L-26: Require strict sequential nonce progression
-        assertMsg "NONCE_NOT_SEQUENTIAL" (attestation.payload.nonce == lastNonce + 1)
+        -- CRIT-05 FIX: Use separate bridge-in nonce counter to prevent collision with bridge-out
+        assertMsg "NONCE_NOT_SEQUENTIAL" (attestation.payload.nonce == lastBridgeInNonce + 1)
 
         -- DAML-H-03: Attestation expiration check
         now <- getTime
@@ -1695,16 +1697,17 @@ template BridgeService
 
         newService <- create this with
           totalBridgedIn = totalBridgedIn + amount
-          lastNonce = attestation.payload.nonce
+          lastBridgeInNonce = attestation.payload.nonce
 
         return (newService, musdCid, newSupplyServiceCid)
 
     -- | Assign nonce to a bridge-out request
+    -- CRIT-05 FIX: Uses separate bridge-out nonce counter to prevent collision with bridge-in
     choice Bridge_AssignNonce : (ContractId BridgeService, Int)
       controller operator
       do
-        let newNonce = lastNonce + 1
-        newService <- create this with lastNonce = newNonce
+        let newNonce = lastBridgeOutNonce + 1
+        newService <- create this with lastBridgeOutNonce = newNonce
         return (newService, newNonce)
 
     -- | Complete a bridge-out after Ethereum confirmation
@@ -1775,9 +1778,31 @@ data AttestationPayload = AttestationPayload with
     cantonStateHash : Text     -- BRIDGE-C-03: Canton ledger state hash for on-chain verification
   deriving (Eq, Show)
 
+-- | ValidatorSelfAttestation - Proof that a validator independently committed to sign.
+-- CRIT-01 FIX: Validators must create a self-attestation (where they are the signatory)
+-- before their signature can be recorded on the AttestationRequest. This prevents the
+-- aggregator from forging validator participation, because only the validator's own
+-- participant node can create a contract where they are the signatory.
+template ValidatorSelfAttestation
+  with
+    validator : Party             -- The validator (signatory — only they can create this)
+    aggregator : Party            -- The aggregator who created the AttestationRequest
+    attestationId : Text          -- Links to the specific AttestationRequest payload
+    ecdsaSignature : Text         -- The ECDSA signature bytes
+    signedAt : Time               -- When the validator signed
+  where
+    signatory validator            -- CRIT-01: Validator is sole signatory — aggregator cannot forge
+    observer aggregator
+
+    ensure T.length ecdsaSignature >= 130
+        && T.length attestationId > 0
+
 -- | AttestationRequest - Multi-party validation for bridge operations.
 -- BRIDGE-C-01: Added ecdsaSignatures field to store actual ECDSA signature bytes
 --   alongside the party set, so the relay can read them for Ethereum submission.
+-- CRIT-01 FIX: Added ensure clause to prevent pre-populated signatures at creation.
+--   Validators must independently create ValidatorSelfAttestation contracts and
+--   present them to Attestation_Sign, proving they actually participated.
 template AttestationRequest
   with
     aggregator : Party
@@ -1793,26 +1818,42 @@ template AttestationRequest
 
     ensure length validatorGroup > 0 && length validatorGroup <= 100
         && requiredSignatures > 0 && requiredSignatures <= length validatorGroup
+        -- CRIT-01 FIX: Prevent aggregator from pre-populating signatures at creation.
+        -- collectedSignatures and ecdsaSignatures must start empty — validators
+        -- add their signatures via Attestation_Sign with ValidatorSelfAttestation proof.
+        && Set.null collectedSignatures
+        && null ecdsaSignatures
 
     -- | Validator signs the attestation
     -- BRIDGE-C-01: Now stores ECDSA signature bytes alongside party tracking
+    -- CRIT-01 FIX: Requires ValidatorSelfAttestation as proof the validator independently
+    -- committed to sign. The self-attestation is signatory-gated (only the validator's
+    -- participant node can create it), so the aggregator cannot forge participation.
     choice Attestation_Sign : ContractId AttestationRequest
       with
         validator : Party
         ecdsaSignature : Text
+        selfAttestationCid : ContractId ValidatorSelfAttestation  -- CRIT-01: Proof of independent commitment
       controller validator
       do
         assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
         assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
-        -- BRIDGE-M-03: Explicit upper bound on signature count. The UNAUTHORIZED_VALIDATOR
-        -- check implicitly limits this (only group members can sign, and ALREADY_SIGNED
-        -- prevents duplicates), but we make the bound explicit to prevent any theoretical
-        -- unbounded growth of ecdsaSignatures/collectedSignatures.
+        -- BRIDGE-M-03: Explicit upper bound on signature count.
         assertMsg "SIGNATURE_COUNT_EXCEEDS_VALIDATORS" (Set.size collectedSignatures < length validatorGroup)
         assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature >= 130)
 
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        -- CRIT-01 FIX: Fetch and verify the ValidatorSelfAttestation
+        -- This contract is signatory-gated to the validator, so the aggregator cannot forge it
+        selfAttestation <- fetch selfAttestationCid
+        assertMsg "SELF_ATTEST_WRONG_VALIDATOR" (selfAttestation.validator == validator)
+        assertMsg "SELF_ATTEST_WRONG_AGGREGATOR" (selfAttestation.aggregator == aggregator)
+        assertMsg "SELF_ATTEST_WRONG_ATTESTATION" (selfAttestation.attestationId == payload.attestationId)
+        assertMsg "SELF_ATTEST_SIG_MISMATCH" (selfAttestation.ecdsaSignature == ecdsaSignature)
+        -- Consume the self-attestation (one-time use)
+        archive selfAttestationCid
 
         -- BRIDGE-C-01: Store both party and ECDSA signature bytes
         create this with
@@ -1882,34 +1923,32 @@ template BridgeOutRequest
     -- | Complete after Ethereum confirmation — AUDIT-H-04: requires attested proof
     -- Mirrors Bridge_ReceiveFromEthereum: validates attestation signatures,
     -- direction, amount, and expiry before marking as bridged.
+    -- CRIT-03 FIX: attestationCid is now mandatory (was Optional, allowing bypass)
     choice BridgeOut_Complete : ContractId BridgeOutRequest
       with
-        attestationCid : Optional (ContractId AttestationRequest)  -- AUDIT-H-04: Optional for upgrade compat
+        attestationCid : ContractId AttestationRequest  -- CRIT-03: Mandatory — no bypass path
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
 
-        -- AUDIT-H-04: Verify attestation if provided (required in production)
-        case attestationCid of
-          Some attCid -> do
-            attestation <- fetch attCid
-            assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
-            assertMsg "WRONG_DIRECTION" (attestation.direction == CantonToEthereum)
-            assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+        -- CRIT-03 FIX: Attestation verification is now always executed (no None bypass)
+        attestation <- fetch attestationCid
+        assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
+        assertMsg "WRONG_DIRECTION" (attestation.direction == CantonToEthereum)
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
 
-            -- AUDIT-H-04: Verify threshold signatures from authorized validators
-            let validatorList = fromOptional [] validators
-            let sigParties = Set.toList attestation.collectedSignatures
-            assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validatorList) sigParties)
-            let sigCount = Set.size attestation.collectedSignatures
-            assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= fromOptional 1 requiredSignatures)
+        -- AUDIT-H-04: Verify threshold signatures from authorized validators
+        let validatorList = fromOptional [] validators
+        let sigParties = Set.toList attestation.collectedSignatures
+        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validatorList) sigParties)
+        let sigCount = Set.size attestation.collectedSignatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= fromOptional 1 requiredSignatures)
 
-            now <- getTime
-            assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
 
-            -- Consume attestation
-            archive attCid
-          None -> pure ()  -- Legacy path: no attestation (pre-H-04 upgrade)
+        -- Consume attestation
+        archive attestationCid
 
         create this with status = "bridged"
 
@@ -1923,6 +1962,8 @@ template BridgeOutRequest
 -- ============================================================
 
 -- | BridgeInRequest - ETH → Canton transfer.
+-- CRIT-02 FIX: Added validators and requiredSignatures fields.
+-- BridgeIn_Complete now requires attestation proof (was zero-validation).
 template BridgeInRequest
   with
     operator : Party
@@ -1933,15 +1974,43 @@ template BridgeInRequest
     nonce : Int
     createdAt : Time
     status : Text
+    validators : [Party]           -- CRIT-02: Validator set for attestation verification
+    requiredSignatures : Int       -- CRIT-02: Signature threshold
   where
     signatory operator
-    observer user
+    observer user, validators
 
-    -- | Complete by minting stables to user
+    ensure requiredSignatures > 0
+        && amount > 0.0
+
+    -- | Complete by verifying attestation proof — CRIT-02 FIX: no longer unilateral
+    -- Mirrors BridgeOut_Complete: validates attestation signatures, direction, amount,
+    -- and expiry before marking as completed.
     choice BridgeIn_Complete : ContractId BridgeInRequest
+      with
+        attestationCid : ContractId AttestationRequest  -- CRIT-02: Required attestation proof
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
+
+        -- CRIT-02 FIX: Full attestation verification (mirrors BridgeOut_Complete)
+        attestation <- fetch attestationCid
+        assertMsg "AGGREGATOR_MISMATCH" (attestation.aggregator == operator)
+        assertMsg "WRONG_DIRECTION" (attestation.direction == EthereumToCanton)
+        assertMsg "AMOUNT_MISMATCH" (attestation.payload.amount == amount)
+
+        -- Verify threshold signatures from authorized validators
+        let sigParties = Set.toList attestation.collectedSignatures
+        assertMsg "UNAUTHORIZED_SIGNERS" (all (`elem` validators) sigParties)
+        let sigCount = Set.size attestation.collectedSignatures
+        assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
+
+        -- Consume attestation
+        archive attestationCid
+
         create this with status = "completed"
 
     -- | Cancel request
