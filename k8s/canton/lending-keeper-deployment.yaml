@@ -1,0 +1,339 @@
+# Minted Canton Lending Keeper — K8s Deployment
+# Monitors CantonDebtPositions for undercollateralized users and executes
+# liquidations via Lending_Liquidate on the Canton ledger.
+#
+# CRITICAL: Without this keeper, bad debt accumulates on Canton — positions
+# that drop below health factor 1.0 have no automated liquidation path.
+#
+# Prerequisites:
+#   - Canton participant running (canton-participant service)
+#   - lending-keeper-secrets created (CANTON_TOKEN)
+#   - PriceFeed templates active on ledger (via price-oracle relay)
+#   - Keeper party has mUSD on Canton for repayment
+#   - LendingService initialized on ledger (via canton-init.sh)
+#
+# Revenue model:
+#   Keeper earns liquidation bonus (5% of CTN penalty, 1.5% for stables)
+#   defined in CollateralConfig.liquidationBonusBps on-ledger.
+---
+# ============================================================
+# LENDING KEEPER CONFIGMAP
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lending-keeper-config
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: lending-keeper
+    app.kubernetes.io/component: keeper
+    app.kubernetes.io/part-of: minted-musd
+    app.kubernetes.io/version: "0.0.0"  # Replaced by CI with git SHA
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # Canton Ledger API (in-cluster)
+  CANTON_HOST: "canton-participant.musd-canton.svc.cluster.local"
+  CANTON_PORT: "5011"
+  CANTON_USE_TLS: "true"
+  # Keeper operator party — must match DAR initialization
+  CANTON_PARTY: ""        # Set via overlay per environment
+  KEEPER_PARTY: ""        # Set via overlay per environment
+  # Tradecraft DEX API (for slippage checks on CTN collateral)
+  TRADECRAFT_URL: "https://api.tradecraft.fi/v1"
+  # Polling and execution parameters
+  KEEPER_POLL_MS: "15000"        # 15s scan interval
+  MIN_PROFIT_USD: "5.0"         # Minimum $5 expected profit to execute
+  MAX_SLIPPAGE_PCT: "3.0"       # Max 3% slippage on collateral sale
+  MAX_CONCURRENT_LIQ: "3"       # Max 3 simultaneous liquidations per cycle
+  LIQ_COOLDOWN_MS: "5000"       # 5s between liquidation attempts
+  # sMUSD price (should come from yield-sync service in production)
+  SMUSD_PRICE: "1.05"
+---
+# ============================================================
+# LENDING KEEPER SERVICE ACCOUNT
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lending-keeper
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: lending-keeper
+    app.kubernetes.io/component: keeper
+    app.kubernetes.io/part-of: minted-musd
+  annotations:
+    kubernetes.io/enforce-mountable-secrets: "true"
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lending-keeper-binding
+  namespace: musd-canton
+subjects:
+  - kind: ServiceAccount
+    name: lending-keeper
+    namespace: musd-canton
+roleRef:
+  kind: Role
+  name: canton-minimal
+  apiGroup: rbac.authorization.k8s.io
+---
+# ============================================================
+# LENDING KEEPER DEPLOYMENT
+# Single replica — must not run concurrent copies to avoid
+# duplicate liquidation submissions (double-repay → reverted choice)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lending-keeper
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: lending-keeper
+    app.kubernetes.io/component: keeper
+    app.kubernetes.io/part-of: minted-musd
+    owner: minted-protocol
+  annotations:
+    email: "team@mintedprotocol.com"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # No concurrent instances — avoid double-liquidation
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lending-keeper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lending-keeper
+        app.kubernetes.io/component: keeper
+        app.kubernetes.io/part-of: minted-musd
+      annotations:
+        prometheus.io/scrape: "false"  # No HTTP metrics endpoint (polling loop)
+    spec:
+      serviceAccountName: lending-keeper
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      # Wait for Canton participant to be reachable before starting
+      initContainers:
+        - name: wait-for-canton
+          image: busybox@sha256:9ae97d36d26566ff84e8893c64a6dc4fe8ca6d1144bf5b87b2b85a32def253c7
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Canton participant Ledger API..."
+              until nc -z canton-participant.musd-canton.svc.cluster.local 5011; do
+                echo "  participant:5011 not ready, retrying in 3s..."
+                sleep 3
+              done
+              echo "Canton participant is reachable."
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: lending-keeper
+          # Uses relay image (same Dockerfile as bridge-relay)
+          # INFRA-C-01: Pin to immutable SHA256 digest
+          image: ghcr.io/minted-protocol/bridge-relay@sha256:807a2251bbecaab5bba8c1cecc71875b064bcd6313098ed6f73615eb78b71b09
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/lending-keeper.js"]
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: CANTON_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: CANTON_HOST
+            - name: CANTON_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: CANTON_PORT
+            - name: CANTON_USE_TLS
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: CANTON_USE_TLS
+            - name: CANTON_PARTY
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: CANTON_PARTY
+            - name: KEEPER_PARTY
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: KEEPER_PARTY
+            - name: TRADECRAFT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: TRADECRAFT_URL
+            - name: KEEPER_POLL_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: KEEPER_POLL_MS
+            - name: MIN_PROFIT_USD
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: MIN_PROFIT_USD
+            - name: MAX_SLIPPAGE_PCT
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: MAX_SLIPPAGE_PCT
+            - name: MAX_CONCURRENT_LIQ
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: MAX_CONCURRENT_LIQ
+            - name: LIQ_COOLDOWN_MS
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: LIQ_COOLDOWN_MS
+            - name: SMUSD_PRICE
+              valueFrom:
+                configMapKeyRef:
+                  name: lending-keeper-config
+                  key: SMUSD_PRICE
+            # Secrets mounted as files — never env vars
+            - name: CANTON_TOKEN
+              value: "file:///run/secrets/canton_token"
+          volumeMounts:
+            - name: keeper-secrets
+              mountPath: /run/secrets
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          # No HTTP health endpoint — lending-keeper is a pure polling loop.
+          # Use exec probe to check if the Node.js process is alive.
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f 'lending-keeper' > /dev/null"
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "pgrep -f 'lending-keeper' > /dev/null"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: keeper-secrets
+          projected:
+            sources:
+              - secret:
+                  name: lending-keeper-secrets
+                  items:
+                    - key: CANTON_TOKEN
+                      path: canton_token
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# ============================================================
+# NETWORK POLICY — Canton internal + Tradecraft HTTPS only
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lending-keeper-netpol
+  namespace: musd-canton
+  labels:
+    app.kubernetes.io/name: lending-keeper
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lending-keeper
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # No inbound traffic — pure outbound worker
+  egress:
+    # Canton participant (in-cluster Ledger API)
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: canton-participant
+      ports:
+        - port: 5011
+          protocol: TCP
+    # Tradecraft DEX API (external HTTPS for slippage checks)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# PDB — allow eviction during rolling upgrades
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lending-keeper-pdb
+  namespace: musd-canton
+spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lending-keeper

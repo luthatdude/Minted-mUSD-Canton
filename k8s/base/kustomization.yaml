@@ -46,6 +46,9 @@ resources:
   # Phase 8: Yield Harvest Keeper
   - ../canton/yield-keeper-deployment.yaml
 
+  # Phase 9: Lending Keeper (Canton liquidation bot)
+  - ../canton/lending-keeper-deployment.yaml
+
   # Phase 10: Network Policies & PDBs
   - ../canton/network-policy.yaml
   - ../canton/pod-disruption-budget.yaml
