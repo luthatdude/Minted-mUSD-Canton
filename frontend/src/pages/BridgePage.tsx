@@ -3,13 +3,13 @@ import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { formatUSD, formatBps, formatHealthFactor, formatTimestamp, shortenAddress } from "@/lib/format";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 import BridgeOutPanel from "@/components/BridgeOutPanel";
 
 export function BridgePage() {
-  const { isConnected } = useWalletConnect();
+  const { isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
   const [data, setData] = useState({
     attestedAssets: 0n,
@@ -117,7 +117,12 @@ export function BridgePage() {
   const attestationFresh = timeSinceAttestation < 3600; // less than 1 hour
 
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="mx-auto max-w-4xl space-y-8">
+        <PageHeader title="Canton Bridge" subtitle="Real-time view of Canton Network attestations governing mUSD supply" badge="Bridge" badgeColor="brand" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
   }
 
   return (
