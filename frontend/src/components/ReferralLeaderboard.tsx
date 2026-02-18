@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { CONTRACTS } from "@/lib/config";
 import { ethers } from "ethers";
 
@@ -39,7 +39,7 @@ function formatMultiplier(raw: bigint): string {
 }
 
 export function ReferralLeaderboard() {
-  const { address, isConnected, getContract, provider } = useWalletConnect();
+  const { address, isConnected, getContract, provider } = useUnifiedWallet();
 
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);

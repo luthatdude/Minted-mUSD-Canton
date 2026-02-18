@@ -7,7 +7,7 @@ import { useTx } from "@/hooks/useTx";
 import { formatToken, formatUSD, formatBps, formatHealthFactor } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 
@@ -26,7 +26,7 @@ interface CollateralInfo {
 type TabType = "deposit" | "borrow" | "repay" | "withdraw";
 
 export function BorrowPage() {
-  const { address, signer, isConnected } = useWalletConnect();
+  const { address, signer, isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
   const [action, setAction] = useState<TabType>("deposit");
   const [selectedToken, setSelectedToken] = useState("");

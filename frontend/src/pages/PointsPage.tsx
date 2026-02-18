@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useReferral } from "@/hooks/useReferral";
 import WalletConnector from "@/components/WalletConnector";
 import { ReferralTracker } from "@/components/ReferralTracker";
@@ -13,7 +13,7 @@ import { ReferralWidget } from "@/components/ReferralWidget";
 type PointsTab = "overview" | "referrals" | "leaderboard";
 
 export function PointsPage() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const { dashboard } = useReferral();
   const [activeTab, setActiveTab] = useState<PointsTab>("overview");
 

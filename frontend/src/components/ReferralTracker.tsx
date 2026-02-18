@@ -1,6 +1,6 @@
 import React from "react";
 import { useReferral } from "@/hooks/useReferral";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { StatCard } from "@/components/StatCard";
 
 /**
@@ -8,7 +8,7 @@ import { StatCard } from "@/components/StatCard";
  * Shows personal referral tree, earnings breakdown, tier progress, and chain.
  */
 export function ReferralTracker() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const {
     isLoading,
     isReferred,

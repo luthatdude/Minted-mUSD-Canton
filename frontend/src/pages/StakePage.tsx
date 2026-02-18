@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatToken } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS, USDC_DECIMALS } from "@/lib/config";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 
@@ -41,7 +41,7 @@ const POOL_TAB_CONFIG = [
 
 // ─── Component ──────────────────────────────────────────────────────────────
 export function StakePage() {
-  const { address, isConnected, provider } = useWalletConnect();
+  const { address, isConnected, provider } = useUnifiedWallet();
   const contracts = useWCContracts();
   const tx = useTx();
 

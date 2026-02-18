@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useReferral } from "@/hooks/useReferral";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 
 /**
  * ReferralWidget — compact card for the Dashboard / Mint page.
@@ -8,7 +8,7 @@ import { useWalletConnect } from "@/hooks/useWalletConnect";
  * and an input to apply someone else's code.
  */
 export function ReferralWidget() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const {
     isLoading,
     error,
