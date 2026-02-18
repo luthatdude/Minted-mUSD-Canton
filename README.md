@@ -145,6 +145,18 @@ View functions: `getNetDailyCapIncrease()`, `getRemainingDailyCapLimit()`
 
 ## Canton Templates (DAML)
 
+### Canonical Mainnet Scope (Frozen)
+
+Canonical module decision for launch is frozen in:
+`docs/plans/mainnet-launch-scope.md`.
+
+Mainnet canonical Canton deployment targets are the standalone modules
+(`CantonDirectMint`, `CantonSMUSD`, `CantonLending`, `CantonLoopStrategy`,
+`Compliance`, `Governance`).
+
+`Minted/Protocol/V3.daml` is retained as audited reference/compatibility surface,
+not the canonical standalone deployment target for this launch.
+
 ### Core Assets
 
 | Template | File | Description |
@@ -181,7 +193,7 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 
 | Template | File | Description |
 |----------|------|-------------|
-| `StakingService` | `MintedProtocolV2Fixed.daml` | Stake mUSD → StakedMUSD with interest accrual. Unstake tracks supply cap via IssuerRole. |
+| `StakingService` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
 | `CantonStakingService` | `CantonSMUSD.daml` | Canton yield vault. Share-price model (totalAssets/totalShares). Yield synced from ETH. |
 | `CantonSMUSD` | `CantonSMUSD.daml` | Individual smUSD share position. |
 
@@ -197,18 +209,18 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 
 | Template | File | Description |
 |----------|------|-------------|
-| `Vault` | `MintedProtocolV2Fixed.daml` | CDP with interest accrual, oracle-checked collateral, MPA propagation to borrowed MUSD. |
-| `LiquidationEngine` | `MintedProtocolV2Fixed.daml` | Liquidation with close factor, penalty, partial/full modes. |
-| `LiquidityPool` | `MintedProtocolV2Fixed.daml` | DEX for atomic leverage (swap mUSD for collateral). |
-| `LeverageManager` | `MintedProtocolV2Fixed.daml` | Multi-loop leverage: borrow → swap → deposit (max 10 loops). |
+| `Vault` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `LiquidationEngine` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `LiquidityPool` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `LeverageManager` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
 
 ### Bridge Protocol
 
 | Template | File | Description |
 |----------|------|-------------|
-| `AttestationRequest` | `MintedProtocolV2Fixed.daml` | Multi-party validation with signature tracking, supermajority quorum, expiry. |
-| `ValidatorSignature` | `MintedProtocolV2Fixed.daml` | Individual validator ECDSA signature. |
-| `IssuerRole` | `MintedProtocolV2Fixed.daml` | Supply-cap-tracked minting via attestation or direct. MPA fields. |
+| `AttestationRequest` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `ValidatorSignature` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `IssuerRole` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
 | `BridgeOutRequest` | `CantonDirectMint.daml` | Canton → Ethereum bridge request with validator list and nonce. |
 | `RedemptionRequest` | `CantonDirectMint.daml` | Pending redemption awaiting USDC bridge-in from Ethereum. |
 
@@ -216,8 +228,8 @@ Integration: `CantonDirectMintService` holds an optional `complianceRegistryCid`
 
 | Template | File | Description |
 |----------|------|-------------|
-| `PriceOracle` | `MintedProtocolV2Fixed.daml` | Price feed with staleness enforcement via ledger time. |
-| `InstitutionalEquityPosition` | `MintedProtocolV2Fixed.daml` | Bank-signed equity positions for attestation collateral checks. |
+| `PriceOracle` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
+| `InstitutionalEquityPosition` | `MintedProtocolV2Fixed.daml` | Legacy compatibility path (not canonical launch scope). |
 
 ### Master Participation Agreement (MPA)
 
