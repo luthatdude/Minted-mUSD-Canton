@@ -8,10 +8,9 @@
 #
 # AUDIT TRAIL: INFRA-H-02 — Operational visibility for bridge and bot services.
 #
-# NOTE: Bridge Relay dashboard (1) now uses PromQL against prom-client counters.
-# Bot Operations dashboard (2) still uses LogQL against Loki (pending prom-client
-# integration in bot services).
-# Logging Overview dashboard (3) uses Loki for log search (as intended).
+# NOTE: Relay and keeper services expose Prometheus `minted_*` metrics via `/metrics`.
+# Bridge throughput, validation, rate-limit, and revert panels use PromQL directly.
+# Loki panels remain for operational log analysis and forensic drill-down.
 ---
 # ============================================================
 # DASHBOARD PROVISIONER CONFIG
@@ -85,7 +84,7 @@ data:
           "type": "row"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -105,7 +104,7 @@ data:
           ]
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -119,13 +118,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "sum(increase(minted_tx_reverts_total[24h]))",
+              "expr": "sum(increase(minted_tx_reverts_total{operation=\"processAttestation\"}[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -145,7 +144,7 @@ data:
           ]
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -165,7 +164,7 @@ data:
           ]
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -179,13 +178,13 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "sum(increase(minted_bridge_outs_total[24h]))",
+              "expr": "sum(increase(minted_bridge_outs_total{status=\"success\"}[24h]))",
               "refId": "A"
             }
           ]
         },
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -199,7 +198,7 @@ data:
           "type": "stat",
           "targets": [
             {
-              "expr": "minted_anomaly_detector_pause_triggered",
+              "expr": "max(minted_anomaly_detector_pause_triggered)",
               "refId": "A"
             }
           ]
@@ -212,7 +211,7 @@ data:
           "type": "row"
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "custom": { "drawStyle": "bars", "fillOpacity": 30, "stacking": { "mode": "normal" } }
@@ -235,19 +234,19 @@ data:
               "refId": "A"
             },
             {
-              "expr": "sum(rate(minted_tx_reverts_total[$__rate_interval]))",
+              "expr": "sum(rate(minted_attestations_processed_total{status=\"revert\"}[$__rate_interval]))",
               "legendFormat": "revert",
               "refId": "B"
             },
             {
-              "expr": "sum(rate(minted_bridge_outs_total[$__rate_interval]))",
+              "expr": "sum(rate(minted_bridge_outs_total{status=\"success\"}[$__rate_interval]))",
               "legendFormat": "bridge_out",
               "refId": "C"
             }
           ]
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "custom": { "drawStyle": "line", "fillOpacity": 10 },
@@ -265,13 +264,13 @@ data:
               "refId": "A"
             },
             {
-              "expr": "sum(rate(minted_nonce_collisions_total[$__rate_interval]))",
-              "legendFormat": "nonce_collision",
+              "expr": "sum(rate(minted_bridge_validation_failures_total{reason=\"nonce_mismatch\"}[$__rate_interval]))",
+              "legendFormat": "nonce_mismatch",
               "refId": "B"
             },
             {
-              "expr": "minted_relay_consecutive_failures",
-              "legendFormat": "consecutive_failures",
+              "expr": "max(minted_relay_active_provider_index)",
+              "legendFormat": "rpc_failover",
               "refId": "C"
             }
           ]
@@ -284,7 +283,7 @@ data:
           "type": "row"
         },
         {
-          "datasource": { "type": "loki", "uid": "${DS_LOKI}" },
+          "datasource": { "type": "prometheus", "uid": "${DS_PROM}" },
           "fieldConfig": {
             "defaults": {
               "custom": { "drawStyle": "bars", "fillOpacity": 50 },
@@ -357,17 +356,6 @@ data:
       "templating": {
         "list": [
           {
-            "current": { "selected": false, "text": "Prometheus", "value": "prometheus" },
-            "hide": 0,
-            "includeAll": false,
-            "label": "Prometheus Datasource",
-            "multi": false,
-            "name": "DS_PROMETHEUS",
-            "options": [],
-            "query": "prometheus",
-            "type": "datasource"
-          },
-          {
             "current": { "selected": false, "text": "Loki", "value": "loki" },
             "hide": 0,
             "includeAll": false,
@@ -394,7 +382,7 @@ data:
       "timezone": "utc",
       "title": "Minted — Bridge Relay Throughput",
       "uid": "minted-relay-throughput",
-      "version": 2
+      "version": 1
     }
 ---
 # ============================================================
@@ -1316,7 +1304,7 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(rate(bridge_requests_total[5m]))",
+              "expr": "sum(rate(minted_attestations_processed_total{status=\"success\"}[5m]))",
               "legendFormat": "bridge_req/s",
               "refId": "A"
             }
@@ -1337,7 +1325,7 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(rate(bridge_validation_failures_total[5m]))",
+              "expr": "sum(rate(minted_bridge_validation_failures_total[5m]))",
               "legendFormat": "validation_failures",
               "refId": "A"
             }
@@ -1358,7 +1346,7 @@ data:
           "type": "timeseries",
           "targets": [
             {
-              "expr": "sum(rate(validator_signing_rate_limit_hits_total[5m]))",
+              "expr": "sum(rate(minted_validator_rate_limit_hits_total[5m]))",
               "legendFormat": "signing_rate_limit_hits",
               "refId": "A"
             }

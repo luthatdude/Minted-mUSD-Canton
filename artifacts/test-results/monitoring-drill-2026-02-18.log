@@ -1,0 +1,26 @@
+monitoring_drill_timestamp=2026-02-18T06:23:46Z
+scenario=bridge_validation_failure_alert_path
+check=prometheus_rule_metric_names
+130:            sum(rate(minted_attestations_processed_total{status="success"}[1h])) > 100
+141:            sum(rate(minted_bridge_validation_failures_total[5m])) > 0
+152:            sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
+check=grafana_queries_metric_names
+101:              "expr": "sum(increase(minted_attestations_processed_total{status=\"success\"}[24h]))",
+121:              "expr": "sum(increase(minted_tx_reverts_total{operation=\"processAttestation\"}[24h]))",
+141:              "expr": "sum(increase(minted_validator_rate_limit_hits_total[24h]))",
+161:              "expr": "sum(increase(minted_bridge_validation_failures_total[24h]))",
+232:              "expr": "sum(rate(minted_attestations_processed_total{status=\"success\"}[$__rate_interval]))",
+237:              "expr": "sum(rate(minted_attestations_processed_total{status=\"revert\"}[$__rate_interval]))",
+262:              "expr": "sum(rate(minted_validator_rate_limit_hits_total[$__rate_interval]))",
+267:              "expr": "sum(rate(minted_bridge_validation_failures_total{reason=\"nonce_mismatch\"}[$__rate_interval]))",
+299:              "expr": "sum(rate(minted_bridge_validation_failures_total[$__rate_interval]))",
+1307:              "expr": "sum(rate(minted_attestations_processed_total{status=\"success\"}[5m]))",
+1328:              "expr": "sum(rate(minted_bridge_validation_failures_total[5m]))",
+1349:              "expr": "sum(rate(minted_validator_rate_limit_hits_total[5m]))",
+check=runbook_index_present
+k8s/monitoring/prometheus-rules.yaml:139:        - alert: BridgeValidationFailures
+k8s/monitoring/prometheus-rules.yaml:281:    musd.io/escalation-policy: "PagerDuty service: minted-musd-production"
+k8s/monitoring/prometheus-rules.yaml:286:  runbook-index: |
+k8s/monitoring/prometheus-rules.yaml:298:    # BridgeValidationFailures: https://docs.example.com/runbooks/bridge-validation-failures
+docs/RUNBOOKS.md:37:1. DETECT   → Alert fires (Prometheus / PagerDuty) OR user report
+docs/RUNBOOKS.md:40:4. NOTIFY   → Slack #incident channel + PagerDuty escalation
