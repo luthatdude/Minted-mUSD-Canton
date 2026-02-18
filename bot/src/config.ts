@@ -41,3 +41,81 @@ export function validateConfig(config: BotConfig): void {
     throw new Error("POLL_INTERVAL_MS must be >= 1000ms");
   }
 }
+
+// ============================================================
+//  TS-H-02 FIX: Role Key Uniqueness Validation
+// ============================================================
+
+/**
+ * Validate that bot role private keys are distinct.
+ *
+ * PRIVATE_KEY (liquidation bot), KEEPER_PRIVATE_KEY (yield/oracle keeper),
+ * and GUARDIAN_PRIVATE_KEY (security sentinel) must be different keys.
+ * Reusing a single key across all roles violates least-privilege — compromise
+ * of one role would compromise all three.
+ *
+ * Call this at bot startup before loading any signers.
+ *
+ * @param keys - Array of { name, envVar } pairs to check
+ * @throws In production if any two keys are identical
+ * @warns In development if any two keys are identical
+ */
+export function validateDistinctRoleKeys(
+  keys: Array<{ name: string; envVar: string }>
+): void {
+  const resolved: Array<{ name: string; value: string }> = [];
+
+  for (const { name, envVar } of keys) {
+    // Check Docker secrets first, then env var
+    let value = "";
+    try {
+      const fs = require("fs");
+      const secretPath = `/run/secrets/${name}`;
+      if (fs.existsSync(secretPath)) {
+        value = fs.readFileSync(secretPath, "utf-8").trim();
+      }
+    } catch { /* fall through */ }
+    if (!value) {
+      value = process.env[envVar] || "";
+    }
+    if (value) {
+      // Normalize: strip 0x prefix for comparison
+      const normalized = value.startsWith("0x") ? value.slice(2).toLowerCase() : value.toLowerCase();
+      resolved.push({ name: envVar, value: normalized });
+    }
+  }
+
+  // Check all pairs for duplicates
+  const duplicates: string[] = [];
+  for (let i = 0; i < resolved.length; i++) {
+    for (let j = i + 1; j < resolved.length; j++) {
+      if (resolved[i].value === resolved[j].value) {
+        duplicates.push(`${resolved[i].name} == ${resolved[j].name}`);
+      }
+    }
+  }
+
+  if (duplicates.length > 0) {
+    const msg =
+      `SECURITY: Bot role keys must be distinct (least-privilege). ` +
+      `Duplicate keys found: ${duplicates.join(", ")}. ` +
+      `Generate separate keys for each role to limit blast radius of key compromise.`;
+
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(msg);
+    } else {
+      console.warn(`⚠️  ${msg}`);
+    }
+  }
+}
+
+/**
+ * Standard set of bot role keys to validate.
+ * Call validateDistinctRoleKeys(BOT_ROLE_KEYS) at startup.
+ */
+export const BOT_ROLE_KEYS = [
+  { name: "bot_private_key", envVar: "PRIVATE_KEY" },
+  { name: "keeper_private_key", envVar: "KEEPER_PRIVATE_KEY" },
+  { name: "guardian_private_key", envVar: "GUARDIAN_PRIVATE_KEY" },
+  { name: "reconciliation_keeper_key", envVar: "RECONCILIATION_KEEPER_KEY" },
+];

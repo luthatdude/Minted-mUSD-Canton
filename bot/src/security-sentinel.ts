@@ -44,6 +44,7 @@
  */
 
 import { ethers } from "ethers";
+import { createBotSigner } from "./signer";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -91,7 +92,7 @@ const LARGE_MINT_THRESHOLD = ethers.parseUnits(
 // GLOBAL STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
-let guardianWallet: ethers.Wallet | null = null;
+let guardianWallet: ethers.Signer | null = null;
 let rpcProvider: ethers.Provider;
 
 // Timelock ops the owner has reviewed and marked safe — no further alerts for these
@@ -326,9 +327,10 @@ async function executeGlobalPause(): Promise<string> {
 
     // Check guardian role
     const guardianRole = ethers.id("GUARDIAN_ROLE");
-    const hasGuardian = await pauseRegistry.hasRole(guardianRole, guardianWallet.address);
+    const guardianAddress = await guardianWallet.getAddress();
+    const hasGuardian = await pauseRegistry.hasRole(guardianRole, guardianAddress);
     if (!hasGuardian) {
-      return `❌ Wallet ${shortAddr(guardianWallet.address)} lacks GUARDIAN_ROLE on GlobalPauseRegistry.`;
+      return `❌ Wallet ${shortAddr(guardianAddress)} lacks GUARDIAN_ROLE on GlobalPauseRegistry.`;
     }
 
     // Execute pause
@@ -363,9 +365,10 @@ async function executeUnpause(): Promise<string> {
 
     // Unpause requires DEFAULT_ADMIN_ROLE (not GUARDIAN_ROLE)
     const adminRole = "0x0000000000000000000000000000000000000000000000000000000000000000";
-    const hasAdmin = await pauseRegistry.hasRole(adminRole, guardianWallet.address);
+    const adminAddress = await guardianWallet.getAddress();
+    const hasAdmin = await pauseRegistry.hasRole(adminRole, adminAddress);
     if (!hasAdmin) {
-      return `❌ Wallet ${shortAddr(guardianWallet.address)} lacks DEFAULT_ADMIN_ROLE — cannot unpause.\nUse a DEFAULT_ADMIN wallet or the Admin Panel.`;
+      return `❌ Wallet ${shortAddr(adminAddress)} lacks DEFAULT_ADMIN_ROLE — cannot unpause.\nUse a DEFAULT_ADMIN wallet or the Admin Panel.`;
     }
 
     const tx = await pauseRegistry.unpauseGlobal();
@@ -399,9 +402,10 @@ async function executeCancelTimelock(operationId: string): Promise<string> {
 
     // Check canceller role
     const cancellerRole = ethers.id("CANCELLER_ROLE");
-    const hasCanceller = await timelock.hasRole(cancellerRole, guardianWallet.address);
+    const cancellerAddress = await guardianWallet.getAddress();
+    const hasCanceller = await timelock.hasRole(cancellerRole, cancellerAddress);
     if (!hasCanceller) {
-      return `❌ Wallet ${shortAddr(guardianWallet.address)} lacks CANCELLER_ROLE on Timelock.`;
+      return `❌ Wallet ${shortAddr(cancellerAddress)} lacks CANCELLER_ROLE on Timelock.`;
     }
 
     const tx = await timelock.cancel(operationId);
@@ -435,7 +439,7 @@ async function getProtocolStatus(): Promise<string> {
 
     const status = isPaused ? "🔴 PAUSED" : "🟢 RUNNING";
     const walletInfo = guardianWallet
-      ? `Guardian: ${shortAddr(guardianWallet.address)}`
+      ? `Guardian: ${shortAddr(await guardianWallet.getAddress())}`
       : "Guardian: ❌ not configured";
 
     return [
@@ -1080,25 +1084,25 @@ async function main(): Promise<void> {
   console.log();
 
   // ── Guardian Wallet ──
-  // SEC-GATE-01: Raw private key is forbidden in production — use KMS
-  if (process.env.NODE_ENV === "production" && GUARDIAN_PRIVATE_KEY && !process.env.GUARDIAN_KMS_KEY_ID) {
-    throw new Error(
-      "SECURITY: GUARDIAN_PRIVATE_KEY is forbidden in production. " +
-      "Set GUARDIAN_KMS_KEY_ID for HSM-backed signing. " +
-      "Raw keys stay in V8 heap memory and are extractable via core dumps."
-    );
-  }
-  if (GUARDIAN_PRIVATE_KEY) {
-    if (!process.env.GUARDIAN_KMS_KEY_ID) {
-      console.warn(
-        "⚠️  DEPRECATED: GUARDIAN_PRIVATE_KEY is deprecated. " +
-        "Migrate to GUARDIAN_KMS_KEY_ID for HSM-backed signing."
+  // TS-H-01 FIX: Use KMS-backed signer in production instead of raw private key
+  const guardianKmsKeyId = process.env.GUARDIAN_KMS_KEY_ID;
+  if (guardianKmsKeyId || GUARDIAN_PRIVATE_KEY) {
+    try {
+      guardianWallet = await createBotSigner(
+        rpcProvider as ethers.JsonRpcProvider,
+        "guardian_private_key",
+        "GUARDIAN_PRIVATE_KEY",
+        "GUARDIAN_KMS_KEY_ID",
       );
+      const guardianAddress = await guardianWallet.getAddress();
+      const balance = await rpcProvider.getBalance(guardianAddress);
+      console.log(`[Guardian] ✅ ${shortAddr(guardianAddress)} (${ethers.formatEther(balance)} ETH)`);
+      console.log(`[Guardian] Can execute: pauseGlobal(), cancel(), unpauseGlobal()`);
+    } catch (err) {
+      console.error(`[Guardian] Failed to initialize signer: ${(err as Error).message}`);
+      console.log("[Guardian] ⚠️  Running in alert-only mode (no on-chain actions)");
+      guardianWallet = null;
     }
-    guardianWallet = new ethers.Wallet(GUARDIAN_PRIVATE_KEY, rpcProvider);
-    const balance = await rpcProvider.getBalance(guardianWallet.address);
-    console.log(`[Guardian] ✅ ${shortAddr(guardianWallet.address)} (${ethers.formatEther(balance)} ETH)`);
-    console.log(`[Guardian] Can execute: pauseGlobal(), cancel(), unpauseGlobal()`);
   } else {
     console.log("[Guardian] ⚠️  No GUARDIAN_PRIVATE_KEY — alert-only mode (no on-chain actions)");
     console.log("  Set GUARDIAN_KMS_KEY_ID (production) or GUARDIAN_PRIVATE_KEY (dev) for on-chain actions.");
@@ -1137,7 +1141,7 @@ async function main(): Promise<void> {
     `Network: ${network.name} (${network.chainId})`,
     `Block: ${blockNumber}`,
     `Contracts: ${Object.keys(ADDRESSES).length}`,
-    `Guardian: ${guardianWallet ? `✅ ${shortAddr(guardianWallet.address)}` : "❌ alert-only"}`,
+    `Guardian: ${guardianWallet ? `✅ ${shortAddr(await guardianWallet.getAddress())}` : "❌ alert-only"}`,
     `Telegram: ${TELEGRAM_BOT_TOKEN ? "✅" : "❌"}`,
   ].join("\n"), [
     [

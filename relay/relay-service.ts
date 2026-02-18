@@ -24,7 +24,7 @@ import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
 // Use shared readSecret utility
 // Use readAndValidatePrivateKey for secp256k1 range validation
 // INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
-import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl } from "./utils";
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl, validateCantonPartyId } from "./utils";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
 // KMS-based Ethereum transaction signer (key never enters Node.js memory)
@@ -1364,6 +1364,18 @@ class RelayService {
       }
 
       console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
+
+      // TS-M-01 FIX: Validate Canton party ID format before passing to Canton ledger.
+      // cantonRecipient comes from user-supplied Ethereum event args and must be sanitized.
+      try {
+        validateCantonPartyId(cantonRecipient, `BridgeToCantonRequested event #${nonce}`);
+      } catch (validationError) {
+        console.error(`[Relay] ${(validationError as Error).message}`);
+        bridgeOutsTotal.labels("validation_error").inc();
+        bridgeValidationFailuresTotal.inc();
+        this.processedBridgeOuts.add(requestId); // Mark processed to avoid retrying invalid data
+        continue;
+      }
 
       try {
         // Create BridgeInRequest on Canton
