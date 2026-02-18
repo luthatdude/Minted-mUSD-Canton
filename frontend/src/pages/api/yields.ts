@@ -128,7 +128,7 @@ export default async function handler(
 
   try {
     const now = Date.now();
-    if (!cachedResult || now - cacheTimestamp > CACHE_TTL_MS) {
+    if (!cachedResult || now - cacheTimestamp > CACHE_TTL_MS || cachedResult.poolsScanned === 0) {
       cachedResult = await fetchAndScore();
       cacheTimestamp = now;
     }
@@ -164,16 +164,24 @@ export default async function handler(
 
 async function fetchAndScore(): Promise<YieldScanResponse> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), 45_000); // 45s — DefiLlama can be slow
 
   let resp: Response;
   try {
     resp = await fetch(DEFI_LLAMA_URL, { signal: controller.signal });
+  } catch (err) {
+    clearTimeout(timeout);
+    console.error("[api/yields] DefiLlama fetch failed:", err);
+    // Return empty result instead of crashing — let the client retry
+    return { pools: [], loops: [], scanTimestamp: Date.now(), poolsScanned: 0, chainsScanned: SCAN_CHAINS };
   } finally {
     clearTimeout(timeout);
   }
 
-  if (!resp.ok) throw new Error(`DefiLlama ${resp.status}`);
+  if (!resp.ok) {
+    console.error(`[api/yields] DefiLlama returned HTTP ${resp.status}`);
+    return { pools: [], loops: [], scanTimestamp: Date.now(), poolsScanned: 0, chainsScanned: SCAN_CHAINS };
+  }
 
   const text = await resp.text();
   if (text.length > 50 * 1024 * 1024) throw new Error("Response too large");
