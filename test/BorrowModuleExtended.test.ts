@@ -408,6 +408,42 @@ describe("BorrowModule — Extended Coverage", function () {
         borrowModule.connect(user1).reconcileTotalBorrows([user1.address])
       ).to.be.reverted;
     });
+
+    it("reverts when borrower list omission would create >5% drift", async function () {
+      const { borrowModule, collateralVault, weth, user1, user2, borrowAdmin } =
+        await loadFixture(deployFullFixture);
+
+      await depositAndBorrow(collateralVault, borrowModule, weth, user1, "10", "5000");
+      await depositAndBorrow(collateralVault, borrowModule, weth, user2, "10", "5000");
+
+      // Omitting one borrower creates ~50% drift vs totalBorrows and must revert.
+      await expect(
+        borrowModule.connect(borrowAdmin).reconcileTotalBorrows([user1.address])
+      ).to.be.reverted;
+    });
+
+    it("emits drift warning and reconciles when drift is between 1% and 5%", async function () {
+      const { borrowModule, collateralVault, weth, user1, user2, borrowAdmin, owner } =
+        await loadFixture(deployFullFixture);
+
+      // Lower minDebt so we can create a small second borrower and controlled drift.
+      await timelockSetMinDebt(borrowModule, owner, ethers.parseEther("10"));
+
+      await depositAndBorrow(collateralVault, borrowModule, weth, user1, "10", "5000");
+      await depositAndBorrow(collateralVault, borrowModule, weth, user2, "10", "80");
+
+      const totalBefore = await borrowModule.totalBorrows();
+
+      await expect(
+        borrowModule.connect(borrowAdmin).reconcileTotalBorrows([user1.address])
+      ).to.emit(borrowModule, "DriftThresholdExceeded");
+
+      const totalAfter = await borrowModule.totalBorrows();
+      const user1Pos = await borrowModule.positions(user1.address);
+      const user1StoredDebt = user1Pos.principal + user1Pos.accruedInterest;
+      expect(totalAfter).to.be.lt(totalBefore);
+      expect(totalAfter).to.equal(user1StoredDebt);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════
