@@ -28,6 +28,8 @@ commonAnnotations:
 
 resources:
   - ../../base
+  # Dev keeps manual Kubernetes Secrets templates.
+  - ../../canton/secrets.yaml
 
 patches:
   # ── Namespace: dev-specific PSA (warn instead of enforce) ──

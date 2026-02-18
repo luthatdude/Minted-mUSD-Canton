@@ -24,7 +24,6 @@ resources:
   - ../canton/serviceaccount.yaml
 
   # Phase 2: Secrets & ConfigMaps
-  - ../canton/secrets.yaml
   - ../canton/participant-config.yaml
   - ../canton/nginx-configmap.yaml
 
