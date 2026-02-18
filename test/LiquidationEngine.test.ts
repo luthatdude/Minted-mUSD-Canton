@@ -106,6 +106,82 @@ describe("LiquidationEngine", function () {
     };
   }
 
+  async function deployMultiCollateralFixture() {
+    const [owner, user1, , liquidator] = await ethers.getSigners();
+
+    const MockERC20 = await ethers.getContractFactory("MockERC20");
+    const weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
+    const wbtc = await MockERC20.deploy("Wrapped Bitcoin", "WBTC", 8);
+
+    const MUSD = await ethers.getContractFactory("MUSD");
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
+
+    const PriceOracle = await ethers.getContractFactory("PriceOracle");
+    const priceOracle = await PriceOracle.deploy();
+
+    const MockAggregator = await ethers.getContractFactory("MockAggregatorV3");
+    const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
+    const btcFeed = await MockAggregator.deploy(8, 4000000000000n); // $40000
+
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
+    await priceOracle.setFeed(await wbtc.getAddress(), await btcFeed.getAddress(), 3600, 8, 0);
+
+    const CollateralVault = await ethers.getContractFactory("CollateralVault");
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
+    // WETH: 75% LTV, 80% threshold, 10% penalty
+    await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
+    // WBTC: 70% LTV, 75% threshold, 15% penalty
+    await collateralVault.addCollateral(await wbtc.getAddress(), 7000, 7500, 1500);
+
+    const BorrowModule = await ethers.getContractFactory("BorrowModule");
+    const borrowModule = await BorrowModule.deploy(
+      await collateralVault.getAddress(),
+      await priceOracle.getAddress(),
+      await musd.getAddress(),
+      500,
+      ethers.parseEther("100")
+    );
+
+    const LiquidationEngine = await ethers.getContractFactory("LiquidationEngine");
+    const liquidationEngine = await LiquidationEngine.deploy(
+      await collateralVault.getAddress(),
+      await borrowModule.getAddress(),
+      await priceOracle.getAddress(),
+      await musd.getAddress(),
+      5000,
+      owner.address
+    );
+
+    const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+    await musd.grantRole(BRIDGE_ROLE, await borrowModule.getAddress());
+    await musd.grantRole(BRIDGE_ROLE, await liquidationEngine.getAddress());
+    await musd.grantRole(BRIDGE_ROLE, owner.address);
+    await collateralVault.grantRole(await collateralVault.BORROW_MODULE_ROLE(), await borrowModule.getAddress());
+    await collateralVault.grantRole(await collateralVault.LIQUIDATION_ROLE(), await liquidationEngine.getAddress());
+    await borrowModule.grantRole(await borrowModule.LIQUIDATION_ROLE(), await liquidationEngine.getAddress());
+
+    await weth.mint(user1.address, ethers.parseEther("100"));
+    await wbtc.mint(user1.address, 500000000n); // 5 WBTC
+    await musd.mint(liquidator.address, ethers.parseEther("500000"));
+
+    await weth.connect(user1).approve(await collateralVault.getAddress(), ethers.MaxUint256);
+    await wbtc.connect(user1).approve(await collateralVault.getAddress(), ethers.MaxUint256);
+    await musd.connect(liquidator).approve(await liquidationEngine.getAddress(), ethers.MaxUint256);
+
+    return {
+      liquidationEngine,
+      borrowModule,
+      collateralVault,
+      musd,
+      weth,
+      wbtc,
+      ethFeed,
+      btcFeed,
+      user1,
+      liquidator,
+    };
+  }
+
   describe("Deployment", function () {
     it("Should initialize with correct parameters", async function () {
       const { liquidationEngine, borrowModule, collateralVault, priceOracle } = await loadFixture(
@@ -331,6 +407,101 @@ describe("LiquidationEngine", function () {
           .connect(liquidator)
           .liquidate(user1.address, await weth.getAddress(), repayAmount)
       ).to.emit(liquidationEngine, "Liquidation");
+    });
+  });
+
+  describe("Edge Cases: Multi-Collateral and Insolvency", function () {
+    it("Should liquidate selected WETH collateral while leaving WBTC untouched", async function () {
+      const { liquidationEngine, borrowModule, collateralVault, weth, wbtc, ethFeed, user1, liquidator } =
+        await loadFixture(deployMultiCollateralFixture);
+
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("10"));
+      await collateralVault.connect(user1).deposit(await wbtc.getAddress(), 100000000n); // 1 WBTC
+      await borrowModule.connect(user1).borrow(ethers.parseEther("40000"));
+
+      // Crash ETH price to make position liquidatable.
+      await ethFeed.setAnswer(50000000000n); // $500
+      expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
+
+      const liquidatorWethBefore = await weth.balanceOf(liquidator.address);
+      await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), ethers.parseEther("2000"));
+      const liquidatorWethAfter = await weth.balanceOf(liquidator.address);
+
+      expect(liquidatorWethAfter).to.be.gt(liquidatorWethBefore);
+      expect(await collateralVault.deposits(user1.address, await wbtc.getAddress())).to.equal(100000000n);
+    });
+
+    it("Should liquidate selected WBTC collateral while leaving WETH untouched", async function () {
+      const { liquidationEngine, borrowModule, collateralVault, weth, wbtc, btcFeed, user1, liquidator } =
+        await loadFixture(deployMultiCollateralFixture);
+
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("10"));
+      await collateralVault.connect(user1).deposit(await wbtc.getAddress(), 100000000n); // 1 WBTC
+      await borrowModule.connect(user1).borrow(ethers.parseEther("40000"));
+
+      // Crash BTC price to make position liquidatable.
+      await btcFeed.setAnswer(1000000000000n); // $10,000
+      expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
+
+      const liquidatorWbtcBefore = await wbtc.balanceOf(liquidator.address);
+      await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await wbtc.getAddress(), ethers.parseEther("2000"));
+      const liquidatorWbtcAfter = await wbtc.balanceOf(liquidator.address);
+
+      expect(liquidatorWbtcAfter).to.be.gt(liquidatorWbtcBefore);
+      expect(await collateralVault.deposits(user1.address, await weth.getAddress())).to.equal(ethers.parseEther("10"));
+    });
+
+    it("Should apply higher seize value for higher-penalty collateral", async function () {
+      const { liquidationEngine, borrowModule, collateralVault, weth, wbtc, ethFeed, btcFeed, user1 } =
+        await loadFixture(deployMultiCollateralFixture);
+
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("10"));
+      await collateralVault.connect(user1).deposit(await wbtc.getAddress(), 100000000n); // 1 WBTC
+      await borrowModule.connect(user1).borrow(ethers.parseEther("30000"));
+
+      await ethFeed.setAnswer(50000000000n); // $500
+      await btcFeed.setAnswer(1000000000000n); // $10,000
+
+      const repay = ethers.parseEther("1000");
+      const wethEstimate = await liquidationEngine.estimateSeize(user1.address, await weth.getAddress(), repay);
+      const wbtcEstimate = await liquidationEngine.estimateSeize(user1.address, await wbtc.getAddress(), repay);
+
+      // Normalize seized amount into USD value at the same spot prices.
+      const wethSeizeUsd = (wethEstimate * 50000000000n) / (10n ** 18n);
+      const wbtcSeizeUsd = (wbtcEstimate * 1000000000000n) / (10n ** 8n);
+      expect(wbtcSeizeUsd).to.be.gt(wethSeizeUsd);
+    });
+
+    it("Should leave residual debt when collateral is insufficient (insolvency edge case)", async function () {
+      const { liquidationEngine, borrowModule, collateralVault, weth, ethFeed, user1, liquidator } =
+        await loadFixture(deployMultiCollateralFixture);
+
+      await collateralVault.connect(user1).deposit(await weth.getAddress(), ethers.parseEther("5")); // $10k
+      await borrowModule.connect(user1).borrow(ethers.parseEther("7000"));
+
+      // Severe crash: collateral now worth only $500.
+      await ethFeed.setAnswer(10000000000n); // $100
+      expect(await liquidationEngine.isLiquidatable(user1.address)).to.equal(true);
+
+      const debtBefore = await borrowModule.totalDebt(user1.address);
+      await liquidationEngine
+        .connect(liquidator)
+        .liquidate(user1.address, await weth.getAddress(), debtBefore);
+      const debtAfter = await borrowModule.totalDebt(user1.address);
+
+      expect(await collateralVault.deposits(user1.address, await weth.getAddress())).to.equal(0);
+      expect(debtAfter).to.be.gt(0);
+      expect(debtAfter).to.be.lt(debtBefore);
+
+      await expect(
+        liquidationEngine
+          .connect(liquidator)
+          .liquidate(user1.address, await weth.getAddress(), ethers.parseEther("100"))
+      ).to.be.revertedWithCustomError(liquidationEngine, "NothingToSeize");
     });
   });
 
