@@ -233,7 +233,7 @@ export function StakePage() {
   if (!isConnected) return <WalletConnector mode="ethereum" />;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8">
       <PageHeader
         title="Stake & Earn"
         subtitle="Earn yield by staking into mUSD vaults — choose your pool"
@@ -271,258 +271,266 @@ export function StakePage() {
       {/* ═══════════ smUSD POOL ═══════════ */}
       {pool === "smusd" && (
         <>
-          {/* Yield Overview */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="Share Price"
-              value={`${smusdExchangeRate} mUSD`}
-              subValue="per smUSD"
-              color="green"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
-            />
-            <StatCard
-              label="Estimated APY"
-              value={`${smusdApy.toFixed(2)}%`}
-              color="green"
-              trend={smusdApy > 0 ? "up" : "neutral"}
-              trendValue={smusdApy > 0 ? "Earning" : "Base"}
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
-            />
-            <StatCard
-              label="Total Vault TVL"
-              value={formatToken(smusdStats.totalAssets) + " mUSD"}
-              color="blue"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
-            />
-            <StatCard
-              label="Total smUSD"
-              value={formatToken(smusdStats.totalSupply)}
-              color="purple"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
-            />
-          </div>
+          {/* Two-column layout: Action left, Stats right */}
+          <div className="grid gap-8 lg:grid-cols-2">
+            {/* Left column: Stake/Unstake Card */}
+            <div>
+              <div className="card-gradient-border overflow-hidden">
+                <div className="flex border-b border-white/10">
+                  <button
+                    className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`}
+                    onClick={() => { setTab("stake"); setAmount(""); }}
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+                      Stake mUSD
+                    </span>
+                    {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
+                  </button>
+                  <button
+                    className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`}
+                    onClick={() => { setTab("unstake"); setAmount(""); }}
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      Unstake smUSD
+                    </span>
+                    {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
+                  </button>
+                </div>
 
-          {/* Position Card */}
-          {smusdStats.smusdBal > 0n && (
-            <div className="card-gradient-border overflow-hidden">
-              <div className="flex items-center gap-3 mb-5">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-500">
-                  <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Your Position</h2>
-                  <p className="text-sm text-gray-400">Staking performance overview</p>
-                </div>
-              </div>
-              <div className="grid gap-6 sm:grid-cols-3">
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-400">smUSD Balance</p>
-                  <p className="text-2xl font-bold text-white">{formatToken(smusdStats.smusdBal)}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-400">Position Value</p>
-                  <p className="text-2xl font-bold text-emerald-400">{formatToken(smusdPositionValue)} mUSD</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-400">Yield Earned</p>
-                  <p className="text-2xl font-bold text-green-400">+{formatToken(smusdYieldEarned)} mUSD</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Cooldown Timer */}
-          {!smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
-            <div className="card overflow-hidden">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-yellow-500/20">
-                    <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="font-medium text-white">Withdrawal Cooldown</p>
-                    <p className="text-sm text-gray-400">
-                      {cooldownHours >= 1
-                        ? `${cooldownHours.toFixed(1)} hours remaining`
-                        : `${Math.ceil(cooldownSeconds / 60)} minutes remaining`}
-                    </p>
-                  </div>
-                </div>
-                <span className="badge-warning">{Math.round(cooldownPct)}% Complete</span>
-              </div>
-              <div className="progress">
-                <div className="progress-bar-emerald h-full rounded-full transition-all duration-1000" style={{ width: `${cooldownPct}%` }} />
-              </div>
-            </div>
-          )}
-
-          {/* Balance Cards */}
-          <div className="grid gap-4 sm:grid-cols-2">
-            <StatCard
-              label="Your mUSD Balance"
-              value={formatToken(smusdStats.musdBal)}
-              color="blue"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
-            />
-            <StatCard
-              label="Your smUSD Balance"
-              value={formatToken(smusdStats.smusdBal)}
-              color="purple"
-              subValue={smusdStats.smusdBal > 0n ? `≈ ${formatToken(smusdPositionValue)} mUSD` : undefined}
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
-            />
-          </div>
-
-          {/* Stake/Unstake Card */}
-          <div className="card-gradient-border overflow-hidden">
-            <div className="flex border-b border-white/10">
-              <button
-                className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`}
-                onClick={() => { setTab("stake"); setAmount(""); }}
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-                  Stake mUSD
-                </span>
-                {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
-              </button>
-              <button
-                className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`}
-                onClick={() => { setTab("unstake"); setAmount(""); }}
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  Unstake smUSD
-                </span>
-                {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
-              </button>
-            </div>
-
-            <div className="space-y-6 p-6">
-              {/* Input */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-gray-400">{tab === "stake" ? "You Stake" : "You Unstake"}</label>
-                  <span className="text-xs text-gray-500">Balance: {formatToken(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal)}</span>
-                </div>
-                <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
-                  <div className="flex items-center gap-4">
-                    <input
-                      type="number"
-                      className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
-                      placeholder="0.00"
-                      value={amount}
-                      onChange={e => setAmount(e.target.value)}
-                    />
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
-                        onClick={() => setAmount(ethers.formatUnits(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal, MUSD_DECIMALS))}
-                      >MAX</button>
-                      <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                        <div className={`h-6 w-6 rounded-full ${tab === "stake" ? "bg-gradient-to-br from-brand-500 to-purple-500" : "bg-gradient-to-br from-emerald-500 to-teal-500"}`} />
-                        <span className="font-semibold text-white">{tab === "stake" ? "mUSD" : "smUSD"}</span>
+                <div className="space-y-6 p-6">
+                  {/* Input */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-sm font-medium text-gray-400">{tab === "stake" ? "You Stake" : "You Unstake"}</label>
+                      <span className="text-xs text-gray-500">Balance: {formatToken(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal)}</span>
+                    </div>
+                    <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
+                      <div className="flex items-center gap-4">
+                        <input
+                          type="number"
+                          className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                          placeholder="0.00"
+                          value={amount}
+                          onChange={e => setAmount(e.target.value)}
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
+                            onClick={() => setAmount(ethers.formatUnits(tab === "stake" ? smusdStats.musdBal : smusdStats.smusdBal, MUSD_DECIMALS))}
+                          >MAX</button>
+                          <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                            <div className={`h-6 w-6 rounded-full ${tab === "stake" ? "bg-gradient-to-br from-brand-500 to-purple-500" : "bg-gradient-to-br from-emerald-500 to-teal-500"}`} />
+                            <span className="font-semibold text-white">{tab === "stake" ? "mUSD" : "smUSD"}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Arrow */}
-              <div className="flex justify-center">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
-                  <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
-                </div>
-              </div>
+                  {/* Arrow */}
+                  <div className="flex justify-center">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
+                      <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                    </div>
+                  </div>
 
-              {/* Output */}
-              <div className="space-y-3">
-                <label className="text-sm font-medium text-gray-400">You Receive</label>
-                <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-2xl font-semibold text-white">
-                      {amount && parseFloat(amount) > 0
-                        ? (tab === "stake" ? formatToken(smusdStats.previewDeposit) : formatToken(smusdStats.previewRedeem))
-                        : "0.00"}
+                  {/* Output */}
+                  <div className="space-y-3">
+                    <label className="text-sm font-medium text-gray-400">You Receive</label>
+                    <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-2xl font-semibold text-white">
+                          {amount && parseFloat(amount) > 0
+                            ? (tab === "stake" ? formatToken(smusdStats.previewDeposit) : formatToken(smusdStats.previewRedeem))
+                            : "0.00"}
+                        </span>
+                        <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                          <div className={`h-6 w-6 rounded-full ${tab === "stake" ? "bg-gradient-to-br from-emerald-500 to-teal-500" : "bg-gradient-to-br from-brand-500 to-purple-500"}`} />
+                          <span className="font-semibold text-white">{tab === "stake" ? "smUSD" : "mUSD"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Exchange Info */}
+                  {amount && parseFloat(amount) > 0 && (
+                    <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-400">Exchange Rate</span>
+                        <span className="font-medium text-white">1 smUSD = {smusdExchangeRate} mUSD</span>
+                      </div>
+                      <div className="divider my-2" />
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-400">Cooldown Period</span>
+                        <span className="text-gray-300">24 hours</span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-400">Withdrawal Fee</span>
+                        <span className="text-emerald-400 font-medium">None</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cooldown Warning */}
+                  {tab === "unstake" && !smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
+                    <div className="alert-warning flex items-center gap-3">
+                      <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm">Cooldown active — {cooldownHours.toFixed(1)}h remaining before you can withdraw.</span>
+                    </div>
+                  )}
+
+                  {/* Action Button */}
+                  <TxButton
+                    onClick={tab === "stake" ? handleSmusdStake : handleSmusdUnstake}
+                    loading={tx.loading}
+                    disabled={!amount || parseFloat(amount) <= 0 || (tab === "unstake" && !smusdStats.canWithdraw)}
+                    className="w-full"
+                  >
+                    <span className="flex items-center justify-center gap-2">
+                      {tab === "stake" ? (
+                        <>
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+                          Stake mUSD
+                        </>
+                      ) : (
+                        <>
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                          {smusdStats.canWithdraw ? "Unstake smUSD" : "Cooldown Active"}
+                        </>
+                      )}
                     </span>
-                    <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                      <div className={`h-6 w-6 rounded-full ${tab === "stake" ? "bg-gradient-to-br from-emerald-500 to-teal-500" : "bg-gradient-to-br from-brand-500 to-purple-500"}`} />
-                      <span className="font-semibold text-white">{tab === "stake" ? "smUSD" : "mUSD"}</span>
+                  </TxButton>
+
+                  {/* Tx Status */}
+                  {tx.error && (
+                    <div className="alert-error flex items-center gap-3">
+                      <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <span className="text-sm">{tx.error}</span>
+                    </div>
+                  )}
+                  {tx.success && (
+                    <div className="alert-success flex items-center gap-3">
+                      <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <span className="text-sm">Transaction confirmed!{" "}
+                        {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right column: Stats & Position */}
+            <div className="space-y-4">
+              {/* Yield Overview */}
+              <div className="grid gap-4 grid-cols-2">
+                <StatCard
+                  label="Share Price"
+                  value={`${smusdExchangeRate} mUSD`}
+                  subValue="per smUSD"
+                  color="green"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
+                />
+                <StatCard
+                  label="Estimated APY"
+                  value={`${smusdApy.toFixed(2)}%`}
+                  color="green"
+                  trend={smusdApy > 0 ? "up" : "neutral"}
+                  trendValue={smusdApy > 0 ? "Earning" : "Base"}
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+                />
+                <StatCard
+                  label="Total Vault TVL"
+                  value={formatToken(smusdStats.totalAssets) + " mUSD"}
+                  color="blue"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+                />
+                <StatCard
+                  label="Total smUSD"
+                  value={formatToken(smusdStats.totalSupply)}
+                  color="purple"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
+                />
+              </div>
+
+              {/* Position Card */}
+              {smusdStats.smusdBal > 0n && (
+                <div className="card-gradient-border overflow-hidden">
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-500">
+                      <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-white">Your Position</h2>
+                      <p className="text-sm text-gray-400">Staking performance overview</p>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 grid-cols-3">
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-400">smUSD Balance</p>
+                      <p className="text-xl font-bold text-white">{formatToken(smusdStats.smusdBal)}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-400">Position Value</p>
+                      <p className="text-xl font-bold text-emerald-400">{formatToken(smusdPositionValue)} mUSD</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-400">Yield Earned</p>
+                      <p className="text-xl font-bold text-green-400">+{formatToken(smusdYieldEarned)} mUSD</p>
                     </div>
                   </div>
                 </div>
+              )}
+
+              {/* Cooldown Timer */}
+              {!smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
+                <div className="card overflow-hidden">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-yellow-500/20">
+                        <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="font-medium text-white">Withdrawal Cooldown</p>
+                        <p className="text-sm text-gray-400">
+                          {cooldownHours >= 1
+                            ? `${cooldownHours.toFixed(1)} hours remaining`
+                            : `${Math.ceil(cooldownSeconds / 60)} minutes remaining`}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="badge-warning">{Math.round(cooldownPct)}% Complete</span>
+                  </div>
+                  <div className="progress">
+                    <div className="progress-bar-emerald h-full rounded-full transition-all duration-1000" style={{ width: `${cooldownPct}%` }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Balance Cards */}
+              <div className="grid gap-4 grid-cols-2">
+                <StatCard
+                  label="Your mUSD Balance"
+                  value={formatToken(smusdStats.musdBal)}
+                  color="blue"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
+                />
+                <StatCard
+                  label="Your smUSD Balance"
+                  value={formatToken(smusdStats.smusdBal)}
+                  color="purple"
+                  subValue={smusdStats.smusdBal > 0n ? `≈ ${formatToken(smusdPositionValue)} mUSD` : undefined}
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
+                />
               </div>
-
-              {/* Exchange Info */}
-              {amount && parseFloat(amount) > 0 && (
-                <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-400">Exchange Rate</span>
-                    <span className="font-medium text-white">1 smUSD = {smusdExchangeRate} mUSD</span>
-                  </div>
-                  <div className="divider my-2" />
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-400">Cooldown Period</span>
-                    <span className="text-gray-300">24 hours</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-400">Withdrawal Fee</span>
-                    <span className="text-emerald-400 font-medium">None</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Cooldown Warning */}
-              {tab === "unstake" && !smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
-                <div className="alert-warning flex items-center gap-3">
-                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-sm">Cooldown active — {cooldownHours.toFixed(1)}h remaining before you can withdraw.</span>
-                </div>
-              )}
-
-              {/* Action Button */}
-              <TxButton
-                onClick={tab === "stake" ? handleSmusdStake : handleSmusdUnstake}
-                loading={tx.loading}
-                disabled={!amount || parseFloat(amount) <= 0 || (tab === "unstake" && !smusdStats.canWithdraw)}
-                className="w-full"
-              >
-                <span className="flex items-center justify-center gap-2">
-                  {tab === "stake" ? (
-                    <>
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-                      Stake mUSD
-                    </>
-                  ) : (
-                    <>
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                      {smusdStats.canWithdraw ? "Unstake smUSD" : "Cooldown Active"}
-                    </>
-                  )}
-                </span>
-              </TxButton>
-
-              {/* Tx Status */}
-              {tx.error && (
-                <div className="alert-error flex items-center gap-3">
-                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className="text-sm">{tx.error}</span>
-                </div>
-              )}
-              {tx.success && (
-                <div className="alert-success flex items-center gap-3">
-                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className="text-sm">Transaction confirmed!{" "}
-                    {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
-                  </span>
-                </div>
-              )}
             </div>
           </div>
 
@@ -558,296 +566,304 @@ export function StakePage() {
       {/* ═══════════ ETH POOL ═══════════ */}
       {pool === "ethpool" && (
         <>
-          {/* Pool Stats */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="smUSD-E Price"
-              value={`${ethPoolSharePriceFmt} mUSD`}
-              subValue="per smUSD-E"
-              color="blue"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
-            />
-            <StatCard
-              label="Pool TVL"
-              value={formatToken(ethPoolTVL) + " mUSD"}
-              color="green"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
-            />
-            <StatCard
-              label="Pool Utilization"
-              value={`${ethPoolUtil.toFixed(1)}%`}
-              color="yellow"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>}
-            />
-            <StatCard
-              label="Your smUSD-E"
-              value={formatToken(ethPoolStats.smUsdEBal)}
-              color="purple"
-              icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
-            />
-          </div>
-
-          {/* Info Banner */}
-          <div className="card overflow-hidden border-l-4 border-blue-500">
-            <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/20 flex-shrink-0">
-                <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-1">ETH Pool — Fluid Strategy Yield</h3>
-                <p className="text-sm text-gray-400">
-                  Deposit ETH, USDC, or USDT into the ETH Pool. Your deposit mints mUSD and you receive smUSD-E shares
-                  with optional time-lock boost multipliers (up to 2×). Yield is generated via Fluid leveraged loop strategies.
-                </p>
-                <p className="text-sm text-blue-400 mt-2 font-medium">
-                  ✦ smUSD-E can be used as collateral for lending &amp; borrowing in the same pools as smUSD
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Deposit / Withdraw Card */}
-          <div className="card-gradient-border overflow-hidden">
-            <div className="flex border-b border-white/10">
-              <button
-                className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`}
-                onClick={() => { setTab("stake"); setAmount(""); }}
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-                  Deposit
-                </span>
-                {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
-              </button>
-              <button
-                className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`}
-                onClick={() => { setTab("unstake"); setAmount(""); }}
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                  Withdraw
-                </span>
-                {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
-              </button>
-            </div>
-
-            <div className="space-y-6 p-6">
-              {tab === "stake" ? (
-                <>
-                  {/* Asset Selector */}
-                  <div className="space-y-3">
-                    <label className="text-sm font-medium text-gray-400">Deposit Asset</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(["ETH", "USDC", "USDT"] as DepositAsset[]).map(asset => (
-                        <button
-                          key={asset}
-                          onClick={() => { setDepositAsset(asset); setAmount(""); }}
-                          className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all duration-200 ${
-                            depositAsset === asset
-                              ? "border-blue-500 bg-blue-500/20 text-white"
-                              : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"
-                          }`}
-                        >
-                          <div className="flex items-center justify-center gap-2">
-                            <div className={`h-5 w-5 rounded-full ${
-                              asset === "ETH" ? "bg-gradient-to-br from-blue-400 to-purple-500"
-                              : asset === "USDC" ? "bg-gradient-to-br from-blue-400 to-blue-600"
-                              : "bg-gradient-to-br from-green-400 to-green-600"
-                            }`} />
-                            {asset}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Lock Tier */}
-                  <div className="space-y-3">
-                    <label className="text-sm font-medium text-gray-400">Time-Lock Boost</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {([0, 1, 2, 3] as LockTier[]).map(tier => (
-                        <button
-                          key={tier}
-                          onClick={() => setLockTier(tier)}
-                          className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all duration-200 ${
-                            lockTier === tier
-                              ? "border-blue-500 bg-blue-500/20 text-white"
-                              : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"
-                          }`}
-                        >
-                          {TIER_LABELS[tier]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Amount Input */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-sm font-medium text-gray-400">Amount</label>
-                      <span className="text-xs text-gray-500">Balance: {ethers.formatUnits(depositBalance, depositDecimals)} {depositAsset}</span>
-                    </div>
-                    <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-blue-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(59,130,246,0.3)]">
-                      <div className="flex items-center gap-4">
-                        <input
-                          type="number"
-                          className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
-                          placeholder="0.00"
-                          value={amount}
-                          onChange={e => setAmount(e.target.value)}
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-400 transition-colors hover:bg-blue-500/30"
-                            onClick={() => setAmount(ethers.formatUnits(depositBalance, depositDecimals))}
-                          >MAX</button>
-                          <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                            <div className={`h-6 w-6 rounded-full ${
-                              depositAsset === "ETH" ? "bg-gradient-to-br from-blue-400 to-purple-500"
-                              : depositAsset === "USDC" ? "bg-gradient-to-br from-blue-400 to-blue-600"
-                              : "bg-gradient-to-br from-green-400 to-green-600"
-                            }`} />
-                            <span className="font-semibold text-white">{depositAsset}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Arrow */}
-                  <div className="flex justify-center">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
-                      <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
-                    </div>
-                  </div>
-
-                  {/* Output */}
-                  <div className="space-y-3">
-                    <label className="text-sm font-medium text-gray-400">You Receive</label>
-                    <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-2xl font-semibold text-white">smUSD-E</span>
-                        <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                          <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500" />
-                          <span className="font-semibold text-white">smUSD-E</span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-gray-500 mt-2">
-                        Shares calculated at current price ({ethPoolSharePriceFmt} mUSD/share) with {TIER_LABELS[lockTier]} boost
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Deposit Button */}
-                  <TxButton
-                    onClick={handleEthPoolStake}
-                    loading={tx.loading}
-                    disabled={!amount || parseFloat(amount) <= 0 || !ethPool}
-                    className="w-full"
+          {/* Two-column layout: Action left, Stats right */}
+          <div className="grid gap-8 lg:grid-cols-2">
+            {/* Left column: Deposit / Withdraw Card */}
+            <div>
+              <div className="card-gradient-border overflow-hidden">
+                <div className="flex border-b border-white/10">
+                  <button
+                    className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`}
+                    onClick={() => { setTab("stake"); setAmount(""); }}
                   >
-                    <span className="flex items-center justify-center gap-2">
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                      Deposit {depositAsset} → smUSD-E
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+                      Deposit
                     </span>
-                  </TxButton>
-                </>
-              ) : (
-                <>
-                  {/* Unstake: position-based */}
-                  {positions.length === 0 ? (
-                    <div className="text-center py-12">
-                      <div className="flex h-16 w-16 mx-auto items-center justify-center rounded-full bg-surface-700/50 mb-4">
-                        <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-                        </svg>
-                      </div>
-                      <p className="text-gray-400 font-medium">No active positions</p>
-                      <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <label className="text-sm font-medium text-gray-400">Select Position to Unstake</label>
-                      {positions.map(pos => {
-                        const isETH = pos.depositAsset === ethers.ZeroAddress;
-                        const assetLabel = isETH ? "ETH" : "Stablecoin";
-                        const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - Math.floor(Date.now() / 1000)) : 0;
-                        const isLocked = lockRemaining > 0;
-                        const daysLeft = Math.ceil(lockRemaining / 86400);
-                        return (
-                          <button
-                            key={pos.id}
-                            onClick={() => setUnstakeId(pos.id)}
-                            className={`w-full rounded-xl border p-4 text-left transition-all duration-200 ${
-                              unstakeId === pos.id
-                                ? "border-blue-500 bg-blue-500/10"
-                                : "border-white/10 bg-surface-800/50 hover:border-white/30"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-white">Position #{pos.id}</span>
-                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                  isLocked ? "bg-yellow-500/20 text-yellow-400" : "bg-emerald-500/20 text-emerald-400"
-                                }`}>
-                                  {isLocked ? `${daysLeft}d locked` : "Unlocked"}
-                                </span>
-                              </div>
-                              <span className="text-sm text-gray-400">{TIER_LABELS[pos.tier as LockTier]}</span>
-                            </div>
-                            <div className="grid grid-cols-3 gap-4 text-sm">
-                              <div>
-                                <p className="text-gray-500">Deposited</p>
-                                <p className="text-white font-medium">
-                                  {isETH
-                                    ? ethers.formatEther(pos.depositAmount) + " ETH"
-                                    : ethers.formatUnits(pos.depositAmount, USDC_DECIMALS) + " " + assetLabel}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-gray-500">mUSD Minted</p>
-                                <p className="text-white font-medium">{formatToken(pos.musdMinted)}</p>
-                              </div>
-                              <div>
-                                <p className="text-gray-500">smUSD-E Shares</p>
-                                <p className="text-white font-medium">{formatToken(pos.smUsdEShares)}</p>
-                              </div>
-                            </div>
-                          </button>
-                        );
-                      })}
+                    {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
+                  </button>
+                  <button
+                    className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all duration-300 ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`}
+                    onClick={() => { setTab("unstake"); setAmount(""); }}
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                      Withdraw
+                    </span>
+                    {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
+                  </button>
+                </div>
 
-                      {/* Unstake Button */}
+                <div className="space-y-6 p-6">
+                  {tab === "stake" ? (
+                    <>
+                      {/* Asset Selector */}
+                      <div className="space-y-3">
+                        <label className="text-sm font-medium text-gray-400">Deposit Asset</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(["ETH", "USDC", "USDT"] as DepositAsset[]).map(asset => (
+                            <button
+                              key={asset}
+                              onClick={() => { setDepositAsset(asset); setAmount(""); }}
+                              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all duration-200 ${
+                                depositAsset === asset
+                                  ? "border-blue-500 bg-blue-500/20 text-white"
+                                  : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"
+                              }`}
+                            >
+                              <div className="flex items-center justify-center gap-2">
+                                <div className={`h-5 w-5 rounded-full ${
+                                  asset === "ETH" ? "bg-gradient-to-br from-blue-400 to-purple-500"
+                                  : asset === "USDC" ? "bg-gradient-to-br from-blue-400 to-blue-600"
+                                  : "bg-gradient-to-br from-green-400 to-green-600"
+                                }`} />
+                                {asset}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Lock Tier */}
+                      <div className="space-y-3">
+                        <label className="text-sm font-medium text-gray-400">Time-Lock Boost</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {([0, 1, 2, 3] as LockTier[]).map(tier => (
+                            <button
+                              key={tier}
+                              onClick={() => setLockTier(tier)}
+                              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all duration-200 ${
+                                lockTier === tier
+                                  ? "border-blue-500 bg-blue-500/20 text-white"
+                                  : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"
+                              }`}
+                            >
+                              {TIER_LABELS[tier]}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Amount Input */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-gray-400">Amount</label>
+                          <span className="text-xs text-gray-500">Balance: {ethers.formatUnits(depositBalance, depositDecimals)} {depositAsset}</span>
+                        </div>
+                        <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-blue-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(59,130,246,0.3)]">
+                          <div className="flex items-center gap-4">
+                            <input
+                              type="number"
+                              className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                              placeholder="0.00"
+                              value={amount}
+                              onChange={e => setAmount(e.target.value)}
+                            />
+                            <div className="flex items-center gap-2">
+                              <button
+                                className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-400 transition-colors hover:bg-blue-500/30"
+                                onClick={() => setAmount(ethers.formatUnits(depositBalance, depositDecimals))}
+                              >MAX</button>
+                              <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                <div className={`h-6 w-6 rounded-full ${
+                                  depositAsset === "ETH" ? "bg-gradient-to-br from-blue-400 to-purple-500"
+                                  : depositAsset === "USDC" ? "bg-gradient-to-br from-blue-400 to-blue-600"
+                                  : "bg-gradient-to-br from-green-400 to-green-600"
+                                }`} />
+                                <span className="font-semibold text-white">{depositAsset}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Arrow */}
+                      <div className="flex justify-center">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
+                          <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                        </div>
+                      </div>
+
+                      {/* Output */}
+                      <div className="space-y-3">
+                        <label className="text-sm font-medium text-gray-400">You Receive</label>
+                        <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-2xl font-semibold text-white">smUSD-E</span>
+                            <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                              <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500" />
+                              <span className="font-semibold text-white">smUSD-E</span>
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">
+                            Shares calculated at current price ({ethPoolSharePriceFmt} mUSD/share) with {TIER_LABELS[lockTier]} boost
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Deposit Button */}
                       <TxButton
-                        onClick={handleEthPoolUnstake}
+                        onClick={handleEthPoolStake}
                         loading={tx.loading}
-                        disabled={unstakeId === null}
+                        disabled={!amount || parseFloat(amount) <= 0 || !ethPool}
                         className="w-full"
                       >
                         <span className="flex items-center justify-center gap-2">
-                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                          {unstakeId !== null ? `Unstake Position #${unstakeId}` : "Select a Position"}
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                          Deposit {depositAsset} → smUSD-E
                         </span>
                       </TxButton>
+                    </>
+                  ) : (
+                    <>
+                      {/* Unstake: position-based */}
+                      {positions.length === 0 ? (
+                        <div className="text-center py-12">
+                          <div className="flex h-16 w-16 mx-auto items-center justify-center rounded-full bg-surface-700/50 mb-4">
+                            <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                            </svg>
+                          </div>
+                          <p className="text-gray-400 font-medium">No active positions</p>
+                          <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Select Position to Unstake</label>
+                          {positions.map(pos => {
+                            const isETH = pos.depositAsset === ethers.ZeroAddress;
+                            const assetLabel = isETH ? "ETH" : "Stablecoin";
+                            const lockRemaining = pos.unlockAt > 0n ? Math.max(0, Number(pos.unlockAt) - Math.floor(Date.now() / 1000)) : 0;
+                            const isLocked = lockRemaining > 0;
+                            const daysLeft = Math.ceil(lockRemaining / 86400);
+                            return (
+                              <button
+                                key={pos.id}
+                                onClick={() => setUnstakeId(pos.id)}
+                                className={`w-full rounded-xl border p-4 text-left transition-all duration-200 ${
+                                  unstakeId === pos.id
+                                    ? "border-blue-500 bg-blue-500/10"
+                                    : "border-white/10 bg-surface-800/50 hover:border-white/30"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-white">Position #{pos.id}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                      isLocked ? "bg-yellow-500/20 text-yellow-400" : "bg-emerald-500/20 text-emerald-400"
+                                    }`}>
+                                      {isLocked ? `${daysLeft}d locked` : "Unlocked"}
+                                    </span>
+                                  </div>
+                                  <span className="text-sm text-gray-400">{TIER_LABELS[pos.tier as LockTier]}</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-4 text-sm">
+                                  <div>
+                                    <p className="text-gray-500">Deposited</p>
+                                    <p className="text-white font-medium">
+                                      {isETH
+                                        ? ethers.formatEther(pos.depositAmount) + " ETH"
+                                        : ethers.formatUnits(pos.depositAmount, USDC_DECIMALS) + " " + assetLabel}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">mUSD Minted</p>
+                                    <p className="text-white font-medium">{formatToken(pos.musdMinted)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500">smUSD-E Shares</p>
+                                    <p className="text-white font-medium">{formatToken(pos.smUsdEShares)}</p>
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
+
+                          {/* Unstake Button */}
+                          <TxButton
+                            onClick={handleEthPoolUnstake}
+                            loading={tx.loading}
+                            disabled={unstakeId === null}
+                            className="w-full"
+                          >
+                            <span className="flex items-center justify-center gap-2">
+                              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                              {unstakeId !== null ? `Unstake Position #${unstakeId}` : "Select a Position"}
+                            </span>
+                          </TxButton>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Tx Status */}
+                  {tx.error && (
+                    <div className="alert-error flex items-center gap-3">
+                      <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <span className="text-sm">{tx.error}</span>
                     </div>
                   )}
-                </>
-              )}
+                  {tx.success && (
+                    <div className="alert-success flex items-center gap-3">
+                      <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <span className="text-sm">Transaction confirmed!{" "}
+                        {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
-              {/* Tx Status */}
-              {tx.error && (
-                <div className="alert-error flex items-center gap-3">
-                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className="text-sm">{tx.error}</span>
+            {/* Right column: Pool Stats & Info */}
+            <div className="space-y-4">
+              {/* Pool Stats */}
+              <div className="grid gap-4 grid-cols-2">
+                <StatCard
+                  label="smUSD-E Price"
+                  value={`${ethPoolSharePriceFmt} mUSD`}
+                  subValue="per smUSD-E"
+                  color="blue"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>}
+                />
+                <StatCard
+                  label="Pool TVL"
+                  value={formatToken(ethPoolTVL) + " mUSD"}
+                  color="green"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+                />
+                <StatCard
+                  label="Pool Utilization"
+                  value={`${ethPoolUtil.toFixed(1)}%`}
+                  color="yellow"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>}
+                />
+                <StatCard
+                  label="Your smUSD-E"
+                  value={formatToken(ethPoolStats.smUsdEBal)}
+                  color="purple"
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
+                />
+              </div>
+
+              {/* Info Banner */}
+              <div className="card overflow-hidden border-l-4 border-blue-500">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/20 flex-shrink-0">
+                    <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-white mb-1">ETH Pool — Fluid Strategy Yield</h3>
+                    <p className="text-sm text-gray-400">
+                      Deposit ETH, USDC, or USDT into the ETH Pool. Your deposit mints mUSD and you receive smUSD-E shares
+                      with optional time-lock boost multipliers (up to 2×). Yield is generated via Fluid leveraged loop strategies.
+                    </p>
+                    <p className="text-sm text-blue-400 mt-2 font-medium">
+                      ✦ smUSD-E can be used as collateral for lending &amp; borrowing in the same pools as smUSD
+                    </p>
+                  </div>
                 </div>
-              )}
-              {tx.success && (
-                <div className="alert-success flex items-center gap-3">
-                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className="text-sm">Transaction confirmed!{" "}
-                    {tx.hash && <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">View on Etherscan</a>}
-                  </span>
-                </div>
-              )}
+              </div>
             </div>
           </div>
 
