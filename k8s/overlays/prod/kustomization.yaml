@@ -29,7 +29,8 @@ commonAnnotations:
 
 resources:
   - ../../base
-  # Production: External Secrets for prod paths
+  # Production: ExternalSecret objects + environment-specific ClusterSecretStore.
+  - ../../canton/external-secrets.yaml
   - external-secrets-prod.yaml
 
 patches:

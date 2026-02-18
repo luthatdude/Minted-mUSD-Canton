@@ -452,39 +452,44 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Maximum assets that can be deposited for `receiver`
-    /// @dev Returns 0 when paused (deposit has whenNotPaused modifier)
+    /// @dev Returns 0 when paused (local or global) since deposit has both pause guards
     function maxDeposit(address receiver) public view override returns (uint256) {
-        if (paused()) {
+        if (paused() || _isGloballyPaused()) {
             return 0;
         }
         return super.maxDeposit(receiver);
     }
 
     /// @notice Maximum shares that can be minted for `receiver`
-    /// @dev Returns 0 when paused (mint has whenNotPaused modifier)
+    /// @dev Returns 0 when paused (local or global) since mint has both pause guards
     function maxMint(address receiver) public view override returns (uint256) {
-        if (paused()) {
+        if (paused() || _isGloballyPaused()) {
             return 0;
         }
         return super.maxMint(receiver);
     }
 
     /// @notice Maximum assets owner can withdraw
-    /// @dev Returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    /// @dev Returns 0 when paused (local/global) or cooldown is active (ERC-4626 compliance)
     function maxWithdraw(address owner) public view override returns (uint256) {
-        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+        if (paused() || _isGloballyPaused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
             return 0;
         }
         return super.maxWithdraw(owner);
     }
 
     /// @notice Maximum shares owner can redeem
-    /// @dev Returns 0 when paused or cooldown is active (ERC-4626 compliance)
+    /// @dev Returns 0 when paused (local/global) or cooldown is active (ERC-4626 compliance)
     function maxRedeem(address owner) public view override returns (uint256) {
-        if (paused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
+        if (paused() || _isGloballyPaused() || block.timestamp < lastDeposit[owner] + WITHDRAW_COOLDOWN) {
             return 0;
         }
         return super.maxRedeem(owner);
+    }
+
+    /// @dev Treat address(0) registry as "global pause disabled" for backward compatibility.
+    function _isGloballyPaused() internal view returns (bool) {
+        return address(globalPauseRegistry) != address(0) && globalPauseRegistry.isGloballyPaused();
     }
 
     // ═══════════════════════════════════════════════════════════════════════

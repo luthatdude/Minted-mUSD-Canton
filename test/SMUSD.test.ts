@@ -312,6 +312,65 @@ describe("SMUSD", function () {
   });
 
   // ============================================================
+  //  ERC-4626 MAX* + GLOBAL PAUSE
+  // ============================================================
+
+  describe("ERC-4626 max* under global pause", function () {
+    let smusdWithRegistry: SMUSD;
+    let musdWithRegistry: MUSD;
+    let guardian: HardhatEthersSigner;
+    let depositor: HardhatEthersSigner;
+    let pauseRegistry: any;
+
+    beforeEach(async function () {
+      const signers = await ethers.getSigners();
+      const admin = signers[0];
+      guardian = signers[1];
+      depositor = signers[2];
+      const bridgeWithRegistry = signers[3];
+
+      const RegistryFactory = await ethers.getContractFactory("GlobalPauseRegistry");
+      pauseRegistry = await RegistryFactory.deploy(admin.address, guardian.address);
+      await pauseRegistry.waitForDeployment();
+
+      const MUSDFactory = await ethers.getContractFactory("MUSD");
+      musdWithRegistry = await MUSDFactory.deploy(SUPPLY_CAP, ethers.ZeroAddress);
+      await musdWithRegistry.waitForDeployment();
+      await musdWithRegistry.grantRole(await musdWithRegistry.BRIDGE_ROLE(), bridgeWithRegistry.address);
+
+      const SMUSDFactory = await ethers.getContractFactory("SMUSD");
+      smusdWithRegistry = await SMUSDFactory.deploy(
+        await musdWithRegistry.getAddress(),
+        await pauseRegistry.getAddress()
+      );
+      await smusdWithRegistry.waitForDeployment();
+
+      await musdWithRegistry.connect(bridgeWithRegistry).mint(depositor.address, ethers.parseEther("10000"));
+      await musdWithRegistry.connect(depositor).approve(await smusdWithRegistry.getAddress(), ethers.MaxUint256);
+    });
+
+    it("returns 0 for maxDeposit and maxMint when globally paused", async function () {
+      await pauseRegistry.connect(guardian).pauseGlobal();
+
+      expect(await smusdWithRegistry.maxDeposit(depositor.address)).to.equal(0);
+      expect(await smusdWithRegistry.maxMint(depositor.address)).to.equal(0);
+    });
+
+    it("returns 0 for maxWithdraw and maxRedeem when globally paused", async function () {
+      await smusdWithRegistry.connect(depositor).deposit(ethers.parseEther("1000"), depositor.address);
+      await time.increase(COOLDOWN + 1);
+
+      expect(await smusdWithRegistry.maxWithdraw(depositor.address)).to.be.gt(0);
+      expect(await smusdWithRegistry.maxRedeem(depositor.address)).to.be.gt(0);
+
+      await pauseRegistry.connect(guardian).pauseGlobal();
+
+      expect(await smusdWithRegistry.maxWithdraw(depositor.address)).to.equal(0);
+      expect(await smusdWithRegistry.maxRedeem(depositor.address)).to.equal(0);
+    });
+  });
+
+  // ============================================================
   //  TREASURY INTEGRATION
   // ============================================================
 
