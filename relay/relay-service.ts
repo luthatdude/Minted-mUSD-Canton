@@ -1084,6 +1084,27 @@ class RelayService {
     this.updateMetricsSnapshot();
   }
 
+  /**
+   * Clear only the in-flight marker after a successful confirmation.
+   * Keep nonce in submittedNonces to avoid duplicate same-process submissions.
+   */
+  private clearInFlightAttestation(attestationId: string): void {
+    this.inFlightAttestations.delete(attestationId);
+    metricInFlightAttestations.set(this.inFlightAttestations.size);
+    this.updateMetricsSnapshot();
+  }
+
+  /**
+   * Roll back nonce and attestation in-flight markers when submission fails.
+   * This allows safe retries after local/provider/tx failure paths.
+   */
+  private unmarkNonceSubmitted(nonce: number, attestationId: string): void {
+    this.submittedNonces.delete(nonce);
+    this.inFlightAttestations.delete(attestationId);
+    metricInFlightAttestations.set(this.inFlightAttestations.size);
+    this.updateMetricsSnapshot();
+  }
+
   // ============================================================
   //  M-3: LOG REDACTION
   // ============================================================
@@ -1957,6 +1978,9 @@ class RelayService {
     cantonContract: ActiveContract<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
   ): Promise<void> {
     const attestationId = payload.attestationId;
+    const nonceNum = Number(payload.nonce);
+    let markedNonce = false;
+    let txSubmitted = false;
     const observeDuration = attestationDuration.startTimer();
 
     try {
@@ -2071,7 +2095,8 @@ class RelayService {
       console.log(`[Relay] Submitting attestation ${attestationId} with ${sortedSigs.length} signatures...`);
 
       // H-3: Mark nonce as submitted before tx (in-flight dedup)
-      this.markNonceSubmitted(Number(nonce), attestationId);
+      this.markNonceSubmitted(nonceNum, attestationId);
+      markedNonce = true;
 
       const tx = await this.bridgeContract.processAttestation(
         attestation,
@@ -2080,6 +2105,7 @@ class RelayService {
           gasLimit: gasEstimate * 120n / 100n,  // 20% buffer
         }
       );
+      txSubmitted = true;
 
       console.log(`[Relay] Transaction submitted: ${tx.hash}`);
 
@@ -2088,6 +2114,10 @@ class RelayService {
 
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
+        if (markedNonce) {
+          this.clearInFlightAttestation(attestationId);
+          markedNonce = false;
+        }
         attestationsProcessedTotal.labels("success").inc();
         this.processedAttestations.add(attestationId);
         // H-1: Record successful submission for rate limiting
@@ -2137,6 +2167,10 @@ class RelayService {
         }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
+        if (markedNonce) {
+          this.unmarkNonceSubmitted(nonceNum, attestationId);
+          markedNonce = false;
+        }
         txRevertsTotal.labels("processAttestation").inc();
         attestationsProcessedTotal.labels("revert").inc();
         // H-2: Track consecutive reverts for pause guardian
@@ -2144,6 +2178,24 @@ class RelayService {
       }
 
     } catch (error: any) {
+      if (markedNonce) {
+        // If tx was submitted but confirmation failed with an unknown transport
+        // issue, keep dedup markers to avoid accidental double-submit.
+        // For explicit revert/failure signals (or pre-submit failures), allow retry.
+        const msg = String(error?.message || "").toLowerCase();
+        const explicitFailure =
+          !txSubmitted ||
+          msg.includes("revert") ||
+          msg.includes("failed") ||
+          msg.includes("execution reverted");
+        if (explicitFailure) {
+          this.unmarkNonceSubmitted(nonceNum, attestationId);
+          markedNonce = false;
+        } else {
+          console.warn(`[Relay] Keeping nonce/in-flight markers for ${attestationId} due to ambiguous post-submit error`);
+        }
+      }
+
       // M-3: Redact sensitive data from error logs
       console.error(`[Relay] Failed to bridge attestation ${attestationId}:`, RelayService.redact(error.message));
       attestationsProcessedTotal.labels("error").inc();
