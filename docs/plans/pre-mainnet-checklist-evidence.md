@@ -21,13 +21,14 @@
 
 - Transfer and handoff workflows:
   - `scripts/transfer-all-admin-roles.ts`
-  - `scripts/deploy-mainnet.ts` (admin handoff section)
+  - `scripts/capture-role-ceremony-evidence.ts` (target-network proof capture; rejects dry-run/local chain)
   - `docs/plans/role-ceremony-evidence.md`
 - Evidence links:
   - `scripts/transfer-all-admin-roles.ts`
-  - `scripts/deploy-mainnet.ts`
+  - `scripts/capture-role-ceremony-evidence.ts`
   - `docs/plans/role-ceremony-evidence.md`
-  - `artifacts/test-results/role-ceremony-dryrun.log`
+  - `artifacts/test-results/role-ceremony-sepolia-proof.log`
+  - `artifacts/test-results/role-ceremony-mainnet-proof.log` (required at launch)
 
 ### 3) Production rate limits configured
 
@@ -45,10 +46,12 @@
 - Monitoring manifests and alert rules:
   - `k8s/monitoring/prometheus-rules.yaml`
   - `k8s/monitoring/grafana-dashboards.yaml`
+  - `scripts/validate-monitoring-evidence.sh` (placeholder/runbook/metric wiring validation)
   - `docs/plans/monitoring-incident-drill-2026-02-18.md`
 - Evidence links:
   - `k8s/monitoring/prometheus-rules.yaml`
   - `k8s/monitoring/grafana-dashboards.yaml`
+  - `artifacts/test-results/monitoring-routing-validation.log`
   - `docs/plans/monitoring-incident-drill-2026-02-18.md`
   - `artifacts/test-results/monitoring-drill-2026-02-18.log`
 
@@ -79,10 +82,12 @@
   - `docs/plans/mainnet-risk-register.md`
   - `docs/plans/test-backlog-mapping.md`
   - `.github/workflows/ci.yml` (launch-readiness artifact gate)
+  - `scripts/capture-ci-status.ts` (API-based CI status capture without `gh`)
 - Evidence links:
   - `docs/plans/mainnet-risk-register.md`
   - `docs/plans/test-backlog-mapping.md`
   - `.github/workflows/ci.yml`
+  - `artifacts/test-results/ci-latest-status.log`
 
 ### 8) Emergency contacts distributed
 
@@ -118,6 +123,14 @@
 - Evidence links:
   - `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
   - `deployments/mainnet-latest.json`
+
+### 12) Canton production domain-connect runtime evidence
+
+- Runtime capture workflow:
+  - `scripts/capture-canton-domain-evidence.sh`
+- Evidence links:
+  - `scripts/capture-canton-domain-evidence.sh`
+  - `artifacts/test-results/canton-domain-connect-live.log`
 
 ## Approval
 

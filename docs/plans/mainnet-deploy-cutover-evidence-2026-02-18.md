@@ -55,7 +55,8 @@ Cutover checklist:
 ## Evidence Artifacts
 
 - `artifacts/test-results/mainnet-cutover-evidence-2026-02-18.log`
-- `artifacts/test-results/role-ceremony-dryrun.log`
+- `artifacts/test-results/role-ceremony-sepolia-proof.log`
+- `artifacts/test-results/role-ceremony-mainnet-proof.log` (required for final launch memo)
 
 ## Sign-Off
 
