@@ -127,7 +127,7 @@ spec:
 
         - alert: HighBridgeVolume
           expr: |
-            sum(rate(bridge_requests_total[1h])) > 100
+            sum(rate(minted_attestations_processed_total{status="success"}[1h])) > 100
           for: 15m
           labels:
             severity: warning
@@ -138,7 +138,7 @@ spec:
 
         - alert: BridgeValidationFailures
           expr: |
-            sum(rate(bridge_validation_failures_total[5m])) > 0
+            sum(rate(minted_bridge_validation_failures_total[5m])) > 0
           for: 1m
           labels:
             severity: critical
@@ -149,7 +149,7 @@ spec:
 
         - alert: ValidatorSigningRateLimitHit
           expr: |
-            sum(rate(validator_signing_rate_limit_hits_total[5m])) > 0
+            sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
           for: 1m
           labels:
             severity: warning

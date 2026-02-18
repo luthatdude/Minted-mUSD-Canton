@@ -121,11 +121,17 @@ data:
 
     logger.info(s"mUSD Operator party: ${operatorParty}")
 
-    // Connect to the Canton Network domain (configured via environment)
-    // In production, replace with the actual Global Synchronizer domain URL
-    // musd_participant.domains.connect(
-    //   "canton-network",
-    //   "https://canton-network-domain.example.com:5018"
-    // )
+    // Connect to the Canton Network domain using environment-provided settings.
+    // Required env vars on participant container:
+    //   CANTON_DOMAIN_ALIAS (default: "canton-network")
+    //   CANTON_DOMAIN_URL   (required in production)
+    val domainAlias = sys.env.getOrElse("CANTON_DOMAIN_ALIAS", "canton-network")
+    val domainUrl = sys.env.getOrElse("CANTON_DOMAIN_URL", "")
+    if (domainUrl.isEmpty) {
+      logger.error("CANTON_DOMAIN_URL is not set; refusing bootstrap without production domain connection")
+      throw new IllegalStateException("CANTON_DOMAIN_URL is required")
+    }
+    musd_participant.domains.connect(domainAlias, domainUrl)
+    logger.info(s"Connected participant to domain alias '${domainAlias}' at ${domainUrl}")
 
     logger.info("Canton participant bootstrap complete")

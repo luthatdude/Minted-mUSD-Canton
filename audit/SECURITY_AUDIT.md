@@ -781,22 +781,22 @@ uint8 tokenDecimals = 18;
 
 ### 8.2 Role Assignment Checklist
 
-```
-□ MUSD.BRIDGE_ROLE → [DirectMint, DirectMintV2, BorrowModule]
-□ MUSD.CAP_MANAGER_ROLE → BLEBridgeV9
-□ MUSD.COMPLIANCE_ROLE → Compliance multisig
-□ TreasuryV2.VAULT_ROLE → DirectMintV2
-□ TreasuryV2.STRATEGIST_ROLE → Protocol multisig
-□ TreasuryV2.GUARDIAN_ROLE → Emergency multisig
-□ TreasuryV2.ALLOCATOR_ROLE → Keeper bot
-□ BLEBridgeV9.VALIDATOR_ROLE → [Validator1, Validator2, ..., ValidatorN]
-□ BLEBridgeV9.EMERGENCY_ROLE → Emergency multisig
-□ CollateralVault.BORROW_MODULE_ROLE → BorrowModule
-□ CollateralVault.LIQUIDATION_ROLE → LiquidationEngine
-□ BorrowModule.LIQUIDATION_ROLE → LiquidationEngine
-□ PriceOracle.ORACLE_ADMIN_ROLE → Protocol multisig
-□ All DEFAULT_ADMIN_ROLE → Protocol multisig (behind timelock)
-```
+- [x] MUSD.BRIDGE_ROLE -> [DirectMint, DirectMintV2, BorrowModule]
+- [x] MUSD.CAP_MANAGER_ROLE -> BLEBridgeV9
+- [x] MUSD.COMPLIANCE_ROLE -> Compliance multisig
+- [x] TreasuryV2.VAULT_ROLE -> DirectMintV2
+- [x] TreasuryV2.STRATEGIST_ROLE -> Protocol multisig
+- [x] TreasuryV2.GUARDIAN_ROLE -> Emergency multisig
+- [x] TreasuryV2.ALLOCATOR_ROLE -> Keeper bot
+- [x] BLEBridgeV9.VALIDATOR_ROLE -> [Validator1, Validator2, Validator3, Validator4, Validator5]
+- [x] BLEBridgeV9.EMERGENCY_ROLE -> Emergency multisig
+- [x] CollateralVault.BORROW_MODULE_ROLE -> BorrowModule
+- [x] CollateralVault.LIQUIDATION_ROLE -> LiquidationEngine
+- [x] BorrowModule.LIQUIDATION_ROLE -> LiquidationEngine
+- [x] PriceOracle.ORACLE_ADMIN_ROLE -> Protocol multisig
+- [x] All DEFAULT_ADMIN_ROLE -> Protocol multisig (behind timelock)
+
+Evidence bundle: `docs/plans/role-ceremony-evidence.md` and `docs/plans/pre-mainnet-checklist-evidence.md`.
 
 ---
 

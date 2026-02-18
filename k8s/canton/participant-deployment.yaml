@@ -171,6 +171,16 @@ spec:
               value: "5432"
             - name: CANTON_DB_NAME
               value: canton
+            - name: CANTON_DOMAIN_ALIAS
+              valueFrom:
+                secretKeyRef:
+                  name: canton-domain-connection
+                  key: CANTON_DOMAIN_ALIAS
+            - name: CANTON_DOMAIN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: canton-domain-connection
+                  key: CANTON_DOMAIN_URL
             # INFRA-H-04: DB credentials read from volume-mounted secrets at /run/secrets/
             # Canton HOCON config references CANTON_DB_USER and CANTON_DB_PASSWORD env vars,
             # which are populated from files by the entrypoint wrapper (see command override below)
@@ -413,4 +423,15 @@ spec:
         - port: 53
           protocol: UDP
         - port: 53
+          protocol: TCP
+    # Canton domain connection (external)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 5018
           protocol: TCP

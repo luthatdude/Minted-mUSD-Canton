@@ -13,6 +13,12 @@
 
 import { ethers } from "ethers";
 import { readSecret, requireHTTPS, enforceTLSSecurity, createSigner } from "./utils";
+import {
+  startMetricsServer,
+  yieldDistributionsTotal,
+  yieldDistributionDuration,
+} from "./metrics";
+import * as http from "http";
 
 // INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
 enforceTLSSecurity();
@@ -129,6 +135,7 @@ class YieldKeeper {
   private treasury: ethers.Contract;
   private config: KeeperConfig;
   private running: boolean = false;
+  private metricsServer: http.Server | null = null;
 
   constructor(config: KeeperConfig) {
     this.config = config;
@@ -168,6 +175,10 @@ class YieldKeeper {
     // Verify connection and configuration
     await this.verifySetup();
 
+    const metricsPort = parseInt(process.env.KEEPER_METRICS_PORT || "9094", 10);
+    const metricsHost = process.env.KEEPER_METRICS_HOST || "0.0.0.0";
+    this.metricsServer = startMetricsServer(metricsPort, metricsHost);
+
     this.running = true;
 
     while (this.running) {
@@ -187,6 +198,10 @@ class YieldKeeper {
   stop(): void {
     console.log("🛑 Yield Keeper stopping...");
     this.running = false;
+    if (this.metricsServer) {
+      this.metricsServer.close();
+      this.metricsServer = null;
+    }
   }
 
   /**
@@ -265,6 +280,7 @@ class YieldKeeper {
 
       // 4. Execute deployment
       console.log("🔄 Triggering auto-deploy...");
+      const observeDuration = yieldDistributionDuration.startTimer();
 
       const tx = await this.treasury.keeperTriggerAutoDeploy({
         gasLimit: gasEstimate * 12n / 10n,  // 20% buffer
@@ -276,15 +292,16 @@ class YieldKeeper {
 
       if (receipt?.status === 1) {
         console.log(`✅ Deployed $${this.formatUsdc(deployable)} to strategy`);
-        this.logMetrics("deploy_success", deployable);
+        yieldDistributionsTotal.labels("usdc", "success").inc();
       } else {
         console.error("❌ TX reverted");
-        this.logMetrics("deploy_failed", 0n);
+        yieldDistributionsTotal.labels("usdc", "revert").inc();
       }
+      observeDuration();
 
     } catch (err) {
       console.error("❌ Deploy failed:", err);
-      this.logMetrics("deploy_error", 0n);
+      yieldDistributionsTotal.labels("usdc", "error").inc();
     }
   }
 
@@ -297,20 +314,6 @@ class YieldKeeper {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-  }
-
-  /**
-   * Log metrics (placeholder for Prometheus/DataDog integration)
-   */
-  // TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
-  private logMetrics(event: string, amount: bigint): void {
-    const metrics = {
-      timestamp: new Date().toISOString(),
-      event,
-      amountUsdc: ethers.formatUnits(amount, 6),
-      keeper: this.walletAddress,
-    };
-    console.log("📈 METRICS:", JSON.stringify(metrics));
   }
 
   /**
