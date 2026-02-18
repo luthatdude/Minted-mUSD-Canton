@@ -51,3 +51,22 @@ Use one row per completed class in PR description or release checklist:
 | Class | File(s) | Command | Result | Artifact Link | Reviewer |
 |---|---|---|---|---|---|
 | `TBD` | `TBD` | `TBD` | `PASS/FAIL` | `TBD` | `TBD` |
+
+## E. CI Status Verification (No `gh` Dependency)
+
+To verify latest branch CI status from a clean machine without GitHub CLI auth:
+
+```bash
+ALLOW_NON_GREEN=true \
+OUTPUT_FILE=artifacts/test-results/ci-latest-status.log \
+npx ts-node scripts/capture-ci-status.ts
+```
+
+The log captures:
+
+- workflow run URL
+- head SHA
+- status + conclusion
+- `status_gate=PASS|FAIL`
+
+Launch readiness for item-4 requires `status_gate=PASS` for the backlog workflow run.

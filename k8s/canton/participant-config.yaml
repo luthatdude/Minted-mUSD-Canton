@@ -125,6 +125,9 @@ data:
     // Required env vars on participant container:
     //   CANTON_DOMAIN_ALIAS (default: "canton-network")
     //   CANTON_DOMAIN_URL   (required in production)
+    // Runtime evidence capture:
+    //   scripts/capture-canton-domain-evidence.sh
+    //   -> artifacts/test-results/canton-domain-connect-live.log
     val domainAlias = sys.env.getOrElse("CANTON_DOMAIN_ALIAS", "canton-network")
     val domainUrl = sys.env.getOrElse("CANTON_DOMAIN_URL", "")
     if (domainUrl.isEmpty) {

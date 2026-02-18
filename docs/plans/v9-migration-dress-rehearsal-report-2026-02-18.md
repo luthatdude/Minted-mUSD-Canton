@@ -21,7 +21,8 @@
 |---|---|---|
 | Mainnet deploy pipeline dry-run executed end-to-end | PASS | `deployments/deploy-dryrun-20260218-010828.log` |
 | Deployment manifest persisted for reproducibility | PASS | `deployments/mainnet-2026-02-18T06-08-29-873Z.json`, `deployments/mainnet-latest.json` |
-| Core role grants captured (bridge/cap-manager/vault-admin) | PASS | `artifacts/test-results/role-ceremony-dryrun.log` |
+| Core role grants captured in rehearsal | PASS | `artifacts/test-results/role-ceremony-dryrun.log` |
+| Target-network role proof captured (non-dry-run) | PASS | `artifacts/test-results/role-ceremony-sepolia-proof.log` |
 | Rehearsal runbook step coverage present in migration doc | PASS | `docs/MIGRATION_V8_TO_V9.md` |
 
 Dry-run metrics captured from manifest/logs:
