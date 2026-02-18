@@ -153,7 +153,7 @@ async function main() {
     // DirectMintV2 needs BRIDGE_ROLE on MUSD to call musd.mint() / musd.burn()
     { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "BRIDGE_ROLE", grantee: CONTRACTS.DirectMintV2.address, granteeName: "DirectMintV2" },
     // BLEBridgeV9 needs BRIDGE_ROLE on MUSD to call musd.mint()
-    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "BRIDGE_ROLE", grantee: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125", granteeName: "BLEBridgeV9" },
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "BRIDGE_ROLE", grantee: "0x708957bFfA312D1730BdF87467E695D3a9F26b0f", granteeName: "BLEBridgeV9" },
     // LiquidationEngine needs LIQUIDATOR_ROLE on MUSD for liquidation burns
     { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "LIQUIDATOR_ROLE", grantee: CONTRACTS.LiquidationEngine.address, granteeName: "LiquidationEngine" },
     // BorrowModule needs BORROW_MODULE_ROLE on CollateralVault for seizure
@@ -163,7 +163,7 @@ async function main() {
     // LeverageVault needs LEVERAGE_VAULT_ROLE on CollateralVault for depositFor
     { contract: "CollateralVault", addr: CONTRACTS.CollateralVault.address, role: "LEVERAGE_VAULT_ROLE", grantee: CONTRACTS.LeverageVault.address, granteeName: "LeverageVault" },
     // BLEBridgeV9 needs CAP_MANAGER_ROLE on MUSD for supply cap updates
-    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "CAP_MANAGER_ROLE", grantee: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125", granteeName: "BLEBridgeV9" },
+    { contract: "MUSD", addr: CONTRACTS.MUSD.address, role: "CAP_MANAGER_ROLE", grantee: "0x708957bFfA312D1730BdF87467E695D3a9F26b0f", granteeName: "BLEBridgeV9" },
   ];
 
   let crossSuccess = 0;

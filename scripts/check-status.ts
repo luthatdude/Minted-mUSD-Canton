@@ -29,7 +29,7 @@ async function main() {
   try { const cap = await musd.supplyCap(); console.log("\nMUSD supplyCap:", ethers.formatUnits(cap, 18)); } catch { console.log("supplyCap: N/A"); }
 
   // Check BLE bridge
-  const bridge = await ethers.getContractAt("BLEBridgeV9", "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125");
+  const bridge = await ethers.getContractAt("BLEBridgeV9", "0x708957bFfA312D1730BdF87467E695D3a9F26b0f");
   try { const min = await bridge.bridgeOutMinAmount(); console.log("bridgeOutMinAmount:", ethers.formatUnits(min, 18)); } catch { console.log("bridgeOutMinAmount: N/A"); }
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

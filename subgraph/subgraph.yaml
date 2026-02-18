@@ -76,7 +76,7 @@ dataSources:
     name: BLEBridgeV9
     network: sepolia
     source:
-      address: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+      address: "0x708957bFfA312D1730BdF87467E695D3a9F26b0f"
       abi: BLEBridgeV9
       startBlock: 10276940
     mapping:

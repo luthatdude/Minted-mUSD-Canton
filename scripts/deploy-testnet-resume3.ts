@@ -19,7 +19,7 @@ async function main() {
   const vaultAddress        = "0x155d6618dcdeb2F4145395CA57C80e6931D7941e";
   const borrowAddress       = "0x7d840D5e398bb27eeB220DF7253ffeE75477827b";
   const liquidationAddress  = "0x741C5516C9fF4d0b5F80b4D3Ac9c13b72cCAD748";
-  const bridgeAddress       = "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125";
+  const bridgeAddress       = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
 
   // ─── 12. LeverageVault ───
   console.log("\n[12/12] Deploying LeverageVault...");

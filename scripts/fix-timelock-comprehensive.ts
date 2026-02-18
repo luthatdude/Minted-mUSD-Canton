@@ -193,7 +193,7 @@ async function main() {
     { name: "PriceOracle",       address: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025" },
     { name: "CollateralVault",   address: "0x155d6618dcdeb2F4145395CA57C80e6931D7941e" },
     { name: "LiquidationEngine", address: "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8" },
-    { name: "BLEBridgeV9",       address: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125" },
+    { name: "BLEBridgeV9",       address: "0x708957bFfA312D1730BdF87467E695D3a9F26b0f" },
     { name: "DepositRouter",     address: "0x531e95585bcDfcB2303511483F232EEF4a0Cd2de" },
     { name: "SkySUSDSStrategy",  address: "0x47Ef43FD576b535574228748FbDE1bE6B512CC6a" },
   ];

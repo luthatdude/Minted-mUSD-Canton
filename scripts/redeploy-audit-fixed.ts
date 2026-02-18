@@ -32,7 +32,7 @@ async function main() {
 
   // UUPS proxy addresses (stay the same, implementation upgraded)
   const treasuryProxyAddress = "0xf2051bDfc738f638668DF2f8c00d01ba6338C513";
-  const bridgeProxyAddress   = "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125";
+  const bridgeProxyAddress   = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
 
   const USDC_ADDRESS  = deployer.address; // placeholder for testnet
   const FEE_RECIPIENT = deployer.address;
