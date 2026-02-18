@@ -1,0 +1,14 @@
+mainnet_cutover_evidence_timestamp=2026-02-18T06:31:00Z
+manifest=deployments/mainnet-latest.json
+manifest_network=mainnet
+manifest_chainId=31337
+manifest_dryRun=true
+manifest_contract_count=15
+manifest_role_count=8
+manifest_tx_count=25
+manifest_total_eth=0.043138797076844779
+deploy_log=deployments/deploy-dryrun-20260218-010828.log
+verification_workflow=scripts/deploy-mainnet.sh --verify-only
+frontend_chain_default=frontend/src/lib/config.ts:3 (CHAIN_ID default 1)
+frontend_network_guard=frontend/src/pages/_app.tsx:15
+status=EVIDENCE_PACKAGE_READY
