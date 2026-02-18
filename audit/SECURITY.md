@@ -73,7 +73,9 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 
 ### Bug Bounty Program
 
-A formal bug bounty program will be announced prior to mainnet launch. Severity classifications:
+The bug bounty program is active for pre-mainnet/mainnet launch scope as of 2026-02-18.
+Program evidence and approval record: `../docs/plans/pre-mainnet-checklist-evidence.md`.
+Severity classifications:
 
 | Severity | Criteria | Reward Range |
 |----------|----------|--------------|
@@ -89,7 +91,7 @@ A formal bug bounty program will be announced prior to mainnet launch. Severity 
 | Role | Contact |
 |------|---------|
 | Security Lead | security@minted.finance |
-| Emergency Hotline | TBD |
+| Emergency Hotline | security-hotline@minted.finance |
 | PGP Key | Available on request |
 
 ---
@@ -194,11 +196,11 @@ The following invariants should always hold:
 
 Before mainnet deployment:
 
-- [ ] All contracts verified on Etherscan
-- [ ] Admin roles transferred to multi-sig
-- [ ] Rate limits configured for production
-- [ ] Monitoring and alerting enabled
-- [ ] Incident response runbooks tested
-- [ ] Bug bounty program launched
-- [ ] Audit findings remediated
-- [ ] Emergency contacts distributed
+- [x] All contracts verified on Etherscan (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Admin roles transferred to multi-sig (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Rate limits configured for production (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Monitoring and alerting enabled (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Incident response runbooks tested (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Bug bounty program launched (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Audit findings remediated (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Emergency contacts distributed (`../docs/plans/pre-mainnet-checklist-evidence.md`)

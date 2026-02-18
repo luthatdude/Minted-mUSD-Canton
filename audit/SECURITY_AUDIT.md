@@ -1193,9 +1193,12 @@ template ComplianceRegistry
 │   └── Risk: LOW — bounded bulk operation
 ```
 
-#### 10.4.6 Minted.Protocol.V3.daml (Critical — Unified Canton Protocol)
+#### 10.4.6 Minted.Protocol.V3.daml (Critical — Unified Canton Protocol Reference)
 
-This is the consolidated production module (1,111 lines, 14 templates). Key additions beyond individual modules:
+This module is retained as a consolidated audited reference (1,111 lines, 14 templates).  
+Canonical mainnet module selection is frozen in:
+`docs/plans/mainnet-launch-scope.md`.
+Key additions beyond individual modules:
 
 ```daml
 template Vault (CDP)
@@ -1357,7 +1360,7 @@ template AssetRegistry
 | **Low** | Quorum inconsistency | BLEProtocol uses supermajority `(n+1)/2 + 1`; BLEBridgeProtocol uses simple majority `(n/2) + 1` | Standardize across all attestation types |
 | **Low** | CantonMUSD_Merge lacks compliance check | Merge allows combining tokens without checking compliance registry | Add compliance validation if ComplianceRegistry is configured |
 | **Low** | YieldAttestation epoch gap not bounded | Sequential epoch required, but large gaps between epochs are unchecked | Consider maximum epoch gap to detect missed attestations |
-| **Info** | Multiple protocol versions coexist | V2Fixed, V3, standalone modules — unclear which is production | Document canonical production module; deprecate others |
+| **Info** | Multiple protocol versions coexist | V2Fixed, V3, standalone modules | ✅ Resolved: canonical scope frozen in `docs/plans/mainnet-launch-scope.md` |
 | **Info** | MintedMUSD.daml uses `Decimal` (10-precision) | Other modules use `Numeric 18` — precision mismatch if interoperating | Ensure modules deployed together use consistent precision type |
 
 ### 10.7 Cross-Chain Bridge Security Analysis
