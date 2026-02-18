@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { useWalletConnect } from "./useWalletConnect";
+import { useUnifiedWallet } from "./useUnifiedWallet";
 import { CONTRACTS } from "@/lib/config";
 
 // ═══════════════════════════════════════════════════════════
@@ -98,7 +98,7 @@ function formatMultiplier(raw: bigint): string {
 // ═══════════════════════════════════════════════════════════
 
 export function useReferral(): ReferralState {
-  const { address, isConnected, getContract, writeContract, provider } = useWalletConnect();
+  const { address, isConnected, getContract, writeContract, provider } = useUnifiedWallet();
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

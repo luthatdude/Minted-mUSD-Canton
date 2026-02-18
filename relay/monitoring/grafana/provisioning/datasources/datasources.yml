@@ -1,0 +1,22 @@
+# Minted Protocol — Grafana Datasource Provisioning
+# Auto-configures Prometheus as the default datasource.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+
+  # Loki for log aggregation (optional — requires Loki container)
+  # - name: Loki
+  #   type: loki
+  #   access: proxy
+  #   url: http://loki:3100
+  #   editable: true

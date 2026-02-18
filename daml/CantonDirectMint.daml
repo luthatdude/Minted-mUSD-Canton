@@ -28,6 +28,7 @@ import DA.Optional (whenSome, fromSome, isSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
+import AuditReceipts (MintAuditReceipt(..), BurnAuditReceipt(..), TransferAuditReceipt(..), AuditAction(..))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
 type Money = Numeric 18
@@ -551,6 +552,21 @@ template CantonDirectMintService
           dailyBurned = resetBurned
           lastRateLimitReset = resetTime
 
+        -- DAML-C-02 FIX: Create immutable audit receipt for regulatory trail
+        registry <- fetch complianceRegistryCid
+        create MintAuditReceipt with
+          operator = operator
+          regulator = registry.regulator
+          minter = user
+          amount = usdc.amount
+          feeAmount = feeAmount
+          netMinted = netAmount
+          supplyAfter = currentSupply + netAmount
+          bridgeNonce = nextNonce
+          timestamp = now
+          txHash = ""
+          action = Mint
+
         return (newService, musdCid, bridgeReq)
 
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
@@ -742,6 +758,21 @@ template CantonDirectMintService
           dailyMinted = resetMinted
           dailyBurned = resetBurned + musd.amount
           lastRateLimitReset = resetTime
+
+        -- DAML-C-02 FIX: Create immutable audit receipt for regulatory trail
+        registry <- fetch complianceRegistryCid
+        create BurnAuditReceipt with
+          operator = operator
+          regulator = registry.regulator
+          burner = user
+          amount = musd.amount
+          feeAmount = feeAmount
+          netRedeemed = netAmount
+          supplyAfter = currentSupply - musd.amount
+          bridgeNonce = 0  -- Redemption uses RedemptionRequest, not bridge nonce
+          timestamp = now
+          txHash = ""
+          action = Redeem
 
         return (newService, redemptionCid)
 

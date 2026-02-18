@@ -456,7 +456,7 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 - [x] CI/CD pipeline (Solidity, DAML, Docker, Slither, Trivy, kubeval)
 - [x] Integration tests (1500+ Solidity + 16 DAML + 29 relay tests)
 - [ ] Mainnet deployment (deployment scripts, network config, contract verification)
-- [x] Monitoring stack (Loki, Promtail, Prometheus, Grafana dashboards for Canton + Bridge health)
+- [x] Monitoring stack (Prometheus prom-client metrics, Grafana PromQL dashboards, Alertmanager with PagerDuty/Telegram routes, docker-compose monitoring stack)
 
 ## Security
 

@@ -1,0 +1,77 @@
+# Minted Protocol — Prometheus Alert Rules (docker-compose edition)
+# Subset of k8s/monitoring/prometheus-rules.yaml for local dev/staging.
+#
+# These rules match the metric names emitted by relay/metrics.ts (prom-client).
+
+groups:
+  - name: bridge-security
+    rules:
+      - alert: BridgeRelayDown
+        expr: up{job="bridge-relay"} == 0
+        for: 3m
+        labels:
+          severity: critical
+          team: bridge
+        annotations:
+          summary: "Bridge relay service is down"
+          description: "Prometheus cannot scrape the relay /metrics endpoint."
+
+      - alert: HighBridgeVolume
+        expr: |
+          sum(rate(minted_attestations_processed_total[1h])) > 100
+        for: 15m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Abnormally high bridge request volume"
+
+      - alert: BridgeValidationFailures
+        expr: |
+          sum(rate(minted_bridge_validation_failures_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Bridge validation failures detected"
+          description: "Attestations failing validation — possible forgery attempt."
+
+      - alert: AnomalyPauseTriggered
+        expr: minted_anomaly_detector_pause_triggered == 1
+        for: 0m
+        labels:
+          severity: critical
+          team: bridge
+        annotations:
+          summary: "Bridge anomaly detector has paused the relay"
+
+      - alert: HighTxRevertRate
+        expr: |
+          sum(rate(minted_tx_reverts_total[10m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          team: bridge
+        annotations:
+          summary: "Elevated on-chain transaction revert rate"
+
+      - alert: ValidatorRateLimitHit
+        expr: |
+          sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Validator signing rate limit triggered"
+
+      - alert: HighNonceCollisionRate
+        expr: |
+          sum(rate(minted_nonce_collisions_total[5m])) > 1
+        for: 3m
+        labels:
+          severity: warning
+          team: bridge
+        annotations:
+          summary: "High nonce collision rate"

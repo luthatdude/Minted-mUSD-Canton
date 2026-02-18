@@ -151,10 +151,12 @@ async function main() {
 
   // ─────────────────────────────────────────────────────────────────────
   // 10. TreasuryV2 (UUPS proxy)
+  // SOL-C-02 FIX: _vault param must be SMUSD (yield vault), NOT CollateralVault.
+  // _asset is USDC_ADDRESS (deployer placeholder on testnet; real USDC on mainnet).
   // ─────────────────────────────────────────────────────────────────────
   const TreasuryImpl = await ethers.getContractFactory("TreasuryV2");
   const treasuryProxy = await upgrades.deployProxy(TreasuryImpl, [
-    USDC_ADDRESS, vaultAddress, deployer.address, FEE_RECIPIENT, timelockAddress,
+    USDC_ADDRESS, smusdAddress, deployer.address, FEE_RECIPIENT, timelockAddress,
   ], { kind: "uups" });
   await treasuryProxy.waitForDeployment();
   const treasuryAddress = await treasuryProxy.getAddress();
@@ -196,18 +198,53 @@ async function main() {
   // ═══════════════════════════════════════════════════════════════════════
   console.log("\n=== Configuring roles ===");
 
+  // ─── MUSD roles ──────────────────────────────────────────────────
   const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
   const LIQUIDATOR_ROLE = await musd.LIQUIDATOR_ROLE();
+  const CAP_MANAGER_ROLE = await musd.CAP_MANAGER_ROLE();
   await (await musd.grantRole(BRIDGE_ROLE, bridgeAddress)).wait();
-  await (await musd.grantRole(LIQUIDATOR_ROLE, liquidationAddress)).wait();
   await (await musd.grantRole(BRIDGE_ROLE, borrowAddress)).wait();
-  console.log("MUSD roles configured");
+  // SOL-C-01 FIX: Grant BRIDGE_ROLE to DirectMintV2 so it can call MUSD.mint()
+  await (await musd.grantRole(BRIDGE_ROLE, directMintAddress)).wait();
+  await (await musd.grantRole(LIQUIDATOR_ROLE, liquidationAddress)).wait();
+  // SOL-H-01 FIX: Grant CAP_MANAGER_ROLE to BLEBridgeV9 for dynamic supply cap
+  await (await musd.grantRole(CAP_MANAGER_ROLE, bridgeAddress)).wait();
+  console.log("MUSD roles configured (bridge, directMint, liquidation, capManager)");
 
+  // ─── CollateralVault roles ───────────────────────────────────────
   const VAULT_ADMIN_ROLE = await vault.VAULT_ADMIN_ROLE();
   await (await vault.grantRole(VAULT_ADMIN_ROLE, borrowAddress)).wait();
   await (await vault.grantRole(VAULT_ADMIN_ROLE, liquidationAddress)).wait();
-  console.log("CollateralVault roles configured");
+  // SOL-H-03 FIX: Grant VAULT_ADMIN_ROLE to LeverageVault for collateral operations
+  await (await vault.grantRole(VAULT_ADMIN_ROLE, leverageAddress)).wait();
+  console.log("CollateralVault roles configured (borrow, liquidation, leverage)");
 
+  // ─── BorrowModule roles ──────────────────────────────────────────
+  const LIQUIDATION_ROLE = await borrow.LIQUIDATION_ROLE();
+  const LEVERAGE_VAULT_ROLE = await borrow.LEVERAGE_VAULT_ROLE();
+  await (await borrow.grantRole(LIQUIDATION_ROLE, liquidationAddress)).wait();
+  // SOL-H-03 FIX: Grant LEVERAGE_VAULT_ROLE to LeverageVault for borrowFor/repayFor
+  await (await borrow.grantRole(LEVERAGE_VAULT_ROLE, leverageAddress)).wait();
+  console.log("BorrowModule roles configured (liquidation, leverage)");
+
+  // ─── SOL-C-03 FIX: BorrowModule post-deploy configuration ──────
+  // setSMUSD, setTreasury, setInterestRateModel require TIMELOCK_ROLE.
+  // On testnet, grant TIMELOCK_ROLE to deployer temporarily, call setters,
+  // then in production this would go through the MintedTimelockController.
+  const BORROW_TIMELOCK_ROLE = await borrow.TIMELOCK_ROLE();
+  await (await borrow.grantRole(BORROW_TIMELOCK_ROLE, deployer.address)).wait();
+  await (await borrow.setSMUSD(smusdAddress)).wait();
+  console.log("BorrowModule: setSMUSD →", smusdAddress);
+  await (await borrow.setTreasury(treasuryAddress)).wait();
+  console.log("BorrowModule: setTreasury →", treasuryAddress);
+  await (await borrow.setInterestRateModel(irmAddress)).wait();
+  console.log("BorrowModule: setInterestRateModel →", irmAddress);
+  // Revoke deployer's TIMELOCK_ROLE — grant to actual timelock for governance
+  await (await borrow.revokeRole(BORROW_TIMELOCK_ROLE, deployer.address)).wait();
+  await (await borrow.grantRole(BORROW_TIMELOCK_ROLE, timelockAddress)).wait();
+  console.log("BorrowModule: TIMELOCK_ROLE transferred to MintedTimelockController");
+
+  // ─── BLEBridgeV9 roles ──────────────────────────────────────────
   // Register deployer as validator on BLEBridgeV9 for testnet
   const bridge = await ethers.getContractAt("BLEBridgeV9", bridgeAddress);
   const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
