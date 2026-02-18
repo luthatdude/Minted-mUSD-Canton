@@ -2,7 +2,7 @@
 
 ## Deployed Contracts (Sepolia)
 
-> **Updated 2026-02-16** — Redeployed with audit fixes (commit `041d154`). All verified on Etherscan.
+> **Updated 2026-02-19** — Fresh bridge deployed with correct MUSD token (commit `ad4c77b9`). E2E bridge test 4/4 passing.
 
 | Contract | Address | Verified |
 |----------|---------|----------|
@@ -18,7 +18,7 @@
 | DirectMintV2 | [`0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7`](https://sepolia.etherscan.io/address/0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7#code) | ✅ (redeployed 2026-02-17) |
 | LeverageVault | [`0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4`](https://sepolia.etherscan.io/address/0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4#code) | ✅ | Redeployed 2026-02-17 (swapRouter fix) |
 | TreasuryV2 (proxy) | [`0xf2051bDfc738f638668DF2f8c00d01ba6338C513`](https://sepolia.etherscan.io/address/0xf2051bDfc738f638668DF2f8c00d01ba6338C513) | ✅ (redeployed 2026-02-17) |
-| BLEBridgeV9 (proxy) | [`0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125`](https://sepolia.etherscan.io/address/0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125) | ⏳ upgrade via timelock |
+| BLEBridgeV9 (proxy) | [`0x708957bFfA312D1730BdF87467E695D3a9F26b0f`](https://sepolia.etherscan.io/address/0x708957bFfA312D1730BdF87467E695D3a9F26b0f) | ✅ E2E tested |
 
 ### Strategies (Sepolia)
 
@@ -43,6 +43,17 @@
 | MockSwapRouter | [`0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e`](https://sepolia.etherscan.io/address/0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e#code) |
 | MockMorphoBlue | [`0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26`](https://sepolia.etherscan.io/address/0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26#code) |
 
+### BLEBridgeV9 Validators (Sepolia)
+
+| Role | Address |
+|------|---------|
+| Validator 1 (deployer) | `0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0` |
+| Validator 2 | `0x2Fe44803dfE94c1C911A4733A76b89114D7B6e0D` |
+
+> **Note:** `minSignatures = 2`. Both validators must sign attestations.
+> The old bridge at `0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125` was initialized
+> with the wrong MUSD address and should NOT be used.
+
 ### Pending Deployments (Tier 1-3)
 
 > Run `deploy-testnet-resume4.ts` to deploy remaining 15 contracts:
@@ -53,6 +64,16 @@
 ---
 
 ## Test Scripts Available
+
+### 0. E2E Bridge Test (Full Round-Trip) ✅
+```bash
+npx hardhat run scripts/e2e-bridge-test.ts --network sepolia
+```
+Tests the complete bridge lifecycle — **4/4 passing** (2026-02-19):
+- **Test 1:** DirectMint (100 USDC → 99 mUSD, 1% fee)
+- **Test 2:** Bridge ETH→Canton (50 mUSD burned, `BridgeToCantonRequested` event)
+- **Test 3:** Supply cap enforcement (headroom verification)
+- **Test 4:** Canton→ETH `processAttestation` (2-of-2 validator signatures, supply cap update)
 
 ### 1. Deploy Mock Oracles (Required First)
 ```bash
@@ -176,12 +197,17 @@ Liquidation requires:
 2. Sufficient liquidity in MockSwapRouter
 3. LiquidationEngine to have LIQUIDATOR_ROLE
 
-### Granting RELAYER_ROLE on BLEBridgeV9 (BRIDGE-M-04)
+### Granting RELAYER_ROLE on BLEBridgeV9
 
 After the BRIDGE-M-04 audit fix, `processAttestation` requires `RELAYER_ROLE`.
-The relay EOA (`0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0`) must be granted this
-role via the timelock upgrade script:
+The relay EOA must be granted this role. On the current bridge (`0x708957...`),
+the deployer has DEFAULT_ADMIN_ROLE and can grant directly:
 
+```bash
+npx hardhat run scripts/deploy-fresh-bridge.ts --network sepolia  # Already done
+```
+
+For production bridges behind a timelock, use:
 ```bash
 # Phase 1 — Deploy new impl + schedule upgrade (creates timelock proposal)
 npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
@@ -189,5 +215,3 @@ npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
 # Phase 2 — Execute after 24h timelock delay
 PHASE=execute npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
 ```
-
-See `scripts/upgrade-bridge-relayer-role.ts` for full details.
