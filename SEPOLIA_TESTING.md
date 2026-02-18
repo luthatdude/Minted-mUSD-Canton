@@ -20,6 +20,36 @@
 | TreasuryV2 (proxy) | [`0xf2051bDfc738f638668DF2f8c00d01ba6338C513`](https://sepolia.etherscan.io/address/0xf2051bDfc738f638668DF2f8c00d01ba6338C513) | ✅ (redeployed 2026-02-17) |
 | BLEBridgeV9 (proxy) | [`0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125`](https://sepolia.etherscan.io/address/0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125) | ⏳ upgrade via timelock |
 
+### Strategies (Sepolia)
+
+| Contract | Address | Verified |
+|----------|---------|----------|
+| PendleMarketSelector | [`0x17Fb251e4580891590633848f3ea9d8d99DA77F6`](https://sepolia.etherscan.io/address/0x17Fb251e4580891590633848f3ea9d8d99DA77F6#code) | ✅ |
+| PendleStrategyV2 | [`0xd0055C2002af04BA0622fFA8284767123e70390f`](https://sepolia.etherscan.io/address/0xd0055C2002af04BA0622fFA8284767123e70390f#code) | ✅ |
+| MorphoLoopStrategy | [`0xA3A4D625C2c53833c7dDF9B358A4D8996B8061C6`](https://sepolia.etherscan.io/address/0xA3A4D625C2c53833c7dDF9B358A4D8996B8061C6#code) | ✅ |
+| SkySUSDSStrategy | [`0x427dF673BCa0233cC16B1fdAB3895f7854358857`](https://sepolia.etherscan.io/address/0x427dF673BCa0233cC16B1fdAB3895f7854358857#code) | ✅ |
+| FluidLoopStrategy | [`0x337ECA06Dc2A4cEa064554f6aeF62b0167145Cf2`](https://sepolia.etherscan.io/address/0x337ECA06Dc2A4cEa064554f6aeF62b0167145Cf2#code) | ✅ |
+| EulerV2LoopStrategy | [`0x67Ab12b2Aabe6147833784A2a84870B074a8a33e`](https://sepolia.etherscan.io/address/0x67Ab12b2Aabe6147833784A2a84870B074a8a33e#code) | ✅ |
+| EulerV2CrossStableLoopStrategy | [`0x38e1D17621f73b7Cf3367C5971e05612673de59d`](https://sepolia.etherscan.io/address/0x38e1D17621f73b7Cf3367C5971e05612673de59d#code) | ✅ |
+| MetaVault | [`0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6`](https://sepolia.etherscan.io/address/0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6#code) | ✅ |
+
+### Mock Infrastructure (Sepolia)
+
+| Contract | Address |
+|----------|---------|
+| MockUSDC | [`0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474`](https://sepolia.etherscan.io/address/0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474#code) |
+| MockWETH | [`0x7999F2894290F2Ce34a508eeff776126D9a7D46e`](https://sepolia.etherscan.io/address/0x7999F2894290F2Ce34a508eeff776126D9a7D46e#code) |
+| MockWBTC | [`0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F`](https://sepolia.etherscan.io/address/0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F#code) |
+| MockSwapRouter | [`0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e`](https://sepolia.etherscan.io/address/0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e#code) |
+| MockMorphoBlue | [`0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26`](https://sepolia.etherscan.io/address/0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26#code) |
+
+### Pending Deployments (Tier 1-3)
+
+> Run `deploy-testnet-resume4.ts` to deploy remaining 15 contracts:
+> - **Tier 1** (zero deps): SMUSDE, PriceAggregator, API3OracleAdapter, ChainlinkOracleAdapter, YieldScanner, YieldVerifier
+> - **Tier 2** (depend on deployed): MorphoMarketRegistry, ERC4626Adapter×2, MorphoBlueAdapter, SMUSDPriceAdapter, RedemptionQueue, ETHPoolYieldDistributor, YieldDistributor
+> - **Tier 3** (depend on Tier 1): ETHPool, UniswapV3TWAPOracle
+
 ---
 
 ## Test Scripts Available
