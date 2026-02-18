@@ -31,6 +31,8 @@ import { getKeeperStatus } from "./yield-keeper";
 import { createEthereumSigner } from "./kms-ethereum-signer";
 // Cryptographic entropy for attestation ID unpredictability
 import * as crypto from "crypto";
+// MEDIUM-02: File-based state persistence for replay protection
+import * as fs from "fs";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
@@ -50,10 +52,13 @@ interface RelayConfig {
   ethereumRpcUrl: string;
   bridgeContractAddress: string;
   treasuryAddress: string;     // Treasury for auto-deploy trigger
-  relayerPrivateKey: string;   // Hot wallet for gas (deprecated: use KMS)
-  // KMS key for Ethereum transaction signing (key never in memory)
-  relayerKmsKeyId: string;     // AWS KMS key ARN for relay signing
-  awsRegion: string;           // AWS region for KMS
+  metaVault3Address: string;   // MetaVault #3 (Fluid) strategy for ETH Pool deposits
+  /** @deprecated SEC-GATE-01: Use relayerKmsKeyId instead. Raw keys forbidden on mainnet. */
+  relayerPrivateKey: string;
+  /** AWS KMS key ARN for Ethereum transaction signing (key never in memory) */
+  relayerKmsKeyId: string;
+  /** AWS region for KMS */
+  awsRegion: string;
 
   // Mapping from DAML Party ID to Ethereum address
   // Without this, signature validation ALWAYS fails because we compared
@@ -67,6 +72,16 @@ interface RelayConfig {
   triggerAutoDeploy: boolean;  // Whether to trigger auto-deploy after bridge
   // Fallback RPC URLs for relay redundancy
   fallbackRpcUrls: string[];
+  // YieldDistributor contract address (Direction 4: yield bridge-in to Canton)
+  yieldDistributorAddress: string;
+  // ETHPoolYieldDistributor contract address (Direction 4b: MetaVault #3 yield → Canton ETH Pool)
+  ethPoolYieldDistributorAddress: string;
+  // Canton governance party — required for ReceiveYield exercise (controller operator, governance)
+  cantonGovernanceParty: string;
+  // MEDIUM-02: File-based state persistence for relay crash recovery
+  stateFilePath: string;
+  // MEDIUM-02: Configurable lookback window for on-chain replay scan (default: 200,000 blocks)
+  replayLookbackBlocks: number;
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -89,9 +104,22 @@ const DEFAULT_CONFIG: RelayConfig = {
   })(),
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
-  // Validate private key is in valid secp256k1 range
-  relayerPrivateKey: readAndValidatePrivateKey("relayer_private_key", "RELAYER_PRIVATE_KEY"),
-  // KMS key for Ethereum transaction signing
+  metaVault3Address: process.env.META_VAULT3_ADDRESS || "",  // Fluid T2/T4 strategy
+  // SEC-GATE-01: Validate private key is in valid secp256k1 range
+  // @deprecated — migrate to RELAYER_KMS_KEY_ID for production
+  relayerPrivateKey: (() => {
+    const kmsId = readSecret("relayer_kms_key_id", "RELAYER_KMS_KEY_ID");
+    const rawKey = readAndValidatePrivateKey("relayer_private_key", "RELAYER_PRIVATE_KEY");
+    if (rawKey && !kmsId) {
+      console.warn(
+        "⚠️  DEPRECATED: RELAYER_PRIVATE_KEY is deprecated. " +
+        "Migrate to RELAYER_KMS_KEY_ID for HSM-backed signing. " +
+        "Raw private keys will be rejected in a future release."
+      );
+    }
+    return rawKey;
+  })(),
+  // KMS key for Ethereum transaction signing (key never in memory)
   relayerKmsKeyId: readSecret("relayer_kms_key_id", "RELAYER_KMS_KEY_ID"),
   awsRegion: process.env.AWS_REGION || "us-east-1",
 
@@ -117,6 +145,19 @@ const DEFAULT_CONFIG: RelayConfig = {
     .split(",")
     .filter(Boolean)
     .map(url => url.trim()),
+  // Direction 4: YieldDistributor address (optional — yield bridge-in disabled if empty)
+  yieldDistributorAddress: process.env.YIELD_DISTRIBUTOR_ADDRESS || "",
+  // Direction 4b: ETHPoolYieldDistributor address (optional — ETH Pool yield bridge-in)
+  // LOW-04: Validate checksum address on load
+  ethPoolYieldDistributorAddress: process.env.ETH_POOL_YIELD_DISTRIBUTOR_ADDRESS
+    ? ethers.getAddress(process.env.ETH_POOL_YIELD_DISTRIBUTOR_ADDRESS)
+    : "",
+  // Canton governance party for ReceiveYield exercise (defaults to operator party)
+  cantonGovernanceParty: process.env.CANTON_GOVERNANCE_PARTY || process.env.CANTON_PARTY || "",
+  // MEDIUM-02: File path for persisting relay state (processed epochs, scanned blocks)
+  stateFilePath: process.env.RELAY_STATE_FILE || path.resolve(__dirname, "relay-state.json"),
+  // MEDIUM-02: Lookback window for on-chain replay scan (default 200,000 blocks ≈ 28 days on Ethereum)
+  replayLookbackBlocks: parseInt(process.env.RELAY_LOOKBACK_BLOCKS || "200000", 10),
 };
 
 // ============================================================
@@ -292,6 +333,63 @@ const BRIDGE_ABI = [
   }
 ];
 
+// ── Direction 4: YieldDistributor ABI (CantonYieldBridged event) ──────
+const YIELD_DISTRIBUTOR_ABI = [
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "epoch", "type": "uint256" },
+      { "indexed": false, "name": "musdAmount", "type": "uint256" },
+      { "indexed": false, "name": "cantonRecipient", "type": "string" }
+    ],
+    "name": "CantonYieldBridged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "epoch", "type": "uint256" },
+      { "indexed": false, "name": "yieldUsdc", "type": "uint256" },
+      { "indexed": false, "name": "musdMinted", "type": "uint256" },
+      { "indexed": false, "name": "ethMusd", "type": "uint256" },
+      { "indexed": false, "name": "cantonMusd", "type": "uint256" },
+      { "indexed": false, "name": "ethSharesBps", "type": "uint256" },
+      { "indexed": false, "name": "cantonSharesBps", "type": "uint256" }
+    ],
+    "name": "YieldDistributed",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "distributionCount",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+];
+
+// ETH Pool yield distributor — MetaVault #3 yield → Canton ETH Pool
+const ETH_POOL_YIELD_DISTRIBUTOR_ABI = [
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "name": "epoch", "type": "uint256" },
+      { "indexed": false, "name": "yieldUsdc", "type": "uint256" },
+      { "indexed": false, "name": "musdBridged", "type": "uint256" },
+      { "indexed": false, "name": "ethPoolRecipient", "type": "string" }
+    ],
+    "name": "ETHPoolYieldBridged",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "distributionCount",
+    "outputs": [{ "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  }
+];
+
 // ============================================================
 //                     RELAY SERVICE
 // ============================================================
@@ -311,6 +409,16 @@ class RelayService {
   private processedBridgeOuts: Set<string> = new Set();
   // Last Ethereum block scanned for BridgeToCantonRequested events
   private lastScannedBlock: number = 0;
+
+  // Direction 4: Yield bridge-in tracking
+  private yieldDistributorContract: ethers.Contract | null = null;
+  private processedYieldEpochs: Set<string> = new Set();
+  private lastYieldScannedBlock: number = 0;
+
+  // Direction 4b: ETH Pool yield bridge-in tracking
+  private ethPoolYieldDistributorContract: ethers.Contract | null = null;
+  private processedETHPoolYieldEpochs: Set<string> = new Set();
+  private lastETHPoolYieldScannedBlock: number = 0;
 
   // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
   // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
@@ -420,8 +528,147 @@ class RelayService {
       BRIDGE_ABI,
       this.wallet
     );
+    // Direction 4: YieldDistributor contract (read-only, for event scanning)
+    if (this.config.yieldDistributorAddress) {
+      this.yieldDistributorContract = new ethers.Contract(
+        this.config.yieldDistributorAddress,
+        YIELD_DISTRIBUTOR_ABI,
+        this.provider  // read-only — no signing needed for event queries
+      );
+    }
     const address = await this.wallet.getAddress();
     console.log(`[Relay] Relayer: ${address}`);
+    if (this.config.yieldDistributorAddress) {
+      console.log(`[Relay] YieldDistributor: ${this.config.yieldDistributorAddress}`);
+    }
+    // Direction 4b: ETHPoolYieldDistributor contract (read-only, for event scanning)
+    if (this.config.ethPoolYieldDistributorAddress) {
+      this.ethPoolYieldDistributorContract = new ethers.Contract(
+        this.config.ethPoolYieldDistributorAddress,
+        ETH_POOL_YIELD_DISTRIBUTOR_ABI,
+        this.provider
+      );
+      console.log(`[Relay] ETHPoolYieldDistributor: ${this.config.ethPoolYieldDistributorAddress}`);
+    }
+  }
+
+  // ============================================================
+  //  MEDIUM-02: File-Based State Persistence for Replay Protection
+  // ============================================================
+
+  /**
+   * Shape of the persisted relay state file.
+   * Stores processed epoch/attestation IDs and last scanned block numbers
+   * so the relay can survive restarts without re-processing events.
+   */
+  private static readonly STATE_VERSION = 1;
+
+  /**
+   * Load persisted state from disk on startup.
+   * Merges with in-memory state (chain-scanned data takes priority).
+   */
+  private loadPersistedState(): void {
+    const filePath = this.config.stateFilePath;
+    if (!filePath) return;
+
+    try {
+      if (!fs.existsSync(filePath)) {
+        console.log(`[Relay] No persisted state file found at ${filePath} — starting fresh`);
+        return;
+      }
+
+      const raw = fs.readFileSync(filePath, "utf-8");
+      // Guard against corrupted / oversized state files (max 5MB)
+      if (raw.length > 5 * 1024 * 1024) {
+        console.warn(`[Relay] State file exceeds 5MB — ignoring corrupted state`);
+        return;
+      }
+
+      const state = JSON.parse(raw);
+
+      // Version check for future migration
+      if (state.version !== RelayService.STATE_VERSION) {
+        console.warn(`[Relay] State file version ${state.version} does not match expected ${RelayService.STATE_VERSION} — ignoring`);
+        return;
+      }
+
+      // Restore processed attestation IDs
+      if (Array.isArray(state.processedAttestations)) {
+        for (const id of state.processedAttestations) {
+          this.processedAttestations.add(id);
+        }
+      }
+
+      // Restore processed yield epochs
+      if (Array.isArray(state.processedYieldEpochs)) {
+        for (const epoch of state.processedYieldEpochs) {
+          this.processedYieldEpochs.add(epoch);
+        }
+      }
+
+      // Restore processed ETH Pool yield epochs
+      if (Array.isArray(state.processedETHPoolYieldEpochs)) {
+        for (const epoch of state.processedETHPoolYieldEpochs) {
+          this.processedETHPoolYieldEpochs.add(epoch);
+        }
+      }
+
+      // Restore last scanned blocks (use persisted value if ahead of default 0)
+      if (typeof state.lastScannedBlock === "number" && state.lastScannedBlock > this.lastScannedBlock) {
+        this.lastScannedBlock = state.lastScannedBlock;
+      }
+      if (typeof state.lastYieldScannedBlock === "number" && state.lastYieldScannedBlock > this.lastYieldScannedBlock) {
+        this.lastYieldScannedBlock = state.lastYieldScannedBlock;
+      }
+      if (typeof state.lastETHPoolYieldScannedBlock === "number" && state.lastETHPoolYieldScannedBlock > this.lastETHPoolYieldScannedBlock) {
+        this.lastETHPoolYieldScannedBlock = state.lastETHPoolYieldScannedBlock;
+      }
+
+      console.log(
+        `[Relay] Loaded persisted state: ` +
+        `${state.processedAttestations?.length || 0} attestations, ` +
+        `${state.processedYieldEpochs?.length || 0} yield epochs, ` +
+        `${state.processedETHPoolYieldEpochs?.length || 0} ETH Pool yield epochs, ` +
+        `lastScanned=${state.lastScannedBlock || 0}, ` +
+        `lastYieldScanned=${state.lastYieldScannedBlock || 0}, ` +
+        `lastETHPoolYieldScanned=${state.lastETHPoolYieldScannedBlock || 0}`
+      );
+    } catch (error: any) {
+      console.warn(`[Relay] Failed to load persisted state: ${error.message} — starting fresh`);
+    }
+  }
+
+  /**
+   * Persist current relay state to disk.
+   * Called after each successful epoch/attestation processing.
+   * Uses atomic write (write to temp file, then rename) to prevent corruption.
+   */
+  private persistState(): void {
+    const filePath = this.config.stateFilePath;
+    if (!filePath) return;
+
+    try {
+      const state = {
+        version: RelayService.STATE_VERSION,
+        timestamp: new Date().toISOString(),
+        processedAttestations: Array.from(this.processedAttestations),
+        processedYieldEpochs: Array.from(this.processedYieldEpochs),
+        processedETHPoolYieldEpochs: Array.from(this.processedETHPoolYieldEpochs),
+        lastScannedBlock: this.lastScannedBlock,
+        lastYieldScannedBlock: this.lastYieldScannedBlock,
+        lastETHPoolYieldScannedBlock: this.lastETHPoolYieldScannedBlock,
+      };
+
+      const json = JSON.stringify(state, null, 2);
+
+      // Atomic write: write to temp file, then rename (prevents partial writes on crash)
+      const tmpPath = filePath + ".tmp";
+      fs.writeFileSync(tmpPath, json, "utf-8");
+      fs.renameSync(tmpPath, filePath);
+    } catch (error: any) {
+      // Non-fatal: state persistence failure should not stop the relay
+      console.error(`[Relay] Failed to persist state: ${error.message}`);
+    }
   }
 
   /**
@@ -438,11 +685,22 @@ class RelayService {
     
     this.isRunning = true;
 
+    // MEDIUM-02: Load persisted state from disk BEFORE chain scanning.
+    // Persisted state provides a baseline; chain scanning then adds any
+    // events that occurred after the last state save.
+    this.loadPersistedState();
+
     // Load already-processed attestations from chain
     await this.loadProcessedAttestations();
 
     // Load already-processed bridge-out requests from chain
     await this.loadProcessedBridgeOuts();
+
+    // Load already-processed yield bridge-in epochs from chain
+    await this.loadProcessedYieldBridgeIns();
+
+    // Load already-processed ETH Pool yield bridge-in epochs from chain
+    await this.loadProcessedETHPoolYieldBridgeIns();
 
     // Main loop — bidirectional
     while (this.isRunning) {
@@ -451,6 +709,12 @@ class RelayService {
         await this.pollForAttestations();
         // Direction 2: Ethereum → Canton (bridge-out watcher)
         await this.watchEthereumBridgeOut();
+        // Direction 3: Canton → Ethereum (auto-process bridge-out backing)
+        await this.processCantonBridgeOuts();
+        // Direction 4: Ethereum → Canton (yield bridge-in — credit Canton pools)
+        await this.processYieldBridgeIn();
+        // Direction 4b: Ethereum → Canton (ETH Pool yield — credit Canton ETH Pool)
+        await this.processETHPoolYieldBridgeIn();
         // Reset failure counter on success
         this.consecutiveFailures = 0;
       } catch (error) {
@@ -792,11 +1056,10 @@ class RelayService {
   private async loadProcessedAttestations(): Promise<void> {
     console.log("[Relay] Loading processed attestations from chain...");
 
-    // Increased block range from 10,000 to 50,000 and added pagination
-    // to avoid missing processed attestations during longer relay downtime
+    // MEDIUM-02: Configurable lookback window (default 200,000 blocks ≈ 28 days)
     const filter = this.bridgeContract.filters.AttestationReceived();
     const currentBlock = await this.provider.getBlockNumber();
-    const maxRange = 50000;
+    const maxRange = this.config.replayLookbackBlocks;
     const fromBlock = Math.max(0, currentBlock - maxRange);
     
     // Paginate in chunks of 10,000 to avoid RPC limits
@@ -932,7 +1195,7 @@ class RelayService {
 
     const filter = this.bridgeContract.filters.BridgeToCantonRequested();
     const currentBlock = await this.provider.getBlockNumber();
-    const maxRange = 50000;
+    const maxRange = this.config.replayLookbackBlocks;
     const fromBlock = Math.max(0, currentBlock - maxRange);
 
     const chunkSize = 10000;
@@ -1002,6 +1265,26 @@ class RelayService {
         continue;
       }
 
+      // Skip yield bridge events — handled by Direction 4 (processYieldBridgeIn)
+      if (
+        this.config.yieldDistributorAddress &&
+        sender.toLowerCase() === this.config.yieldDistributorAddress.toLowerCase()
+      ) {
+        console.log(`[Relay] Skipping yield bridge-out #${nonce} from YieldDistributor (handled by Direction 4)`);
+        this.processedBridgeOuts.add(requestId); // Mark processed to avoid re-checking
+        continue;
+      }
+
+      // Skip ETH Pool yield bridge events — handled by Direction 4b (processETHPoolYieldBridgeIn)
+      if (
+        this.config.ethPoolYieldDistributorAddress &&
+        sender.toLowerCase() === this.config.ethPoolYieldDistributorAddress.toLowerCase()
+      ) {
+        console.log(`[Relay] Skipping ETH Pool yield bridge-out #${nonce} from ETHPoolYieldDistributor (handled by Direction 4b)`);
+        this.processedBridgeOuts.add(requestId);
+        continue;
+      }
+
       console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
 
       try {
@@ -1039,6 +1322,555 @@ class RelayService {
       } catch (error: any) {
         console.error(`[Relay] Failed to relay bridge-out #${nonce} to Canton:`, error.message);
         // Don't mark as processed — will retry next cycle
+      }
+    }
+  }
+
+  // ============================================================
+  //  DIRECTION 4: Ethereum → Canton (Yield Bridge-In)
+  // ============================================================
+
+  /**
+   * Load already-processed yield epochs from chain to prevent replay on restart.
+   */
+  private async loadProcessedYieldBridgeIns(): Promise<void> {
+    if (!this.yieldDistributorContract) return;
+
+    console.log("[Relay] Loading processed yield bridge-in epochs from chain...");
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const maxRange = this.config.replayLookbackBlocks;
+    const fromBlock = Math.max(0, currentBlock - maxRange);
+
+    const filter = this.yieldDistributorContract.filters.CantonYieldBridged();
+    const chunkSize = 10000;
+    let events: ethers.EventLog[] = [];
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const chunk = await this.yieldDistributorContract.queryFilter(filter, start, end);
+      events = events.concat(chunk as ethers.EventLog[]);
+    }
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (args) {
+        this.processedYieldEpochs.add(args.epoch.toString());
+      }
+    }
+
+    this.lastYieldScannedBlock = currentBlock;
+    console.log(
+      `[Relay] Found ${this.processedYieldEpochs.size} yield epochs (scanning from block ${fromBlock})`
+    );
+  }
+
+  /**
+   * Watch for CantonYieldBridged events from YieldDistributor and credit
+   * Canton staking pool via ReceiveYield.
+   *
+   * Flow:
+   *   1. Scan for new CantonYieldBridged events (YieldDistributor → BLEBridge → burn)
+   *   2. Create CantonMUSD on Canton (operator-owned, yield amount)
+   *   3. Query CantonStakingService to get its contractId
+   *   4. Exercise ReceiveYield with the minted CantonMUSD → pool grows → share price ↑
+   */
+  private async processYieldBridgeIn(): Promise<void> {
+    if (!this.yieldDistributorContract) return;
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const confirmedBlock = currentBlock - this.config.confirmations;
+
+    if (confirmedBlock <= this.lastYieldScannedBlock) return;
+
+    const filter = this.yieldDistributorContract.filters.CantonYieldBridged();
+    const events = await this.yieldDistributorContract.queryFilter(
+      filter,
+      this.lastYieldScannedBlock + 1,
+      confirmedBlock
+    );
+
+    this.lastYieldScannedBlock = confirmedBlock;
+
+    if (events.length === 0) return;
+
+    console.log(`[Relay] Found ${events.length} new CantonYieldBridged events`);
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (!args) continue;
+
+      const epoch: string = args.epoch.toString();
+      const musdAmount: bigint = args.musdAmount;
+      const cantonRecipient: string = args.cantonRecipient;
+
+      if (this.processedYieldEpochs.has(epoch)) continue;
+
+      const amountStr = ethers.formatEther(musdAmount);
+      console.log(
+        `[Relay] Yield epoch #${epoch}: ${amountStr} mUSD → Canton staking pool (${cantonRecipient})`
+      );
+
+      try {
+        // MEDIUM-02: Canton-side duplicate check before creating CantonMUSD
+        const agreementHash = `yield-epoch-${epoch}`;
+        const existingMusd = await this.canton.queryContracts(
+          TEMPLATES.CantonMUSD,
+          (payload: any) =>
+            payload.owner === this.config.cantonParty &&
+            payload.agreementHash === agreementHash
+        );
+        if (existingMusd.length > 0) {
+          console.log(
+            `[Relay] Yield epoch #${epoch} already has CantonMUSD on Canton ` +
+            `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`
+          );
+          this.processedYieldEpochs.add(epoch);
+          this.persistState();
+          continue;
+        }
+
+        // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          {
+            issuer: this.config.cantonParty,
+            owner: this.config.cantonParty,
+            amount: amountStr,
+            agreementHash: `yield-epoch-${epoch}`,
+            agreementUri: `ethereum:yield-distributor:${this.config.yieldDistributorAddress}`,
+            privacyObservers: [] as string[],
+          }
+        );
+
+        // Extract contractId from create response
+        // The v2 submit-and-wait response includes the completion with created events
+        const musdContractId = this.extractCreatedContractId(createResult, "CantonMUSD");
+        if (!musdContractId) {
+          // Fallback: query for the most recent CantonMUSD owned by operator
+          const musdContracts = await this.canton.queryContracts(
+            TEMPLATES.CantonMUSD,
+            (payload: any) =>
+              payload.owner === this.config.cantonParty &&
+              payload.agreementHash === `yield-epoch-${epoch}`
+          );
+          if (musdContracts.length === 0) {
+            throw new Error("Created CantonMUSD not found on Canton after create");
+          }
+          const latestMusd = musdContracts[musdContracts.length - 1];
+          console.log(`[Relay] CantonMUSD created (queried): ${latestMusd.contractId}`);
+          await this.creditCantonStakingPool(latestMusd.contractId, epoch, amountStr);
+        } else {
+          console.log(`[Relay] CantonMUSD created: ${musdContractId}`);
+          await this.creditCantonStakingPool(musdContractId, epoch, amountStr);
+        }
+
+        // Mark epoch as processed
+        this.processedYieldEpochs.add(epoch);
+        // MEDIUM-02: Persist state to disk after each successful processing
+        this.persistState();
+
+        // Cache eviction
+        if (this.processedYieldEpochs.size > this.MAX_PROCESSED_CACHE) {
+          const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
+          let evicted = 0;
+          for (const key of this.processedYieldEpochs) {
+            if (evicted >= toEvict) break;
+            this.processedYieldEpochs.delete(key);
+            evicted++;
+          }
+        }
+      } catch (error: any) {
+        console.error(
+          `[Relay] Failed to process yield epoch #${epoch}: ${error.message}`
+        );
+        // Don't mark as processed — retry next cycle
+      }
+    }
+  }
+
+  /**
+   * Exercise ReceiveYield on CantonStakingService to credit the staking pool.
+   */
+  private async creditCantonStakingPool(
+    musdContractId: string,
+    epoch: string,
+    amountStr: string
+  ): Promise<void> {
+    // Step 2: Query CantonStakingService to get its contractId
+    const stakingServices = await this.canton.queryContracts(
+      TEMPLATES.CantonStakingService,
+      (payload: any) => payload.operator === this.config.cantonParty
+    );
+
+    if (stakingServices.length === 0) {
+      throw new Error("No CantonStakingService found on Canton — cannot credit yield");
+    }
+
+    const stakingService = stakingServices[0];
+
+    // Step 3: Exercise ReceiveYield — merges mUSD into vault, pooledMusd ↑
+    await this.canton.exerciseChoice(
+      TEMPLATES.CantonStakingService,
+      stakingService.contractId,
+      "ReceiveYield",
+      { yieldMusdCid: musdContractId }
+    );
+
+    console.log(
+      `[Relay] ✅ Yield epoch #${epoch}: ${amountStr} mUSD credited to Canton staking pool ` +
+      `(service: ${stakingService.contractId.slice(0, 16)}...)`
+    );
+  }
+
+  // ============================================================
+  //  DIRECTION 4b: Ethereum → Canton (ETH Pool Yield Bridge-In)
+  // ============================================================
+
+  /**
+   * Load already-processed ETH Pool yield epochs from chain to prevent replay on restart.
+   */
+  private async loadProcessedETHPoolYieldBridgeIns(): Promise<void> {
+    if (!this.ethPoolYieldDistributorContract) return;
+
+    console.log("[Relay] Loading processed ETH Pool yield bridge-in epochs from chain...");
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const maxRange = this.config.replayLookbackBlocks;
+    const fromBlock = Math.max(0, currentBlock - maxRange);
+
+    const filter = this.ethPoolYieldDistributorContract.filters.ETHPoolYieldBridged();
+    const chunkSize = 10000;
+    let events: ethers.EventLog[] = [];
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const chunk = await this.ethPoolYieldDistributorContract.queryFilter(filter, start, end);
+      events = events.concat(chunk as ethers.EventLog[]);
+    }
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (args) {
+        this.processedETHPoolYieldEpochs.add(args.epoch.toString());
+      }
+    }
+
+    this.lastETHPoolYieldScannedBlock = currentBlock;
+    console.log(
+      `[Relay] Found ${this.processedETHPoolYieldEpochs.size} ETH Pool yield epochs (scanning from block ${fromBlock})`
+    );
+  }
+
+  /**
+   * Watch for ETHPoolYieldBridged events from ETHPoolYieldDistributor and credit
+   * Canton ETH Pool via ETHPool_ReceiveYield.
+   *
+   * Flow:
+   *   1. Scan for new ETHPoolYieldBridged events (distributor mints mUSD → bridge burns)
+   *   2. Create CantonMUSD on Canton (operator-owned, yield amount)
+   *   3. Query CantonETHPoolService to get its contractId
+   *   4. Exercise ETHPool_ReceiveYield with the minted CantonMUSD → pooledUsdc ↑ → share price ↑
+   */
+  private async processETHPoolYieldBridgeIn(): Promise<void> {
+    if (!this.ethPoolYieldDistributorContract) return;
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const confirmedBlock = currentBlock - this.config.confirmations;
+
+    if (confirmedBlock <= this.lastETHPoolYieldScannedBlock) return;
+
+    const filter = this.ethPoolYieldDistributorContract.filters.ETHPoolYieldBridged();
+    const events = await this.ethPoolYieldDistributorContract.queryFilter(
+      filter,
+      this.lastETHPoolYieldScannedBlock + 1,
+      confirmedBlock
+    );
+
+    this.lastETHPoolYieldScannedBlock = confirmedBlock;
+
+    if (events.length === 0) return;
+
+    console.log(`[Relay] Found ${events.length} new ETHPoolYieldBridged events`);
+
+    for (const event of events) {
+      const args = (event as ethers.EventLog).args;
+      if (!args) continue;
+
+      const epoch: string = args.epoch.toString();
+      const musdBridged: bigint = args.musdBridged;
+      const ethPoolRecipient: string = args.ethPoolRecipient;
+
+      if (this.processedETHPoolYieldEpochs.has(epoch)) continue;
+
+      const amountStr = ethers.formatEther(musdBridged);
+      console.log(
+        `[Relay] ETH Pool yield epoch #${epoch}: ${amountStr} mUSD → Canton ETH Pool (${ethPoolRecipient})`
+      );
+
+      try {
+        // MEDIUM-02: Canton-side duplicate check — query for existing CantonMUSD
+        // with matching agreementHash before creating a new one. This prevents
+        // orphaned CantonMUSD contracts if the relay restarts and re-encounters
+        // an event that was processed but not persisted.
+        const agreementHash = `ethpool-yield-epoch-${epoch}`;
+        const existingMusd = await this.canton.queryContracts(
+          TEMPLATES.CantonMUSD,
+          (payload: any) =>
+            payload.owner === this.config.cantonParty &&
+            payload.agreementHash === agreementHash
+        );
+        if (existingMusd.length > 0) {
+          console.log(
+            `[Relay] ETH Pool yield epoch #${epoch} already has CantonMUSD on Canton ` +
+            `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`
+          );
+          this.processedETHPoolYieldEpochs.add(epoch);
+          this.persistState();
+          continue;
+        }
+
+        // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          {
+            issuer: this.config.cantonParty,
+            owner: this.config.cantonParty,
+            amount: amountStr,
+            agreementHash: `ethpool-yield-epoch-${epoch}`,
+            agreementUri: `ethereum:ethpool-yield-distributor:${this.config.ethPoolYieldDistributorAddress}`,
+            privacyObservers: [] as string[],
+          }
+        );
+
+        // Extract contractId from create response
+        const musdContractId = this.extractCreatedContractId(createResult, "CantonMUSD");
+        if (!musdContractId) {
+          // Fallback: query for the most recent CantonMUSD owned by operator
+          const musdContracts = await this.canton.queryContracts(
+            TEMPLATES.CantonMUSD,
+            (payload: any) =>
+              payload.owner === this.config.cantonParty &&
+              payload.agreementHash === `ethpool-yield-epoch-${epoch}`
+          );
+          if (musdContracts.length === 0) {
+            throw new Error("Created CantonMUSD not found on Canton after create (ETH Pool)");
+          }
+          const latestMusd = musdContracts[musdContracts.length - 1];
+          console.log(`[Relay] CantonMUSD created for ETH Pool (queried): ${latestMusd.contractId}`);
+          await this.creditCantonETHPool(latestMusd.contractId, epoch, amountStr);
+        } else {
+          console.log(`[Relay] CantonMUSD created for ETH Pool: ${musdContractId}`);
+          await this.creditCantonETHPool(musdContractId, epoch, amountStr);
+        }
+
+        // Mark epoch as processed
+        this.processedETHPoolYieldEpochs.add(epoch);
+        // MEDIUM-02: Persist state to disk after each successful processing
+        this.persistState();
+
+        // Cache eviction
+        if (this.processedETHPoolYieldEpochs.size > this.MAX_PROCESSED_CACHE) {
+          const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
+          let evicted = 0;
+          for (const key of this.processedETHPoolYieldEpochs) {
+            if (evicted >= toEvict) break;
+            this.processedETHPoolYieldEpochs.delete(key);
+            evicted++;
+          }
+        }
+      } catch (error: any) {
+        console.error(
+          `[Relay] Failed to process ETH Pool yield epoch #${epoch}: ${error.message}`
+        );
+        // Don't mark as processed — retry next cycle
+      }
+    }
+  }
+
+  /**
+   * Exercise ETHPool_ReceiveYield on CantonETHPoolService to credit the ETH Pool.
+   * This increments pooledUsdc, which raises the ETH Pool share price.
+   */
+  private async creditCantonETHPool(
+    musdContractId: string,
+    epoch: string,
+    amountStr: string
+  ): Promise<void> {
+    // Query CantonETHPoolService to get its contractId
+    const ethPoolServices = await this.canton.queryContracts(
+      TEMPLATES.CantonETHPoolService,
+      (payload: any) => payload.operator === this.config.cantonParty
+    );
+
+    if (ethPoolServices.length === 0) {
+      throw new Error("No CantonETHPoolService found on Canton — cannot credit ETH Pool yield");
+    }
+
+    const ethPoolService = ethPoolServices[0];
+
+    // Exercise ETHPool_ReceiveYield — archives mUSD, increments pooledUsdc
+    await this.canton.exerciseChoice(
+      TEMPLATES.CantonETHPoolService,
+      ethPoolService.contractId,
+      "ETHPool_ReceiveYield",
+      { yieldMusdCid: musdContractId }
+    );
+
+    console.log(
+      `[Relay] ✅ ETH Pool yield epoch #${epoch}: ${amountStr} mUSD credited to Canton ETH Pool ` +
+      `(service: ${ethPoolService.contractId.slice(0, 16)}...)`
+    );
+  }
+
+  /**
+   * Extract the created contract ID from a v2 submit-and-wait response.
+   * Returns null if the response format doesn't contain a recognizable contractId.
+   */
+  private extractCreatedContractId(response: unknown, entityName: string): string | null {
+    try {
+      const resp = response as any;
+      // Daml JSON API v2 submit-and-wait returns a transaction with events
+      const transaction = resp?.transaction || resp?.result?.transaction;
+      if (!transaction) return null;
+
+      const events = transaction.events || transaction.eventsById;
+      if (!events) return null;
+
+      // events can be an array or a map
+      const eventList = Array.isArray(events) ? events : Object.values(events);
+      for (const evt of eventList) {
+        const created = evt?.CreatedEvent || evt?.created || evt;
+        if (created?.contractId && created?.templateId?.includes(entityName)) {
+          return created.contractId;
+        }
+      }
+    } catch {
+      /* Response format not recognized — fall back to query */
+    }
+    return null;
+  }
+
+  // ============================================================
+  //  DIRECTION 3: Canton → Ethereum (Auto Bridge-Out Processing)
+  // ============================================================
+
+  /**
+   * Auto-process Canton BridgeOutRequests.
+   *
+   * When a user mints mUSD on Canton (via USDC/USDCx), a BridgeOutRequest is created.
+   * This method polls Canton for pending requests and processes them:
+   *
+   *   1. Check if USDC backing is available in relayer wallet
+   *      (from xReserve/Circle CCTP redemption — operator redeems USDCx off-chain)
+   *   2. Route USDC based on source:
+   *      - "ethpool" → depositToStrategy(MetaVault #3) — targeted Fluid allocation
+   *      - "directmint" → deposit() — general auto-allocation across strategies
+   *   3. Mark BridgeOutRequest as "bridged" on Canton
+   */
+  private async processCantonBridgeOuts(): Promise<void> {
+    // Query Canton for pending BridgeOutRequests (standalone module)
+    const pendingRequests = await this.canton.queryContracts<{
+      operator: string;
+      user: string;
+      amount: string;
+      targetChainId: number;
+      targetTreasury: string;
+      nonce: number;
+      createdAt: string;
+      status: string;
+      source: string;
+      validators: string[];
+    }>(
+      TEMPLATES.StandaloneBridgeOutRequest,
+      (p) => p.status === "pending" && p.operator === this.config.cantonParty
+    );
+
+    if (pendingRequests.length === 0) return;
+
+    console.log(`[Relay] Found ${pendingRequests.length} pending BridgeOutRequests on Canton`);
+
+    // Treasury ABI — includes both general deposit and targeted depositToStrategy
+    const treasuryAbi = [
+      "function deposit(address from, uint256 amount) external",
+      "function depositToStrategy(address strategy, uint256 amount) external returns (uint256)",
+      "function usdc() external view returns (address)",
+    ];
+    const treasury = new ethers.Contract(
+      this.config.treasuryAddress,
+      treasuryAbi,
+      this.wallet
+    );
+
+    const erc20Abi = [
+      "function approve(address spender, uint256 amount) external returns (bool)",
+      "function balanceOf(address account) external view returns (uint256)",
+    ];
+
+    let usdcAddress: string;
+    try {
+      usdcAddress = await treasury.usdc();
+    } catch (err: any) {
+      console.error(`[Relay] Failed to read USDC address from Treasury:`, err.message);
+      return;
+    }
+
+    const usdc = new ethers.Contract(usdcAddress, erc20Abi, this.wallet);
+    const walletAddress = await this.wallet.getAddress();
+
+    for (const req of pendingRequests) {
+      const { payload, contractId } = req;
+      try {
+        // Convert DAML Numeric 18 to USDC 6-decimal amount
+        const amountWei = ethers.parseEther(payload.amount);
+        const amountUsdc = amountWei / BigInt(1e12);
+
+        // Check relayer wallet has sufficient USDC
+        // (arrives from xReserve/Circle CCTP redemption — handled off-chain by operator)
+        const balance: bigint = await usdc.balanceOf(walletAddress);
+        if (balance < amountUsdc) {
+          console.log(
+            `[Relay] BridgeOut #${payload.nonce}: insufficient USDC ` +
+            `(need ${amountUsdc}, have ${balance}) — waiting for xReserve redemption`
+          );
+          continue; // Skip — will retry next cycle when USDC arrives
+        }
+
+        const isEthPool = payload.source === "ethpool";
+        const routeLabel = isEthPool ? "MetaVault #3 (Fluid)" : "Treasury (auto-allocate)";
+
+        console.log(`[Relay] Processing BridgeOut #${payload.nonce} [${payload.source}]: ${ethers.formatUnits(amountUsdc, 6)} USDC → ${routeLabel}`);
+
+        // Step 1: Approve Treasury to spend USDC
+        const approveTx = await usdc.approve(this.config.treasuryAddress, amountUsdc);
+        await approveTx.wait();
+
+        // Step 2: Route deposit based on source
+        if (isEthPool && this.config.metaVault3Address) {
+          // ETH Pool → deposit directly to MetaVault #3 (Fluid T2/T4 strategy)
+          const depositTx = await treasury.depositToStrategy(
+            this.config.metaVault3Address,
+            amountUsdc
+          );
+          await depositTx.wait();
+          console.log(`[Relay] ✅ Deposited ${ethers.formatUnits(amountUsdc, 6)} USDC → MetaVault #3 (tx: ${depositTx.hash})`);
+        } else {
+          // DirectMint → general deposit with auto-allocation
+          const depositTx = await treasury.deposit(walletAddress, amountUsdc);
+          await depositTx.wait();
+          console.log(`[Relay] ✅ Deposited ${ethers.formatUnits(amountUsdc, 6)} USDC to Treasury (tx: ${depositTx.hash})`);
+        }
+
+        // Step 3: Mark BridgeOutRequest as completed on Canton
+        await this.canton.exerciseChoice(
+          TEMPLATES.StandaloneBridgeOutRequest,
+          contractId,
+          "BridgeOut_Complete",
+          { relayParty: this.config.cantonParty }
+        );
+        console.log(`[Relay] ✅ BridgeOutRequest #${payload.nonce} marked as bridged on Canton`);
+
+      } catch (error: any) {
+        console.error(`[Relay] Failed to process BridgeOut #${payload.nonce}:`, error.message);
+        // Don't mark as failed — will retry next cycle
       }
     }
   }
@@ -1226,6 +2058,9 @@ class RelayService {
         if (this.config.triggerAutoDeploy && this.config.treasuryAddress) {
           await this.triggerYieldDeploy();
         }
+
+        // MEDIUM-02: Persist state to disk after successful attestation processing
+        this.persistState();
 
         // Evict oldest 10% of entries if cache exceeds limit
         if (this.processedAttestations.size > this.MAX_PROCESSED_CACHE) {
