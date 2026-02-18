@@ -59,8 +59,8 @@
   "canton": {
     "network": "devnet",
     "participantUrl": "http://localhost:7575",
-    "grpcPort": 5001,
-    "adminPort": 5002,
+    "grpcPort": 5011,
+    "adminPort": 5012,
     "damlPackageVersion": "2.3.0",
     "damlPackageId": "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b",
     "sdkVersion": "3.4.10",
