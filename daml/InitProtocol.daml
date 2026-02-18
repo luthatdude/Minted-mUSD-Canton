@@ -141,7 +141,8 @@ initProtocol = do
           minValidators = Some 1          -- AUDIT-H-03: Devnet allows single validator
           totalBridgedIn = 0.0
           totalBridgedOut = 0.0
-          lastNonce = 0
+          lastBridgeOutNonce = 0
+          lastBridgeInNonce = 0
           paused = False
           observers = [validator1]
 

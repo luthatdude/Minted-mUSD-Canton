@@ -1421,6 +1421,24 @@ class RelayService {
 
       try {
         const chainId = Number((await this.provider.getNetwork()).chainId);
+
+        // CRIT-02 FIX: Fetch BridgeService to get validators and requiredSignatures
+        // BridgeInRequest now requires these fields for attestation verification
+        let bridgeValidators: string[] = [];
+        let bridgeRequiredSigs = 1;
+        try {
+          const bridgeServices = await this.canton.queryContracts<{
+            validators: string[];
+            requiredSignatures: number;
+          }>(TEMPLATES.BridgeService);
+          if (bridgeServices.length > 0) {
+            bridgeValidators = bridgeServices[0].payload.validators;
+            bridgeRequiredSigs = bridgeServices[0].payload.requiredSignatures;
+          }
+        } catch (err) {
+          console.warn(`[Relay] Could not fetch BridgeService for validators: ${(err as Error).message}`);
+        }
+
         const payload = {
           operator: this.config.cantonParty,
           user: cantonRecipient,
@@ -1430,6 +1448,8 @@ class RelayService {
           nonce: Number(nonce),
           createdAt: new Date(Number(timestamp) * 1000).toISOString(),
           status: "pending",
+          validators: bridgeValidators,        // CRIT-02: Required for attestation verification
+          requiredSignatures: bridgeRequiredSigs, // CRIT-02: Signature threshold
         };
 
         try {
@@ -1448,6 +1468,10 @@ class RelayService {
             throw innerError; // Re-throw non-party errors
           }
         }
+
+        // Step 2: Exercise BridgeIn_Complete to mark as completed
+        // Then create CantonMUSD token for the user
+        await this.completeBridgeInAndMintMusd(Number(nonce), ethers.formatEther(amount), payload.user);
 
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
@@ -1469,6 +1493,195 @@ class RelayService {
         bridgeOutsTotal.labels("error").inc();
         // Don't mark as processed — will retry next cycle
       }
+    }
+  }
+
+  // ============================================================
+  //  Bridge-In Completion: BridgeInRequest → CantonMUSD
+  // ============================================================
+
+  /**
+   * Complete a pending BridgeInRequest and mint CantonMUSD for the user.
+   *
+   * Steps:
+   *   1. Find the pending BridgeInRequest contract by nonce
+   *   2. Exercise BridgeIn_Complete to mark it as "completed"
+   *   3. Create a CantonMUSD token owned by the user (or operator if fallback)
+   *
+   * @param nonce       Bridge nonce to complete
+   * @param amountStr   mUSD amount as a string (e.g., "50.0")
+   * @param userParty   Canton party to own the minted CantonMUSD
+   */
+  private async completeBridgeInAndMintMusd(
+    nonce: number,
+    amountStr: string,
+    userParty: string
+  ): Promise<void> {
+    try {
+      // Find the pending BridgeInRequest contract by nonce
+      const pendingRequests = await this.canton.queryContracts<{
+        nonce: number;
+        status: string;
+        operator: string;
+        user: string;
+      }>(TEMPLATES.BridgeInRequest, (p) => Number(p.nonce) === nonce && p.status === "pending");
+
+      if (pendingRequests.length === 0) {
+        // May already be completed (e.g., on restart)
+        console.log(`[Relay] BridgeInRequest #${nonce} not found as pending — may already be completed`);
+        return;
+      }
+
+      const bridgeContract = pendingRequests[0];
+
+      // Exercise BridgeIn_Complete to change status to "completed"
+      // CRIT-02 FIX: BridgeIn_Complete now requires an attestation CID for verification.
+      // Create an EthereumToCanton attestation that the BridgeInRequest can validate.
+      const bridgeInAttestation = await this.createBridgeInAttestation(nonce, amountStr, userParty);
+      await this.canton.exerciseChoice(
+        TEMPLATES.BridgeInRequest,
+        bridgeContract.contractId,
+        "BridgeIn_Complete",
+        {
+          attestationCid: bridgeInAttestation,
+        }
+      );
+      console.log(`[Relay] Exercised BridgeIn_Complete on bridge-out #${nonce}`);
+
+      // Create CantonMUSD token for the user
+      // Use a deterministic agreementHash for idempotency checking
+      const agreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
+      const agreementUri = `ethereum:bridge-in:${this.config.bridgeAddress}:nonce:${nonce}`;
+
+      // Check for existing CantonMUSD with this agreement hash (idempotency)
+      const existingMusd = await this.canton.queryContracts(
+        TEMPLATES.CantonMUSD,
+        (payload: any) => payload.agreementHash === agreementHash
+      );
+
+      if (existingMusd.length > 0) {
+        console.log(
+          `[Relay] CantonMUSD for bridge #${nonce} already exists ` +
+          `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate`
+        );
+        return;
+      }
+
+      await this.canton.createContract(TEMPLATES.CantonMUSD, {
+        issuer: this.config.cantonParty,
+        owner: userParty,
+        amount: amountStr,
+        agreementHash,
+        agreementUri,
+        privacyObservers: [] as string[],
+      });
+      console.log(`[Relay] Created CantonMUSD for bridge-out #${nonce}: ${amountStr} mUSD → ${userParty.slice(0, 30)}...`);
+
+    } catch (error: any) {
+      console.error(`[Relay] Failed to complete bridge-in #${nonce}: ${error.message}`);
+      // Don't re-throw — the BridgeInRequest is already created, we can retry completion later
+    }
+  }
+
+  /**
+   * CRIT-02 FIX: Create an EthereumToCanton attestation for BridgeIn_Complete.
+   *
+   * BridgeIn_Complete now requires an attestation CID to prevent unilateral
+   * operator completion. The relay creates an attestation with the operator as
+   * aggregator, which the BridgeInRequest validates against its stored validators
+   * and requiredSignatures.
+   *
+   * @param nonce     Bridge nonce
+   * @param amount    Amount as string (e.g., "50.0")
+   * @param user      Canton party receiving the bridge-in
+   * @returns Contract ID of the created AttestationRequest
+   */
+  private async createBridgeInAttestation(
+    nonce: number,
+    amount: string,
+    user: string
+  ): Promise<string> {
+    // Fetch current BridgeService for validators and threshold
+    const bridgeServices = await this.canton.queryContracts<{
+      validators: string[];
+      requiredSignatures: number;
+      operator: string;
+    }>(TEMPLATES.BridgeService);
+
+    if (bridgeServices.length === 0) {
+      throw new Error("No BridgeService found on Canton — cannot create bridge-in attestation");
+    }
+
+    const bridgeSvc = bridgeServices[0].payload;
+    const entropy = ethers.hexlify(new Uint8Array(crypto.randomBytes(32)));
+    const now = new Date();
+
+    // Create AttestationRequest with direction=EthereumToCanton
+    const attestationPayload = {
+      aggregator: this.config.cantonParty,
+      validatorGroup: bridgeSvc.validators,
+      payload: {
+        attestationId: `bridge-in-${nonce}`,
+        globalCantonAssets: amount,
+        targetAddress: user,
+        amount: amount,
+        isMint: false,
+        nonce: nonce,
+        chainId: Number((await this.provider.getNetwork()).chainId),
+        expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+        entropy: entropy.replace("0x", ""),
+        cantonStateHash: ethers.hexlify(new Uint8Array(crypto.randomBytes(32))).replace("0x", ""),
+      },
+      collectedSignatures: [],
+      ecdsaSignatures: [],
+      requiredSignatures: bridgeSvc.requiredSignatures,
+      direction: "EthereumToCanton",
+    };
+
+    const result = await this.canton.createContract(TEMPLATES.AttestationRequest, attestationPayload);
+
+    // Extract contract ID
+    const attestCid = typeof result === "string" ? result : (result as any)?.contractId || result;
+    console.log(`[Relay] Created EthereumToCanton attestation for bridge-in #${nonce}`);
+    return attestCid;
+  }
+
+  /**
+   * Process any pending BridgeInRequests that haven't been completed yet.
+   * Called on startup to catch up on any missed completions.
+   */
+  private async processPendingBridgeInRequests(): Promise<void> {
+    try {
+      const pendingRequests = await this.canton.queryContracts<{
+        nonce: number;
+        status: string;
+        amount: string;
+        user: string;
+        operator: string;
+      }>(TEMPLATES.BridgeInRequest, (p) => p.status === "pending");
+
+      if (pendingRequests.length === 0) {
+        console.log("[Relay] No pending BridgeInRequests to process");
+        return;
+      }
+
+      console.log(`[Relay] Found ${pendingRequests.length} pending BridgeInRequests — completing...`);
+
+      for (const req of pendingRequests) {
+        const nonce = Number(req.payload.nonce);
+        // Skip test/cancelled nonces (e.g., 999)
+        if (nonce >= 900) {
+          console.log(`[Relay] Skipping nonce ${nonce} (test/special)`);
+          continue;
+        }
+        await this.completeBridgeInAndMintMusd(
+          nonce,
+          req.payload.amount,
+          req.payload.user || req.payload.operator
+        );
+      }
+    } catch (error: any) {
+      console.error(`[Relay] Failed to process pending BridgeInRequests: ${error.message}`);
     }
   }
 

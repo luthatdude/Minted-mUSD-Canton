@@ -647,7 +647,7 @@ test_BridgeAssignNonce = script do
       operator = op; governance = gov
       validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
-      lastNonce = 0; paused = False; observers = []
+      lastBridgeOutNonce = 0; lastBridgeInNonce = 0; paused = False; observers = []
 
   (newSvc, nonce) <- submit op do
     exerciseCmd svc Bridge_AssignNonce
@@ -656,7 +656,7 @@ test_BridgeAssignNonce = script do
 
   r <- queryContractId op newSvc
   case r of
-    Some s -> assertMsg "lastNonce 1" (s.lastNonce == 1)
+    Some s -> assertMsg "lastBridgeOutNonce 1" (s.lastBridgeOutNonce == 1)
     None -> abort "not found"
   pure ()
 
@@ -674,7 +674,7 @@ test_BridgePauseUnpause = script do
       operator = op; governance = gov
       validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
-      lastNonce = 0; paused = False; observers = []
+      lastBridgeOutNonce = 0; lastBridgeInNonce = 0; paused = False; observers = []
 
   svc2 <- submitMulti [op, gov] [] do
     exerciseCmd svc Bridge_Pause
@@ -710,7 +710,7 @@ test_BridgeUpdateValidators = script do
       operator = op; governance = gov
       validators = [op]; requiredSignatures = 1; minValidators = Some 1
       totalBridgedIn = 0.0; totalBridgedOut = 0.0
-      lastNonce = 0; paused = False; observers = []
+      lastBridgeOutNonce = 0; lastBridgeInNonce = 0; paused = False; observers = []
 
   svc2 <- submitMulti [op, gov] [] do
     exerciseCmd svc Bridge_UpdateValidators with
@@ -751,13 +751,28 @@ test_AttestationSignAndComplete = script do
       requiredSignatures = 2
       direction = CantonToEthereum
 
+  -- CRIT-01: Validators must create self-attestations before signing
+  selfAttest1 <- submit v1 do
+    createCmd ValidatorSelfAttestation with
+      validator = v1; aggregator = op
+      attestationId = "bridge-1"; ecdsaSignature = dummySig
+      signedAt = now
+
   attest2 <- submit v1 do
     exerciseCmd attest Attestation_Sign with
       validator = v1; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest1
+
+  selfAttest2 <- submit v2 do
+    createCmd ValidatorSelfAttestation with
+      validator = v2; aggregator = op
+      attestationId = "bridge-1"; ecdsaSignature = dummySig
+      signedAt = now
 
   attest3 <- submit v2 do
     exerciseCmd attest2 Attestation_Sign with
       validator = v2; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest2
 
   -- Now complete
   submit op do
@@ -788,14 +803,34 @@ test_AttestationDuplicateSignFails = script do
         amount = 500.0; isMint = True; nonce = 2
         chainId = 1; expiresAt = addRelTime now (hours 24)
         entropy = dummyEntropy; cantonStateHash = dummyStateHash
-      collectedSignatures = Set.fromList [v1]
-      ecdsaSignatures = [(v1, dummySig)]
+      collectedSignatures = Set.empty   -- CRIT-01: Must start empty (ensure clause)
+      ecdsaSignatures = []              -- CRIT-01: Must start empty (ensure clause)
       requiredSignatures = 1
       direction = CantonToEthereum
 
-  submitMustFail v1 do
+  -- First sign succeeds
+  selfAttest1 <- submit v1 do
+    createCmd ValidatorSelfAttestation with
+      validator = v1; aggregator = op
+      attestationId = "bridge-2"; ecdsaSignature = dummySig
+      signedAt = now
+
+  attest2 <- submit v1 do
     exerciseCmd attest Attestation_Sign with
       validator = v1; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest1
+
+  -- Second sign by same validator should fail (VALIDATOR_ALREADY_SIGNED)
+  selfAttest2 <- submit v1 do
+    createCmd ValidatorSelfAttestation with
+      validator = v1; aggregator = op
+      attestationId = "bridge-2"; ecdsaSignature = dummySig
+      signedAt = now
+
+  submitMustFail v1 do
+    exerciseCmd attest2 Attestation_Sign with
+      validator = v1; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest2
   pure ()
 
 -- ============================================================
@@ -873,13 +908,21 @@ test_BridgeOutRequestLifecycle = script do
       requiredSignatures = 1
       direction = CantonToEthereum
 
+  -- CRIT-01: Create self-attestation before signing
+  selfAttest <- submit v1 do
+    createCmd ValidatorSelfAttestation with
+      validator = v1; aggregator = op
+      attestationId = "bridge-out-42"; ecdsaSignature = dummySig
+      signedAt = now
+
   attest2 <- submit v1 do
     exerciseCmd attest Attestation_Sign with
       validator = v1; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest
 
-  -- Complete with attested proof
+  -- CRIT-03: Complete with mandatory attested proof (no longer Optional)
   req4 <- submit op do
-    exerciseCmd req3 BridgeOut_Complete with attestationCid = Some attest2
+    exerciseCmd req3 BridgeOut_Complete with attestationCid = attest2
 
   r <- queryContractId op req4
   case r of
@@ -895,6 +938,7 @@ test_BridgeInComplete : Script ()
 test_BridgeInComplete = script do
   op <- allocateParty "Operator"
   alice <- allocateParty "Alice"
+  v1 <- allocateParty "Validator1"
   now <- getTime
 
   req <- submit op do
@@ -902,9 +946,41 @@ test_BridgeInComplete = script do
       operator = op; user = alice; amount = 500.0
       feeAmount = 5.0; sourceChainId = 1; nonce = 1
       createdAt = now; status = "pending"
+      validators = [v1]; requiredSignatures = 1
 
+  -- CRIT-02: Create attestation for bridge-in completion
+  attest <- submit op do
+    createCmd AttestationRequest with
+      aggregator = op
+      validatorGroup = [v1]
+      payload = AttestationPayload with
+        attestationId = "bridge-in-1"
+        globalCantonAssets = 500.0
+        targetAddress = ethAddr
+        amount = 500.0; isMint = False; nonce = 1
+        chainId = 1; expiresAt = addRelTime now (hours 24)
+        entropy = dummyEntropy; cantonStateHash = dummyStateHash
+      collectedSignatures = Set.empty
+      ecdsaSignatures = []
+      requiredSignatures = 1
+      direction = EthereumToCanton
+
+  -- CRIT-01: Self-attestation before signing
+  selfAttest <- submit v1 do
+    createCmd ValidatorSelfAttestation with
+      validator = v1; aggregator = op
+      attestationId = "bridge-in-1"; ecdsaSignature = dummySig
+      signedAt = now
+
+  signedAttest <- submit v1 do
+    exerciseCmd attest Attestation_Sign with
+      validator = v1; ecdsaSignature = dummySig
+      selfAttestationCid = selfAttest
+
+  -- CRIT-02: Complete with attestation proof (no longer unilateral)
   req2 <- submit op do
-    exerciseCmd req BridgeIn_Complete
+    exerciseCmd req BridgeIn_Complete with
+      attestationCid = signedAttest
 
   r <- queryContractId op req2
   case r of
