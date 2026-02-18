@@ -138,10 +138,22 @@ template UserPrivacySettings
 --                     HELPER: LOOKUP OBSERVERS
 -- ============================================================
 
--- | Look up a user's privacy observers. Returns [] if no settings exist (= fully private).
--- This is called by product templates when creating user-facing contracts.
--- NOTE: Contract keys removed in LF 2.x; callers should pass settings explicitly.
--- This stub preserves backward compatibility by returning [] (fully private).
-lookupUserObservers : Party -> Party -> Update [Party]
-lookupUserObservers _operator _user = do
-  return []  -- LF 2.x: contract keys removed, default to fully private
+-- | Look up a user's privacy observers.
+-- DAML-H-02 FIX: LF 2.x removed contract key uniqueness guarantees, so
+-- lookupByKey can no longer be used to find UserPrivacySettings.
+--
+-- New approach: callers pass an Optional ContractId.
+--   Some cid → fetch the contract, validate operator/user match, return observers
+--   None     → return [] (fully private — safe default)
+--
+-- For UpdateObservers choices: user provides their settings CID explicitly.
+-- For service choices (Stake, Unstake, etc.): pass None for default privacy;
+--   users can call UpdateObservers on created contracts afterwards.
+lookupUserObservers : Party -> Party -> Optional (ContractId UserPrivacySettings) -> Update [Party]
+lookupUserObservers _operator _user None = return []  -- No settings = fully private
+lookupUserObservers operator user (Some settingsCid) = do
+  settings <- fetch settingsCid
+  -- Validate the fetched contract belongs to the correct operator/user pair
+  assertMsg "PRIVACY_SETTINGS_OPERATOR_MISMATCH" (settings.operator == operator)
+  assertMsg "PRIVACY_SETTINGS_USER_MISMATCH" (settings.user == user)
+  return settings.observers

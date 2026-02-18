@@ -25,7 +25,7 @@ module CantonSMUSD where
 
 import DA.Time
 import CantonDirectMint (CantonMUSD(..), CantonMUSD_Merge(..), Money)
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 
 -- ============================================================
@@ -52,10 +52,13 @@ template CantonSMUSD
     ensure shares > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice SMUSD_UpdateObservers : ContractId CantonSMUSD
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     -- FIX DL-C2: Use proposal pattern for safe dual-signatory transfers
@@ -199,7 +202,7 @@ template CantonStakingService
         -- Issue smUSD shares
         -- FIX D-M01: Record staked timestamp for cooldown enforcement
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
@@ -264,7 +267,7 @@ template CantonStakingService
         -- Last staker: take full vault balance (avoids rounding dust)
         let withdrawalAmount = if remainingShares <= 0.0 || poolMusd.amount <= musdAmount
               then poolMusd.amount else musdAmount
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         userMusdCid <- create CantonMUSD with
           issuer = operator
           owner = user
