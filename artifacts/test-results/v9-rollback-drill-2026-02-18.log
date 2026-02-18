@@ -1,0 +1,12 @@
+rollback_drill_timestamp=2026-02-18T06:30:00Z
+mode=tabletop_dryrun
+script=scripts/rollback-v9-to-v8.sh
+step_sequence_check=PASS
+step_1=Pause V9
+step_2=Revoke V9 CAP_MANAGER_ROLE on MUSD
+step_3=Re-grant V8 BRIDGE_ROLE on MUSD
+step_4=Unpause V8
+step_5=Relay config update to V8 bridge
+step_6=Sync V8 nonce from V9
+post_checks=health_endpoint,grafana_throughput,test_attestation,one_hour_monitoring
+result=PASS

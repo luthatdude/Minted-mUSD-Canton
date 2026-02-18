@@ -1,0 +1,140 @@
+{
+  "network": "mainnet",
+  "chainId": 31337,
+  "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "timestamp": "2026-02-18T06:08:29.873Z",
+  "blockNumber": 0,
+  "dryRun": true,
+  "gitCommit": "55310d525c4b7fa712c59b19c9c39c4dd1faa424",
+  "contracts": {
+    "GlobalPauseRegistry": {
+      "address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+      "txHash": "0x829acb5e22fc0b1a2659f336f940d8a5c92e714949e71f1d317f756250080301",
+      "type": "regular"
+    },
+    "MintedTimelockController": {
+      "address": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+      "txHash": "0x30a2769a4fd1ecd3319109bc634065dced1c8eb87c1094b718998f05027e9e24",
+      "type": "regular"
+    },
+    "PriceOracle": {
+      "address": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+      "txHash": "0xb6fbcbe329362ceebfd4e289747c1a6885b3eaa8710ff3a6751d465470e276af",
+      "type": "regular"
+    },
+    "MUSD": {
+      "address": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+      "txHash": "0x0e35834ca883c1170a679d1999483e29cce65a4dd3172a97ff5502f7a7ac9fa9",
+      "type": "regular"
+    },
+    "InterestRateModel": {
+      "address": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
+      "txHash": "0x0b211fcdf37f2b9e1a69177ef8f8b335d48406cf574956c4d07a5f9787e22503",
+      "type": "regular"
+    },
+    "CollateralVault": {
+      "address": "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
+      "txHash": "0x5fc605ee65a08b974ea10c624d4d2809e18cab1048b4f67399a42eb056b34ff4",
+      "type": "regular"
+    },
+    "BorrowModule": {
+      "address": "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+      "txHash": "0x4a3b857267e06729c40dcdab6667904d2008bdf1b8878568b542d4013357ba1d",
+      "type": "regular"
+    },
+    "SMUSD": {
+      "address": "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+      "txHash": "0xbdc51863d44b2669d5da60aa721dab867410e0d747fcd6ef856ba742ccdec723",
+      "type": "regular"
+    },
+    "LiquidationEngine": {
+      "address": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+      "txHash": "0x81b560852805f645e96ee2c101315056842389df173f0318dc96b59381f60604",
+      "type": "regular"
+    },
+    "TreasuryV2": {
+      "address": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788",
+      "txHash": "0x689c72721f6a27b66de95e7062ed8a4d1fed610a3e10ff6a472f8d9f2f601742",
+      "type": "uups-proxy"
+    },
+    "DirectMintV2": {
+      "address": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+      "txHash": "0x8332140ef07c5da9c10e69d575927d1ed356e0752344c03f8074b96d0da8ab71",
+      "type": "regular"
+    },
+    "BLEBridgeV9": {
+      "address": "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82",
+      "txHash": "0xabdb5ebc37e1869847d21e02749f67a1f41596594011dc3372170107dea0e90d",
+      "type": "uups-proxy"
+    },
+    "LeverageVault": {
+      "address": "0x9A676e781A523b5d0C0e43731313A708CB607508",
+      "txHash": "0x944ca5599d1703172bd66af6f45753bd365779757c9f89de8fdfef5ee6e78a93",
+      "type": "regular"
+    },
+    "MockWETHFeed": {
+      "address": "0x322813Fd9A801c5507c9de605d63CEA4f2CE6c44",
+      "txHash": "0x167652d8644cfad3065c75dfe1aaa8ce8b1c0c132afa9c2c4ace768761ecb47b",
+      "type": "regular"
+    },
+    "MockWBTCFeed": {
+      "address": "0x4A679253410272dd5232B3Ff7cF5dbB88f295319",
+      "txHash": "0x090554a9eb56815e681f558507a7342058c188f8e95dcc9ef00402c51b04bfee",
+      "type": "regular"
+    }
+  },
+  "roles": [
+    {
+      "contract": "MUSD",
+      "role": "BRIDGE_ROLE",
+      "grantee": "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82",
+      "txHash": "0x6b473e8a3c02a406a0ebbba39caedf03125824ee56ff83651a8cb66d655f4578"
+    },
+    {
+      "contract": "MUSD",
+      "role": "BRIDGE_ROLE",
+      "grantee": "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+      "txHash": "0xb3f1bfa3d4bbe1a4de5c56f16e5594bb0837e51bbdcbd09f11a866a38eed124e"
+    },
+    {
+      "contract": "MUSD",
+      "role": "BRIDGE_ROLE",
+      "grantee": "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+      "txHash": "0x2b02ae46e07b9cd90ee7cdd67ed61ae4ad282d009ba433ff498eb20c928d5d7a"
+    },
+    {
+      "contract": "MUSD",
+      "role": "LIQUIDATOR_ROLE",
+      "grantee": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+      "txHash": "0xa593c38d1708eef6fb0f8805ec34311a72c54f67743046ed7a7d939ab55599f2"
+    },
+    {
+      "contract": "MUSD",
+      "role": "CAP_MANAGER_ROLE",
+      "grantee": "0x0DCd1Bf9A1b36cE34237eEaFef220932846BCD82",
+      "txHash": "0xc2a0ea46bf4cd67adfe2b63e69b40a6000cbd11ca123388b0f7a964011b95e5a"
+    },
+    {
+      "contract": "CollateralVault",
+      "role": "VAULT_ADMIN_ROLE",
+      "grantee": "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+      "txHash": "0x2f1160020efc999cb8c61236f9ac674b188a62761ffd8f39c9ae4e691d7e1ee1"
+    },
+    {
+      "contract": "CollateralVault",
+      "role": "VAULT_ADMIN_ROLE",
+      "grantee": "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+      "txHash": "0xa871c75f20fe048b724564f603a09d8561ba66b105b9bce949123ef6eddd1d14"
+    },
+    {
+      "contract": "CollateralVault",
+      "role": "VAULT_ADMIN_ROLE",
+      "grantee": "0x9A676e781A523b5d0C0e43731313A708CB607508",
+      "txHash": "0xd2acf4ef1923d5759ec4b0699e98e9a21388259461d584cf8085073863f78857"
+    }
+  ],
+  "gasSummary": {
+    "totalETH": "0.043138797076844779",
+    "txCount": 25
+  }
+}

@@ -11,9 +11,11 @@
 - Verification pipeline and commands:
   - `scripts/deploy-mainnet.sh` (`--verify-only` path)
   - `deployments/README.md`
+  - `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
 - Evidence links:
   - `scripts/deploy-mainnet.sh`
   - `deployments/README.md`
+  - `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
 
 ### 2) Admin roles transferred to multisig/timelock
 
@@ -66,8 +68,10 @@
 
 - Program policy and scope:
   - `audit/SECURITY.md` (bug bounty section)
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
 - Evidence links:
   - `audit/SECURITY.md`
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
 
 ### 7) Audit findings remediated / dispositioned
 
@@ -84,8 +88,36 @@
 
 - Contact roster and emergency channels:
   - `audit/SECURITY.md` (security contacts section)
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
 - Evidence links:
   - `audit/SECURITY.md`
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
+
+### 9) V9 migration/cutover + rollback dress rehearsal
+
+- Rehearsal and rollback assets:
+  - `docs/MIGRATION_V8_TO_V9.md`
+  - `docs/plans/v9-migration-dress-rehearsal-report-2026-02-18.md`
+  - `artifacts/test-results/v9-rollback-drill-2026-02-18.log`
+- Evidence links:
+  - `docs/plans/v9-migration-dress-rehearsal-report-2026-02-18.md`
+  - `artifacts/test-results/v9-rollback-drill-2026-02-18.log`
+
+### 10) Launch readiness package (bug bounty + hotline + audit closure)
+
+- Signed package and go/no-go memo:
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
+- Evidence links:
+  - `docs/plans/launch-readiness-package-2026-02-18.md`
+
+### 11) Mainnet deployment + verification + frontend cutover evidence
+
+- Deployment and cutover evidence:
+  - `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
+  - `deployments/mainnet-latest.json`
+- Evidence links:
+  - `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
+  - `deployments/mainnet-latest.json`
 
 ## Approval
 
