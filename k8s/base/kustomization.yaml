@@ -43,16 +43,19 @@ resources:
   # Phase 7: Liquidation Bot
   - ../canton/bot-deployment.yaml
 
-  # Phase 8: Network Policies & PDBs
+  # Phase 8: Yield Harvest Keeper
+  - ../canton/yield-keeper-deployment.yaml
+
+  # Phase 10: Network Policies & PDBs
   - ../canton/network-policy.yaml
   - ../canton/pod-disruption-budget.yaml
 
-  # Phase 9: Monitoring
+  # Phase 11: Monitoring
   - ../monitoring/canton-health-cronjob.yaml
   - ../monitoring/prometheus-rules.yaml
   - ../monitoring/service-monitors.yaml
   - ../monitoring/grafana-dashboards.yaml
   - ../monitoring/loki-stack.yaml
 
-  # Phase 10: Backups
+  # Phase 12: Backups
   - ../canton/postgres-backup-cronjob.yaml

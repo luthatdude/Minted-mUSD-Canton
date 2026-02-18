@@ -133,6 +133,7 @@ contract TreasuryV2 is
     event StrategyWithdrawn(address indexed strategy, uint256 amount);
     event FeesAccrued(uint256 yield_, uint256 protocolFee);
     event FeesClaimed(address indexed recipient, uint256 amount);
+    event YieldHarvested(uint256 netYield, uint256 protocolFee);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
@@ -712,6 +713,75 @@ contract TreasuryV2 is
         lastRecordedValue = totalValue();
 
         emit FeesClaimed(fees.feeRecipient, toSend);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // YIELD HARVEST — Automated distribution to smUSD holders
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice View: net yield available for distribution (80% after protocol fee)
+     * @return netYield USDC amount that stays in strategies for smUSD holders
+     * @return grossYield Total yield above high-water mark
+     * @return protocolFee 20% protocol share (tracked in accruedFees, claimable separately)
+     */
+    function pendingYield() external view returns (uint256 netYield, uint256 grossYield, uint256 protocolFee) {
+        uint256 currentValue = totalValue();
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+
+        if (currentValue <= peak) return (0, 0, 0);
+
+        grossYield = currentValue - peak;
+        protocolFee = (grossYield * fees.performanceFeeBps) / BPS;
+        netYield = grossYield - protocolFee;
+    }
+
+    /**
+     * @notice Keeper-callable yield harvest: accrues fees, auto-claims if above
+     *         threshold, and redeploys idle reserve back into strategies.
+     * @dev The 80% net yield auto-compounds in strategies — smUSD share price
+     *      reflects it via globalTotalAssets() → Treasury.totalValue().
+     *      This function handles the protocol's 20% fee collection and redeployment.
+     *      Caller needs ALLOCATOR_ROLE.
+     * @return claimedFees Amount of USDC protocol fees claimed to feeRecipient
+     */
+    function harvestYield() external nonReentrant whenNotPaused onlyRole(ALLOCATOR_ROLE) returns (uint256 claimedFees) {
+        // 1. Snapshot yield for event
+        uint256 currentValue = totalValue();
+        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
+
+        // 2. Accrue protocol fees (updates peakRecordedValue + accruedFees)
+        _accrueFees();
+
+        uint256 grossYield = currentValue > peak ? currentValue - peak : 0;
+        uint256 protocolFee = grossYield > 0 ? (grossYield * fees.performanceFeeBps) / BPS : 0;
+
+        // 3. Auto-claim accrued fees if any
+        claimedFees = fees.accruedFees;
+        if (claimedFees > 0) {
+            uint256 reserve = reserveBalance();
+            if (reserve < claimedFees) {
+                _withdrawFromStrategies(claimedFees - reserve);
+            }
+            uint256 available = reserveBalance();
+            uint256 toSend = available < claimedFees ? available : claimedFees;
+            fees.accruedFees = claimedFees - toSend;
+            claimedFees = toSend;
+
+            asset.safeTransfer(fees.feeRecipient, toSend);
+            emit FeesClaimed(fees.feeRecipient, toSend);
+        }
+
+        // 4. Redeploy any excess idle reserve back into strategies
+        uint256 currentReserve = reserveBalance();
+        uint256 targetRes = targetReserve();
+        if (currentReserve > targetRes + minAutoAllocateAmount) {
+            _autoAllocate(currentReserve - targetRes);
+        }
+
+        lastRecordedValue = totalValue();
+
+        emit YieldHarvested(grossYield > protocolFee ? grossYield - protocolFee : 0, protocolFee);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

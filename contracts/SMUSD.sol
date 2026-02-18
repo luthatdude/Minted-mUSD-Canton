@@ -116,12 +116,24 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     /// @notice Last interest receipt timestamp
     uint256 public lastInterestReceiptTime;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // CRIT-01 FIX: Track yield extracted from Treasury for cross-chain distribution
+    // When YieldDistributor withdraws USDC from Treasury, totalValue() drops.
+    // This offset ensures globalTotalAssets() stays accurate during distribution.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice USDC value (6 dec) withdrawn from Treasury for yield distribution
+    ///         that hasn't yet been reflected back in Treasury strategies.
+    ///         Decremented as yield vests in SMUSD or is confirmed bridged to Canton.
+    uint256 public distributedYieldOffset;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
     event CantonSharesSynced(uint256 cantonShares, uint256 epoch, uint256 globalSharePrice);
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
+    event DistributedYieldOffsetUpdated(uint256 oldOffset, uint256 newOffset);
     /// @dev SOL-H-2: Emitted when treasury value is successfully cached
     event TreasuryCacheRefreshed(uint256 cachedValue, uint256 timestamp);
     /// @dev SOL-H-2: Emitted when treasury call fails and cache is used
@@ -342,6 +354,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
     ///      Treasury.totalValue() returns USDC (6 decimals) but
     ///      this vault's asset is mUSD (18 decimals). Must scale by 1e12.
     ///      Uses typed interface call for better error propagation and compile-time safety.
+    /// @notice CRIT-01 FIX: globalTotalAssets includes distributedYieldOffset
+    ///         so share price doesn't drop when yield is withdrawn from Treasury
+    ///         for proportional distribution to ETH and Canton pools.
     function globalTotalAssets() public view returns (uint256) {
         if (treasury == address(0)) {
             return totalAssets();
@@ -349,12 +364,16 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         // Treasury.totalValue() returns total USDC backing all mUSD (6 decimals)
         // slither-disable-next-line calls-loop
         try ITreasury(treasury).totalValue() returns (uint256 usdcValue) {
+            // CRIT-01: Add back yield that was withdrawn from Treasury for distribution
+            // but hasn't been reflected yet (vesting in SMUSD or bridged to Canton)
+            uint256 effectiveUsdc = usdcValue + distributedYieldOffset;
             // Convert USDC (6 decimals) to mUSD (18 decimals)
-            return usdcValue * 1e12;
+            return effectiveUsdc * 1e12;
         } catch {
             // SOL-H-2: Use cached treasury value instead of silently falling back to local
             if (lastKnownTreasuryValue > 0 && block.timestamp <= lastTreasuryRefreshTime + MAX_TREASURY_STALENESS) {
-                return lastKnownTreasuryValue * 1e12;
+                uint256 effectiveCached = lastKnownTreasuryValue + distributedYieldOffset;
+                return effectiveCached * 1e12;
             }
             // If cache is too stale or never set, revert to prevent incorrect accounting
             revert NoTreasury();
@@ -370,6 +389,17 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         lastKnownTreasuryValue = usdcValue;
         lastTreasuryRefreshTime = block.timestamp;
         emit TreasuryCacheRefreshed(usdcValue, block.timestamp);
+    }
+
+    /// @notice CRIT-01 FIX: Update the distributed yield offset
+    /// @dev Called by YieldDistributor when it withdraws USDC from Treasury.
+    ///      Set to the USDC amount withdrawn for distribution. Keeper decrements
+    ///      after yield finishes vesting / is confirmed bridged to Canton.
+    /// @param _offset USDC amount (6 decimals) that has been withdrawn from Treasury
+    function setDistributedYieldOffset(uint256 _offset) external onlyRole(YIELD_MANAGER_ROLE) {
+        uint256 oldOffset = distributedYieldOffset;
+        distributedYieldOffset = _offset;
+        emit DistributedYieldOffsetUpdated(oldOffset, _offset);
     }
 
     /// @notice Global share price used for both chains

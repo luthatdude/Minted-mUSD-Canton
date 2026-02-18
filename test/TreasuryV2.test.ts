@@ -701,4 +701,120 @@ describe("TreasuryV2", function () {
       ).to.be.revertedWithCustomError(treasury, "OnlyTimelock");
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // YIELD HARVEST
+  // ═══════════════════════════════════════════════════════════════════════
+
+  describe("Yield Harvest", function () {
+    it("Should return pending yield correctly", async function () {
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
+
+      // Deposit 100K
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Simulate 10K yield in strategy
+      const yieldAmount = 10_000n * ONE_USDC;
+      await usdc.mint(await strategyA.getAddress(), yieldAmount);
+
+      const [netYield, grossYield, protocolFee] = await treasury.pendingYield();
+      expect(grossYield).to.be.closeTo(yieldAmount, 100n * ONE_USDC);
+      // 20% of 10K = 2K fee
+      expect(protocolFee).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
+      // 80% of 10K = 8K net
+      expect(netYield).to.be.closeTo(8_000n * ONE_USDC, 100n * ONE_USDC);
+    });
+
+    it("Should return zero pending yield when no profit", async function () {
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
+
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      const [netYield, grossYield, protocolFee] = await treasury.pendingYield();
+      expect(grossYield).to.equal(0);
+      expect(netYield).to.equal(0);
+      expect(protocolFee).to.equal(0);
+    });
+
+    it("Should harvestYield: accrue fees, auto-claim, and emit events", async function () {
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
+
+      // Deposit 100K
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // Simulate 10K yield in strategy
+      const yieldAmount = 10_000n * ONE_USDC;
+      await usdc.mint(await strategyA.getAddress(), yieldAmount);
+
+      // Advance time past MIN_ACCRUAL_INTERVAL
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
+
+      // Harvest
+      const tx = await treasury.harvestYield();
+      const receipt = await tx.wait();
+
+      // Check events — should have FeesAccrued, FeesClaimed, YieldHarvested
+      const feesAccruedEvent = receipt!.logs.find((log) => {
+        try {
+          return treasury.interface.parseLog(log)?.name === "FeesAccrued";
+        } catch { return false; }
+      });
+      expect(feesAccruedEvent).to.not.be.undefined;
+
+      const feesClaimedEvent = receipt!.logs.find((log) => {
+        try {
+          return treasury.interface.parseLog(log)?.name === "FeesClaimed";
+        } catch { return false; }
+      });
+      expect(feesClaimedEvent).to.not.be.undefined;
+
+      const harvestEvent = receipt!.logs.find((log) => {
+        try {
+          return treasury.interface.parseLog(log)?.name === "YieldHarvested";
+        } catch { return false; }
+      });
+      expect(harvestEvent).to.not.be.undefined;
+
+      // Fee recipient should have received ~2K USDC
+      const recipientBal = await usdc.balanceOf(feeRecipient.address);
+      expect(recipientBal).to.be.closeTo(2_000n * ONE_USDC, 100n * ONE_USDC);
+
+      // Accrued fees should be 0 after harvest
+      expect(await treasury.pendingFees()).to.be.closeTo(0, 100n * ONE_USDC);
+    });
+
+    it("Should harvestYield with no yield (no-op)", async function () {
+      await timelockAddStrategy(treasury, admin, await strategyA.getAddress(), 9000, 5000, 10000, true);
+
+      const depositAmount = 100_000n * ONE_USDC;
+      await usdc.mint(vault.address, depositAmount);
+      await usdc.connect(vault).approve(await treasury.getAddress(), depositAmount);
+      await treasury.connect(vault).deposit(vault.address, depositAmount);
+
+      // No yield simulated — harvest should be a no-op
+      await ethers.provider.send("evm_increaseTime", [3601]);
+      await ethers.provider.send("evm_mine", []);
+
+      await treasury.harvestYield();
+
+      const recipientBal = await usdc.balanceOf(feeRecipient.address);
+      expect(recipientBal).to.equal(0);
+    });
+
+    it("Should revert harvestYield from non-allocator", async function () {
+      await expect(
+        treasury.connect(user).harvestYield()
+      ).to.be.revertedWithCustomError(treasury, "AccessControlUnauthorizedAccount");
+    });
+  });
 });
