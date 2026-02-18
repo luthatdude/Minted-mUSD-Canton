@@ -267,14 +267,15 @@ const BRIDGE_ABI = [
     "type": "function"
   },
   // Event: AttestationReceived (for loading processed attestation history)
+  // CX-M-02: Must match BLEBridgeV9.sol exactly — param order, types, and names
   {
     "anonymous": false,
     "inputs": [
-      { "indexed": true, "name": "attestationId", "type": "bytes32" },
+      { "indexed": true, "name": "id", "type": "bytes32" },
       { "indexed": false, "name": "cantonAssets", "type": "uint256" },
-      { "indexed": false, "name": "nonce", "type": "uint256" },
       { "indexed": false, "name": "newSupplyCap", "type": "uint256" },
-      { "indexed": false, "name": "submitter", "type": "address" }
+      { "indexed": false, "name": "nonce", "type": "uint256" },
+      { "indexed": false, "name": "timestamp", "type": "uint256" }
     ],
     "name": "AttestationReceived",
     "type": "event"
