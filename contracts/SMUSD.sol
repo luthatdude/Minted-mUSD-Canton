@@ -546,6 +546,24 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable, GlobalPausa
         return _currentUnvestedYield();
     }
 
+    /// @notice CX-C-01: Whether yield vesting is currently active.
+    /// @dev When true, totalAssets() is intentionally depressed (anti-MEV).
+    ///      ERC-4626 preview/convert functions will return slightly conservative
+    ///      values. Integrators should be aware:
+    ///        - convertToShares() returns MORE shares than "fair" global price
+    ///        - convertToAssets() returns FEWER assets than "fair" global price
+    ///      Use globalSharePrice() for canonical cross-chain pricing.
+    /// @return active True if unvested yield remains (within VESTING_DURATION)
+    /// @return remaining Seconds until vesting completes (0 if inactive)
+    /// @return unvested Amount of yield still unvested (mUSD, 18 decimals)
+    function vestingActive() external view returns (bool active, uint256 remaining, uint256 unvested) {
+        unvested = _currentUnvestedYield();
+        active = unvested > 0;
+        if (active && block.timestamp < yieldVestingEnd) {
+            remaining = yieldVestingEnd - block.timestamp;
+        }
+    }
+
     // ============================================================
     //                     EMERGENCY CONTROLS
     // ============================================================
