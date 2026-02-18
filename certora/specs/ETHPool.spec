@@ -1,6 +1,7 @@
 /// @title ETHPool Formal Verification Spec
 /// @notice Certora spec for the ETH/stablecoin staking pool
-/// @dev Verifies pool cap enforcement, share price bounds, time-lock, and accounting
+/// @dev Verifies pool cap enforcement, share price bounds, time-lock, accounting,
+///      and critical role-gated operations.
 
 // ═══════════════════════════════════════════════════════════════════
 // METHODS
@@ -19,8 +20,20 @@ methods {
     function acceptedStablecoins(address) external returns (bool) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
     function DEFAULT_ADMIN_ROLE() external returns (bytes32) envfree;
+    function PAUSER_ROLE() external returns (bytes32) envfree;
+    function STRATEGY_MANAGER_ROLE() external returns (bytes32) envfree;
     function POOL_MANAGER_ROLE() external returns (bytes32) envfree;
     function YIELD_MANAGER_ROLE() external returns (bytes32) envfree;
+
+    function stake(uint8) external;
+    function stakeWithToken(address, uint256, uint8) external;
+    function unstake(uint256) external;
+    function updateSharePrice(uint256) external;
+    function deployToStrategy(uint256) external;
+    function withdrawFromStrategy(uint256) external;
+    function setPoolCap(uint256) external;
+    function pause() external;
+    function unpause() external;
 
     // External contract summaries (HAVOC prevention)
     function _.getValueUsd(address, uint256) external => NONDET;
@@ -63,7 +76,7 @@ rule share_price_change_bounded(uint256 newPrice) {
     updateSharePrice@withrevert(e, newPrice);
     bool succeeded = !lastReverted;
 
-    // If succeeded, the price change must be within ±10%
+    // If succeeded, the price change must be within +-10%
     assert succeeded => (
         to_mathint(newPrice) <= to_mathint(oldPrice) + to_mathint(oldPrice) * to_mathint(maxChangeBps) / 10000
     ), "Share price increase must be bounded by MAX_SHARE_PRICE_CHANGE_BPS";
@@ -120,4 +133,62 @@ rule only_accepted_stablecoins(address token, uint256 amount, uint8 tier) {
 
     assert lastReverted,
         "Staking with non-accepted stablecoin must revert";
+}
+
+/// @notice pause must be PAUSER_ROLE-gated
+rule pause_requires_pauser() {
+    env e;
+    pause@withrevert(e);
+    assert !lastReverted => hasRole(PAUSER_ROLE(), e.msg.sender),
+        "pause must be PAUSER_ROLE-gated";
+}
+
+/// @notice unpause must be DEFAULT_ADMIN_ROLE-gated
+rule unpause_requires_admin() {
+    env e;
+    unpause@withrevert(e);
+    assert !lastReverted => hasRole(DEFAULT_ADMIN_ROLE(), e.msg.sender),
+        "unpause must be DEFAULT_ADMIN_ROLE-gated";
+}
+
+/// @notice deployToStrategy must be STRATEGY_MANAGER_ROLE-gated
+rule deploy_to_strategy_requires_strategy_manager(uint256 amount) {
+    env e;
+    deployToStrategy@withrevert(e, amount);
+    assert !lastReverted => hasRole(STRATEGY_MANAGER_ROLE(), e.msg.sender),
+        "deployToStrategy must be STRATEGY_MANAGER_ROLE-gated";
+}
+
+/// @notice withdrawFromStrategy must be STRATEGY_MANAGER_ROLE-gated
+rule withdraw_from_strategy_requires_strategy_manager(uint256 amount) {
+    env e;
+    withdrawFromStrategy@withrevert(e, amount);
+    assert !lastReverted => hasRole(STRATEGY_MANAGER_ROLE(), e.msg.sender),
+        "withdrawFromStrategy must be STRATEGY_MANAGER_ROLE-gated";
+}
+
+/// @notice setPoolCap stores value on success
+rule set_pool_cap_stores_on_success(uint256 newCap) {
+    env e;
+    require newCap > 0;
+    setPoolCap@withrevert(e, newCap);
+    bool succeeded = !lastReverted;
+    assert succeeded => poolCap() == newCap,
+        "setPoolCap must store the supplied cap on success";
+}
+
+/// @notice stakeWithToken must revert while paused
+rule paused_blocks_stake_with_token(address token, uint256 amount, uint8 tier) {
+    env e;
+    require paused();
+    stakeWithToken@withrevert(e, token, amount, tier);
+    assert lastReverted, "stakeWithToken must revert while paused";
+}
+
+/// @notice unstake must revert while paused
+rule paused_blocks_unstake(uint256 positionId) {
+    env e;
+    require paused();
+    unstake@withrevert(e, positionId);
+    assert lastReverted, "unstake must revert while paused";
 }

@@ -1,6 +1,6 @@
 /// @title ETHPoolYieldDistributor Formal Verification Spec
 /// @notice Certora spec for the ETH Pool yield distribution with high-water mark
-/// @dev Verifies HWM monotonicity, yield cap, maturity window, cooldown, and role separation
+/// @dev Verifies HWM monotonicity, yield cap, maturity window, cooldown, pause behavior, and role separation
 
 // ═══════════════════════════════════════════════════════════════════
 // METHODS
@@ -24,6 +24,10 @@ methods {
     function KEEPER_ROLE() external returns (bytes32) envfree;
     function GOVERNOR_ROLE() external returns (bytes32) envfree;
 
+    function distributeETHPoolYield() external;
+    function pause() external;
+    function setMaxYieldBps(uint256) external;
+
     // External contract summaries
     function _.totalValue() external => NONDET;
     function _.mint(address, uint256) external => NONDET;
@@ -35,6 +39,9 @@ methods {
 // ═══════════════════════════════════════════════════════════════════
 // RULES
 // ═══════════════════════════════════════════════════════════════════
+
+invariant max_yield_bps_within_cap()
+    maxYieldBps() <= MAX_YIELD_BPS_CAP();
 
 /// @notice totalDistributed is monotonically increasing
 rule total_distributed_monotonic() {
@@ -64,6 +71,14 @@ rule distribution_count_increments() {
 rule yield_bps_bounded() {
     assert to_mathint(maxYieldBps()) <= to_mathint(MAX_YIELD_BPS_CAP()),
         "maxYieldBps must never exceed MAX_YIELD_BPS_CAP (2000 bps)";
+}
+
+/// @notice setMaxYieldBps rejects values above cap
+rule set_max_yield_bps_rejects_above_cap(uint256 bps) {
+    env e;
+    require bps > MAX_YIELD_BPS_CAP();
+    setMaxYieldBps@withrevert(e, bps);
+    assert lastReverted, "setMaxYieldBps must reject values above MAX_YIELD_BPS_CAP";
 }
 
 /// @notice High-water mark never decreases on distribution
@@ -102,6 +117,14 @@ rule cooldown_enforced() {
 
     assert lastReverted,
         "Distribution must revert if cooldown has not elapsed";
+}
+
+/// @notice Paused contract blocks distribution
+rule paused_blocks_distribution() {
+    env e;
+    require paused();
+    distributeETHPoolYield@withrevert(e);
+    assert lastReverted, "distribution must revert while paused";
 }
 
 /// @notice yieldFirstObservedBlock resets after distribution

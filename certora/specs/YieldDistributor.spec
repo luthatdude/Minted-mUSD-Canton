@@ -1,6 +1,7 @@
 /// @title YieldDistributor Formal Verification Spec
 /// @notice Certora spec for the cross-chain yield distribution contract
-/// @dev Verifies minimum distribution, cooldown enforcement, proportional split, and monotonic counters
+/// @dev Verifies minimum distribution, cooldown enforcement, proportional split,
+///      monotonic counters, pause behavior, and governance setters.
 
 // ═══════════════════════════════════════════════════════════════════
 // METHODS
@@ -18,6 +19,12 @@ methods {
     function hasRole(bytes32, address) external returns (bool) envfree;
     function KEEPER_ROLE() external returns (bytes32) envfree;
     function GOVERNOR_ROLE() external returns (bytes32) envfree;
+
+    function distributeYield(uint256) external;
+    function setMinDistribution(uint256) external;
+    function setDistributionCooldown(uint256) external;
+    function pause() external;
+    function unpause() external;
 
     // External contract summaries
     function _.totalValue() external => NONDET;
@@ -99,6 +106,14 @@ rule cooldown_enforced(uint256 yieldUsdc) {
         "Distribution must revert if cooldown has not elapsed";
 }
 
+/// @notice Paused contract blocks distribution
+rule paused_blocks_distribution(uint256 yieldUsdc) {
+    env e;
+    require paused();
+    distributeYield@withrevert(e, yieldUsdc);
+    assert lastReverted, "distributeYield must revert while paused";
+}
+
 /// @notice Distribution below minimum is rejected
 rule minimum_distribution_enforced(uint256 yieldUsdc) {
     env e;
@@ -121,4 +136,30 @@ rule only_governor_can_pause(address caller) {
 
     assert lastReverted,
         "Non-governor must not be able to pause";
+}
+
+/// @notice unpause must be GOVERNOR_ROLE-gated
+rule unpause_requires_governor() {
+    env e;
+    unpause@withrevert(e);
+    assert !lastReverted => hasRole(GOVERNOR_ROLE(), e.msg.sender),
+        "unpause must be GOVERNOR_ROLE-gated";
+}
+
+/// @notice setMinDistribution stores the configured value on success
+rule set_min_distribution_stores(uint256 nextMin) {
+    env e;
+    setMinDistribution@withrevert(e, nextMin);
+    bool succeeded = !lastReverted;
+    assert succeeded => minDistributionUsdc() == nextMin,
+        "setMinDistribution must store the supplied value on success";
+}
+
+/// @notice setDistributionCooldown stores the configured value on success
+rule set_distribution_cooldown_stores(uint256 nextCooldown) {
+    env e;
+    setDistributionCooldown@withrevert(e, nextCooldown);
+    bool succeeded = !lastReverted;
+    assert succeeded => distributionCooldown() == nextCooldown,
+        "setDistributionCooldown must store the supplied value on success";
 }
