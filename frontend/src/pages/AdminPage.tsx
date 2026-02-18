@@ -301,7 +301,7 @@ export function AdminPage() {
         if (directMint) {
           vals.mintFee = formatBps(await directMint.mintFeeBps());
           vals.redeemFee = formatBps(await directMint.redeemFeeBps());
-          vals.accFees = formatToken(await directMint.accumulatedFees(), 6);
+          vals.accFees = formatToken(await directMint.totalAccumulatedFees(), 6);
           vals.paused = (await directMint.paused()).toString();
         }
         if (treasury) {
@@ -1524,12 +1524,15 @@ export function AdminPage() {
               Emergency Reduce Cap
             </TxButton>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <TxButton onClick={() => tx.send(() => bridge!.pause())} loading={tx.loading} disabled={!bridge} variant="danger">
               Pause Bridge
             </TxButton>
-            <TxButton onClick={() => tx.send(() => bridge!.unpause())} loading={tx.loading} disabled={!bridge} variant="secondary">
-              Unpause Bridge
+            <TxButton onClick={() => tx.send(() => bridge!.requestUnpause())} loading={tx.loading} disabled={!bridge} variant="secondary">
+              Request Unpause (24h delay)
+            </TxButton>
+            <TxButton onClick={() => tx.send(() => bridge!.executeUnpause())} loading={tx.loading} disabled={!bridge} variant="secondary">
+              Execute Unpause
             </TxButton>
           </div>
         </div>

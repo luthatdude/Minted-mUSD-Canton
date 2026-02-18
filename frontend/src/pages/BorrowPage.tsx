@@ -10,6 +10,7 @@ import { ERC20_ABI } from "@/abis/ERC20";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
 
 interface CollateralInfo {
   token: string;
@@ -38,7 +39,9 @@ export function BorrowPage() {
   const [interestRate, setInterestRate] = useState(0n);
   const [isLiquidatable, setIsLiquidatable] = useState(false);
   const [musdBalance, setMusdBalance] = useState(0n);
+  const [reloadKey, setReloadKey] = useState(0);
   const tx = useTx();
+  const [slippageBps, setSlippageBps] = useState(50);
 
   const { vault, borrow, oracle, musd, liquidation } = contracts;
 
@@ -104,7 +107,7 @@ export function BorrowPage() {
       }
     }
     load();
-  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success]);
+  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success, reloadKey]);
 
   async function handleDeposit() {
     if (!vault || !signer || !selectedToken) return;
@@ -181,6 +184,27 @@ export function BorrowPage() {
   const utilizationPct = totalCollateralUsd > 0n && debt > 0n
     ? Math.min(100, Number((debt * 10000n) / totalCollateralUsd) / 100)
     : 0;
+
+  // Testnet faucet: mint test collateral tokens (MockERC20 has public mint)
+  const [faucetLoading, setFaucetLoading] = useState(false);
+  async function handleFaucetMint() {
+    if (!signer || !selectedToken) return;
+    setFaucetLoading(true);
+    try {
+      const info = collaterals.find(c => c.token === selectedToken);
+      const decimals = info?.decimals ?? 18;
+      const faucetAmount = ethers.parseUnits("10", decimals); // 10 tokens
+      const erc20 = new ethers.Contract(selectedToken, [...ERC20_ABI, "function mint(address to, uint256 amount)"], signer);
+      const mintTx = await erc20.mint(address, faucetAmount, { gasLimit: 100_000 });
+      await mintTx.wait();
+      // Trigger data reload
+      setReloadKey(k => k + 1);
+    } catch (e: any) {
+      console.error("Faucet mint failed:", e);
+    } finally {
+      setFaucetLoading(false);
+    }
+  }
 
   // Health factor gauge (map from 1.0-3.0 to 0%-100%)
   const hfGaugePct = debt > 0n
@@ -325,6 +349,16 @@ export function BorrowPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
+                  {/* Testnet Faucet */}
+                  {action === "deposit" && selectedToken && (
+                    <button
+                      className="mt-2 w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
+                      onClick={handleFaucetMint}
+                      disabled={faucetLoading}
+                    >
+                      {faucetLoading ? "Minting..." : `🚰 Get 10 Test ${collaterals.find(c => c.token === selectedToken)?.symbol || "Tokens"}`}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -434,6 +468,11 @@ export function BorrowPage() {
                 </span>
               </TxButton>
 
+              {/* Slippage Tolerance (withdraw tab) */}
+              {action === "withdraw" && (
+                <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
+              )}
+
               {/* Transaction Status */}
               {tx.error && (
                 <div className="alert-error flex items-center gap-3">
@@ -450,7 +489,7 @@ export function BorrowPage() {
                   </svg>
                   <span className="text-sm">
                     Transaction confirmed! {tx.hash && (
-                      <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                      <a href={`https://sepolia.etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
                         View on Etherscan
                       </a>
                     )}

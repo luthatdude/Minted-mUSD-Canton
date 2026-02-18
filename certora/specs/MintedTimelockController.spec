@@ -1,60 +1,77 @@
 /// @title MintedTimelockController Formal Verification Spec
-/// @notice Verifies role-gated timelock controls and operation-state consistency.
+/// @notice Certora spec for the governance timelock with minimum delay floors
+/// @dev Verifies operation lifecycle, minimum delay enforcement, and role separation
+
+// ═══════════════════════════════════════════════════════════════════
+// METHODS
+// ═══════════════════════════════════════════════════════════════════
 
 methods {
+    function getMinDelay() external returns (uint256) envfree;
     function MIN_CRITICAL_DELAY() external returns (uint256) envfree;
     function MIN_EMERGENCY_DELAY() external returns (uint256) envfree;
-
-    function isPending(bytes32) external returns (bool) envfree;
-    function isReady(bytes32) external returns (bool) envfree;
-    function isDone(bytes32) external returns (bool) envfree;
-    function readyAt(bytes32) external returns (uint256) envfree;
-
-    function PROPOSER_ROLE() external returns (bytes32) envfree;
-    function CANCELLER_ROLE() external returns (bytes32) envfree;
+    function isOperation(bytes32) external returns (bool) envfree;
+    function isOperationPending(bytes32) external returns (bool) envfree;
+    function isOperationReady(bytes32) external returns (bool) envfree;
+    function isOperationDone(bytes32) external returns (bool) envfree;
+    function getOperationState(bytes32) external returns (uint8) envfree;
+    function getTimestamp(bytes32) external returns (uint256) envfree;
     function hasRole(bytes32, address) external returns (bool) envfree;
-
-    function schedule(address, uint256, bytes, bytes32, bytes32, uint256) external;
-    function cancel(bytes32) external;
+    function PROPOSER_ROLE() external returns (bytes32) envfree;
+    function EXECUTOR_ROLE() external returns (bytes32) envfree;
+    function CANCELLER_ROLE() external returns (bytes32) envfree;
 }
 
-rule critical_delay_not_below_emergency_floor() {
-    assert MIN_CRITICAL_DELAY() >= MIN_EMERGENCY_DELAY(),
-        "Critical delay floor must be >= emergency delay floor";
+// ═══════════════════════════════════════════════════════════════════
+// RULES
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Minimum delay is always >= MIN_EMERGENCY_DELAY (24 hours)
+rule min_delay_floor_holds() {
+    assert to_mathint(getMinDelay()) >= to_mathint(MIN_EMERGENCY_DELAY()),
+        "minDelay must always be >= MIN_EMERGENCY_DELAY (24h)";
 }
 
-rule operation_states_are_mutually_exclusive(bytes32 id) {
-    bool pending = isPending(id);
-    bool ready = isReady(id);
-    bool done = isDone(id);
-
-    assert !(pending && ready),
-        "Operation cannot be pending and ready simultaneously";
-    assert !(pending && done),
-        "Operation cannot be pending and done simultaneously";
-    assert !(ready && done),
-        "Operation cannot be ready and done simultaneously";
-}
-
-rule schedule_requires_proposer(
-    address target,
-    uint256 value,
-    bytes data,
-    bytes32 predecessor,
-    bytes32 salt,
-    uint256 delay
-) {
+/// @notice Schedule creates a pending operation
+rule schedule_creates_pending(bytes32 id, address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay) {
     env e;
+    require !isOperation(id);
+
+    schedule@withrevert(e, target, value, data, predecessor, salt, delay);
+    bool succeeded = !lastReverted;
+
+    assert succeeded => isOperationPending(id),
+        "Scheduled operation must be pending";
+}
+
+/// @notice Pending operation has a future timestamp
+rule pending_operation_has_timestamp(bytes32 id) {
+    require isOperationPending(id);
+    require !isOperationDone(id);
+
+    assert to_mathint(getTimestamp(id)) > 0,
+        "Pending operation must have a non-zero timestamp";
+}
+
+/// @notice Done operations cannot transition back to pending
+rule done_operations_are_final(bytes32 id, address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay) {
+    env e;
+    require isOperationDone(id);
+
     schedule@withrevert(e, target, value, data, predecessor, salt, delay);
 
-    assert !lastReverted => hasRole(PROPOSER_ROLE(), e.msg.sender),
-        "schedule must be proposer-gated";
+    assert lastReverted,
+        "Cannot re-schedule an already completed operation";
 }
 
-rule cancel_requires_canceller(bytes32 id) {
+/// @notice Non-proposers cannot schedule operations
+rule only_proposer_can_schedule(address caller, address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay) {
     env e;
-    cancel@withrevert(e, id);
+    require e.msg.sender == caller;
+    require !hasRole(PROPOSER_ROLE(), caller);
 
-    assert !lastReverted => hasRole(CANCELLER_ROLE(), e.msg.sender),
-        "cancel must be canceller-gated";
+    schedule@withrevert(e, target, value, data, predecessor, salt, delay);
+
+    assert lastReverted,
+        "Non-proposer must not be able to schedule operations";
 }

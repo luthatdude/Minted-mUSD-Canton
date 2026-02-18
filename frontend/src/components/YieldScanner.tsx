@@ -492,6 +492,17 @@ export function YieldScanner() {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
           <p className="text-sm text-gray-500">Scanning DeFi protocols…</p>
+          <p className="text-[10px] text-gray-600">First scan may take 15-30s while fetching live data from DefiLlama</p>
+        </div>
+      ) : !loading && pools.length === 0 && !error ? (
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <p className="text-sm text-gray-500">No pools found matching your filters.</p>
+          <button
+            onClick={refresh}
+            className="rounded-lg bg-brand-500/20 px-4 py-2 text-xs font-semibold text-brand-400 hover:bg-brand-500/30"
+          >
+            🔍 Scan Now
+          </button>
         </div>
       ) : (
         <PoolTable pools={pools} sortField={sortField} sortDir={sortDir} onSort={setSort} />

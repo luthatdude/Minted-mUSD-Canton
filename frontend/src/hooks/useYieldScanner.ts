@@ -5,7 +5,7 @@
  * auto-refresh, and returns typed pool + loop data.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { PoolResult, LoopResult, YieldScanResponse } from "@/pages/api/yields";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ function comparePools(a: PoolResult, b: PoolResult, field: SortField, dir: SortD
 export function useYieldScanner(): UseYieldScannerReturn {
   const [rawPools, setRawPools] = useState<PoolResult[]>([]);
   const [loops, setLoops] = useState<LoopResult[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scanTimestamp, setScanTimestamp] = useState<number | null>(null);
   const [poolsScanned, setPoolsScanned] = useState(0);
@@ -87,39 +87,57 @@ export function useYieldScanner(): UseYieldScannerReturn {
   const [filters, setFilters] = useState<ScannerFilters>(DEFAULT_FILTERS);
   const [sortField, setSortField] = useState<SortField>("overallScore");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ limit: "30", loops: "true" });
-      if (filters.chain) params.set("chain", filters.chain);
-      params.set("minTvl", String(filters.minTvl));
-      params.set("minApy", String(filters.minApy));
-
-      const resp = await fetch(`/api/yields?${params}`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data: YieldScanResponse = await resp.json();
-
-      setRawPools(data.pools);
-      setLoops(data.loops);
-      setScanTimestamp(data.scanTimestamp);
-      setPoolsScanned(data.poolsScanned);
-      setChainsScanned(data.chainsScanned);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [filters.chain, filters.minTvl, filters.minApy]);
-
-  // Initial fetch + auto-refresh
+  // Main data-fetching effect — re-runs when filters or refreshKey change
   useEffect(() => {
-    fetchData();
-    intervalRef.current = setInterval(fetchData, REFRESH_INTERVAL_MS);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [fetchData]);
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25_000); // 25s timeout
+
+    async function doFetch() {
+      setLoading(true);
+      setError(null);
+      try {
+        const params = new URLSearchParams({ limit: "30", loops: "true" });
+        if (filters.chain) params.set("chain", filters.chain);
+        params.set("minTvl", String(filters.minTvl));
+        params.set("minApy", String(filters.minApy));
+
+        const resp = await fetch(`/api/yields?${params}`, { signal: controller.signal });
+        if (cancelled) return;
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data: YieldScanResponse = await resp.json();
+        if (cancelled) return;
+
+        setRawPools(data.pools ?? []);
+        setLoops(data.loops ?? []);
+        setScanTimestamp(data.scanTimestamp);
+        setPoolsScanned(data.poolsScanned ?? 0);
+        setChainsScanned(data.chainsScanned ?? []);
+        setError(null);
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof DOMException && e.name === "AbortError") {
+          setError("Scan timed out — DefiLlama may be slow. Click Scan Now to retry.");
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    doFetch();
+    return () => { cancelled = true; controller.abort(); };
+  }, [filters.chain, filters.minTvl, filters.minApy, refreshKey]);
+
+  // Auto-refresh every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(() => setRefreshKey((k) => k + 1), REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   // Toggle sort direction or change sort field
   const setSort = useCallback(
@@ -152,6 +170,6 @@ export function useYieldScanner(): UseYieldScannerReturn {
     sortField,
     sortDir,
     setSort,
-    refresh: fetchData,
+    refresh: () => setRefreshKey((k) => k + 1),
   };
 }
