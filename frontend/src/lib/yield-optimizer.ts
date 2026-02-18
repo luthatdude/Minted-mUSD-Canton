@@ -51,6 +51,8 @@ export interface StrategyScore {
   stars: number;          // 1-5
   eligible: boolean;      // passes risk prefs
   source: "defillama" | "fallback";
+  /** Pendle PT maturity countdown data (only for Pendle strategies) */
+  ptMaturities?: { market: string; maturityUnix: number; label: string }[];
 }
 
 export interface RecommendedAllocation {
@@ -93,11 +95,19 @@ interface StrategyMeta {
   riskTier: number;       // 1=safest (Aave), 5=riskiest
   gasEstimateUsd: number; // typical deploy tx gas cost
   fallbackApyBps: number; // used when DefiLlama has no data
+  /** Pendle PT maturity dates — only set for Pendle-type strategies */
+  ptMaturities?: { market: string; maturityUnix: number; label: string }[];
 }
 
 const STRATEGY_META: StrategyMeta[] = [
   { key: "fluid",      name: "Fluid Stable Loop #146",          shortName: "Fluid #146",    color: "#06b6d4", riskTier: 2, gasEstimateUsd: 3.20, fallbackApyBps: 1430 },
-  { key: "pendle",     name: "Pendle Multi-Pool",               shortName: "Pendle",        color: "#8b5cf6", riskTier: 2, gasEstimateUsd: 4.80, fallbackApyBps: 1170 },
+  { key: "pendle",     name: "Pendle Multi-Pool",               shortName: "Pendle",        color: "#8b5cf6", riskTier: 2, gasEstimateUsd: 4.80, fallbackApyBps: 1170,
+    ptMaturities: [
+      { market: "PT-sUSDe",  maturityUnix: 1782518400, label: "PT-sUSDe 26Jun2026" },
+      { market: "PT-GHO",    maturityUnix: 1774742400, label: "PT-GHO 26Mar2026" },
+      { market: "PT-USDC",   maturityUnix: 1782518400, label: "PT-USDC 26Jun2026" },
+    ],
+  },
   { key: "morpho",     name: "Morpho Leveraged Loop",           shortName: "Morpho",        color: "#3b82f6", riskTier: 2, gasEstimateUsd: 2.10, fallbackApyBps: 1150 },
   { key: "eulerCross", name: "Euler V2 RLUSD/USDC Cross-Stable",shortName: "Euler xStable", color: "#10b981", riskTier: 3, gasEstimateUsd: 3.60, fallbackApyBps: 1000 },
   { key: "euler",      name: "Euler V2 Loop",                   shortName: "Euler V2",      color: "#14b8a6", riskTier: 2, gasEstimateUsd: 3.10, fallbackApyBps: 850  },
@@ -189,6 +199,7 @@ function scoreStrategy(
     stars,
     eligible,
     source,
+    ptMaturities: meta.ptMaturities,
   };
 }
 
