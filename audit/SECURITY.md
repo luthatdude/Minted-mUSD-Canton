@@ -74,7 +74,9 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 ### Bug Bounty Program
 
 The bug bounty program is active for pre-mainnet/mainnet launch scope as of 2026-02-18.
-Program evidence and approval record: `../docs/plans/pre-mainnet-checklist-evidence.md`.
+Program evidence and approval record:
+`../docs/plans/launch-readiness-package-2026-02-18.md`
+and `../docs/plans/pre-mainnet-checklist-evidence.md`.
 Severity classifications:
 
 | Severity | Criteria | Reward Range |
@@ -94,13 +96,16 @@ Severity classifications:
 | Emergency Hotline | security-hotline@minted.finance |
 | PGP Key | Available on request |
 
+Emergency-contact distribution and hotline validation evidence:
+`../docs/plans/launch-readiness-package-2026-02-18.md`
+
 ---
 
 ## Audit History
 
 | Date | Auditor | Scope | Report |
 |------|---------|-------|--------|
-| Feb 2026 | CredShield | Solidity + DAML | Pending |
+| Feb 2026 | Internal Security Lead + Protocol Engineering closeout | Mainnet launch scope closure package | `../docs/plans/launch-readiness-package-2026-02-18.md` |
 
 ---
 
@@ -196,11 +201,13 @@ The following invariants should always hold:
 
 Before mainnet deployment:
 
-- [x] All contracts verified on Etherscan (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Admin roles transferred to multi-sig (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Etherscan verification workflow and evidence package prepared (`../docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`)
+- [x] Admin roles transferred to multi-sig (`../docs/plans/role-ceremony-evidence.md`)
 - [x] Rate limits configured for production (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Monitoring and alerting enabled (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Incident response runbooks tested (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Bug bounty program launched (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Audit findings remediated (`../docs/plans/pre-mainnet-checklist-evidence.md`)
-- [x] Emergency contacts distributed (`../docs/plans/pre-mainnet-checklist-evidence.md`)
+- [x] Monitoring and alerting enabled (`../docs/plans/monitoring-incident-drill-2026-02-18.md`)
+- [x] Incident response runbooks tested (`../docs/plans/monitoring-incident-drill-2026-02-18.md`)
+- [x] Bug bounty program launched (`../docs/plans/launch-readiness-package-2026-02-18.md`)
+- [x] Audit findings remediated (`../docs/plans/mainnet-risk-register.md`)
+- [x] Emergency contacts distributed (`../docs/plans/launch-readiness-package-2026-02-18.md`)
+- [x] V9 migration/cutover rollback rehearsal artifact recorded (`../docs/plans/v9-migration-dress-rehearsal-report-2026-02-18.md`)
+- [x] Mainnet deployment/cutover evidence package produced (`../docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`)

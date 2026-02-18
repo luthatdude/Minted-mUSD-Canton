@@ -268,6 +268,18 @@ console.log(`  usedAttestationIds: ${usedAttestationIds.length} IDs`);
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Dress Rehearsal Evidence
+
+- Migration + cutover rehearsal report:
+  `docs/plans/v9-migration-dress-rehearsal-report-2026-02-18.md`
+- Deployment/cutover manifest snapshot:
+  `deployments/mainnet-latest.json`
+- Monitoring/soak drill evidence:
+  `docs/plans/monitoring-incident-drill-2026-02-18.md`
+- Rollback drill evidence:
+  `scripts/rollback-v9-to-v8.sh`,
+  `artifacts/test-results/v9-rollback-drill-2026-02-18.log`
+
 ---
 
 ## Rollback Procedure

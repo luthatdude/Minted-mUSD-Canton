@@ -455,8 +455,14 @@ GitHub Actions pipeline (`.github/workflows/ci.yml`):
 - [x] Kubernetes deployment manifests (Canton, PostgreSQL, NGINX, NetworkPolicy)
 - [x] CI/CD pipeline (Solidity, DAML, Docker, Slither, Trivy, kubeval)
 - [x] Integration tests (1500+ Solidity + 16 DAML + 29 relay tests)
-- [ ] Mainnet deployment (deployment scripts, network config, contract verification)
+- [x] Mainnet deploy/verify/cutover evidence package (dry-run manifests + verification workflow + frontend cutover checklist)
+- [ ] Live mainnet deployment transaction set and public launch announcement
 - [x] Monitoring stack (Prometheus prom-client metrics, Grafana PromQL dashboards, Alertmanager with PagerDuty/Telegram routes, docker-compose monitoring stack)
+
+Mainnet evidence links:
+- `docs/plans/mainnet-deploy-cutover-evidence-2026-02-18.md`
+- `docs/plans/v9-migration-dress-rehearsal-report-2026-02-18.md`
+- `docs/plans/launch-readiness-package-2026-02-18.md`
 
 ## Security
 
