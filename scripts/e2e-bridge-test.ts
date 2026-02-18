@@ -1,11 +1,11 @@
 /**
- * Task 6 — End-to-End Bridge Test on Sepolia
+ * Task 6 — End-to-End Bridge Test on Sepolia (v3)
  *
  * Tests:
  *   1. DirectMint: deposit USDC → mint mUSD
  *   2. Bridge ETH→Canton: burn mUSD → BridgeToCantonRequested event
  *   3. Supply cap enforcement: attempt mint beyond cap
- *   4. Canton→ETH: processAttestation (if RELAYER_ROLE upgrade is live)
+ *   4. Canton→ETH: processAttestation (2-of-2 validator signatures)
  *
  * Usage:
  *   npx hardhat run scripts/e2e-bridge-test.ts --network sepolia
@@ -15,19 +15,22 @@ import { ethers } from "hardhat";
 const ADDR = {
   musd:       "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
   usdc:       "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
-  bridge:     "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+  bridge:     "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",   // fresh bridge with correct MUSD
   directMint: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
   treasury:   "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
 };
 
+// Testnet-only: second validator for 2-of-2 signing
+const VALIDATOR2_KEY = "0x6b061339d3eec548b88e639fe85561ed6b18c2e2cda41f8b809e5a8be05da423";
+
 const CANTON_PARTY = "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+const CHAIN_ID = 11155111n; // Sepolia
 
 async function main() {
   const [signer] = await ethers.getSigners();
-  const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
 
   console.log("═".repeat(70));
-  console.log("  E2E BRIDGE TEST — Sepolia Devnet");
+  console.log("  E2E BRIDGE TEST v2 — Sepolia Devnet");
   console.log("═".repeat(70));
   console.log(`  Signer: ${signer.address}`);
   console.log(`  Balance: ${ethers.formatEther(await ethers.provider.getBalance(signer.address))} ETH`);
@@ -103,24 +106,40 @@ async function main() {
   // ═════════════════════════════════════════════════════════════════════
   console.log("── TEST 2: Bridge ETH→Canton (50 mUSD) ──");
   try {
-    // Check if bridgeToCanton exists on the current on-chain version
-    try { await bridge.bridgeOutNonce(); } catch {
-      console.log(`  ⏭️  TEST 2 SKIPPED — bridgeToCanton not in current on-chain implementation`);
-      console.log(`     Bridge upgrade pending (execute timelock after 2026-02-18T07:52:36Z)`);
-      throw new Error("SKIP");
-    }
-
     const bridgeAmount = ethers.parseUnits("50", 18);
     const supplyBeforeBridge = await musd.totalSupply();
 
-    // Approve bridge to burn our mUSD
-    const approveTx = await musd.approve(ADDR.bridge, bridgeAmount);
-    await approveTx.wait(2);
-    console.log(`  ✅ mUSD approved for bridge: ${approveTx.hash}`);
+    // Approve bridge to spend mUSD — use max allowance to rule out allowance issues
+    const approveTx = await musd.approve(ADDR.bridge, ethers.MaxUint256);
+    await approveTx.wait(1);
+    console.log(`  ✅ mUSD approved (MaxUint256): ${approveTx.hash}`);
+
+    // Verify allowance is set
+    const allowance = await musd.allowance(signer.address, ADDR.bridge);
+    console.log(`  ✅ Verified allowance: ${allowance === ethers.MaxUint256 ? "MaxUint256" : ethers.formatUnits(allowance, 18)}`);
+
+    // Verify BRIDGE_ROLE on MUSD for bridge contract
+    const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
+    const bridgeHasRole = await musd.hasRole(BRIDGE_ROLE, ADDR.bridge);
+    console.log(`  ✅ Bridge has BRIDGE_ROLE on MUSD: ${bridgeHasRole}`);
+
+    // Simulate first to catch revert reason
+    try {
+      await bridge.bridgeToCanton.staticCall(bridgeAmount, CANTON_PARTY);
+      console.log(`  ✅ staticCall simulation passed`);
+    } catch (simErr: any) {
+      console.log(`  ⚠️  staticCall failed — decoding error...`);
+      if (simErr.data) {
+        console.log(`     Error selector: ${simErr.data.slice(0, 10)}`);
+        console.log(`     Full data: ${simErr.data.slice(0, 140)}`);
+      }
+      console.log(`     Message: ${simErr.message?.slice(0, 300)}`);
+      throw simErr;
+    }
 
     // Call bridgeToCanton
     const bridgeTx = await bridge.bridgeToCanton(bridgeAmount, CANTON_PARTY);
-    const bridgeReceipt = await bridgeTx.wait(2);
+    const bridgeReceipt = await bridgeTx.wait(1);
     console.log(`  ✅ Bridge tx: ${bridgeTx.hash}`);
 
     // Parse BridgeToCantonRequested event
@@ -150,8 +169,8 @@ async function main() {
       passed++;
     }
   } catch (e: any) {
-    if (e.message === "SKIP") { /* already logged */ }
-    else { console.log(`  ❌ TEST 2 FAILED: ${e.message?.slice(0, 200)}`); failed++; }
+    console.log(`  ❌ TEST 2 FAILED: ${e.message?.slice(0, 300)}`);
+    failed++;
   }
   console.log();
 
@@ -168,7 +187,6 @@ async function main() {
     console.log(`  Headroom:       ${ethers.formatUnits(headroom, 18)}`);
 
     // Attempt to mint beyond cap via DirectMint (would require > headroom USDC)
-    // Instead, verify the math: try minting a huge amount
     const absurdAmount = ethers.parseUnits("20000000", 6); // 20M USDC — way beyond cap
     const usdcBal = await usdc.balanceOf(signer.address);
 
@@ -200,64 +218,102 @@ async function main() {
   console.log();
 
   // ═════════════════════════════════════════════════════════════════════
-  // TEST 4: Canton→ETH (processAttestation) — skip if RELAYER_ROLE pending
+  // TEST 4: Canton→ETH (processAttestation) — 2-of-N validator sigs
   // ═════════════════════════════════════════════════════════════════════
   console.log("── TEST 4: Canton→ETH (processAttestation) ──");
   try {
     const RELAYER_ROLE = await bridge.RELAYER_ROLE();
+    const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
     const hasRelayer = await bridge.hasRole(RELAYER_ROLE, signer.address);
-    console.log(`  RELAYER_ROLE defined: true`);
+    const minSigs = await bridge.minSignatures();
     console.log(`  Signer has RELAYER_ROLE: ${hasRelayer}`);
+    console.log(`  minSignatures required: ${minSigs}`);
 
-    if (hasRelayer) {
-      // Build a test attestation
-      const currentNonce = await bridge.currentNonce();
-      const timestamp = BigInt(Math.floor(Date.now() / 1000));
-      const entropy = ethers.hexlify(ethers.randomBytes(32));
-      const stateHash = ethers.hexlify(ethers.randomBytes(32));
-      const cantonAssets = ethers.parseUnits("200000", 18); // 200K
-
-      const id = ethers.keccak256(ethers.solidityPacked(
-        ["uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
-        [cantonAssets, currentNonce + 1n, entropy, stateHash, 11155111n, ADDR.bridge]
-      ));
-
-      const att = { id, cantonAssets, nonce: currentNonce + 1n, timestamp, entropy, cantonStateHash: stateHash };
-      const message = ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(
-        ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32"],
-        [att.id, att.cantonAssets, att.nonce, att.timestamp, att.entropy, att.cantonStateHash]
-      ));
-      const ethSignedMessage = ethers.hashMessage(ethers.getBytes(message));
-      const signature = await signer.signMessage(ethers.getBytes(message));
-
-      console.log(`  Attestation ID: ${id}`);
-      console.log(`  Submitting processAttestation...`);
-
-      const tx = await bridge.processAttestation(att, [signature]);
-      const receipt = await tx.wait(2);
-      console.log(`  ✅ processAttestation tx: ${tx.hash}`);
-
-      const attestEvent = receipt!.logs.find((log: any) => {
-        try { return bridge.interface.parseLog(log)?.name === "AttestationReceived"; } catch { return false; }
-      });
-      if (attestEvent) {
-        const parsed = bridge.interface.parseLog(attestEvent);
-        console.log(`  ✅ AttestationReceived: cantonAssets=${ethers.formatUnits(parsed!.args[1], 18)}, newCap=${ethers.formatUnits(parsed!.args[2], 18)}`);
-      }
-      console.log(`  ✅ TEST 4 PASSED — Canton→ETH attestation processed`);
-      passed++;
-    } else {
-      console.log(`  ⏭️  TEST 4 SKIPPED — Signer lacks RELAYER_ROLE (bridge upgrade pending)`);
-      console.log(`     Execute upgrade after timelock: PHASE=execute npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia`);
+    if (!hasRelayer) {
+      console.log(`  ⏭️  TEST 4 SKIPPED — Signer lacks RELAYER_ROLE`);
+      throw new Error("SKIP");
     }
+
+    // Create the second validator wallet from the known key
+    const validator2 = new ethers.Wallet(VALIDATOR2_KEY);
+    console.log(`  Validator 2: ${validator2.address}`);
+
+    // Verify both have VALIDATOR_ROLE (already granted during bridge deployment)
+    const signer1HasValidator = await bridge.hasRole(VALIDATOR_ROLE, signer.address);
+    const signer2HasValidator = await bridge.hasRole(VALIDATOR_ROLE, validator2.address);
+    console.log(`  Signer1 VALIDATOR_ROLE: ${signer1HasValidator}`);
+    console.log(`  Signer2 VALIDATOR_ROLE: ${signer2HasValidator}`);
+    if (!signer1HasValidator || !signer2HasValidator) {
+      console.log(`  ❌ Missing VALIDATOR_ROLE — cannot proceed`);
+      throw new Error("SKIP");
+    }
+
+    // Build attestation matching contract's expected format
+    const currentNonce = await bridge.currentNonce();
+    // Use a recent block timestamp (minus buffer) to avoid FutureTimestamp revert.
+    // Sepolia block timestamps can lag behind wall clock by a few seconds.
+    const latestBlock = await ethers.provider.getBlock("latest");
+    const timestamp = BigInt(latestBlock!.timestamp - 30); // 30s before latest block
+    const entropy = ethers.hexlify(ethers.randomBytes(32));
+    const stateHash = ethers.hexlify(ethers.randomBytes(32));
+    const cantonAssets = ethers.parseUnits("200000", 18); // 200K
+    const nonce = currentNonce + 1n;
+
+    // Attestation ID must match contract: keccak256(abi.encodePacked(nonce, cantonAssets, timestamp, entropy, cantonStateHash, chainid, address))
+    const id = ethers.keccak256(ethers.solidityPacked(
+      ["uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+      [nonce, cantonAssets, timestamp, entropy, stateHash, CHAIN_ID, ADDR.bridge]
+    ));
+
+    const att = { id, cantonAssets, nonce, timestamp, entropy, cantonStateHash: stateHash };
+    console.log(`  Attestation ID: ${id}`);
+    console.log(`  Nonce: ${nonce}, Timestamp: ${timestamp}`);
+
+    // Message hash must match contract: keccak256(abi.encodePacked(id, cantonAssets, nonce, timestamp, entropy, cantonStateHash, chainid, address))
+    const messageHash = ethers.keccak256(ethers.solidityPacked(
+      ["bytes32", "uint256", "uint256", "uint256", "bytes32", "bytes32", "uint256", "address"],
+      [att.id, att.cantonAssets, att.nonce, att.timestamp, att.entropy, att.cantonStateHash, CHAIN_ID, ADDR.bridge]
+    ));
+
+    // Sign with both validators (ethers.signMessage applies EIP-191 prefix automatically)
+    const sig1 = await signer.signMessage(ethers.getBytes(messageHash));
+    const sig2 = await validator2.signMessage(ethers.getBytes(messageHash));
+
+    // Contract requires sorted signers (ascending address order)
+    const addr1 = signer.address.toLowerCase();
+    const addr2 = validator2.address.toLowerCase();
+    const signatures = addr1 < addr2 ? [sig1, sig2] : [sig2, sig1];
+    console.log(`  Sorted validators: ${addr1 < addr2 ? "signer1, signer2" : "signer2, signer1"}`);
+
+    console.log(`  Submitting processAttestation with ${signatures.length} signatures...`);
+
+    // Simulate first
+    try {
+      await bridge.processAttestation.staticCall(att, signatures);
+      console.log(`  ✅ staticCall simulation passed`);
+    } catch (simErr: any) {
+      console.log(`  ⚠️  staticCall failed — decoding error...`);
+      if (simErr.data) console.log(`     Error selector: ${simErr.data.slice(0, 10)}`);
+      console.log(`     Message: ${simErr.message?.slice(0, 300)}`);
+      throw simErr;
+    }
+
+    const tx = await bridge.processAttestation(att, signatures);
+    const receipt = await tx.wait(2);
+    console.log(`  ✅ processAttestation tx: ${tx.hash}`);
+
+    const attestEvent = receipt!.logs.find((log: any) => {
+      try { return bridge.interface.parseLog(log)?.name === "AttestationReceived"; } catch { return false; }
+    });
+    if (attestEvent) {
+      const parsed = bridge.interface.parseLog(attestEvent);
+      console.log(`  ✅ AttestationReceived: cantonAssets=${ethers.formatUnits(parsed!.args[1], 18)}, newCap=${ethers.formatUnits(parsed!.args[2], 18)}`);
+    }
+    console.log(`  ✅ TEST 4 PASSED — Canton→ETH attestation processed`);
+    passed++;
   } catch (e: any) {
-    if (e.message?.includes("RELAYER_ROLE is not a function")) {
-      console.log(`  ⏭️  TEST 4 SKIPPED — RELAYER_ROLE not defined in on-chain version`);
-      console.log(`     Bridge upgrade pending (timelock ~14h remaining)`);
-    } else {
-      console.log(`  ❌ TEST 4 FAILED: ${e.message?.slice(0, 200)}`);
-      failed++;
-    }
+    if (e.message === "SKIP") { /* already logged */ }
+    else { console.log(`  ❌ TEST 4 FAILED: ${e.message?.slice(0, 300)}`); failed++; }
   }
   console.log();
 
@@ -271,11 +327,14 @@ async function main() {
   console.log(`  MUSD supply:     ${ethers.formatUnits(supplyFinal, 18)}`);
   console.log(`  Signer MUSD:     ${ethers.formatUnits(musdFinal, 18)}`);
   try { console.log(`  Bridge nonce:    ${await bridge.bridgeOutNonce()}`); } catch { console.log(`  Bridge nonce:    N/A (upgrade pending)`); }
+  try { console.log(`  Attest nonce:    ${await bridge.currentNonce()}`); } catch {}
   console.log();
 
   console.log("═".repeat(70));
   console.log(`  E2E BRIDGE TEST COMPLETE — ${passed} passed, ${failed} failed`);
   console.log("═".repeat(70));
+
+  if (failed > 0) process.exitCode = 1;
 }
 
 main().catch((error) => {
