@@ -142,6 +142,16 @@ describe("SMUSD", function () {
       ).to.be.revertedWithCustomError(smusd, "CooldownActive");
     });
 
+    it("should return 0 maxWithdraw/maxRedeem during cooldown, then recover after cooldown", async function () {
+      expect(await smusd.maxWithdraw(user1.address)).to.equal(0);
+      expect(await smusd.maxRedeem(user1.address)).to.equal(0);
+
+      await time.increase(COOLDOWN + 1);
+
+      expect(await smusd.maxWithdraw(user1.address)).to.be.gt(0);
+      expect(await smusd.maxRedeem(user1.address)).to.be.gt(0);
+    });
+
     it("should allow withdrawal after cooldown", async function () {
       await time.increase(COOLDOWN);
       const balanceBefore = await musd.balanceOf(user1.address);
