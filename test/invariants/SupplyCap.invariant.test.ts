@@ -18,12 +18,14 @@ describe("SupplyCap invariant behavior", function () {
     bridgeAddress = bridge.address;
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = await MUSDFactory.deploy(INITIAL_CAP);
+    musd = await MUSDFactory.deploy(INITIAL_CAP, ethers.ZeroAddress);
     await musd.waitForDeployment();
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), bridge.address);
     // CAP_MANAGER_ROLE is not required for deployer (already admin), but grant for explicitness.
     await musd.grantRole(await musd.CAP_MANAGER_ROLE(), deployer.address);
+    // Align invariant test with single-chain cap semantics.
+    await musd.setLocalCapBps(10_000);
   });
 
   it("preserves totalSupply <= supplyCap across sequential mint/burn/cap updates", async function () {
@@ -54,7 +56,7 @@ describe("SupplyCap invariant behavior", function () {
     // After reaching 750 supply and 1200 cap, minting 451 would exceed cap.
     await expect(
       musd.connect(bridge).mint(bridgeAddress, ethers.parseEther("451"))
-    ).to.be.revertedWith("EXCEEDS_CAP");
+    ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
 
     // Exact fill to cap should still succeed.
     await musd.connect(bridge).mint(bridgeAddress, ethers.parseEther("450"));
@@ -73,7 +75,7 @@ describe("SupplyCap invariant behavior", function () {
     // Under-collateralized cap mode: no new mint allowed.
     await expect(
       musd.connect(bridge).mint(bridgeAddress, ethers.parseEther("1"))
-    ).to.be.revertedWith("EXCEEDS_CAP");
+    ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
 
     // Burn down supply below cap, then minting is allowed again.
     await musd.connect(bridge).burn(bridgeAddress, ethers.parseEther("150"));
@@ -85,6 +87,6 @@ describe("SupplyCap invariant behavior", function () {
 
     await expect(
       musd.connect(bridge).mint(bridgeAddress, ethers.parseEther("1"))
-    ).to.be.revertedWith("EXCEEDS_CAP");
+    ).to.be.revertedWithCustomError(musd, "ExceedsLocalCap");
   });
 });

@@ -26,13 +26,13 @@ describe("FeeMath fuzz behavior", function () {
     await usdc.waitForDeployment();
 
     const MUSDFactory = await ethers.getContractFactory("MUSD");
-    musd = (await MUSDFactory.deploy(ethers.parseEther("1000000000"))) as MUSD;
+    musd = (await MUSDFactory.deploy(ethers.parseEther("1000000000"), ethers.ZeroAddress)) as MUSD;
     await musd.waitForDeployment();
 
     const TreasuryFactory = await ethers.getContractFactory("TreasuryV2");
     treasury = (await upgrades.deployProxy(
       TreasuryFactory,
-      [await usdc.getAddress(), deployer.address, deployer.address, feeRecipient.address],
+      [await usdc.getAddress(), deployer.address, deployer.address, feeRecipient.address, deployer.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
@@ -48,6 +48,7 @@ describe("FeeMath fuzz behavior", function () {
 
     await musd.grantRole(await musd.BRIDGE_ROLE(), await directMint.getAddress());
     await treasury.grantRole(await treasury.VAULT_ROLE(), await directMint.getAddress());
+    await directMint.grantRole(await directMint.TIMELOCK_ROLE(), deployer.address);
 
     // Large user balance to support iterative fuzz rounds.
     await usdc.mint(userAddress, 500_000_000_000n); // 500,000 USDC (6 decimals)

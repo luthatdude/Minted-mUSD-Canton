@@ -26,7 +26,7 @@ describe("Loop function gas benchmarks", function () {
     const TreasuryFactory = await ethers.getContractFactory("TreasuryV2");
     const treasury = (await upgrades.deployProxy(
       TreasuryFactory,
-      [await usdc.getAddress(), admin.address, admin.address, feeRecipient.address],
+      [await usdc.getAddress(), admin.address, admin.address, feeRecipient.address, admin.address],
       { initializer: "initialize", kind: "uups" }
     )) as unknown as TreasuryV2;
     await treasury.waitForDeployment();
