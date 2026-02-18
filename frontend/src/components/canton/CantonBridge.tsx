@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { TxButton } from "@/components/TxButton";
+import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
@@ -137,10 +139,13 @@ export function CantonBridge() {
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white">Canton Bridge</h1>
-      <p className="text-emerald-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
-      <p className="text-gray-400">Lock mUSD on Canton for Ethereum bridging, or claim bridged assets</p>
+    <div className="mx-auto max-w-6xl space-y-8">
+      <PageHeader
+        title="Canton Bridge"
+        subtitle="Bridge mUSD between Canton Network and Ethereum with multi-sig attestation security"
+        badge="Canton"
+        badgeColor="purple"
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Bridge Services" value={bridgeServices.length.toString()} />
@@ -148,21 +153,30 @@ export function CantonBridge() {
         <StatCard label="Claimable" value={claims.length.toString()} color="green" />
       </div>
 
-      <div className="card">
-        <div className="mb-6 flex border-b border-gray-700">
-          <button className={`tab ${tab === "lock" ? "tab-active" : ""}`} onClick={() => setTab("lock")}>
-            Lock for Bridge
-          </button>
-          <button className={`tab ${tab === "usdc" ? "tab-active" : ""}`} onClick={() => setTab("usdc")}>
-            USDC Bridge
-          </button>
-          <button className={`tab ${tab === "attest" ? "tab-active" : ""}`} onClick={() => setTab("attest")}>
-            Attestations
-          </button>
-          <button className={`tab ${tab === "claim" ? "tab-active" : ""}`} onClick={() => setTab("claim")}>
-            Claim
-          </button>
+      <div className="card-gradient-border overflow-hidden">
+        <div className="flex border-b border-white/10">
+          {[
+            { key: "lock" as const, label: "Lock for Bridge", icon: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" },
+            { key: "usdc" as const, label: "USDC Bridge", icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" },
+            { key: "attest" as const, label: "Attestations", icon: "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" },
+            { key: "claim" as const, label: "Claim", icon: "M5 13l4 4L19 7" },
+          ].map(({ key, label, icon }) => (
+            <button
+              key={key}
+              className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === key ? "text-white" : "text-gray-400 hover:text-white"}`}
+              onClick={() => setTab(key)}
+            >
+              <span className="flex items-center justify-center gap-2">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
+                </svg>
+                {label}
+              </span>
+              {tab === key && <span className="absolute bottom-0 left-1/2 h-0.5 w-20 -translate-x-1/2 rounded-full bg-gradient-to-r from-purple-500 to-pink-500" />}
+            </button>
+          ))}
         </div>
+        <div className="p-6">
 
         {/* USDC Bridge Tab - Loop Wallet Extension */}
         {tab === "usdc" && (
@@ -189,28 +203,20 @@ export function CantonBridge() {
                 onChange={(e) => setAmount(e.target.value)} 
               />
             </div>
-            <button
+            <TxButton
               onClick={handleUsdcBridge}
-              disabled={loading || !amount || parseFloat(amount) <= 0}
-              className="btn-primary w-full flex items-center justify-center gap-2"
+              loading={loading}
+              disabled={!amount || parseFloat(amount) <= 0}
+              variant="primary"
+              className="w-full"
             >
-              {loading ? (
-                <>
-                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Bridging...
-                </>
-              ) : (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                  Bridge USDC to Ethereum
-                </>
-              )}
-            </button>
+              <span className="flex items-center justify-center gap-2">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+                Bridge USDC to Ethereum
+              </span>
+            </TxButton>
           </div>
         )}
 
@@ -278,13 +284,15 @@ export function CantonBridge() {
                 <input type="text" className="input" placeholder="0x..." value={targetAddress} onChange={(e) => setTargetAddress(e.target.value)} />
               </div>
             </div>
-            <button
+            <TxButton
               onClick={handleLock}
-              disabled={loading || !amount || parseFloat(amount) <= 0 || !targetAddress}
-              className="btn-primary w-full"
+              loading={loading}
+              disabled={!amount || parseFloat(amount) <= 0 || !targetAddress}
+              variant="primary"
+              className="w-full"
             >
-              {loading ? "Locking on Canton..." : "Lock mUSD for Bridge"}
-            </button>
+              Lock mUSD for Bridge
+            </TxButton>
           </div>
         )}
 
@@ -292,30 +300,56 @@ export function CantonBridge() {
         {tab === "attest" && (
           <div className="space-y-3">
             {attestations.length === 0 ? (
-              <p className="text-gray-500">No pending attestations</p>
-            ) : (
-              attestations.map((att) => (
-                <div key={att.contractId} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <p className="font-mono text-xs text-gray-400">{att.contractId}</p>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-gray-500">Aggregator: </span>
-                      <span className="text-gray-300">{att.payload?.aggregator?.slice(0, 20) || "?"}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Validators: </span>
-                      <span className="text-gray-300">{att.payload?.validatorGroup?.length || 0}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Signatures: </span>
-                      <span className="text-gray-300">{att.payload?.signatures?.length || 0}</span>
-                    </div>
-                  </div>
-                  <pre className="mt-2 max-h-24 overflow-auto rounded bg-gray-900 p-2 text-xs text-gray-400">
-                    {JSON.stringify(att.payload?.payload, null, 2)}
-                  </pre>
+              <div className="text-center py-12">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-purple-500/10">
+                  <svg className="h-8 w-8 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
                 </div>
-              ))
+                <p className="text-gray-400 font-medium">No pending attestations</p>
+                <p className="text-sm text-gray-500 mt-1">Lock mUSD first to generate bridge attestations</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10">
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Contract ID</th>
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Aggregator</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Validators</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Signatures</th>
+                      <th className="text-right py-3 px-4 text-gray-400 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attestations.map((att) => {
+                      const sigs = att.payload?.signatures?.length || 0;
+                      const validators = att.payload?.validatorGroup?.length || 0;
+                      const progress = validators > 0 ? (sigs / validators) * 100 : 0;
+                      return (
+                        <tr key={att.contractId} className="border-b border-white/5 hover:bg-surface-800/50">
+                          <td className="py-3 px-4 font-mono text-xs text-gray-400">{att.contractId.slice(0, 16)}...</td>
+                          <td className="py-3 px-4 font-mono text-xs text-gray-300">{att.payload?.aggregator?.slice(0, 20) || "?"}</td>
+                          <td className="text-right py-3 px-4 text-white">{validators}</td>
+                          <td className="text-right py-3 px-4">
+                            <span className={`font-semibold ${sigs >= validators ? "text-emerald-400" : "text-yellow-400"}`}>{sigs}</span>
+                          </td>
+                          <td className="text-right py-3 px-4">
+                            <div className="flex items-center justify-end gap-2">
+                              <div className="h-2 w-16 overflow-hidden rounded-full bg-surface-700">
+                                <div className={`h-full rounded-full transition-all ${progress >= 100 ? "bg-emerald-500" : "bg-yellow-500"}`} style={{ width: `${Math.min(progress, 100)}%` }} />
+                              </div>
+                              <span className={`text-xs font-semibold ${progress >= 100 ? "text-emerald-400" : "text-yellow-400"}`}>
+                                {progress >= 100 ? "Ready" : `${progress.toFixed(0)}%`}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         )}
@@ -324,29 +358,76 @@ export function CantonBridge() {
         {tab === "claim" && (
           <div className="space-y-3">
             {claims.length === 0 ? (
-              <p className="text-gray-500">No pending claims</p>
+              <div className="text-center py-12">
+                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/10">
+                  <svg className="h-8 w-8 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <p className="text-gray-400 font-medium">No pending claims</p>
+                <p className="text-sm text-gray-500 mt-1">Bridge attestations need to finalize before claims appear</p>
+              </div>
             ) : (
               claims.map((cl) => (
-                <div key={cl.contractId} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <p className="font-mono text-xs text-gray-400">{cl.contractId}</p>
-                  <div className="mt-2 text-sm text-gray-300">
-                    Amount: {cl.payload?.amount || "?"}
+                <div key={cl.contractId} className="rounded-xl border border-white/10 bg-surface-800/50 p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
+                        <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-white">{cl.payload?.amount || "?"} mUSD</p>
+                        <p className="font-mono text-xs text-gray-500">{cl.contractId.slice(0, 24)}...</p>
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-400">Claimable</span>
                   </div>
-                  <button
+                  <TxButton
                     onClick={() => handleFinalizeClaim(cl.contractId)}
-                    disabled={loading}
-                    className="btn-primary mt-3 text-sm"
+                    loading={loading}
+                    variant="success"
+                    size="sm"
+                    className="w-full"
                   >
-                    {loading ? "Finalizing..." : "Finalize Claim"}
-                  </button>
+                    Finalize Claim
+                  </TxButton>
                 </div>
               ))
             )}
           </div>
         )}
 
-        {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
-        {result && <p className="mt-4 text-sm text-green-400">{result}</p>}
+        {error && <div className="alert-error mt-4 text-sm">{error}</div>}
+        {result && <div className="alert-success mt-4 text-sm">{result}</div>}
+        </div>
+      </div>
+
+      {/* How Canton Bridge Works */}
+      <div className="card">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
+            <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">How Canton Bridge Works</h2>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-4">
+          {[
+            { step: "1", title: "Lock mUSD", desc: "Lock mUSD on Canton Network for cross-chain bridging.", color: "purple" },
+            { step: "2", title: "Attestation", desc: "Multi-sig validators verify the lock and generate attestations.", color: "blue" },
+            { step: "3", title: "Claim", desc: "Finalize the bridge claim once attestation threshold is met.", color: "emerald" },
+            { step: "4", title: "Receive", desc: "mUSD is minted on the target chain (Ethereum, Polygon, etc).", color: "yellow" },
+          ].map(({ step, title, desc, color }) => (
+            <div key={step} className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+              <div className={`flex h-8 w-8 items-center justify-center rounded-full bg-${color}-500/20 text-${color}-400 font-bold text-sm mb-3`}>{step}</div>
+              <h3 className="font-medium text-white mb-1">{title}</h3>
+              <p className="text-sm text-gray-400">{desc}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

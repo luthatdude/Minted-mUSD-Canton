@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
@@ -289,13 +290,15 @@ export function CantonStake() {
                       </div>
                     </div>
                   </div>
-                  <button
+                  <TxButton
                     onClick={tab === "stake" ? handleSmusdStake : handleSmusdUnstake}
-                    disabled={loading || !amount || parseFloat(amount) <= 0}
-                    className="btn-primary w-full py-4 text-sm font-semibold disabled:opacity-50"
+                    loading={loading}
+                    disabled={!amount || parseFloat(amount) <= 0}
+                    variant="primary"
+                    className="w-full py-4 text-sm font-semibold"
                   >
-                    {loading ? "Processing..." : (tab === "stake" ? "Stake mUSD → smUSD" : "Unstake smUSD → mUSD")}
-                  </button>
+                    {tab === "stake" ? "Stake mUSD → smUSD" : "Unstake smUSD → mUSD"}
+                  </TxButton>
                   {error && <div className="alert-error text-sm">{error}</div>}
                   {result && <div className="alert-success text-sm">{result}</div>}
                 </div>
@@ -399,13 +402,15 @@ export function CantonStake() {
                         </div>
                       </div>
 
-                      <button
+                      <TxButton
                         onClick={handleEthPoolStake}
-                        disabled={loading || !amount || parseFloat(amount) <= 0}
-                        className="btn-primary w-full py-4 text-sm font-semibold disabled:opacity-50"
+                        loading={loading}
+                        disabled={!amount || parseFloat(amount) <= 0}
+                        variant="primary"
+                        className="w-full py-4 text-sm font-semibold"
                       >
-                        {loading ? "Processing..." : `Deposit mUSD → smUSD-E (${TIER_LABELS[lockTier]})`}
-                      </button>
+                        {`Deposit mUSD → smUSD-E (${TIER_LABELS[lockTier]})`}
+                      </TxButton>
                     </>
                   ) : (
                     <>
@@ -443,13 +448,15 @@ export function CantonStake() {
                               </div>
                             </button>
                           ))}
-                          <button
+                          <TxButton
                             onClick={handleEthPoolUnstake}
-                            disabled={loading || !selectedPositionId}
-                            className="btn-primary w-full py-4 text-sm font-semibold disabled:opacity-50"
+                            loading={loading}
+                            disabled={!selectedPositionId}
+                            variant="primary"
+                            className="w-full py-4 text-sm font-semibold"
                           >
-                            {loading ? "Processing..." : "Unstake Position"}
-                          </button>
+                            Unstake Position
+                          </TxButton>
                         </div>
                       )}
                     </>
@@ -552,21 +559,21 @@ export function CantonStake() {
                     </div>
                   )}
 
-                  <button
+                  <TxButton
                     onClick={tab === "stake" ? handleBoostDeposit : handleBoostWithdraw}
+                    loading={loading}
                     disabled={
-                      loading || !amount || parseFloat(amount) <= 0
+                      !amount || parseFloat(amount) <= 0
                       || (tab === "stake" && totalSmusd <= 0)
                       || (tab === "stake" && parseFloat(amount) > maxBoostDeposit)
                     }
-                    className="btn-primary w-full py-4 text-sm font-semibold disabled:opacity-50"
+                    variant="primary"
+                    className="w-full py-4 text-sm font-semibold"
                   >
-                    {loading
-                      ? "Processing..."
-                      : tab === "stake"
-                        ? "Deposit CantonCoin → Boost Pool"
-                        : "Withdraw from Boost Pool"}
-                  </button>
+                    {tab === "stake"
+                      ? "Deposit CantonCoin → Boost Pool"
+                      : "Withdraw from Boost Pool"}
+                  </TxButton>
 
                   {error && <div className="alert-error text-sm">{error}</div>}
                   {result && <div className="alert-success text-sm">{result}</div>}

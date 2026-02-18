@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
@@ -223,64 +224,107 @@ export function CantonMint() {
             </div>
           </div>
 
-          {/* Amount Input */}
-          <div className="space-y-2">
-            <label className="label">Amount</label>
+          {/* You Pay */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-400">You Pay</label>
+              <span className="text-xs text-gray-500">
+                Balance: {tab === "mint" ? totalUsdc.toFixed(2) : totalMusd.toFixed(2)}
+              </span>
+            </div>
             <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
-              <input
-                type="number"
-                className="w-full bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-              />
+              <div className="flex items-center gap-4">
+                <input
+                  type="number"
+                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
+                    onClick={() => setAmount(tab === "mint" ? totalUsdc.toString() : totalMusd.toString())}
+                  >MAX</button>
+                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                    <div className={`h-6 w-6 rounded-full bg-gradient-to-br ${tab === "mint" ? "from-blue-500 to-cyan-500" : "from-emerald-500 to-teal-500"}`} />
+                    <span className="font-semibold text-white">{tab === "mint" ? "USDC" : "mUSD"}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Info Box */}
+          {/* Arrow */}
+          <div className="flex justify-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
+              <svg className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+            </div>
+          </div>
+
+          {/* You Receive */}
+          <div className="space-y-3">
+            <label className="text-sm font-medium text-gray-400">You Receive</label>
+            <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+              <div className="flex items-center gap-4">
+                <span className="flex-1 text-2xl font-semibold text-white">
+                  {amount && parseFloat(amount) > 0 ? parseFloat(amount).toFixed(2) : "0.00"}
+                </span>
+                <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                  <div className={`h-6 w-6 rounded-full bg-gradient-to-br ${tab === "mint" ? "from-emerald-500 to-teal-500" : "from-blue-500 to-cyan-500"}`} />
+                  <span className="font-semibold text-white">{tab === "mint" ? "mUSD" : "USDC"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Fee Breakdown */}
           <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">Exchange Rate</span>
+              <span className="text-gray-300">1:1</span>
+            </div>
+            <div className="h-px bg-white/10" />
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">Protocol Fee</span>
+              <span className="text-emerald-400">0%</span>
+            </div>
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Mint Service</span>
               <span className="font-mono text-xs text-emerald-400">
                 {serviceId ? `${serviceId.slice(0, 24)}...` : "No service found"}
               </span>
             </div>
-            <div className="divider my-2" />
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">Pattern</span>
-              <span className="text-gray-300">1:1 USDC → mUSD (Daml Ledger)</span>
-            </div>
           </div>
 
           {/* Action Button */}
-          <button
+          <TxButton
             onClick={tab === "mint" ? handleMint : handleRedeem}
-            disabled={loading || !amount || parseFloat(amount) <= 0}
-            className="btn-success w-full flex items-center justify-center gap-2"
+            loading={loading}
+            disabled={!amount || parseFloat(amount) <= 0}
+            variant="success"
+            className="w-full"
           >
-            {loading ? (
-              <>
-                <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Processing on Canton...
-              </>
-            ) : (
-              <>
-                {tab === "mint" ? (
+            <span className="flex items-center justify-center gap-2">
+              {tab === "mint" ? (
+                <>
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
                   </svg>
-                ) : (
+                  Mint mUSD
+                </>
+              ) : (
+                <>
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                )}
-                {tab === "mint" ? "Mint mUSD" : "Redeem USDC"}
-              </>
-            )}
-          </button>
+                  Redeem USDC
+                </>
+              )}
+            </span>
+          </TxButton>
 
           {/* Status Messages */}
           {error && (
