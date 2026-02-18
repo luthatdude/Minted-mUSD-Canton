@@ -17,9 +17,9 @@
 # The backup CronJob will upload each backup to this bucket after the local dump completes.
 # Ensure the pod's ServiceAccount (or IRSA / Workload Identity) has write access to this bucket.
 #
-# F-02 FIX: CI must validate these are NOT placeholder values before deployment.
-# Add to CI pipeline:
-#   grep -rq 'REPLACE_WITH_ACTUAL' k8s/canton/postgres-backup-cronjob.yaml && echo 'FAIL: backup bucket not configured' && exit 1
+# INFRA-C-02 FIX: Base config uses empty strings — environment overlays MUST patch real values.
+# CI validates: grep -rq 'REPLACE_WITH_ACTUAL' k8s/ && exit 1
+# Kustomize patches inject real bucket names per environment (see overlays/prod/kustomization.yaml).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -29,16 +29,15 @@ metadata:
     app.kubernetes.io/name: postgres-backup
     app.kubernetes.io/component: backup
   annotations:
-    # F-02: CI validation gate — deployment blocked if buckets are still placeholders
-    musd.io/requires-configuration: "BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET must be set before production deploy"
+    # INFRA-C-02: CI validation gate — deployment blocked if buckets are empty in production
+    musd.io/requires-configuration: "BACKUP_S3_BUCKET or BACKUP_GCS_BUCKET must be patched by overlay before production deploy"
 data:
-  # ⚠️ MUST be configured per-environment before production deployment.
-  # CI pipeline should fail if these contain 'REPLACE_WITH_ACTUAL'.
-  # For AWS: "my-org-musd-canton-backups-us-east-1"
-  # For GCS: "my-org-musd-canton-backups" (and use gsutil cp instead of aws s3 cp)
-  BACKUP_S3_BUCKET: "REPLACE_WITH_ACTUAL_BUCKET_NAME"
-  # For GCS-based backup (alternative to S3). Set to your GCS bucket name.
-  BACKUP_GCS_BUCKET: "REPLACE_WITH_ACTUAL_GCS_BUCKET_NAME"
+  # INFRA-C-02 FIX: Empty defaults — overlays MUST patch with real bucket names.
+  # Production overlay patches these via strategic merge patch.
+  # For AWS: "minted-musd-canton-backups-us-east-1"
+  # For GCS: "minted-musd-canton-backups"
+  BACKUP_S3_BUCKET: ""
+  BACKUP_GCS_BUCKET: ""
 ---
 # PVC for storing database backups
 apiVersion: v1
