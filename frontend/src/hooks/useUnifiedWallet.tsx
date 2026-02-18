@@ -1,4 +1,4 @@
-import { useState, useCallback, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
 import { ethers, BrowserProvider, Signer, Contract } from 'ethers';
 import { useWalletConnect, WalletConnectContextType } from './useWalletConnect';
 import { useMetaMask, MetaMaskContextType } from './useMetaMask';
@@ -63,6 +63,26 @@ export function UnifiedWalletProvider({ children }: UnifiedWalletProviderProps) 
   // Get both wallet contexts
   const walletConnect = useWalletConnect();
   const metamask = useMetaMask();
+
+  // Auto-detect wallet connections (handles page-reload auto-connect and
+  // direct provider connections that bypass connectMetaMask/connectWalletConnect)
+  useEffect(() => {
+    if (activeWallet) return; // already set by explicit connect call
+    if (metamask.isConnected && metamask.address) {
+      setActiveWallet('metamask');
+    } else if (walletConnect.isConnected && walletConnect.address) {
+      setActiveWallet('walletconnect');
+    }
+  }, [activeWallet, metamask.isConnected, metamask.address, walletConnect.isConnected, walletConnect.address]);
+
+  // Clear activeWallet when the active provider disconnects
+  useEffect(() => {
+    if (activeWallet === 'metamask' && !metamask.isConnected) {
+      setActiveWallet(null);
+    } else if (activeWallet === 'walletconnect' && !walletConnect.isConnected) {
+      setActiveWallet(null);
+    }
+  }, [activeWallet, metamask.isConnected, walletConnect.isConnected]);
   
   // Determine which wallet is active
   const isMetaMaskActive = activeWallet === 'metamask' && metamask.isConnected;
