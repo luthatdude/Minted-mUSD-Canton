@@ -33,6 +33,8 @@ import { createEthereumSigner } from "./kms-ethereum-signer";
 import * as crypto from "crypto";
 // MEDIUM-02: File-based state persistence for replay protection
 import * as fs from "fs";
+// Item-10: Prometheus metrics instrumentation
+import * as metrics from "./metrics";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
@@ -718,10 +720,12 @@ class RelayService {
         await this.processETHPoolYieldBridgeIn();
         // Reset failure counter on success
         this.consecutiveFailures = 0;
+        metrics.consecutiveFailures.set(0);
       } catch (error) {
         console.error("[Relay] Poll error:", error);
         // Failover to backup RPC on consecutive failures
         this.consecutiveFailures++;
+        metrics.consecutiveFailures.set(this.consecutiveFailures);
         if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
           console.warn(
             `[Relay] ${this.consecutiveFailures} consecutive failures — attempting provider failover`
@@ -838,12 +842,14 @@ class RelayService {
     // Check per-minute cap
     if (rl.txThisMinute >= rl.maxTxPerMinute) {
       console.warn(`[RateLimit] Per-minute cap reached (${rl.maxTxPerMinute}/min). Skipping.`);
+      metrics.validatorRateLimitHitsTotal.inc();
       return false;
     }
 
     // Check per-hour cap
     if (rl.txThisHour >= rl.maxTxPerHour) {
       console.warn(`[RateLimit] Per-hour cap reached (${rl.maxTxPerHour}/hr). Skipping.`);
+      metrics.validatorRateLimitHitsTotal.inc();
       return false;
     }
 
@@ -940,6 +946,8 @@ class RelayService {
    */
   private async recordRevert(): Promise<void> {
     this.anomalyDetector.consecutiveReverts++;
+    // Item-10: gauge for anomaly detector state
+    metrics.anomalyConsecutiveReverts.set(this.anomalyDetector.consecutiveReverts);
     if (this.anomalyDetector.consecutiveReverts >= this.anomalyDetector.maxConsecutiveReverts) {
       console.error(
         `[PauseGuardian] ${this.anomalyDetector.consecutiveReverts} consecutive reverts — auto-pausing bridge.`
@@ -964,6 +972,8 @@ class RelayService {
   private async triggerEmergencyPause(reason: string): Promise<void> {
     if (this.anomalyDetector.pauseTriggered) return;
     this.anomalyDetector.pauseTriggered = true;
+    // Item-10: flag pause in Prometheus
+    metrics.anomalyPauseTriggered.set(1);
 
     console.error(`[PauseGuardian] ⚠️  EMERGENCY PAUSE TRIGGERED: ${reason}`);
 
@@ -1007,10 +1017,12 @@ class RelayService {
   private checkNonceReplay(nonce: number, attestationId: string): boolean {
     if (this.submittedNonces.has(nonce)) {
       console.warn(`[NonceGuard] Nonce ${nonce} already submitted by this relay. Skipping duplicate.`);
+      metrics.nonceCollisionsTotal.inc();
       return false;
     }
     if (this.inFlightAttestations.has(attestationId)) {
       console.warn(`[NonceGuard] Attestation ${attestationId} already in-flight. Skipping duplicate.`);
+      metrics.nonceCollisionsTotal.inc();
       return false;
     }
     return true;
@@ -1287,6 +1299,8 @@ class RelayService {
       }
 
       console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
+      // Item-10: count bridge-outs
+      metrics.bridgeOutsTotal.inc({ status: "processing" });
 
       try {
         // Create BridgeInRequest on Canton
@@ -2028,6 +2042,8 @@ class RelayService {
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
         this.processedAttestations.add(attestationId);
+        // Item-10: Prometheus counters
+        metrics.attestationsProcessedTotal.inc({ status: "success" });
         // H-1: Record successful submission for rate limiting
         this.recordTxSubmission();
         // H-2: Reset consecutive revert counter and update cap baseline
@@ -2075,6 +2091,9 @@ class RelayService {
         }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
+        // Item-10: Prometheus counters
+        metrics.attestationsProcessedTotal.inc({ status: "revert" });
+        metrics.txRevertsTotal.inc({ operation: "attestation" });
         // H-2: Track consecutive reverts for pause guardian
         await this.recordRevert();
       }
@@ -2167,6 +2186,7 @@ class RelayService {
             rsvSignature = sig.ecdsaSignature;
           } else {
             console.warn(`[Relay] Invalid RSV signature from ${sig.validator}: bad v value`);
+            metrics.bridgeValidationFailuresTotal.inc({ reason: "bad_v_value" });
             continue;
           }
         }
@@ -2192,6 +2212,7 @@ class RelayService {
               `[Relay] CRITICAL: Signature from ${sig.validator} (${validatorEthAddress}) recovers to ${recoveredAddress}`
             );
             console.error(`[Relay] Rejecting invalid signature - possible attack or key mismatch`);
+            metrics.bridgeValidationFailuresTotal.inc({ reason: "ecrecover_mismatch" });
             continue;  // Skip this signature
           }
 
@@ -2290,7 +2311,9 @@ class RelayService {
 
 import * as http from "http";
 
-// Health server with optional bearer token authentication
+// Health server with Prometheus metrics endpoint (Item-10)
+// Replaces the legacy JSON /metrics with Prometheus text exposition format
+// so that K8s PodMonitors / ServiceMonitors can scrape correctly.
 function startHealthServer(port: number, relay: RelayService): http.Server {
   const healthToken = process.env.HEALTH_AUTH_TOKEN || "";
 
@@ -2312,6 +2335,20 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
         timestamp: new Date().toISOString(),
       }));
     } else if (req.url === "/metrics") {
+      // Item-10: Refresh relay-specific gauges before every Prometheus scrape
+      metrics.lastScannedBlock.set((relay as any).lastScannedBlock || 0);
+      metrics.activeProviderIndex.set((relay as any).activeProviderIndex || 0);
+      metrics.consecutiveFailures.set((relay as any).consecutiveFailures || 0);
+      metrics.rateLimiterTxPerMinute.set((relay as any).rateLimiter?.txThisMinute || 0);
+      metrics.rateLimiterTxPerHour.set((relay as any).rateLimiter?.txThisHour || 0);
+      metrics.inFlightAttestations.set((relay as any).inFlightAttestations?.size || 0);
+      metrics.anomalyConsecutiveReverts.set((relay as any).anomalyDetector?.consecutiveReverts || 0);
+      metrics.anomalyPauseTriggered.set((relay as any).anomalyDetector?.pauseTriggered ? 1 : 0);
+
+      // Serve Prometheus text exposition format
+      await metrics.metricsHandler(req, res);
+    } else if (req.url === "/metrics/json") {
+      // Legacy JSON endpoint preserved for backwards compatibility
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         processedCount: (relay as any).processedAttestations.size,
@@ -2319,24 +2356,16 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
         lastScannedBlock: (relay as any).lastScannedBlock,
         activeProviderIndex: (relay as any).activeProviderIndex,
         consecutiveFailures: (relay as any).consecutiveFailures,
-        // H-1: Rate limiter state
         rateLimiter: {
           txThisMinute: (relay as any).rateLimiter.txThisMinute,
           txThisHour: (relay as any).rateLimiter.txThisHour,
-          maxTxPerMinute: (relay as any).rateLimiter.maxTxPerMinute,
-          maxTxPerHour: (relay as any).rateLimiter.maxTxPerHour,
         },
-        // H-2: Anomaly detector state
         anomalyDetector: {
           consecutiveReverts: (relay as any).anomalyDetector.consecutiveReverts,
-          maxConsecutiveReverts: (relay as any).anomalyDetector.maxConsecutiveReverts,
           pauseTriggered: (relay as any).anomalyDetector.pauseTriggered,
-          maxCapChangePct: (relay as any).anomalyDetector.maxCapChangePct,
         },
-        // H-3: Nonce tracking
         submittedNonces: (relay as any).submittedNonces.size,
         inFlightAttestations: (relay as any).inFlightAttestations.size,
-        // M-1: Uptime
         uptimeSeconds: Math.floor(process.uptime()),
         memoryMB: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024),
       }));

@@ -300,17 +300,27 @@ class YieldKeeper {
   }
 
   /**
-   * Log metrics (placeholder for Prometheus/DataDog integration)
+   * Log and record Prometheus metrics (Item-10: replaces placeholder)
    */
   // TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
   private logMetrics(event: string, amount: bigint): void {
-    const metrics = {
+    const metricsPayload = {
       timestamp: new Date().toISOString(),
       event,
       amountUsdc: ethers.formatUnits(amount, 6),
       keeper: this.walletAddress,
     };
-    console.log("📈 METRICS:", JSON.stringify(metrics));
+    console.log("📈 METRICS:", JSON.stringify(metricsPayload));
+
+    // Item-10: Prometheus counters for yield distributions
+    try {
+      const metrics = require("./metrics");
+      if (event.includes("yield") || event.includes("distribute")) {
+        metrics.yieldDistributionsTotal.inc({ type: "usdc", status: "success" });
+      }
+    } catch {
+      // metrics module not available in test context — silently skip
+    }
   }
 
   /**

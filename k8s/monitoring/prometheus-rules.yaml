@@ -127,7 +127,7 @@ spec:
 
         - alert: HighBridgeVolume
           expr: |
-            sum(rate(bridge_requests_total[1h])) > 100
+            sum(rate(minted_attestations_processed_total[1h])) > 100
           for: 15m
           labels:
             severity: warning
@@ -138,7 +138,7 @@ spec:
 
         - alert: BridgeValidationFailures
           expr: |
-            sum(rate(bridge_validation_failures_total[5m])) > 0
+            sum(rate(minted_bridge_validation_failures_total[5m])) > 0
           for: 1m
           labels:
             severity: critical
@@ -149,7 +149,7 @@ spec:
 
         - alert: ValidatorSigningRateLimitHit
           expr: |
-            sum(rate(validator_signing_rate_limit_hits_total[5m])) > 0
+            sum(rate(minted_validator_rate_limit_hits_total[5m])) > 0
           for: 1m
           labels:
             severity: warning
@@ -157,6 +157,38 @@ spec:
           annotations:
             summary: "Validator signing rate limit triggered"
             description: "A validator node hit its per-hour signing limit (50/hr)."
+
+        - alert: AnomalyPauseTriggered
+          expr: minted_anomaly_detector_pause_triggered == 1
+          for: 0m
+          labels:
+            severity: critical
+            team: bridge
+          annotations:
+            summary: "Bridge anomaly detector has paused the relay"
+            description: "Emergency pause triggered — manual investigation required."
+
+        - alert: HighNonceCollisionRate
+          expr: |
+            sum(rate(minted_nonce_collisions_total[5m])) > 1
+          for: 3m
+          labels:
+            severity: warning
+            team: bridge
+          annotations:
+            summary: "High nonce collision rate detected"
+            description: "Possible duplicate attestation replay or relay desync."
+
+        - alert: HighTxRevertRate
+          expr: |
+            sum(rate(minted_tx_reverts_total[10m])) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            team: bridge
+          annotations:
+            summary: "Elevated on-chain transaction revert rate"
+            description: "More than 0.5 reverts/sec over 10 minutes — check gas, nonce, or contract state."
 
     # ──────────────────────────────────────────────────
     #  4. Price Oracle Alerts

@@ -1,0 +1,17 @@
+# Minted Protocol — Grafana Dashboard Provisioning
+# Auto-loads dashboard JSON from the dashboards directory.
+
+apiVersion: 1
+
+providers:
+  - name: Minted Protocol
+    orgId: 1
+    folder: Minted Protocol
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
