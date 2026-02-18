@@ -10,6 +10,7 @@ import { ERC20_ABI } from "@/abis/ERC20";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
 
 interface CollateralInfo {
   token: string;
@@ -40,6 +41,7 @@ export function BorrowPage() {
   const [musdBalance, setMusdBalance] = useState(0n);
   const [reloadKey, setReloadKey] = useState(0);
   const tx = useTx();
+  const [slippageBps, setSlippageBps] = useState(50);
 
   const { vault, borrow, oracle, musd, liquidation } = contracts;
 
@@ -465,6 +467,11 @@ export function BorrowPage() {
                   )}
                 </span>
               </TxButton>
+
+              {/* Slippage Tolerance (withdraw tab) */}
+              {action === "withdraw" && (
+                <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
+              )}
 
               {/* Transaction Status */}
               {tx.error && (

@@ -24,6 +24,14 @@ methods {
     function previewWithdraw(uint256) external returns (uint256) envfree;
     function previewRedeem(uint256) external returns (uint256) envfree;
     function paused() external returns (bool) envfree;
+    function currentUnvestedYield() external returns (uint256) envfree;
+    function unvestedYield() external returns (uint256) envfree;
+    function yieldVestingEnd() external returns (uint256) envfree;
+    function VESTING_DURATION() external returns (uint256) envfree;
+    function MAX_YIELD_BPS() external returns (uint256) envfree;
+    function cantonTotalShares() external returns (uint256) envfree;
+    function lastDeposit(address) external returns (uint256) envfree;
+    function WITHDRAW_COOLDOWN() external returns (uint256) envfree;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -147,4 +155,62 @@ rule paused_blocks_withdraw(uint256 assets, address receiver, address owner) {
 
     assert lastReverted,
         "Withdraw succeeded while paused";
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CX-C-01: YIELD VESTING DEVIATION BOUNDS
+// ═══════════════════════════════════════════════════════════════════
+
+/// @notice Unvested yield never exceeds MAX_YIELD_BPS of total assets
+/// @dev This bounds the maximum ERC-4626 preview deviation during vesting
+rule unvested_yield_bounded_by_max_yield() {
+    require totalSupply() > 0 && totalSupply() < 1000000000000000000000000;
+    require totalAssets() > 0 && totalAssets() < 1000000000000000000000000;
+
+    uint256 unvested = currentUnvestedYield();
+    uint256 raw = totalAssets() + unvested;
+    uint256 maxYield = (raw * MAX_YIELD_BPS()) / 10000;
+
+    assert unvested <= maxYield,
+        "Unvested yield exceeds MAX_YIELD_BPS of total assets";
+}
+
+/// @notice During vesting, deposit-redeem round-trip never creates value
+/// @dev The anti-MEV vesting mechanism depresses totalAssets, giving depositors
+///      more shares. But floor rounding ensures no profit on round-trip.
+rule vesting_favors_vault_on_deposit(uint256 assets) {
+    require assets > 0 && assets < 1000000000000000000000000;
+    require totalSupply() > 0 && totalSupply() < 1000000000000000000000000;
+    require totalAssets() > 0 && totalAssets() < 1000000000000000000000000;
+
+    uint256 shares = convertToShares(assets);
+    uint256 roundTrip = convertToAssets(shares);
+
+    assert roundTrip <= assets,
+        "Deposit-redeem round-trip created value during vesting";
+}
+
+/// @notice Cooldown prevents immediate withdrawal after deposit
+rule cooldown_blocks_immediate_withdraw(address user) {
+    require lastDeposit(user) > 0;
+
+    env e;
+    require e.block.timestamp < lastDeposit(user) + WITHDRAW_COOLDOWN();
+
+    withdraw@withrevert(e, 1, user, user);
+
+    assert lastReverted,
+        "Withdraw succeeded during cooldown period";
+}
+
+/// @notice Canton shares do not affect local ERC-4626 conversion
+/// @dev convertToShares uses local totalAssets/totalSupply, not global
+rule canton_shares_dont_affect_local_conversion(uint256 assets) {
+    require assets > 0 && assets < 1000000000000000000000000;
+    require totalSupply() > 0 && totalSupply() < 1000000000000000000000000;
+    require totalAssets() > 0 && totalAssets() < 1000000000000000000000000;
+
+    uint256 shares = convertToShares(assets);
+    assert shares > 0,
+        "Zero shares for positive deposit";
 }

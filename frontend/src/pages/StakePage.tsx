@@ -9,6 +9,7 @@ import { CONTRACTS, MUSD_DECIMALS, USDC_DECIMALS } from "@/lib/config";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 // smUSD has _decimalsOffset(3) in its ERC-4626 vault, so ERC20 decimals = 18 + 3 = 21
@@ -48,6 +49,7 @@ export function StakePage() {
   const { address, isConnected, provider } = useUnifiedWallet();
   const contracts = useWCContracts();
   const tx = useTx();
+  const [slippageBps, setSlippageBps] = useState(50);
 
   // Current timestamp (client-only to avoid hydration mismatch)
   const [nowSeconds, setNowSeconds] = useState(0);
@@ -402,6 +404,11 @@ export function StakePage() {
                       </svg>
                       <span className="text-sm">Cooldown active — {cooldownHours.toFixed(1)}h remaining before you can withdraw.</span>
                     </div>
+                  )}
+
+                  {/* Slippage Tolerance (unstake tab) */}
+                  {tab === "unstake" && (
+                    <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
                   )}
 
                   {/* Action Button */}

@@ -12,6 +12,7 @@ import WalletConnector from "@/components/WalletConnector";
 import ChainSelector from "@/components/ChainSelector";
 import { useMultiChainDeposit, DepositQuote } from "@/hooks/useMultiChainDeposit";
 import { ChainConfig, requiresBridging, estimateBridgeTime, getUSDCDecimals, USDC_DECIMALS_BY_CHAIN } from "@/lib/chains";
+import { SlippageInput } from "@/components/SlippageInput";
 
 export function MintPage() {
   const { address, isConnected } = useUnifiedWallet();
@@ -37,6 +38,7 @@ export function MintPage() {
   });
   const tx = useTx();
   const [faucetLoading, setFaucetLoading] = useState(false);
+  const [slippageBps, setSlippageBps] = useState(50);
 
   const { directMint, usdc, musd } = contracts;
 
@@ -448,6 +450,11 @@ export function MintPage() {
                     {faucetLoading ? "Minting..." : "🚰 Get 10,000 Test USDC"}
                   </button>
                 </div>
+              )}
+
+              {/* Slippage Tolerance (redeem tab) */}
+              {tab === "redeem" && (
+                <SlippageInput value={slippageBps} onChange={setSlippageBps} />
               )}
 
               {/* Action Button */}
