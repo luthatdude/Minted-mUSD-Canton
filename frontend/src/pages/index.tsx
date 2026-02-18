@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/router";
 import { Layout } from "@/components/Layout";
 import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
@@ -23,11 +24,27 @@ import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
 
 export default function Home() {
+  const router = useRouter();
   const wallet = useWalletConnect();
   const contracts = useWCContracts();
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
   const [page, setPage] = useState("dashboard");
+
+  // Keep URL in sync with active page for deep-linkable navigation
+  useEffect(() => {
+    const qp = router.query.page;
+    if (typeof qp === "string" && qp !== page) {
+      setPage(qp);
+    }
+  }, [router.query.page]);
+
+  const handleNavigate = (next: string) => {
+    setPage(next);
+    router.replace({ pathname: "/", query: next === "dashboard" ? {} : { page: next } }, undefined, {
+      shallow: true,
+    });
+  };
 
   function renderPage() {
     if (chainState.chain === "canton") {
@@ -76,7 +93,7 @@ export default function Home() {
       onConnect={wallet.connect}
       onDisconnect={wallet.disconnect}
       activePage={page}
-      onNavigate={setPage}
+      onNavigate={handleNavigate}
       chain={chainState.chain}
       onToggleChain={chainState.toggle}
       cantonParty={loopWallet.partyId}

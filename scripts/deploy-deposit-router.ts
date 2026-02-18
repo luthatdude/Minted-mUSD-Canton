@@ -11,6 +11,7 @@
  */
 
 import { ethers, network } from "hardhat";
+import { assertSafeForNetworkDeployment } from "./utils/deployGuards";
 
 // Chain-specific configuration
 const CONFIG: Record<string, {
@@ -91,6 +92,8 @@ const WORMHOLE_CHAIN_IDS: Record<string, number> = {
 };
 
 async function main() {
+  await assertSafeForNetworkDeployment("deploy-deposit-router.ts");
+
   const networkName = network.name;
   const config = CONFIG[networkName];
 

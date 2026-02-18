@@ -1,7 +1,8 @@
-import { HardhatUserConfig } from "hardhat/config";
+import { HardhatUserConfig, subtask } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 import "@openzeppelin/hardhat-upgrades";
 import * as dotenv from "dotenv";
+import { TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS } from "hardhat/builtin-tasks/task-names";
 
 dotenv.config();
 
@@ -12,6 +13,15 @@ const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || "";
 const DEPLOYER_KMS_KEY_ID = process.env.DEPLOYER_KMS_KEY_ID || "";
 const RPC_URL = process.env.RPC_URL || "";
 const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL || "";
+const FORBIDDEN_SOURCE_SEGMENTS = ["/certora/", "/harness/"] as const;
+
+subtask(TASK_COMPILE_SOLIDITY_GET_SOURCE_PATHS, async (_taskArgs, _hre, runSuper) => {
+  const sourcePaths: string[] = await runSuper();
+  return sourcePaths.filter((sourcePath) => {
+    const normalizedPath = sourcePath.replace(/\\/g, "/").toLowerCase();
+    return !FORBIDDEN_SOURCE_SEGMENTS.some((segment) => normalizedPath.includes(segment));
+  });
+});
 
 // Hard gate: reject raw private key on mainnet at config-load time
 if (MAINNET_RPC_URL && DEPLOYER_PRIVATE_KEY && !DEPLOYER_KMS_KEY_ID) {

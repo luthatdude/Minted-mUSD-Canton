@@ -35,6 +35,7 @@
 
 import { ethers, upgrades } from "hardhat";
 import { BLEBridgeV8, BLEBridgeV9, MUSD } from "../typechain-types";
+import { assertSafeForNetworkDeployment } from "./utils/deployGuards";
 
 // ============================================================
 //  SC-01: Pre-flight safety checks before migration
@@ -376,6 +377,8 @@ async function verifyMigration(
 }
 
 async function main() {
+  await assertSafeForNetworkDeployment("migrate-v8-to-v9.ts");
+
   console.log("═══════════════════════════════════════════════════════════════");
   console.log("         BLEBridgeV8 → BLEBridgeV9 Migration Script");
   console.log("═══════════════════════════════════════════════════════════════");
