@@ -294,11 +294,13 @@ async function main() {
   // SkySUSDS: 1500 bps (15%)
   // FluidLoop: 1000 bps (10%)
   // Total: 3000 + 3000 + 1500 + 1500 + 1000 = 10000 ✅
+  // autoAllocate = false: funds stay idle in Treasury reserve until admin
+  // manually calls deployToStrategy() from the admin page.
   const registrations = [
-    { name: "MetaVault",         addr: results.MetaVault,         target: 3000, min: 1000, max: 5000, auto: true },
-    { name: "MorphoLoopStrategy", addr: results.MorphoLoopStrategy, target: 1500, min: 500, max: 3000, auto: true },
-    { name: "SkySUSDSStrategy",  addr: results.SkySUSDSStrategy,  target: 1500, min: 500, max: 3000, auto: true },
-    { name: "FluidLoopStrategy", addr: results.FluidLoopStrategy, target: 1000, min: 200, max: 2000, auto: true },
+    { name: "MetaVault",         addr: results.MetaVault,         target: 3000, min: 1000, max: 5000, auto: false },
+    { name: "MorphoLoopStrategy", addr: results.MorphoLoopStrategy, target: 1500, min: 500, max: 3000, auto: false },
+    { name: "SkySUSDSStrategy",  addr: results.SkySUSDSStrategy,  target: 1500, min: 500, max: 3000, auto: false },
+    { name: "FluidLoopStrategy", addr: results.FluidLoopStrategy, target: 1000, min: 200, max: 2000, auto: false },
   ];
 
   for (const reg of registrations) {

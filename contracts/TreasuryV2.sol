@@ -13,7 +13,10 @@ import "./Errors.sol";
 
 /**
  * @title TreasuryV2
- * @notice Auto-allocating treasury that distributes deposits across strategies on mint
+ * @notice USDC treasury with manual admin-driven deployment to strategies.
+ *         Deposits stay idle in reserve until ALLOCATOR_ROLE calls deployToStrategy().
+ *         Auto-allocation only fires if strategies are registered with autoAllocate=true
+ *         (production default: false).
  * @dev When USDC comes in, it's automatically split according to target allocations.
  *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
  *
@@ -772,12 +775,8 @@ contract TreasuryV2 is
             emit FeesClaimed(fees.feeRecipient, toSend);
         }
 
-        // 4. Redeploy any excess idle reserve back into strategies
-        uint256 currentReserve = reserveBalance();
-        uint256 targetRes = targetReserve();
-        if (currentReserve > targetRes + minAutoAllocateAmount) {
-            _autoAllocate(currentReserve - targetRes);
-        }
+        // 4. Reserve stays idle — admin deploys manually via deployToStrategy()
+        // (Removed auto-redeploy: funds must not leave reserve without explicit admin action)
 
         lastRecordedValue = totalValue();
 
