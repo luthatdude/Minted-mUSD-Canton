@@ -148,7 +148,7 @@ export function BorrowPage() {
     if (!borrow || !musd || !address || debt === 0n) return;
     const repayAmount = musdBalance < debt ? musdBalance : debt;
     if (repayAmount === 0n) return;
-    
+
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < repayAmount) {
@@ -176,7 +176,7 @@ export function BorrowPage() {
 
   // Total collateral value
   const totalCollateralUsd = collaterals.reduce((sum, c) => sum + c.valueUsd, 0n);
-  
+
   // Utilization percentage (debt / max borrowable capacity)
   const utilizationPct = totalCollateralUsd > 0n && debt > 0n
     ? Math.min(100, Number((debt * 10000n) / totalCollateralUsd) / 100)
@@ -193,7 +193,7 @@ export function BorrowPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8">
       <PageHeader
         title="Borrow & Lend"
         subtitle="Deposit collateral to borrow mUSD with overcollateralization"
@@ -248,415 +248,423 @@ export function BorrowPage() {
         </div>
       )}
 
-      {/* Stats Dashboard */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Total Collateral"
-          value={formatUSD(totalCollateralUsd)}
-          color="blue"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Outstanding Debt"
-          value={formatUSD(debt)}
-          color={debt > 0n ? "red" : "default"}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Available to Borrow"
-          value={formatUSD(maxBorrowable)}
-          color="green"
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          }
-        />
-        <StatCard
-          label="Interest Rate"
-          value={formatBps(interestRate) + " APR"}
-          icon={
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          }
-        />
-      </div>
-
-      {/* Health Factor & Position Overview */}
-      {debt > 0n && (
-        <div className="card-gradient-border overflow-hidden">
-          <div className="grid gap-6 sm:grid-cols-2">
-            {/* Health Factor Gauge */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-3">
-                <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                  hfValue < 1.2 ? "bg-red-500/20" : hfValue < 1.5 ? "bg-yellow-500/20" : "bg-emerald-500/20"
-                }`}>
-                  <svg className={`h-5 w-5 ${
-                    hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
-                  }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">Health Factor</p>
-                  <p className={`text-3xl font-bold ${
-                    hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
-                  }`}>
-                    {formatHealthFactor(healthFactor)}
-                  </p>
-                </div>
-              </div>
-
-              {/* Gauge Bar */}
-              <div className="space-y-2">
-                <div className="progress">
-                  <div
-                    className={`h-full rounded-full bg-gradient-to-r ${hfGaugeColor} transition-all duration-1000`}
-                    style={{ width: `${hfGaugePct}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-xs text-gray-500">
-                  <span className="text-red-400">Liquidation (1.0)</span>
-                  <span>Caution (1.5)</span>
-                  <span className="text-emerald-400">Safe (3.0+)</span>
-                </div>
-              </div>
-
-              <div className="rounded-lg bg-surface-800/50 px-3 py-2 text-sm">
-                <span className="text-gray-400">Status: </span>
-                <span className={`font-semibold ${
-                  hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
-                }`}>
-                  {hfValue < 1.0 ? "Liquidatable" : hfValue < 1.2 ? "Critical" : hfValue < 1.5 ? "Caution" : hfValue > 10 ? "Very Safe" : "Healthy"}
-                </span>
-              </div>
+      {/* Two-Column Grid: Action Card (left) + Stats/Health/Collateral (right) */}
+      <div className="grid gap-8 lg:grid-cols-2">
+        {/* LEFT column: Action Card */}
+        <div>
+          <div className="card-gradient-border overflow-hidden">
+            {/* Tabs */}
+            <div className="flex border-b border-white/10">
+              {(["deposit", "borrow", "repay", "withdraw"] as const).map((a) => {
+                const tabIcons: Record<TabType, JSX.Element> = {
+                  deposit: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                    </svg>
+                  ),
+                  borrow: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
+                    </svg>
+                  ),
+                  repay: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  ),
+                  withdraw: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                  ),
+                };
+                return (
+                  <button
+                    key={a}
+                    className={`relative flex-1 px-4 py-4 text-center text-sm font-semibold transition-all duration-300 ${
+                      action === a ? "text-white" : "text-gray-400 hover:text-white"
+                    }`}
+                    onClick={() => { setAction(a); setAmount(""); }}
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2 capitalize">
+                      {tabIcons[a]}
+                      {a}
+                    </span>
+                    {action === a && (
+                      <span className="absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-500 to-purple-500" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
-            {/* Position Summary */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20">
-                  <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
+            {/* Form Content */}
+            <div className="space-y-6 p-6">
+              {/* Token Selector for deposit/withdraw */}
+              {(action === "deposit" || action === "withdraw") && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-400">Collateral Token</label>
+                  <div className="relative">
+                    <select
+                      className="input appearance-none pr-10"
+                      value={selectedToken}
+                      onChange={(e) => setSelectedToken(e.target.value)}
+                    >
+                      {collaterals.map((c) => (
+                        <option key={c.token} value={c.token}>
+                          {c.symbol} {c.deposited > 0n ? `(${formatToken(c.deposited, c.decimals)} deposited)` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <svg className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
                 </div>
-                <p className="text-sm text-gray-400">Position Summary</p>
+              )}
+
+              {/* Amount Input */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-400">
+                    {action === "deposit" ? "Deposit Amount" : action === "borrow" ? "Borrow Amount (mUSD)" : action === "repay" ? "Repay Amount (mUSD)" : "Withdraw Amount"}
+                  </label>
+                  {action === "borrow" && (
+                    <span className="text-xs text-gray-500">Max: {formatUSD(maxBorrowable)}</span>
+                  )}
+                  {action === "repay" && (
+                    <span className="text-xs text-gray-500">Debt: {formatUSD(debt)}</span>
+                  )}
+                </div>
+                <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="number"
+                      className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                      placeholder="0.00"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      {action === "borrow" && maxBorrowable > 0n && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(ethers.formatUnits(maxBorrowable, MUSD_DECIMALS))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "repay" && debt > 0n && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(ethers.formatUnits(musdBalance < debt ? musdBalance : debt, MUSD_DECIMALS))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                        <div className={`h-6 w-6 rounded-full ${
+                          action === "borrow" || action === "repay"
+                            ? "bg-gradient-to-br from-brand-500 to-purple-500"
+                            : "bg-gradient-to-br from-blue-500 to-cyan-500"
+                        }`} />
+                        <span className="font-semibold text-white">
+                          {action === "borrow" || action === "repay" ? "mUSD" : collaterals.find(c => c.token === selectedToken)?.symbol || "Token"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Collateral Value</span>
-                  <span className="font-medium text-white">{formatUSD(totalCollateralUsd)}</span>
+              {/* Action Button */}
+              <TxButton
+                onClick={
+                  action === "deposit"
+                    ? handleDeposit
+                    : action === "borrow"
+                    ? handleBorrow
+                    : action === "repay"
+                    ? handleRepay
+                    : handleWithdraw
+                }
+                loading={tx.loading}
+                disabled={!amount || parseFloat(amount) <= 0}
+                variant={action === "repay" ? "secondary" : "primary"}
+                className="w-full"
+              >
+                <span className="flex items-center justify-center gap-2">
+                  {action === "deposit" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Deposit Collateral
+                    </>
+                  )}
+                  {action === "borrow" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
+                      </svg>
+                      Borrow mUSD
+                    </>
+                  )}
+                  {action === "repay" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Repay Debt
+                    </>
+                  )}
+                  {action === "withdraw" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                      </svg>
+                      Withdraw Collateral
+                    </>
+                  )}
+                </span>
+              </TxButton>
+
+              {/* Transaction Status */}
+              {tx.error && (
+                <div className="alert-error flex items-center gap-3">
+                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm">{tx.error}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Outstanding Debt</span>
-                  <span className="font-medium text-red-400">{formatUSD(debt)}</span>
-                </div>
-                <div className="divider" />
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Net Position</span>
-                  <span className="font-medium text-white">{formatUSD(totalCollateralUsd > debt ? totalCollateralUsd - debt : 0n)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Utilization</span>
-                  <span className={`font-medium ${utilizationPct > 80 ? "text-red-400" : utilizationPct > 60 ? "text-yellow-400" : "text-emerald-400"}`}>
-                    {utilizationPct.toFixed(1)}%
+              )}
+              {tx.success && (
+                <div className="alert-success flex items-center gap-3">
+                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm">
+                    Transaction confirmed! {tx.hash && (
+                      <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                        View on Etherscan
+                      </a>
+                    )}
                   </span>
                 </div>
-              </div>
-
-              {/* mUSD Balance for quick repay */}
-              <div className="flex items-center justify-between rounded-lg bg-surface-800/50 px-4 py-3">
-                <div>
-                  <p className="text-xs text-gray-400">Your mUSD</p>
-                  <p className="font-semibold text-white">{formatUSD(musdBalance)}</p>
-                </div>
-                <TxButton
-                  onClick={handleRepayMax}
-                  loading={tx.loading}
-                  disabled={musdBalance === 0n || debt === 0n}
-                  variant="secondary"
-                  className="!py-2 !px-4 text-sm"
-                >
-                  Close Position
-                </TxButton>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Collateral Positions Table */}
-      {collaterals.length > 0 && (
-        <div className="card overflow-hidden">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
-              <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-              </svg>
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-white">Collateral Positions</h2>
-              <p className="text-sm text-gray-400">{collaterals.length} supported token{collaterals.length > 1 ? "s" : ""}</p>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/10 text-gray-400">
-                  <th className="pb-3 text-left font-medium">Token</th>
-                  <th className="pb-3 text-right font-medium">Deposited</th>
-                  <th className="pb-3 text-right font-medium">USD Value</th>
-                  <th className="pb-3 text-right font-medium">LTV</th>
-                  <th className="pb-3 text-right font-medium">Liq. Threshold</th>
-                  <th className="pb-3 text-right font-medium">Penalty</th>
-                </tr>
-              </thead>
-              <tbody>
-                {collaterals.map((c) => (
-                  <tr key={c.token} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-purple-500 text-xs font-bold text-white">
-                          {c.symbol[0]}
-                        </div>
-                        <span className="font-medium text-white">{c.symbol}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 text-right text-gray-300">{formatToken(c.deposited, c.decimals)}</td>
-                    <td className="py-3 text-right font-medium text-white">{formatUSD(c.valueUsd)}</td>
-                    <td className="py-3 text-right">
-                      <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-xs font-medium text-brand-400">
-                        {formatBps(c.factorBps)}
-                      </span>
-                    </td>
-                    <td className="py-3 text-right">
-                      <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-400">
-                        {formatBps(c.liqThreshold)}
-                      </span>
-                    </td>
-                    <td className="py-3 text-right">
-                      <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
-                        {formatBps(c.liqPenalty)}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Action Card */}
-      <div className="card-gradient-border overflow-hidden">
-        {/* Tabs */}
-        <div className="flex border-b border-white/10">
-          {(["deposit", "borrow", "repay", "withdraw"] as const).map((a) => {
-            const tabIcons: Record<TabType, JSX.Element> = {
-              deposit: (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-                </svg>
-              ),
-              borrow: (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
-                </svg>
-              ),
-              repay: (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              ),
-              withdraw: (
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                </svg>
-              ),
-            };
-            return (
-              <button
-                key={a}
-                className={`relative flex-1 px-4 py-4 text-center text-sm font-semibold transition-all duration-300 ${
-                  action === a ? "text-white" : "text-gray-400 hover:text-white"
-                }`}
-                onClick={() => { setAction(a); setAmount(""); }}
-              >
-                <span className="relative z-10 flex items-center justify-center gap-2 capitalize">
-                  {tabIcons[a]}
-                  {a}
-                </span>
-                {action === a && (
-                  <span className="absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-500 to-purple-500" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Form Content */}
-        <div className="space-y-6 p-6">
-          {/* Token Selector for deposit/withdraw */}
-          {(action === "deposit" || action === "withdraw") && (
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400">Collateral Token</label>
-              <div className="relative">
-                <select
-                  className="input appearance-none pr-10"
-                  value={selectedToken}
-                  onChange={(e) => setSelectedToken(e.target.value)}
-                >
-                  {collaterals.map((c) => (
-                    <option key={c.token} value={c.token}>
-                      {c.symbol} {c.deposited > 0n ? `(${formatToken(c.deposited, c.decimals)} deposited)` : ""}
-                    </option>
-                  ))}
-                </select>
-                <svg className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-            </div>
-          )}
-
-          {/* Amount Input */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-400">
-                {action === "deposit" ? "Deposit Amount" : action === "borrow" ? "Borrow Amount (mUSD)" : action === "repay" ? "Repay Amount (mUSD)" : "Withdraw Amount"}
-              </label>
-              {action === "borrow" && (
-                <span className="text-xs text-gray-500">Max: {formatUSD(maxBorrowable)}</span>
-              )}
-              {action === "repay" && (
-                <span className="text-xs text-gray-500">Debt: {formatUSD(debt)}</span>
               )}
             </div>
-            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
-              <div className="flex items-center gap-4">
-                <input
-                  type="number"
-                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-                <div className="flex items-center gap-2">
-                  {action === "borrow" && maxBorrowable > 0n && (
-                    <button
-                      className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                      onClick={() => setAmount(ethers.formatUnits(maxBorrowable, MUSD_DECIMALS))}
-                    >
-                      MAX
-                    </button>
-                  )}
-                  {action === "repay" && debt > 0n && (
-                    <button
-                      className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                      onClick={() => setAmount(ethers.formatUnits(musdBalance < debt ? musdBalance : debt, MUSD_DECIMALS))}
-                    >
-                      MAX
-                    </button>
-                  )}
-                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
-                    <div className={`h-6 w-6 rounded-full ${
-                      action === "borrow" || action === "repay"
-                        ? "bg-gradient-to-br from-brand-500 to-purple-500"
-                        : "bg-gradient-to-br from-blue-500 to-cyan-500"
-                    }`} />
-                    <span className="font-semibold text-white">
-                      {action === "borrow" || action === "repay" ? "mUSD" : collaterals.find(c => c.token === selectedToken)?.symbol || "Token"}
+          </div>
+        </div>
+
+        {/* RIGHT column: Stats + Health Factor + Collateral Positions */}
+        <div className="space-y-4">
+          {/* Stats Dashboard */}
+          <div className="grid gap-4 grid-cols-2">
+            <StatCard
+              label="Total Collateral"
+              value={formatUSD(totalCollateralUsd)}
+              color="blue"
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Outstanding Debt"
+              value={formatUSD(debt)}
+              color={debt > 0n ? "red" : "default"}
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Available to Borrow"
+              value={formatUSD(maxBorrowable)}
+              color="green"
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Interest Rate"
+              value={formatBps(interestRate) + " APR"}
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              }
+            />
+          </div>
+
+          {/* Health Factor & Position Overview */}
+          {debt > 0n && (
+            <div className="card-gradient-border overflow-hidden">
+              <div className="grid gap-6 sm:grid-cols-2">
+                {/* Health Factor Gauge */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                      hfValue < 1.2 ? "bg-red-500/20" : hfValue < 1.5 ? "bg-yellow-500/20" : "bg-emerald-500/20"
+                    }`}>
+                      <svg className={`h-5 w-5 ${
+                        hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                      }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-400">Health Factor</p>
+                      <p className={`text-3xl font-bold ${
+                        hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                      }`}>
+                        {formatHealthFactor(healthFactor)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Gauge Bar */}
+                  <div className="space-y-2">
+                    <div className="progress">
+                      <div
+                        className={`h-full rounded-full bg-gradient-to-r ${hfGaugeColor} transition-all duration-1000`}
+                        style={{ width: `${hfGaugePct}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-xs text-gray-500">
+                      <span className="text-red-400">Liquidation (1.0)</span>
+                      <span>Caution (1.5)</span>
+                      <span className="text-emerald-400">Safe (3.0+)</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg bg-surface-800/50 px-3 py-2 text-sm">
+                    <span className="text-gray-400">Status: </span>
+                    <span className={`font-semibold ${
+                      hfValue < 1.2 ? "text-red-400" : hfValue < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                    }`}>
+                      {hfValue < 1.0 ? "Liquidatable" : hfValue < 1.2 ? "Critical" : hfValue < 1.5 ? "Caution" : hfValue > 10 ? "Very Safe" : "Healthy"}
                     </span>
+                  </div>
+                </div>
+
+                {/* Position Summary */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20">
+                      <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm text-gray-400">Position Summary</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Collateral Value</span>
+                      <span className="font-medium text-white">{formatUSD(totalCollateralUsd)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Outstanding Debt</span>
+                      <span className="font-medium text-red-400">{formatUSD(debt)}</span>
+                    </div>
+                    <div className="divider" />
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Net Position</span>
+                      <span className="font-medium text-white">{formatUSD(totalCollateralUsd > debt ? totalCollateralUsd - debt : 0n)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Utilization</span>
+                      <span className={`font-medium ${utilizationPct > 80 ? "text-red-400" : utilizationPct > 60 ? "text-yellow-400" : "text-emerald-400"}`}>
+                        {utilizationPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* mUSD Balance for quick repay */}
+                  <div className="flex items-center justify-between rounded-lg bg-surface-800/50 px-4 py-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Your mUSD</p>
+                      <p className="font-semibold text-white">{formatUSD(musdBalance)}</p>
+                    </div>
+                    <TxButton
+                      onClick={handleRepayMax}
+                      loading={tx.loading}
+                      disabled={musdBalance === 0n || debt === 0n}
+                      variant="secondary"
+                      className="!py-2 !px-4 text-sm"
+                    >
+                      Close Position
+                    </TxButton>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-
-          {/* Action Button */}
-          <TxButton
-            onClick={
-              action === "deposit"
-                ? handleDeposit
-                : action === "borrow"
-                ? handleBorrow
-                : action === "repay"
-                ? handleRepay
-                : handleWithdraw
-            }
-            loading={tx.loading}
-            disabled={!amount || parseFloat(amount) <= 0}
-            variant={action === "repay" ? "secondary" : "primary"}
-            className="w-full"
-          >
-            <span className="flex items-center justify-center gap-2">
-              {action === "deposit" && (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
-                  </svg>
-                  Deposit Collateral
-                </>
-              )}
-              {action === "borrow" && (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
-                  </svg>
-                  Borrow mUSD
-                </>
-              )}
-              {action === "repay" && (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Repay Debt
-                </>
-              )}
-              {action === "withdraw" && (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                  </svg>
-                  Withdraw Collateral
-                </>
-              )}
-            </span>
-          </TxButton>
-
-          {/* Transaction Status */}
-          {tx.error && (
-            <div className="alert-error flex items-center gap-3">
-              <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-sm">{tx.error}</span>
-            </div>
           )}
-          {tx.success && (
-            <div className="alert-success flex items-center gap-3">
-              <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-sm">
-                Transaction confirmed! {tx.hash && (
-                  <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
-                    View on Etherscan
-                  </a>
-                )}
-              </span>
+
+          {/* Collateral Positions Table */}
+          {collaterals.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="flex items-center gap-3 mb-5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
+                  <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Collateral Positions</h2>
+                  <p className="text-sm text-gray-400">{collaterals.length} supported token{collaterals.length > 1 ? "s" : ""}</p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 text-gray-400">
+                      <th className="pb-3 text-left font-medium">Token</th>
+                      <th className="pb-3 text-right font-medium">Deposited</th>
+                      <th className="pb-3 text-right font-medium">USD Value</th>
+                      <th className="pb-3 text-right font-medium">LTV</th>
+                      <th className="pb-3 text-right font-medium">Liq. Threshold</th>
+                      <th className="pb-3 text-right font-medium">Penalty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {collaterals.map((c) => (
+                      <tr key={c.token} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-purple-500 text-xs font-bold text-white">
+                              {c.symbol[0]}
+                            </div>
+                            <span className="font-medium text-white">{c.symbol}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 text-right text-gray-300">{formatToken(c.deposited, c.decimals)}</td>
+                        <td className="py-3 text-right font-medium text-white">{formatUSD(c.valueUsd)}</td>
+                        <td className="py-3 text-right">
+                          <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-xs font-medium text-brand-400">
+                            {formatBps(c.factorBps)}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right">
+                          <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-400">
+                            {formatBps(c.liqThreshold)}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right">
+                          <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
+                            {formatBps(c.liqPenalty)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
