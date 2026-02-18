@@ -105,24 +105,25 @@ describe("SMUSD", function () {
     it("should be economically unprofitable for first depositor to donate then redeem", async function () {
       const attacker = user1;
       const victim = user2;
-      const attackerBalanceBefore = await musd.balanceOf(attacker.address);
+      const initialAttackerBalance = await musd.balanceOf(attacker.address);
 
-      // Attacker becomes first depositor with tiny amount, then donates directly.
+      // First depositor uses tiny amount, then donates large amount directly to vault.
       await smusd.connect(attacker).deposit(1n, attacker.address);
-      await musd.connect(attacker).transfer(await smusd.getAddress(), ethers.parseEther("5000"));
+      const donation = ethers.parseEther("5000");
+      await musd.connect(attacker).transfer(await smusd.getAddress(), donation);
 
-      // Victim still receives shares (not rounded to zero).
-      const victimPreviewShares = await smusd.previewDeposit(ethers.parseEther("1000"));
-      expect(victimPreviewShares).to.be.gt(0);
+      // Victim can still deposit and receives non-zero shares.
+      const victimPreview = await smusd.previewDeposit(ethers.parseEther("1000"));
+      expect(victimPreview).to.be.gt(0);
       await smusd.connect(victim).deposit(ethers.parseEther("1000"), victim.address);
 
-      // After cooldown, attacker exits and should end with less mUSD than started.
+      // Attacker exits after cooldown and should still lose value overall.
       await time.increase(COOLDOWN + 1);
       const attackerShares = await smusd.balanceOf(attacker.address);
       await smusd.connect(attacker).redeem(attackerShares, attacker.address, attacker.address);
 
-      const attackerBalanceAfter = await musd.balanceOf(attacker.address);
-      expect(attackerBalanceAfter).to.be.lt(attackerBalanceBefore);
+      const finalAttackerBalance = await musd.balanceOf(attacker.address);
+      expect(finalAttackerBalance).to.be.lt(initialAttackerBalance);
     });
   });
 

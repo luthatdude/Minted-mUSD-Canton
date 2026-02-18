@@ -764,5 +764,29 @@ describe('LeverageVault', function () {
       expect(positionAfter.totalCollateral).to.equal(0);
       expect(positionAfter.totalDebt).to.equal(0);
     });
+
+    it('should revert cleanly on swap failure without leaving orphaned debt or position', async function () {
+      // Force router to revert on swap
+      await mockSwapRouter.setShouldRevert(true);
+
+      const initialDeposit = ethers.parseEther('10');
+
+      await expect(
+        leverageVault.connect(user).openLeveragedPosition(
+          await weth.getAddress(),
+          initialDeposit,
+          20,
+          5
+        )
+      ).to.be.revertedWith('SWAP_FAILED_ORPHANED_DEBT');
+
+      const position = await leverageVault.getPosition(user.address);
+      expect(position.totalCollateral).to.equal(0);
+      expect(position.totalDebt).to.equal(0);
+
+      expect(await borrowModule.totalDebt(user.address)).to.equal(0);
+      expect(await collateralVault.deposits(user.address, await weth.getAddress())).to.equal(0);
+      expect(await weth.balanceOf(user.address)).to.equal(INITIAL_WETH_BALANCE);
+    });
   });
 });
