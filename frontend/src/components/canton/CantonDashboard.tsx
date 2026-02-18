@@ -127,30 +127,77 @@ export function CantonDashboard() {
         badgeColor="emerald"
       />
 
-      {/* Hero Stats */}
+      {/* Portfolio Hero */}
       <div className="card-emerald overflow-hidden p-8">
-        <div className="grid gap-8 lg:grid-cols-3">
-          <div className="space-y-2">
-            <p className="text-sm font-medium text-gray-400">Total mUSD Supply</p>
-            <p className="text-4xl font-bold text-gradient-emerald">{stats.musdTotal.toFixed(2)}</p>
+        <div className="grid gap-8 lg:grid-cols-4">
+          <div className="lg:col-span-2 space-y-2">
+            <p className="text-sm font-medium text-gray-400">Net Portfolio Value</p>
+            <p className="text-5xl font-bold text-gradient-emerald">
+              ${(stats.musdTotal + stats.usdcTotal + stats.collateralTotal).toFixed(2)}
+            </p>
             <p className="flex items-center gap-2 text-sm text-emerald-400">
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
-              {stats.musdContracts} active contracts
+              {stats.musdContracts + stats.usdcContracts + stats.collateralContracts} active contracts on Canton
             </p>
           </div>
           <div className="space-y-2">
-            <p className="text-sm font-medium text-gray-400">USDC Reserves</p>
-            <p className="text-4xl font-bold text-white">{stats.usdcTotal.toFixed(2)}</p>
-            <p className="text-sm text-gray-500">{stats.usdcContracts} contracts</p>
+            <p className="text-sm font-medium text-gray-400">mUSD Supply</p>
+            <p className="text-3xl font-bold text-white">{stats.musdTotal.toFixed(2)}</p>
+            <p className="text-sm text-gray-500">{stats.musdContracts} contracts</p>
           </div>
           <div className="space-y-2">
-            <p className="text-sm font-medium text-gray-400">Collateral Locked</p>
-            <p className="text-4xl font-bold text-white">{stats.collateralTotal.toFixed(2)}</p>
-            <p className="text-sm text-gray-500">{stats.collateralContracts} contracts</p>
+            <p className="text-sm font-medium text-gray-400">USDC Reserves</p>
+            <p className="text-3xl font-bold text-white">{stats.usdcTotal.toFixed(2)}</p>
+            <p className="text-sm text-gray-500">{stats.usdcContracts} contracts</p>
           </div>
         </div>
+      </div>
+
+      {/* Token Balance Grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        {[
+          { label: "mUSD", value: stats.musdTotal.toFixed(2), color: "from-emerald-500 to-teal-500" },
+          { label: "USDC", value: stats.usdcTotal.toFixed(2), color: "from-blue-500 to-cyan-500" },
+          { label: "Collateral", value: stats.collateralTotal.toFixed(2), color: "from-purple-500 to-pink-500" },
+          { label: "Vaults", value: stats.vaults.toString(), color: "from-yellow-400 to-orange-500" },
+          { label: "Attestations", value: stats.attestations.toString(), color: "from-red-400 to-pink-500" },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="card group text-center transition-all duration-300 hover:border-white/20">
+            <div className={`mx-auto mb-3 h-10 w-10 rounded-full bg-gradient-to-br ${color} flex items-center justify-center`}>
+              <span className="text-white font-bold text-sm">{label[0]}</span>
+            </div>
+            <p className="text-2xl font-bold text-white">{value}</p>
+            <p className="text-xs text-gray-400 mt-1">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid gap-4 sm:grid-cols-4">
+        {[
+          { label: "Mint", href: "#canton-mint", icon: "M12 4v16m8-8H4", color: "emerald" },
+          { label: "Stake", href: "#canton-stake", icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6", color: "blue" },
+          { label: "Bridge", href: "#canton-bridge", icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4", color: "purple" },
+          { label: "Borrow", href: "#canton-borrow", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5", color: "yellow" },
+        ].map(({ label, href, icon, color }) => (
+          <a
+            key={label}
+            href={href}
+            className={`card group flex items-center gap-4 transition-all duration-300 hover:border-${color}-500/50 hover:bg-${color}-500/5`}
+          >
+            <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-${color}-500/10`}>
+              <svg className={`h-6 w-6 text-${color}-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
+              </svg>
+            </div>
+            <div>
+              <p className="font-semibold text-white">{label}</p>
+              <p className="text-xs text-gray-400">Go to {label.toLowerCase()}</p>
+            </div>
+          </a>
+        ))}
       </div>
 
       {/* Assets Section */}
