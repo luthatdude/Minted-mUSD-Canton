@@ -9,7 +9,7 @@ import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
-import { getDefaultChain } from "@/lib/chains";
+import { getTreasuryChain } from "@/lib/chains";
 import WalletConnector from "@/components/WalletConnector";
 import { SlippageInput } from "@/components/SlippageInput";
 
@@ -355,7 +355,7 @@ export function BorrowPage() {
                     </svg>
                   </div>
                   {/* Testnet Faucet — hidden on mainnet */}
-                  {action === "deposit" && selectedToken && getDefaultChain().isTestnet && (
+                  {action === "deposit" && selectedToken && getTreasuryChain().isTestnet && (
                     <button
                       className="mt-2 w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
                       onClick={handleFaucetMint}

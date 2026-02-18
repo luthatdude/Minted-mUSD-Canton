@@ -5,12 +5,14 @@ import { PageHeader } from "@/components/PageHeader";
 import { formatUSD, formatBps, formatHealthFactor, formatTimestamp, shortenAddress } from "@/lib/format";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
 import BridgeOutPanel from "@/components/BridgeOutPanel";
 
 export function BridgePage() {
   const { isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
+  const loopWallet = useLoopWallet();
   const [data, setData] = useState({
     attestedAssets: 0n,
     supplyCap: 0n,
@@ -135,7 +137,7 @@ export function BridgePage() {
       />
 
       {/* ── Bridge to Canton (ETH → Canton) ── */}
-      <BridgeOutPanel />
+      <BridgeOutPanel existingCantonParty={loopWallet.partyId} />
 
       {/* Paused Alert */}
       {data.paused && (

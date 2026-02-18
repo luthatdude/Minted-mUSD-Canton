@@ -523,6 +523,7 @@ class RelayService {
       userId: process.env.CANTON_USER_ID || "administrator",
       actAs: config.cantonParty,
       timeoutMs: 30_000,
+      defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
     });
 
     // Initialize Ethereum connection
@@ -1298,17 +1299,38 @@ class RelayService {
       events = events.concat(chunk as ethers.EventLog[]);
     }
 
-    // Check which ones already have BridgeInRequest on Canton
+    // FIX: Cross-check against Canton — only mark events as processed if a
+    // BridgeInRequest already exists on the ledger for that nonce.
+    // Previously this blindly added ALL on-chain events, causing missed relays
+    // when the relay was down during a bridge-out.
+    let cantonBridgeInNonces: Set<number>;
+    try {
+      const existingRequests = await this.canton.queryContracts<{ nonce: number }>(TEMPLATES.BridgeInRequest);
+      cantonBridgeInNonces = new Set(existingRequests.map(c => Number(c.payload.nonce)));
+      console.log(`[Relay] Found ${cantonBridgeInNonces.size} existing BridgeInRequest contracts on Canton`);
+    } catch {
+      // If Canton query fails, fall back to marking all as processed (safe default)
+      console.warn("[Relay] Could not query Canton for existing BridgeInRequests — marking all as processed");
+      cantonBridgeInNonces = new Set(events.map(e => Number((e as ethers.EventLog).args?.nonce)));
+    }
+
+    let unrelayed = 0;
     for (const event of events) {
       const args = (event as ethers.EventLog).args;
       if (args) {
-        this.processedBridgeOuts.add(args.requestId);
+        const nonce = Number(args.nonce);
+        if (cantonBridgeInNonces.has(nonce)) {
+          this.processedBridgeOuts.add(args.requestId);
+        } else {
+          unrelayed++;
+          // Leave unprocessed — watchEthereumBridgeOut will pick these up
+        }
       }
     }
 
-    this.lastScannedBlock = currentBlock;
+    this.lastScannedBlock = fromBlock; // Start scanning from fromBlock so unrelayed events are picked up
     metricLastScannedBlock.set(this.lastScannedBlock);
-    console.log(`[Relay] Found ${this.processedBridgeOuts.size} bridge-out requests (scanning from block ${fromBlock})`);
+    console.log(`[Relay] Found ${this.processedBridgeOuts.size} already-relayed bridge-outs, ${unrelayed} pending relay (scanning from block ${fromBlock})`);
   }
 
   /**
@@ -1330,11 +1352,15 @@ class RelayService {
     }
 
     const filter = this.bridgeContract.filters.BridgeToCantonRequested();
-    const events = await this.bridgeContract.queryFilter(
-      filter,
-      this.lastScannedBlock + 1,
-      confirmedBlock
-    );
+
+    // Chunk the query to stay within RPC block range limits (public RPCs cap at 50k)
+    const chunkSize = 10000;
+    let events: (ethers.EventLog | ethers.Log)[] = [];
+    for (let start = this.lastScannedBlock + 1; start <= confirmedBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, confirmedBlock);
+      const chunk = await this.bridgeContract.queryFilter(filter, start, end);
+      events = events.concat(chunk);
+    }
 
     this.lastScannedBlock = confirmedBlock;
     metricLastScannedBlock.set(this.lastScannedBlock);

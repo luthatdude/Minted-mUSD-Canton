@@ -17,6 +17,7 @@ interface NavbarProps {
   address: string | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onCantonDisconnect: () => void;
   activePage: string;
   onNavigate: (page: string) => void;
   chain: ActiveChain;
@@ -28,6 +29,7 @@ export function Navbar({
   address,
   onConnect,
   onDisconnect,
+  onCantonDisconnect,
   activePage,
   onNavigate,
   chain,
@@ -120,12 +122,19 @@ export function Navbar({
               )
             ) : (
               cantonParty ? (
-                <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 backdrop-blur-sm">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-                  <span className="text-sm font-medium text-emerald-400">
+                <button
+                  onClick={onCantonDisconnect}
+                  className="group flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 backdrop-blur-sm transition-all duration-300 hover:border-red-500/30 hover:bg-red-500/10"
+                  title="Disconnect Canton Wallet"
+                >
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)] group-hover:bg-red-400 group-hover:shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                  <span className="text-sm font-medium text-emerald-400 group-hover:text-red-400">
                     {cantonParty.length > 16 ? cantonParty.slice(0, 16) + "..." : cantonParty}
                   </span>
-                </div>
+                  <svg className="h-4 w-4 text-emerald-500/50 transition-colors group-hover:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                </button>
               ) : (
                 <span className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2.5 text-sm font-medium text-yellow-400">
                   Canton Disconnected

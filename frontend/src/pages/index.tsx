@@ -92,6 +92,7 @@ export default function Home() {
       address={wallet.address}
       onConnect={() => wallet.connectMetaMask()}
       onDisconnect={() => wallet.disconnect()}
+      onCantonDisconnect={() => loopWallet.disconnect()}
       activePage={page}
       onNavigate={handleNavigate}
       chain={chainState.chain}
