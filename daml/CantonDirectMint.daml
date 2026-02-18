@@ -482,7 +482,7 @@ template CantonDirectMintService
 
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
-    choice DirectMint_Mint : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
+    nonconsuming choice DirectMint_Mint : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
       with
         user : Party
         usdcCid : ContractId CantonUSDC
@@ -555,7 +555,7 @@ template CantonDirectMintService
     -- | Mint with USDCx: User deposits USDCx (xReserve bridged USDC) → gets Canton mUSD
     -- Pendle/Morpho/Sky strategies. The relay redeems USDCx → USDC on Ethereum
     -- and deposits into TreasuryV2.
-    choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
+    nonconsuming choice DirectMint_MintWithUSDCx : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
       with
         user : Party
         usdcxCid : ContractId USDCx
@@ -693,7 +693,7 @@ template CantonDirectMintService
     -- This is a two-phase process:
     --   Phase 1: Burn mUSD, create redemption request
     --   Phase 2: Bridge-in from Ethereum fulfills the redemption (handled by BLEProtocol)
-    choice DirectMint_Redeem : (ContractId CantonDirectMintService, ContractId RedemptionRequest)
+    nonconsuming choice DirectMint_Redeem : (ContractId CantonDirectMintService, ContractId RedemptionRequest)
       with
         user : Party
         musdCid : ContractId CantonMUSD
@@ -766,14 +766,14 @@ template CantonDirectMintService
         assertMsg "CAP_UPDATE_COOLDOWN" (elapsed >= cooldownRel || newCap <= supplyCap)
         create this with supplyCap = newCap, lastRateLimitReset = now
 
-    choice DirectMint_SetPaused : ContractId CantonDirectMintService
+    nonconsuming choice DirectMint_SetPaused : ContractId CantonDirectMintService
       with
         newPaused : Bool
       controller operator
       do
         create this with paused = newPaused
 
-    choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
+    nonconsuming choice DirectMint_SetDailyMintLimit : ContractId CantonDirectMintService
       with
         newLimit : Money
         governanceProofCid : ContractId GovernanceActionLog
@@ -785,7 +785,7 @@ template CantonDirectMintService
         assertMsg "LIMIT_MUST_BE_POSITIVE" (newLimit > 0.0)
         create this with dailyMintLimit = newLimit
 
-    choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
+    nonconsuming choice DirectMint_SetComplianceRegistry : ContractId CantonDirectMintService
       with
         newRegistryCid : ContractId ComplianceRegistry
         governanceProofCid : ContractId GovernanceActionLog
@@ -847,7 +847,6 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
-
 -- ============================================================
 --                     SECTION 7: BURN RATE LIMITER
 -- ============================================================

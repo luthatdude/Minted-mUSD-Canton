@@ -1,4 +1,5 @@
 import { ethers, upgrades } from "hardhat";
+import { assertSafeForNetworkDeployment } from "./utils/deployGuards";
 
 /**
  * Testnet deployment script for the Minted / BLE Protocol.
@@ -19,6 +20,8 @@ import { ethers, upgrades } from "hardhat";
  *  12. LeverageVault              (leverage)
  */
 async function main() {
+  await assertSafeForNetworkDeployment("deploy-testnet.ts");
+
   const [deployer] = await ethers.getSigners();
   console.log("Deployer:", deployer.address);
   const startBalance = ethers.formatEther(await ethers.provider.getBalance(deployer.address));

@@ -2,6 +2,7 @@
 // Deploys LeverageVault with mock swap router for testing
 
 import { ethers } from "hardhat";
+import { assertSafeForNetworkDeployment } from "./utils/deployGuards";
 
 // Deployed contract addresses on Sepolia
 const CONTRACTS = {
@@ -14,6 +15,8 @@ const CONTRACTS = {
 };
 
 async function main() {
+  await assertSafeForNetworkDeployment("deploy-leverage-vault.ts");
+
   const [deployer] = await ethers.getSigners();
   console.log("═".repeat(60));
   console.log("Deploy LeverageVault for Testnet");
