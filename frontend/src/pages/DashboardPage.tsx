@@ -10,6 +10,7 @@ import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
 import WalletConnector from "@/components/WalletConnector";
 import { MintPage } from "./MintPage";
+import { ReferralWidget } from "@/components/ReferralWidget";
 
 interface DashboardData {
   musdSupply: bigint;
@@ -539,6 +540,9 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
               />
             </div>
           </Section>
+
+          {/* Referral Widget */}
+          <ReferralWidget />
         </>
       )}
 
