@@ -128,9 +128,10 @@ const MUSD_EVENT_ABI = [
 ];
 
 const BRIDGE_EVENT_ABI = [
-  "event AttestationReceived(bytes32 indexed attestationHash, uint256 nonce, uint256 epoch, uint256 mintAmount, uint256 burnAmount)",
+  // CX-M-02: Must match BLEBridgeV9.sol event signatures exactly
+  "event AttestationReceived(bytes32 indexed id, uint256 cantonAssets, uint256 newSupplyCap, uint256 nonce, uint256 timestamp)",
   "event EmergencyCapReduction(uint256 oldCap, uint256 newCap, string reason)",
-  "event SupplyCapUpdated(uint256 newMintCap, uint256 newBurnCap, uint256 epoch)",
+  "event SupplyCapUpdated(uint256 oldCap, uint256 newCap, uint256 attestedAssets)",
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1030,13 +1031,14 @@ function setupBridgeMonitor(provider: ethers.Provider): void {
     ].join("\n"), pauseButtons());
   });
 
-  bridge.on("AttestationReceived", async (hash, nonce, epoch, mintAmount, burnAmount) => {
-    const totalValue = mintAmount + burnAmount;
-    if (totalValue >= LARGE_MINT_THRESHOLD) {
+  // CX-M-02: Params match BLEBridgeV9.sol — (id, cantonAssets, newSupplyCap, nonce, timestamp)
+  bridge.on("AttestationReceived", async (id, cantonAssets, newSupplyCap, nonce, timestamp) => {
+    if (cantonAssets >= LARGE_MINT_THRESHOLD) {
       await sendAlert("HIGH", "Large Bridge Attestation", [
-        `Hash: \`${hash}\``,
-        `Nonce: ${nonce} | Epoch: ${epoch}`,
-        `Mint: ${ethers.formatUnits(mintAmount, 18)} | Burn: ${ethers.formatUnits(burnAmount, 18)}`,
+        `ID: \`${id}\``,
+        `Nonce: ${nonce}`,
+        `Canton Assets: ${ethers.formatUnits(cantonAssets, 18)}`,
+        `New Supply Cap: ${ethers.formatUnits(newSupplyCap, 18)}`,
       ].join("\n"));
     }
   });
@@ -1078,14 +1080,28 @@ async function main(): Promise<void> {
   console.log();
 
   // ── Guardian Wallet ──
+  // SEC-GATE-01: Raw private key is forbidden in production — use KMS
+  if (process.env.NODE_ENV === "production" && GUARDIAN_PRIVATE_KEY && !process.env.GUARDIAN_KMS_KEY_ID) {
+    throw new Error(
+      "SECURITY: GUARDIAN_PRIVATE_KEY is forbidden in production. " +
+      "Set GUARDIAN_KMS_KEY_ID for HSM-backed signing. " +
+      "Raw keys stay in V8 heap memory and are extractable via core dumps."
+    );
+  }
   if (GUARDIAN_PRIVATE_KEY) {
+    if (!process.env.GUARDIAN_KMS_KEY_ID) {
+      console.warn(
+        "⚠️  DEPRECATED: GUARDIAN_PRIVATE_KEY is deprecated. " +
+        "Migrate to GUARDIAN_KMS_KEY_ID for HSM-backed signing."
+      );
+    }
     guardianWallet = new ethers.Wallet(GUARDIAN_PRIVATE_KEY, rpcProvider);
     const balance = await rpcProvider.getBalance(guardianWallet.address);
     console.log(`[Guardian] ✅ ${shortAddr(guardianWallet.address)} (${ethers.formatEther(balance)} ETH)`);
     console.log(`[Guardian] Can execute: pauseGlobal(), cancel(), unpauseGlobal()`);
   } else {
     console.log("[Guardian] ⚠️  No GUARDIAN_PRIVATE_KEY — alert-only mode (no on-chain actions)");
-    console.log("  Set GUARDIAN_PRIVATE_KEY in .env to enable one-tap pause from Telegram.");
+    console.log("  Set GUARDIAN_KMS_KEY_ID (production) or GUARDIAN_PRIVATE_KEY (dev) for on-chain actions.");
   }
   console.log();
 
