@@ -1,0 +1,12 @@
+timestamp=2026-02-18T16:57:23Z
+rules_file=/Users/luiscuello/Documents/New project/Minted-mUSD-Canton/k8s/monitoring/prometheus-rules.yaml
+grafana_file=/Users/luiscuello/Documents/New project/Minted-mUSD-Canton/k8s/monitoring/grafana-dashboards.yaml
+drill_file=/Users/luiscuello/Documents/New project/Minted-mUSD-Canton/artifacts/test-results/monitoring-drill-2026-02-18.log
+checks_begin=true
+check=runbook_placeholders result=PASS
+check=bridge_alert_rules result=PASS
+check=bridge_metrics_rules result=PASS
+check=bridge_metrics_grafana result=PASS
+check=drill_artifact_exists result=PASS
+check=drill_metric_paths result=PASS
+status=PASS

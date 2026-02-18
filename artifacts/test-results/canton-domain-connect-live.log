@@ -1,0 +1,7 @@
+timestamp=2026-02-18T16:58:47Z
+namespace=musd-canton
+label_selector=app.kubernetes.io/name=canton-participant
+mode=live-k8s
+check=kubectl_available result=PASS
+check=namespace_exists result=FAIL detail=namespace_not_found
+status=FAIL

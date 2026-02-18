@@ -17,6 +17,7 @@
 - Bridge overview and throughput panels now query Prometheus `minted_*` metrics directly.
 - Security rejection trend now uses `minted_bridge_validation_failures_total`.
 - Infrastructure bridge panels query the same `minted_*` counters as the alert rules.
+- Runbook references no longer use placeholder domains; they point to `docs/RUNBOOKS.md`.
 
 References:
 - `k8s/monitoring/grafana-dashboards.yaml`
@@ -28,6 +29,7 @@ References:
 ## Drill Output Artifact
 
 - `artifacts/test-results/monitoring-drill-2026-02-18.log`
+- `artifacts/test-results/monitoring-routing-validation.log`
 
 ## Sign-Off
 

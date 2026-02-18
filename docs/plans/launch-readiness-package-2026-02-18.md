@@ -38,7 +38,7 @@ Distribution and routing evidence:
 | Audit Closeout Gate | Status | Evidence |
 |---|---|---|
 | Medium findings owner/decision/evidence completeness | CLOSED | `docs/plans/mainnet-risk-register.md` |
-| Test backlog ownership and CI artifact mapping | CLOSED | `docs/plans/test-backlog-mapping.md`, `.github/workflows/ci.yml` |
+| Test backlog ownership and CI artifact mapping | CLOSED (mapping) / TRACKED (latest run status) | `docs/plans/test-backlog-mapping.md`, `.github/workflows/ci.yml`, `artifacts/test-results/ci-latest-status.log` |
 | Main security checklist evidence bundle | CLOSED | `docs/plans/pre-mainnet-checklist-evidence.md` |
 
 ## 4) Go/No-Go Memo
