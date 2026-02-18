@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Contract } from "ethers";
 import { useWalletConnect } from "./useWalletConnect";
-import { CONTRACTS } from "@/lib/config";
+import { CONTRACTS, CHAIN_ID } from "@/lib/config";
 import { MUSD_ABI } from "@/abis/MUSD";
 import { SMUSD_ABI } from "@/abis/SMUSD";
 import { DIRECT_MINT_ABI } from "@/abis/DirectMint";
@@ -41,12 +41,18 @@ const ABI_MAP: Record<string, readonly string[]> = {
 };
 
 /**
- * Hook to get a single contract instance using WalletConnect
+ * Hook to get a single contract instance using WalletConnect.
+ * Returns null if the wallet is on the wrong network.
  */
 export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
-  const { signer, provider, isConnected } = useWalletConnect();
+  const { signer, provider, isConnected, chainId } = useWalletConnect();
 
   return useMemo(() => {
+    // Block contract creation when wallet is on the wrong chain
+    if (isConnected && chainId !== null && chainId !== CHAIN_ID) {
+      return null;
+    }
+
     const address = CONTRACTS[name];
     const abi = ABI_MAP[name];
     if (!address || !abi) return null;
@@ -55,18 +61,23 @@ export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
     if (!signerOrProvider) return null;
     
     return new Contract(address, abi, signerOrProvider);
-  }, [name, signer, provider, isConnected]);
+  }, [name, signer, provider, isConnected, chainId]);
 }
 
 /**
- * Hook to get all protocol contracts using WalletConnect
+ * Hook to get all protocol contracts using WalletConnect.
+ * Returns all-null contracts if the wallet is on the wrong network,
+ * preventing accidental cross-chain transactions.
  */
 export function useWCContracts() {
-  const { signer, provider, isConnected } = useWalletConnect();
+  const { signer, provider, isConnected, chainId } = useWalletConnect();
 
   return useMemo(() => {
     const signerOrProvider = signer || provider;
-    if (!signerOrProvider) {
+
+    // Return null contracts when disconnected OR on the wrong chain
+    const wrongNetwork = isConnected && chainId !== null && chainId !== CHAIN_ID;
+    if (!signerOrProvider || wrongNetwork) {
       return {
         musd: null,
         smusd: null,
@@ -116,7 +127,7 @@ export function useWCContracts() {
       globalPause: createContract("GlobalPauseRegistry"),
       timelock: createContract("Timelock"),
     };
-  }, [signer, provider, isConnected]);
+  }, [signer, provider, isConnected, chainId]);
 }
 
 // Type exports
