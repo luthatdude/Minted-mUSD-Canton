@@ -926,7 +926,7 @@ test_SmUSDDeposit = script do
   smusd <- submitMulti [op, gov] [] do
     createCmd CantonSMUSD with
       operator = op; governance = gov
-      totalShares = 0.0; totalAssets = 0.0
+      totalShares = 0.0; totalAssets = 0.0; pooledMusd = 0.0
       lastYieldEpoch = 0
       config = SmUSDConfig with
         cooldownSeconds = 0; maxTotalDeposits = 10_000_000.0
@@ -963,7 +963,7 @@ test_SmUSDSyncYield = script do
   smusd <- submitMulti [op, gov] [] do
     createCmd CantonSMUSD with
       operator = op; governance = gov
-      totalShares = 1000.0; totalAssets = 10000.0
+      totalShares = 1000.0; totalAssets = 10000.0; pooledMusd = 10000.0
       lastYieldEpoch = 5
       config = SmUSDConfig with
         cooldownSeconds = 0; maxTotalDeposits = 10_000_000.0
@@ -995,7 +995,7 @@ test_SmUSDYieldExceedsMaxFails = script do
   smusd <- submitMulti [op, gov] [] do
     createCmd CantonSMUSD with
       operator = op; governance = gov
-      totalShares = 1000.0; totalAssets = 10000.0
+      totalShares = 1000.0; totalAssets = 10000.0; pooledMusd = 10000.0
       lastYieldEpoch = 5
       config = SmUSDConfig with
         cooldownSeconds = 0; maxTotalDeposits = 10_000_000.0

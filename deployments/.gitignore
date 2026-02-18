@@ -1,0 +1,6 @@
+# Ignore deploy logs (may contain gas/nonce details)
+*.log
+
+# Keep manifests (committed for auditability)
+!*.json
+!README.md

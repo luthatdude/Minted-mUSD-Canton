@@ -96,6 +96,7 @@ createMintService operator usdcIssuer complianceCid minters = do
       lastRateLimitReset = now
       complianceRegistryCid = complianceCid
       mpaHash = testMpaHash; mpaUri = testMpaUri; authorizedMinters = minters
+      cantonCoinPrice = None
       serviceName = "CantonDirectMint"
 
 -- ============================================================
@@ -201,7 +202,7 @@ test_SupplyCapEnforced = script do
       dailyMinted = 0.0; dailyBurned = 0.0
       lastRateLimitReset = now
       complianceRegistryCid = complianceCid
-      mpaHash = testMpaHash; mpaUri = testMpaUri; authorizedMinters = []; serviceName = "CantonDirectMint"
+      mpaHash = testMpaHash; mpaUri = testMpaUri; authorizedMinters = []; cantonCoinPrice = None; serviceName = "CantonDirectMint"
 
   usdcCid <- createUSDC operator alice 200.0
   submitMustFail alice do
@@ -233,7 +234,7 @@ test_DailyMintRateLimit = script do
       dailyMinted = 0.0; dailyBurned = 0.0
       lastRateLimitReset = now
       complianceRegistryCid = complianceCid
-      mpaHash = testMpaHash; mpaUri = testMpaUri; authorizedMinters = [alice]; serviceName = "CantonDirectMint"
+      mpaHash = testMpaHash; mpaUri = testMpaUri; authorizedMinters = [alice]; cantonCoinPrice = None; serviceName = "CantonDirectMint"
 
   usdcCid1 <- createUSDC operator alice 80.0
   (svc2, _, _) <- submitMulti [alice] [operator] do

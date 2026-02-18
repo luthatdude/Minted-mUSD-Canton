@@ -198,12 +198,19 @@ export class OracleKeeper {
       batchMaxCount: 1,
     });
 
-    // Guard against raw private key usage in production
+    // SEC-GATE-01: Guard against raw private key usage in production
     if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
       throw new Error(
         "SECURITY: Raw private key usage is forbidden in production. " +
-        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
+        "Configure KMS_KEY_ID and AWS_REGION environment variables. " +
         "See relay/kms-ethereum-signer.ts for KMS signer implementation."
+      );
+    }
+    if (!process.env.KMS_KEY_ID) {
+      console.warn(
+        "⚠️  DEPRECATED: KEEPER_PRIVATE_KEY is deprecated. " +
+        "Migrate to KMS_KEY_ID for HSM-backed signing. " +
+        "Raw private keys will be rejected in a future release."
       );
     }
     this.wallet = new Wallet(config.privateKey, this.provider);

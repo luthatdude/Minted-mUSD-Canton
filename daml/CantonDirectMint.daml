@@ -187,8 +187,9 @@ template USDCxTransferProposal
 --                     SECTION 2: CANTON mUSD
 -- ============================================================
 
--- | Canton-side mUSD token. Thin wrapper — the real backing
--- lives on Ethereum Treasury.
+-- | Canton-side mUSD token. Represents mUSD on Canton Network.
+-- Pooled inside CantonStakingService/CantonETHPoolService as TVL backing.
+-- Backing stables are piped to Ethereum Treasury for yield generation.
 template CantonMUSD
   with
     issuer : Party
@@ -322,6 +323,7 @@ template BridgeOutRequest
     nonce : Int               -- Unique request ID
     createdAt : Time          -- When request was created
     status : Text             -- "pending" | "bridged" | "failed"
+    source : Text             -- "directmint" | "ethpool" — routing tag for relay
     validators : [Party]      -- Validators who will attest to the bridge
   where
     signatory operator
@@ -438,9 +440,10 @@ template ReserveTracker
 -- | The CantonDirectMint service.
 -- Mints Canton mUSD and emits a bridge request for the backing stables.
 -- Does NOT hold stables locally — they get piped to Ethereum Treasury.
--- Supports both:
---   1. CantonUSDC - Direct USDC deposits on Canton
---   2. USDCx - Bridged USDC from xReserve via Circle CCTP
+-- Supports three entry asset types:
+--   1. CantonUSDC  — Direct USDC deposits on Canton
+--   2. USDCx       — Bridged USDC from xReserve via Circle CCTP
+--   3. CantonCoin   — Canton validator token sold to operator at oracle price
 template CantonDirectMintService
   with
     operator : Party
@@ -470,6 +473,8 @@ template CantonDirectMintService
     mpaHash : Text               -- SHA-256 hash of the MPA PDF
     mpaUri : Text                -- URI to the MPA document
     authorizedMinters : [Party]  -- Users authorized to mint (visibility required)
+    -- Canton coin oracle price for CantonCoin → mUSD conversion
+    cantonCoinPrice : Optional Money  -- USD per Canton coin (None = CantonCoin minting disabled)
     serviceName : Text           -- D-M02: Unique service name for lookupByKey
   where
     signatory operator
@@ -533,6 +538,7 @@ template CantonDirectMintService
           nonce = nextNonce
           createdAt = now
           status = "pending"
+          source = "directmint"
           validators = validators
 
         -- Update service state including rate limit tracking
@@ -611,6 +617,7 @@ template CantonDirectMintService
           nonce = nextNonce
           createdAt = now
           status = "pending"
+          source = "directmint"
           validators = validators
 
         -- Update service state including rate limit tracking
@@ -623,6 +630,64 @@ template CantonDirectMintService
           lastRateLimitReset = resetTime
 
         return (newService, musdCid, bridgeReq)
+
+    -- | Mint with CantonCoin value: Operator-attested coin conversion → user gets mUSD.
+    -- The CantonCoin is burned in a separate module (CantonCoinMint) that calls this.
+    -- Operator attests to the coin value and mints mUSD to the user.
+    -- No BridgeOutRequest emitted — operator absorbs coin exposure off-ledger.
+    -- cantonCoinPrice must be set (not None) for this to be enabled.
+    choice DirectMint_MintForCoin : (ContractId CantonDirectMintService, ContractId CantonMUSD)
+      with
+        user : Party
+        coinMusdValue : Money     -- mUSD value of the coin (coin.amount * cantonCoinPrice)
+      controller operator
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "CANTON_COIN_MINTING_DISABLED" (isSome cantonCoinPrice)
+
+        -- Compliance check: verify minter is not blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
+
+        -- Validate coin value against oracle price bounds
+        assertMsg "ZERO_MUSD_VALUE" (coinMusdValue > 0.0)
+
+        let feeAmount = coinMusdValue * intToNumeric mintFeeBps / 10000.0
+        let netAmount = coinMusdValue - feeAmount
+
+        assertMsg "BELOW_MIN_AMOUNT" (netAmount >= minAmount)
+        assertMsg "ABOVE_MAX_AMOUNT" (netAmount <= maxAmount)
+        assertMsg "EXCEEDS_SUPPLY_CAP" (currentSupply + netAmount <= supplyCap)
+
+        -- 24h rolling window rate limit check
+        now <- getTime
+        let windowElapsed = subTime now lastRateLimitReset
+        let oneDayRel = hours 24
+        let (resetMinted, resetBurned, resetTime) =
+              if windowElapsed >= oneDayRel
+              then (0.0, 0.0, now)
+              else (dailyMinted, dailyBurned, lastRateLimitReset)
+        let netMinted = if resetMinted > resetBurned then resetMinted - resetBurned else 0.0
+        assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
+
+        -- Mint Canton mUSD to user (no bridge-out — operator backs via coin)
+        userObs <- lookupUserObservers operator user
+        musdCid <- create CantonMUSD with
+          issuer = operator
+          owner = user
+          amount = netAmount
+          agreementHash = mpaHash
+          agreementUri = mpaUri
+          privacyObservers = userObs
+
+        -- Update service state including rate limit tracking
+        newService <- create this with
+          currentSupply = currentSupply + netAmount
+          accumulatedFees = accumulatedFees + feeAmount
+          dailyMinted = resetMinted + netAmount
+          dailyBurned = resetBurned
+          lastRateLimitReset = resetTime
+
+        return (newService, musdCid)
 
     -- | Redeem: User burns Canton mUSD → needs USDC bridged back from Ethereum
     -- This is a two-phase process:
