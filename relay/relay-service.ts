@@ -33,8 +33,23 @@ import { createEthereumSigner } from "./kms-ethereum-signer";
 import * as crypto from "crypto";
 // MEDIUM-02: File-based state persistence for replay protection
 import * as fs from "fs";
-// Item-10: Prometheus metrics instrumentation
-import * as metrics from "./metrics";
+import {
+  metricsHandler,
+  attestationsProcessedTotal,
+  bridgeOutsTotal,
+  bridgeValidationFailuresTotal,
+  validatorRateLimitHitsTotal,
+  txRevertsTotal,
+  lastScannedBlock as metricLastScannedBlock,
+  consecutiveFailures as metricConsecutiveFailures,
+  activeProviderIndex as metricActiveProviderIndex,
+  inFlightAttestations as metricInFlightAttestations,
+  rateLimiterTxPerMinute,
+  rateLimiterTxPerHour,
+  anomalyPauseTriggered,
+  anomalyConsecutiveReverts,
+  attestationDuration,
+} from "./metrics";
 
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
@@ -720,12 +735,12 @@ class RelayService {
         await this.processETHPoolYieldBridgeIn();
         // Reset failure counter on success
         this.consecutiveFailures = 0;
-        metrics.consecutiveFailures.set(0);
+        this.updateMetricsSnapshot();
       } catch (error) {
         console.error("[Relay] Poll error:", error);
         // Failover to backup RPC on consecutive failures
         this.consecutiveFailures++;
-        metrics.consecutiveFailures.set(this.consecutiveFailures);
+        this.updateMetricsSnapshot();
         if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
           console.warn(
             `[Relay] ${this.consecutiveFailures} consecutive failures — attempting provider failover`
@@ -795,6 +810,7 @@ class RelayService {
 
     this.activeProviderIndex = nextIndex;
     this.consecutiveFailures = 0;
+    this.updateMetricsSnapshot();
 
     // Re-initialise signer + contract against the new provider
     try {
@@ -815,6 +831,18 @@ class RelayService {
     this.isRunning = false;
   }
 
+  /** Sync in-memory relay state into exported Prometheus gauges. */
+  private updateMetricsSnapshot(): void {
+    metricLastScannedBlock.set(this.lastScannedBlock);
+    metricConsecutiveFailures.set(this.consecutiveFailures);
+    metricActiveProviderIndex.set(this.activeProviderIndex);
+    metricInFlightAttestations.set(this.inFlightAttestations.size);
+    rateLimiterTxPerMinute.set(this.rateLimiter.txThisMinute);
+    rateLimiterTxPerHour.set(this.rateLimiter.txThisHour);
+    anomalyPauseTriggered.set(this.anomalyDetector.pauseTriggered ? 1 : 0);
+    anomalyConsecutiveReverts.set(this.anomalyDetector.consecutiveReverts);
+  }
+
   // ============================================================
   //  H-1: RATE LIMITING
   // ============================================================
@@ -831,25 +859,29 @@ class RelayService {
     if (now - rl.minuteWindowStart > 60_000) {
       rl.txThisMinute = 0;
       rl.minuteWindowStart = now;
+      rateLimiterTxPerMinute.set(0);
     }
 
     // Reset hour window
     if (now - rl.hourWindowStart > 3_600_000) {
       rl.txThisHour = 0;
       rl.hourWindowStart = now;
+      rateLimiterTxPerHour.set(0);
     }
 
     // Check per-minute cap
     if (rl.txThisMinute >= rl.maxTxPerMinute) {
       console.warn(`[RateLimit] Per-minute cap reached (${rl.maxTxPerMinute}/min). Skipping.`);
-      metrics.validatorRateLimitHitsTotal.inc();
+      validatorRateLimitHitsTotal.inc();
+      this.updateMetricsSnapshot();
       return false;
     }
 
     // Check per-hour cap
     if (rl.txThisHour >= rl.maxTxPerHour) {
       console.warn(`[RateLimit] Per-hour cap reached (${rl.maxTxPerHour}/hr). Skipping.`);
-      metrics.validatorRateLimitHitsTotal.inc();
+      validatorRateLimitHitsTotal.inc();
+      this.updateMetricsSnapshot();
       return false;
     }
 
@@ -859,6 +891,8 @@ class RelayService {
       if (currentBlock === rl.lastSubmittedBlock) {
         if (rl.txThisBlock >= rl.maxTxPerBlock) {
           console.warn(`[RateLimit] Per-block cap reached (${rl.maxTxPerBlock}/block). Waiting for next block.`);
+          validatorRateLimitHitsTotal.inc();
+          this.updateMetricsSnapshot();
           return false;
         }
       } else {
@@ -879,6 +913,7 @@ class RelayService {
     this.rateLimiter.txThisMinute++;
     this.rateLimiter.txThisHour++;
     this.rateLimiter.txThisBlock++;
+    this.updateMetricsSnapshot();
   }
 
   // ============================================================
@@ -946,8 +981,7 @@ class RelayService {
    */
   private async recordRevert(): Promise<void> {
     this.anomalyDetector.consecutiveReverts++;
-    // Item-10: gauge for anomaly detector state
-    metrics.anomalyConsecutiveReverts.set(this.anomalyDetector.consecutiveReverts);
+    anomalyConsecutiveReverts.set(this.anomalyDetector.consecutiveReverts);
     if (this.anomalyDetector.consecutiveReverts >= this.anomalyDetector.maxConsecutiveReverts) {
       console.error(
         `[PauseGuardian] ${this.anomalyDetector.consecutiveReverts} consecutive reverts — auto-pausing bridge.`
@@ -956,6 +990,7 @@ class RelayService {
         `${this.anomalyDetector.consecutiveReverts} consecutive transaction reverts`
       );
     }
+    this.updateMetricsSnapshot();
   }
 
   /**
@@ -963,6 +998,8 @@ class RelayService {
    */
   private recordSuccess(): void {
     this.anomalyDetector.consecutiveReverts = 0;
+    anomalyConsecutiveReverts.set(0);
+    this.updateMetricsSnapshot();
   }
 
   /**
@@ -972,8 +1009,8 @@ class RelayService {
   private async triggerEmergencyPause(reason: string): Promise<void> {
     if (this.anomalyDetector.pauseTriggered) return;
     this.anomalyDetector.pauseTriggered = true;
-    // Item-10: flag pause in Prometheus
-    metrics.anomalyPauseTriggered.set(1);
+    anomalyPauseTriggered.set(1);
+    this.updateMetricsSnapshot();
 
     console.error(`[PauseGuardian] ⚠️  EMERGENCY PAUSE TRIGGERED: ${reason}`);
 
@@ -1017,12 +1054,12 @@ class RelayService {
   private checkNonceReplay(nonce: number, attestationId: string): boolean {
     if (this.submittedNonces.has(nonce)) {
       console.warn(`[NonceGuard] Nonce ${nonce} already submitted by this relay. Skipping duplicate.`);
-      metrics.nonceCollisionsTotal.inc();
+      bridgeValidationFailuresTotal.labels("nonce_replay").inc();
       return false;
     }
     if (this.inFlightAttestations.has(attestationId)) {
       console.warn(`[NonceGuard] Attestation ${attestationId} already in-flight. Skipping duplicate.`);
-      metrics.nonceCollisionsTotal.inc();
+      bridgeValidationFailuresTotal.labels("attestation_in_flight").inc();
       return false;
     }
     return true;
@@ -1034,6 +1071,7 @@ class RelayService {
   private markNonceSubmitted(nonce: number, attestationId: string): void {
     this.submittedNonces.add(nonce);
     this.inFlightAttestations.add(attestationId);
+    metricInFlightAttestations.set(this.inFlightAttestations.size);
     // Evict old nonces if set grows too large
     if (this.submittedNonces.size > 1000) {
       const toEvict = Array.from(this.submittedNonces).slice(0, 100);
@@ -1043,6 +1081,7 @@ class RelayService {
       const toEvict = Array.from(this.inFlightAttestations).slice(0, 100);
       toEvict.forEach(id => this.inFlightAttestations.delete(id));
     }
+    this.updateMetricsSnapshot();
   }
 
   // ============================================================
@@ -1148,6 +1187,7 @@ class RelayService {
 
       if (ecdsaSigs.length < Number(minSigs)) {
         console.log(`[Relay] Attestation ${attestationId}: ${ecdsaSigs.length}/${minSigs} ECDSA signatures`);
+        bridgeValidationFailuresTotal.labels("insufficient_ecdsa_signatures").inc();
         continue;
       }
 
@@ -1157,6 +1197,7 @@ class RelayService {
 
       if (Number(payload.nonce) !== expectedNonce) {
         console.log(`[Relay] Attestation ${attestationId}: nonce mismatch (got ${payload.nonce}, expected ${expectedNonce})`);
+        bridgeValidationFailuresTotal.labels("nonce_mismatch").inc();
         continue;
       }
 
@@ -1182,6 +1223,7 @@ class RelayService {
 
       if (validatorSigs.length < Number(minSigs)) {
         console.log(`[Relay] Attestation ${attestationId}: not enough valid signatures`);
+        bridgeValidationFailuresTotal.labels("insufficient_valid_signatures").inc();
         continue;
       }
 
@@ -1228,6 +1270,7 @@ class RelayService {
     }
 
     this.lastScannedBlock = currentBlock;
+    metricLastScannedBlock.set(this.lastScannedBlock);
     console.log(`[Relay] Found ${this.processedBridgeOuts.size} bridge-out requests (scanning from block ${fromBlock})`);
   }
 
@@ -1257,6 +1300,7 @@ class RelayService {
     );
 
     this.lastScannedBlock = confirmedBlock;
+    metricLastScannedBlock.set(this.lastScannedBlock);
 
     if (events.length === 0) return;
 
@@ -1299,8 +1343,6 @@ class RelayService {
       }
 
       console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
-      // Item-10: count bridge-outs
-      metrics.bridgeOutsTotal.inc({ status: "processing" });
 
       try {
         // Create BridgeInRequest on Canton
@@ -1322,6 +1364,7 @@ class RelayService {
 
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
+        bridgeOutsTotal.labels("success").inc();
 
         // Evict oldest entries if cache exceeds limit
         if (this.processedBridgeOuts.size > this.MAX_PROCESSED_CACHE) {
@@ -1336,6 +1379,7 @@ class RelayService {
 
       } catch (error: any) {
         console.error(`[Relay] Failed to relay bridge-out #${nonce} to Canton:`, error.message);
+        bridgeOutsTotal.labels("error").inc();
         // Don't mark as processed — will retry next cycle
       }
     }
@@ -1913,6 +1957,7 @@ class RelayService {
     cantonContract: ActiveContract<AttestationRequest>  // BRIDGE-H-03: Need contract ID for Attestation_Complete
   ): Promise<void> {
     const attestationId = payload.attestationId;
+    const observeDuration = attestationDuration.startTimer();
 
     try {
       // Validate chain ID matches connected network to prevent cross-chain replay
@@ -1925,6 +1970,8 @@ class RelayService {
           `[Relay] CRITICAL: Chain ID mismatch! Payload: ${payloadChainId}, Network: ${expectedChainId}`
         );
         console.error(`[Relay] Rejecting attestation ${attestationId} - possible cross-chain replay attack`);
+        bridgeValidationFailuresTotal.labels("chain_id_mismatch").inc();
+        attestationsProcessedTotal.labels("error").inc();
         throw new Error(`CHAIN_ID_MISMATCH: expected ${expectedChainId}, got ${payloadChainId}`);
       }
 
@@ -2041,9 +2088,8 @@ class RelayService {
 
       if (receipt.status === 1) {
         console.log(`[Relay] Attestation ${attestationId} bridged successfully`);
+        attestationsProcessedTotal.labels("success").inc();
         this.processedAttestations.add(attestationId);
-        // Item-10: Prometheus counters
-        metrics.attestationsProcessedTotal.inc({ status: "success" });
         // H-1: Record successful submission for rate limiting
         this.recordTxSubmission();
         // H-2: Reset consecutive revert counter and update cap baseline
@@ -2091,9 +2137,8 @@ class RelayService {
         }
       } else {
         console.error(`[Relay] Transaction reverted: ${tx.hash}`);
-        // Item-10: Prometheus counters
-        metrics.attestationsProcessedTotal.inc({ status: "revert" });
-        metrics.txRevertsTotal.inc({ operation: "attestation" });
+        txRevertsTotal.labels("processAttestation").inc();
+        attestationsProcessedTotal.labels("revert").inc();
         // H-2: Track consecutive reverts for pause guardian
         await this.recordRevert();
       }
@@ -2101,6 +2146,10 @@ class RelayService {
     } catch (error: any) {
       // M-3: Redact sensitive data from error logs
       console.error(`[Relay] Failed to bridge attestation ${attestationId}:`, RelayService.redact(error.message));
+      attestationsProcessedTotal.labels("error").inc();
+      if (typeof error?.message === "string" && error.message.toLowerCase().includes("revert")) {
+        txRevertsTotal.labels("processAttestation").inc();
+      }
 
       // Check if it's a revert with reason
       if (error.reason) {
@@ -2112,6 +2161,9 @@ class RelayService {
 
       // Don't mark as processed so we can retry
       throw error;
+    } finally {
+      observeDuration();
+      this.updateMetricsSnapshot();
     }
   }
 
@@ -2174,6 +2226,7 @@ class RelayService {
             `[Relay] No Ethereum address mapped for validator party: ${sig.validator}`
           );
           console.error(`[Relay] Add to VALIDATOR_ADDRESSES config: {"${sig.validator}": "0x..."}`);
+          bridgeValidationFailuresTotal.labels("validator_mapping_missing").inc();
           continue;  // Skip - no address mapping
         }
 
@@ -2186,7 +2239,7 @@ class RelayService {
             rsvSignature = sig.ecdsaSignature;
           } else {
             console.warn(`[Relay] Invalid RSV signature from ${sig.validator}: bad v value`);
-            metrics.bridgeValidationFailuresTotal.inc({ reason: "bad_v_value" });
+            bridgeValidationFailuresTotal.labels("invalid_signature_v").inc();
             continue;
           }
         }
@@ -2212,7 +2265,7 @@ class RelayService {
               `[Relay] CRITICAL: Signature from ${sig.validator} (${validatorEthAddress}) recovers to ${recoveredAddress}`
             );
             console.error(`[Relay] Rejecting invalid signature - possible attack or key mismatch`);
-            metrics.bridgeValidationFailuresTotal.inc({ reason: "ecrecover_mismatch" });
+            bridgeValidationFailuresTotal.labels("signature_mismatch").inc();
             continue;  // Skip this signature
           }
 
@@ -2225,11 +2278,13 @@ class RelayService {
             `[Relay] Failed to recover address from signature by ${sig.validator}:`,
             recoverError
           );
+          bridgeValidationFailuresTotal.labels("signature_recover_error").inc();
           continue;  // Skip malformed signatures
         }
 
       } catch (error) {
         console.warn(`[Relay] Failed to format signature from ${sig.validator}:`, error);
+        bridgeValidationFailuresTotal.labels("signature_format_error").inc();
       }
     }
 
@@ -2311,9 +2366,7 @@ class RelayService {
 
 import * as http from "http";
 
-// Health server with Prometheus metrics endpoint (Item-10)
-// Replaces the legacy JSON /metrics with Prometheus text exposition format
-// so that K8s PodMonitors / ServiceMonitors can scrape correctly.
+// Health server with optional bearer token authentication
 function startHealthServer(port: number, relay: RelayService): http.Server {
   const healthToken = process.env.HEALTH_AUTH_TOKEN || "";
 
@@ -2335,40 +2388,8 @@ function startHealthServer(port: number, relay: RelayService): http.Server {
         timestamp: new Date().toISOString(),
       }));
     } else if (req.url === "/metrics") {
-      // Item-10: Refresh relay-specific gauges before every Prometheus scrape
-      metrics.lastScannedBlock.set((relay as any).lastScannedBlock || 0);
-      metrics.activeProviderIndex.set((relay as any).activeProviderIndex || 0);
-      metrics.consecutiveFailures.set((relay as any).consecutiveFailures || 0);
-      metrics.rateLimiterTxPerMinute.set((relay as any).rateLimiter?.txThisMinute || 0);
-      metrics.rateLimiterTxPerHour.set((relay as any).rateLimiter?.txThisHour || 0);
-      metrics.inFlightAttestations.set((relay as any).inFlightAttestations?.size || 0);
-      metrics.anomalyConsecutiveReverts.set((relay as any).anomalyDetector?.consecutiveReverts || 0);
-      metrics.anomalyPauseTriggered.set((relay as any).anomalyDetector?.pauseTriggered ? 1 : 0);
-
-      // Serve Prometheus text exposition format
-      await metrics.metricsHandler(req, res);
-    } else if (req.url === "/metrics/json") {
-      // Legacy JSON endpoint preserved for backwards compatibility
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        processedCount: (relay as any).processedAttestations.size,
-        bridgeOutCount: (relay as any).processedBridgeOuts.size,
-        lastScannedBlock: (relay as any).lastScannedBlock,
-        activeProviderIndex: (relay as any).activeProviderIndex,
-        consecutiveFailures: (relay as any).consecutiveFailures,
-        rateLimiter: {
-          txThisMinute: (relay as any).rateLimiter.txThisMinute,
-          txThisHour: (relay as any).rateLimiter.txThisHour,
-        },
-        anomalyDetector: {
-          consecutiveReverts: (relay as any).anomalyDetector.consecutiveReverts,
-          pauseTriggered: (relay as any).anomalyDetector.pauseTriggered,
-        },
-        submittedNonces: (relay as any).submittedNonces.size,
-        inFlightAttestations: (relay as any).inFlightAttestations.size,
-        uptimeSeconds: Math.floor(process.uptime()),
-        memoryMB: Math.floor(process.memoryUsage().heapUsed / 1024 / 1024),
-      }));
+      (relay as any).updateMetricsSnapshot();
+      await metricsHandler(req, res);
     } else {
       res.writeHead(404);
       res.end();

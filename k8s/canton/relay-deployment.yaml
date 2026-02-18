@@ -658,13 +658,22 @@ metadata:
     app.kubernetes.io/name: bridge-relay
     app.kubernetes.io/part-of: minted-musd
 data:
-  # Sepolia testnet — update for mainnet
-  BRIDGE_CONTRACT_ADDRESS: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
-  TREASURY_ADDRESS: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513"
-  CANTON_PARTY: "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4"
-  # JSON map: DAML Party → Ethereum address
+  # Production relay settings (mainnet + 3-of-5 validator quorum).
+  # Replace placeholder addresses/party IDs during mainnet ceremony.
+  BRIDGE_CONTRACT_ADDRESS: "__MAINNET_BRIDGE_PROXY_ADDRESS__"
+  TREASURY_ADDRESS: "__MAINNET_TREASURY_PROXY_ADDRESS__"
+  CANTON_PARTY: "minted-relay-aggregator::<party-id>"
+  RELAY_VALIDATOR_SET_SIZE: "5"
+  RELAY_MIN_SIGNATURES: "3"
+  # JSON map: DAML Party -> Ethereum address (exactly five validators)
   VALIDATOR_ADDRESSES: |
-    {"minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4":"0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36"}
+    {
+      "minted-validator-1::<party-id-1>":"0x0000000000000000000000000000000000001001",
+      "minted-validator-2::<party-id-2>":"0x0000000000000000000000000000000000001002",
+      "minted-validator-3::<party-id-3>":"0x0000000000000000000000000000000000001003",
+      "minted-validator-4::<party-id-4>":"0x0000000000000000000000000000000000001004",
+      "minted-validator-5::<party-id-5>":"0x0000000000000000000000000000000000001005"
+    }
 ---
 # ============================================================
 # RELAY NETWORKPOLICY
