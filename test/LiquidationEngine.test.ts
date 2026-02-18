@@ -114,7 +114,7 @@ describe("LiquidationEngine", function () {
     const wbtc = await MockERC20.deploy("Wrapped Bitcoin", "WBTC", 8);
 
     const MUSD = await ethers.getContractFactory("MUSD");
-    const musd = await MUSD.deploy(ethers.parseEther("100000000"));
+    const musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
 
     const PriceOracle = await ethers.getContractFactory("PriceOracle");
     const priceOracle = await PriceOracle.deploy();
@@ -123,11 +123,11 @@ describe("LiquidationEngine", function () {
     const ethFeed = await MockAggregator.deploy(8, 200000000000n); // $2000
     const btcFeed = await MockAggregator.deploy(8, 4000000000000n); // $40000
 
-    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18);
-    await priceOracle.setFeed(await wbtc.getAddress(), await btcFeed.getAddress(), 3600, 8);
+    await priceOracle.setFeed(await weth.getAddress(), await ethFeed.getAddress(), 3600, 18, 0);
+    await priceOracle.setFeed(await wbtc.getAddress(), await btcFeed.getAddress(), 3600, 8, 0);
 
     const CollateralVault = await ethers.getContractFactory("CollateralVault");
-    const collateralVault = await CollateralVault.deploy();
+    const collateralVault = await CollateralVault.deploy(ethers.ZeroAddress);
     // WETH: 75% LTV, 80% threshold, 10% penalty
     await collateralVault.addCollateral(await weth.getAddress(), 7500, 8000, 1000);
     // WBTC: 70% LTV, 75% threshold, 15% penalty
@@ -148,7 +148,8 @@ describe("LiquidationEngine", function () {
       await borrowModule.getAddress(),
       await priceOracle.getAddress(),
       await musd.getAddress(),
-      5000
+      5000,
+      owner.address
     );
 
     const BRIDGE_ROLE = await musd.BRIDGE_ROLE();
@@ -500,7 +501,7 @@ describe("LiquidationEngine", function () {
         liquidationEngine
           .connect(liquidator)
           .liquidate(user1.address, await weth.getAddress(), ethers.parseEther("100"))
-      ).to.be.revertedWith("NOTHING_TO_SEIZE");
+      ).to.be.revertedWithCustomError(liquidationEngine, "NothingToSeize");
     });
   });
 

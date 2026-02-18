@@ -776,9 +776,10 @@ describe('LeverageVault', function () {
           await weth.getAddress(),
           initialDeposit,
           20,
-          5
+          5,
+          futureDeadline()
         )
-      ).to.be.revertedWith('SWAP_FAILED_ORPHANED_DEBT');
+      ).to.be.revertedWithCustomError(leverageVault, "SwapFailedOrphanedDebt");
 
       const position = await leverageVault.getPosition(user.address);
       expect(position.totalCollateral).to.equal(0);
