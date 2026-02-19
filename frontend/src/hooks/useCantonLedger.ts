@@ -186,6 +186,36 @@ export async function cantonExercise(
 }
 
 /**
+ * Fetch fresh balances data inline (not through React state).
+ * Use this before exercising consuming choices to ensure the CID is current.
+ */
+export async function fetchFreshBalances(): Promise<CantonBalancesData> {
+  const resp = await fetch("/api/canton-balances");
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(err.error || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Refresh all price feeds to prevent PRICE_STALE errors.
+ * Call before borrow/withdraw operations.
+ */
+export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed?: number; error?: string }> {
+  const resp = await fetch("/api/canton-refresh-prices", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
+  return resp.json();
+}
+
+/**
  * Create a DAML contract on Canton via server-side API route.
  */
 export async function cantonCreate(

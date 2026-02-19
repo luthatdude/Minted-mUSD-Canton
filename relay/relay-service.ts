@@ -1434,12 +1434,12 @@ class RelayService {
           nonce: Number(nonce),
           createdAt: new Date(Number(timestamp) * 1000).toISOString(),
           status: "pending",
+          // CRIT-02: V3 BridgeInRequest requires validators and requiredSignatures.
+          // The ensure clause mandates `requiredSignatures > 0 && amount > 0.0`.
+          // Without these fields, Canton rejects the create with DAML_INTERPRETATION_ERROR.
+          validators: Object.keys(this.config.validatorAddresses),
+          requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
         };
-
-        // NOTE: Do NOT add validators/requiredSignatures to the BridgeInRequest payload.
-        // The old DAML package on Canton does not have those fields on BridgeInRequest
-        // and Canton rejects unexpected fields with INVALID_ARGUMENT.
-        // These fields only exist on BridgeService (for governance) — not on individual requests.
 
         try {
           // Create BridgeInRequest on Canton with the original user party
@@ -1566,14 +1566,23 @@ class RelayService {
           }
 
           if (musdCid) {
-            // Exercise CantonMUSD_Transfer to propose transfer to user
-            await this.canton.exerciseChoice(
-              TEMPLATES.CantonMUSD,
-              musdCid,
-              "CantonMUSD_Transfer",
-              { newOwner: userParty }
-            );
-            console.log(`[Relay] ✅ Transferred CantonMUSD #${nonce} to user ${userParty.slice(0, 30)}...`);
+            // CantonMUSD_Transfer requires complianceRegistryCid — query for it
+            const complianceContracts = await this.canton.queryContracts(
+              { moduleName: "CantonDirectMint", entityName: "ComplianceRegistry" },
+              (p: any) => p.operator === this.config.cantonParty
+            ).catch(() => []);
+
+            if (complianceContracts.length > 0) {
+              await this.canton.exerciseChoice(
+                TEMPLATES.CantonMUSD,
+                musdCid,
+                "CantonMUSD_Transfer",
+                { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId }
+              );
+              console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+            } else {
+              console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
+            }
           } else {
             console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
           }

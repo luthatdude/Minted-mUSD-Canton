@@ -5,6 +5,8 @@ import { TxButton } from "@/components/TxButton";
 import {
   useCantonLedger,
   cantonExercise,
+  fetchFreshBalances,
+  refreshPriceFeeds,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 
@@ -94,16 +96,30 @@ export function CantonBorrow() {
     try {
       const amt = parseFloat(borrowAmount);
       if (isNaN(amt) || amt <= 0) throw new Error("Enter a valid borrow amount");
+
+      // 1. Refresh price feeds to prevent PRICE_STALE
+      const priceResult = await refreshPriceFeeds();
+      if (!priceResult.success) {
+        console.warn("Price feed refresh warning:", priceResult.error);
+      }
+
+      // 2. Fetch fresh data after price refresh (price feeds get new CIDs)
+      const fresh = await fetchFreshBalances();
+      const freshService = fresh.lendingService;
+      if (!freshService) throw new Error("Lending service not found");
+      const freshEscrows = fresh.escrowPositions || [];
+      const freshPF = fresh.priceFeeds || [];
+      if (freshEscrows.length === 0) throw new Error("No collateral deposited");
+
       // Lending_Borrow needs ALL escrow positions + matching price feeds (1:1)
-      const pf = data?.priceFeeds || [];
-      const allEscrowCids = escrowPositions.map(e => e.contractId);
-      const allPriceFeedCids = escrowPositions.map(e => {
+      const allEscrowCids = freshEscrows.map(e => e.contractId);
+      const allPriceFeedCids = freshEscrows.map(e => {
         const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
-        return pf.find(p => p.asset === sym)?.contractId || "";
+        return freshPF.find(p => p.asset === sym)?.contractId || "";
       });
       if (allPriceFeedCids.some(c => !c)) throw new Error("Missing price feed for one or more collateral types");
-      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, "Lending_Borrow", {
-        user: data!.party, borrowAmount: String(amt), escrowCids: allEscrowCids, priceFeedCids: allPriceFeedCids,
+      const resp = await cantonExercise("CantonLendingService", freshService.contractId, "Lending_Borrow", {
+        user: fresh.party, borrowAmount: String(amt), escrowCids: allEscrowCids, priceFeedCids: allPriceFeedCids,
       });
       if (!resp.success) throw new Error(resp.error || "Borrow failed");
       setTxSuccess(`Borrowed ${fmtAmount(amt)} mUSD against collateral`);
@@ -116,15 +132,62 @@ export function CantonBorrow() {
     if (!lendingService || debtPositions.length === 0 || tokens.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
-      const debt = debtPositions[selectedIdx];
-      if (!debt) throw new Error("No debt position selected");
-      const musd = tokens[repayIdx];
-      if (!musd) throw new Error("No mUSD token selected for repayment");
-      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, "Lending_Repay", {
-        user: data!.party, debtCid: debt.contractId, musdCid: musd.contractId,
+      // Fetch fresh data (Lending_Repay is consuming)
+      const fresh = await fetchFreshBalances();
+      const freshService = fresh.lendingService;
+      if (!freshService) throw new Error("Lending service not found");
+      const freshDebts = fresh.debtPositions || [];
+      const freshTokens = fresh.tokens || [];
+      const debt = freshDebts[selectedIdx] || freshDebts[0];
+      if (!debt) throw new Error("No debt position found");
+      let musd = freshTokens[repayIdx] || freshTokens[0];
+      if (!musd) throw new Error("No mUSD token available for repayment");
+
+      const debtTotal = parseFloat(debt.debtMusd) + parseFloat(debt.interestAccrued || "0");
+      const musdAmount = parseFloat(musd.amount);
+
+      // If mUSD token amount > debt, split first to create exact-amount token
+      let musdCidForRepay = musd.contractId;
+      if (musdAmount > debtTotal && debtTotal > 0) {
+        const splitResp = await cantonExercise("CantonMUSD", musd.contractId, "CantonMUSD_Split", {
+          splitAmount: String(debtTotal),
+        });
+        if (!splitResp.success) throw new Error(splitResp.error || "Failed to split mUSD token");
+        // After split, we need to refresh to get the new CID of the split portion
+        const afterSplit = await fetchFreshBalances();
+        const splitTokens = afterSplit.tokens || [];
+        // Find the token with amount closest to debtTotal
+        const exactToken = splitTokens.find(t => {
+          const diff = Math.abs(parseFloat(t.amount) - debtTotal);
+          return diff < 0.000001;
+        });
+        if (exactToken) {
+          musdCidForRepay = exactToken.contractId;
+        } else {
+          // Fall back to smallest token that covers the debt
+          const sorted = [...splitTokens].sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
+          const viable = sorted.find(t => parseFloat(t.amount) >= debtTotal);
+          if (viable) musdCidForRepay = viable.contractId;
+        }
+        // Re-fetch service CID (might have changed if concurrent ops)
+        const fresh2 = afterSplit;
+        const freshService2 = fresh2.lendingService;
+        if (freshService2) {
+          const resp = await cantonExercise("CantonLendingService", freshService2.contractId, "Lending_Repay", {
+            user: fresh2.party, debtCid: debt.contractId, musdCid: musdCidForRepay,
+          });
+          if (!resp.success) throw new Error(resp.error || "Repay failed");
+          setTxSuccess(`Repaid ${fmtAmount(debtTotal)} mUSD debt`);
+          await refresh();
+          return;
+        }
+      }
+
+      const resp = await cantonExercise("CantonLendingService", freshService.contractId, "Lending_Repay", {
+        user: fresh.party, debtCid: debt.contractId, musdCid: musdCidForRepay,
       });
       if (!resp.success) throw new Error(resp.error || "Repay failed");
-      setTxSuccess(`Repaid debt on ${debt.collateralType} position`);
+      setTxSuccess(`Repaid debt position`);
       await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -134,8 +197,21 @@ export function CantonBorrow() {
     if (!lendingService || escrowPositions.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
-      const escrow = escrowPositions[selectedIdx];
-      if (!escrow) throw new Error("No collateral position selected");
+      // 1. Refresh price feeds (withdraw checks health factor which needs fresh prices)
+      const priceResult = await refreshPriceFeeds();
+      if (!priceResult.success) {
+        console.warn("Price feed refresh warning:", priceResult.error);
+      }
+
+      // 2. Fetch fresh data after price refresh
+      const fresh = await fetchFreshBalances();
+      const freshService = fresh.lendingService;
+      if (!freshService) throw new Error("Lending service not found");
+      const freshEscrows = fresh.escrowPositions || [];
+      const freshPF = fresh.priceFeeds || [];
+      const escrow = freshEscrows[selectedIdx] || freshEscrows[0];
+      if (!escrow) throw new Error("No collateral position found");
+
       // Pick correct withdraw choice per collateral type
       const choiceMap: Record<string, string> = {
         "CTN_Coin": "Lending_WithdrawCTN",
@@ -144,15 +220,14 @@ export function CantonBorrow() {
       };
       const choice = choiceMap[escrow.collateralType] || "Lending_WithdrawCTN";
       // Collect other escrow positions + price feeds for health check
-      const pf = data?.priceFeeds || [];
-      const otherEscrows = escrowPositions.filter((_, i) => i !== selectedIdx);
+      const otherEscrows = freshEscrows.filter((_, i) => i !== selectedIdx);
       const otherEscrowCids = otherEscrows.map(e => e.contractId);
       const priceFeedCids = otherEscrows.map(e => {
         const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
-        return pf.find(p => p.asset === sym)?.contractId || "";
+        return freshPF.find(p => p.asset === sym)?.contractId || "";
       });
-      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, choice, {
-        user: data!.party, escrowCid: escrow.contractId, withdrawAmount: escrow.amount,
+      const resp = await cantonExercise("CantonLendingService", freshService.contractId, choice, {
+        user: fresh.party, escrowCid: escrow.contractId, withdrawAmount: escrow.amount,
         otherEscrowCids, priceFeedCids,
       });
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");

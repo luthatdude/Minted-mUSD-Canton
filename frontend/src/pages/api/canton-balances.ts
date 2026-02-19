@@ -275,10 +275,12 @@ export default async function handler(
           minDeposit: String(p.minDeposit || "0.01"),
           paused: isPaused,
         };
-        // Prefer service with valid complianceRegistryCid and unpaused
+        const prevTvl = stakingService ? parseFloat(stakingService.pooledMusd) : -1;
+        // Prefer service with valid complianceRegistryCid, unpaused, and higher TVL
         if (!stakingService
             || (hasValidCompliance && !stakingHasValidCompliance)
-            || (hasValidCompliance === stakingHasValidCompliance && !isPaused && stakingService.paused)) {
+            || (hasValidCompliance === stakingHasValidCompliance && !isPaused && stakingService.paused)
+            || (hasValidCompliance === stakingHasValidCompliance && isPaused === stakingService.paused && tvl > prevTvl)) {
           stakingService = candidate;
           stakingHasValidCompliance = hasValidCompliance;
         }
@@ -287,6 +289,7 @@ export default async function handler(
         const isPaused = p.paused === true || p.paused === "True";
         const compCid = (p.complianceRegistryCid as string) || "";
         const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+        const tvl = parseFloat((p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0");
         const candidate: ETHPoolServiceInfo = {
           contractId: evt.contractId,
           totalShares: (p.totalShares as string) || "0",
@@ -296,9 +299,11 @@ export default async function handler(
           paused: isPaused,
           totalMusdStaked: (p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0",
         };
+        const prevTvl = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : -1;
         if (!ethPoolService
             || (hasValidCompliance && !ethPoolHasValidCompliance)
-            || (hasValidCompliance === ethPoolHasValidCompliance && !isPaused && ethPoolService.paused)) {
+            || (hasValidCompliance === ethPoolHasValidCompliance && !isPaused && ethPoolService.paused)
+            || (hasValidCompliance === ethPoolHasValidCompliance && isPaused === ethPoolService.paused && tvl > prevTvl)) {
           ethPoolService = candidate;
           ethPoolHasValidCompliance = hasValidCompliance;
         }
