@@ -260,9 +260,17 @@ export function EthWalletProvider({
     if (!provider) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, provider);
     // Validate method name against ABI to prevent arbitrary invocation
+    // Supports both JSON ABI objects and human-readable string ABI entries
     const abiMethods = abi
-      .filter((item: any) => item.type === 'function')
-      .map((item: any) => item.name);
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          // Human-readable: "function balanceOf(address) view returns (uint256)"
+          const match = item.match(/^function\s+(\w+)\s*\(/);
+          return match ? match[1] : null;
+        }
+        return item.type === 'function' ? item.name : null;
+      })
+      .filter(Boolean);
     if (!abiMethods.includes(method)) {
       throw new Error(`Method "${method}" not found in contract ABI`);
     }
@@ -285,9 +293,16 @@ export function EthWalletProvider({
     }
     const contract = new Contract(contractAddress, abi, signer);
     // Validate method name against ABI to prevent arbitrary invocation
+    // Supports both JSON ABI objects and human-readable string ABI entries
     const abiMethods = abi
-      .filter((item: any) => item.type === 'function')
-      .map((item: any) => item.name);
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          const match = item.match(/^function\s+(\w+)\s*\(/);
+          return match ? match[1] : null;
+        }
+        return item.type === 'function' ? item.name : null;
+      })
+      .filter(Boolean);
     if (!abiMethods.includes(method)) {
       throw new Error(`Method "${method}" not found in contract ABI`);
     }
