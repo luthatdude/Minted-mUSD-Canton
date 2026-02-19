@@ -147,10 +147,12 @@ export function BorrowPage() {
   async function handleRepay() {
     if (!borrow || !musd || !address) return;
     const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
+    // Approve MaxUint256 so contract's dust auto-close (which may bump the amount)
+    // doesn't fail due to insufficient allowance from interest accrual
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < parsed) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, parsed);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
         await approveTx.wait();
       }
       return borrow.repay(parsed);
@@ -160,13 +162,16 @@ export function BorrowPage() {
 
   async function handleRepayMax() {
     if (!borrow || !musd || !address || debt === 0n) return;
-    const repayAmount = musdBalance < debt ? musdBalance : debt;
+    // Use the larger of debt or balance, capped. Add 1% buffer for interest accrual
+    // between read and TX execution. Contract caps at actual debt, so overpaying is safe.
+    const bufferedDebt = debt + (debt / 100n); // +1% buffer for accruing interest
+    const repayAmount = musdBalance < bufferedDebt ? musdBalance : bufferedDebt;
     if (repayAmount === 0n) return;
 
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < repayAmount) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, repayAmount);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
         await approveTx.wait();
       }
       return borrow.repay(repayAmount);
@@ -183,7 +188,10 @@ export function BorrowPage() {
   }
 
   // Health factor thresholds
-  const hfValue = Number(ethers.formatUnits(healthFactor, 18));
+  // Contract returns health factor in basis points (10000 = 1.0x)
+  const hfValue = healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff")
+    ? Infinity
+    : Number(healthFactor) / 10000;
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
   const isAtRisk = hfValue < 1.5 && debt > 0n;
   const isCritical = hfValue < 1.2 && debt > 0n;
@@ -402,7 +410,13 @@ export function BorrowPage() {
                       {action === "repay" && debt > 0n && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => setAmount(ethers.formatUnits(musdBalance < debt ? musdBalance : debt, MUSD_DECIMALS))}
+                          onClick={() => {
+                            // Add 1% buffer for interest that accrues between read and TX.
+                            // Contract caps repay at actual debt, so overpaying is safe.
+                            const buffered = debt + (debt / 100n);
+                            const repayAmt = musdBalance < buffered ? musdBalance : buffered;
+                            setAmount(ethers.formatUnits(repayAmt, MUSD_DECIMALS));
+                          }}
                         >
                           MAX
                         </button>

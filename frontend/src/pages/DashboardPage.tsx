@@ -259,7 +259,11 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     Number(ethers.formatUnits(portfolio.totalDebt, MUSD_DECIMALS))
   ) : 0;
 
-  const hfValue = portfolio ? Number(ethers.formatUnits(portfolio.healthFactor, 18)) : 999;
+  const hfValue = portfolio
+    ? (portfolio.healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff")
+      ? Infinity
+      : Number(portfolio.healthFactor) / 10000)
+    : 999;
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
 
   return (
