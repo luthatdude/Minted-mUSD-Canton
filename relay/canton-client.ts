@@ -311,19 +311,26 @@ export class CantonClient {
    * @param contractId   Contract ID to exercise on
    * @param choice       Choice name (e.g., "Attestation_Complete")
    * @param choiceArgument  Choice argument payload
+   * @param extraActAs   Additional parties to include in actAs (e.g., governance party
+   *                     for choices with multi-party controllers like ReceiveYield)
    * @returns The exercise result (transaction events)
    */
   async exerciseChoice(
     templateId: TemplateId,
     contractId: string,
     choice: string,
-    choiceArgument: Record<string, unknown> = {}
+    choiceArgument: Record<string, unknown> = {},
+    extraActAs: string[] = []
   ): Promise<unknown> {
     const commandId = `relay-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
+    // Build actAs array: always include primary party, plus any extra parties
+    // (e.g., governance party for dual-controller choices like ReceiveYield)
+    const actAs = [this.actAs, ...extraActAs.filter(p => p && p !== this.actAs)];
+
     const body = {
       userId: this.userId,
-      actAs: [this.actAs],
+      actAs,
       readAs: this.readAs,
       commandId,
       commands: [

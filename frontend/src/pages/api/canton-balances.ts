@@ -188,14 +188,20 @@ export default async function handler(
       } else if (entityName === "CantonStakingService") {
         const p = evt.createArgument;
         const ts = parseFloat(String(p.totalShares || "0"));
+        // Deployed version uses globalSharePrice (not pooledMusd)
+        const gsp = parseFloat(String(p.globalSharePrice || "1.0"));
         const pm = parseFloat(String(p.pooledMusd || "0"));
+        // Pool-derived TVL: if pooledMusd is available use it, otherwise estimate from shares * sharePrice
+        const tvl = pm > 0 ? pm : (ts * gsp);
+        // Share price: prefer pool-derived, fall back to globalSharePrice
+        const sharePrice = pm > 0 && ts > 0 ? pm / ts : gsp;
         stakingService = {
           contractId: evt.contractId,
           totalShares: String(ts),
-          pooledMusd: String(pm),
-          sharePrice: ts > 0 ? String(pm / ts) : "1.0",
+          pooledMusd: String(tvl),
+          sharePrice: String(sharePrice),
           cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
-          minDeposit: (p.minDeposit as string) || "0.01",
+          minDeposit: String(p.minDeposit || "0.01"),
           paused: p.paused === true || p.paused === "True",
         };
       } else if (entityName === "CantonETHPoolService") {
@@ -211,10 +217,14 @@ export default async function handler(
         };
       } else if (entityName === "CantonDirectMintService") {
         const p = evt.createArgument;
-        directMintService = {
-          contractId: evt.contractId,
-          paused: p.paused === true || p.paused === "True",
-        };
+        // Pick the active (unpaused) service, or the one with highest nonce
+        const isPaused = p.paused === true || p.paused === "True";
+        if (!directMintService || (!isPaused && directMintService.paused)) {
+          directMintService = {
+            contractId: evt.contractId,
+            paused: isPaused,
+          };
+        }
       } else if (entityName === "CantonSMUSD") {
         const p = evt.createArgument;
         smusdTokens.push({
