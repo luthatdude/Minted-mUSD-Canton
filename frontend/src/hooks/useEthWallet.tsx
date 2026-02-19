@@ -90,6 +90,12 @@ export function EthWalletProvider({
   useEffect(() => {
     const checkConnection = async () => {
       if (typeof window === 'undefined' || !window.ethereum) return;
+      // Guard against MetaMask SDK shim returning non-provider strings
+      if (typeof window.ethereum !== 'object' || typeof window.ethereum.request !== 'function') return;
+      try {
+        const rawChainId = await window.ethereum.request({ method: 'eth_chainId' });
+        if (typeof rawChainId !== 'string' || !rawChainId.startsWith('0x')) return;
+      } catch { return; }
 
       try {
         const accounts = await window.ethereum.request({ method: 'eth_accounts' });
@@ -118,11 +124,12 @@ export function EthWalletProvider({
     };
 
     const handleChainChanged = (chainIdHex: string) => {
+      if (typeof chainIdHex !== 'string' || !chainIdHex.startsWith('0x')) return;
       const newChainId = parseInt(chainIdHex, 16);
       setChainId(newChainId);
       onChainChange?.(newChainId);
       // Reload provider with new chain
-      if (window.ethereum) {
+      if (window.ethereum && typeof window.ethereum === 'object' && typeof window.ethereum.request === 'function') {
         const newProvider = new BrowserProvider(window.ethereum);
         setProvider(newProvider);
         newProvider.getSigner().then(setSigner).catch(console.error);
@@ -146,8 +153,21 @@ export function EthWalletProvider({
   }, [provider, address, chainId]);
 
   const handleConnect = async () => {
-    if (typeof window === 'undefined' || !window.ethereum) {
+    if (typeof window === 'undefined' || !window.ethereum ||
+        typeof window.ethereum !== 'object' || typeof window.ethereum.request !== 'function') {
       setError('No Ethereum wallet found. Please install MetaMask.');
+      return;
+    }
+
+    // Validate provider returns a real chain ID, not a MetaMask SDK redirect
+    try {
+      const rawChainId = await window.ethereum.request({ method: 'eth_chainId' });
+      if (typeof rawChainId !== 'string' || !rawChainId.startsWith('0x')) {
+        setError('Wallet provider is not ready. Please check MetaMask.');
+        return;
+      }
+    } catch {
+      setError('Wallet provider is not available.');
       return;
     }
 

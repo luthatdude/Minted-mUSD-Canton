@@ -100,7 +100,15 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
       if (typeof window === 'undefined' || !window.ethereum) return;
       // MetaMask SDK can set window.ethereum to a string like "open_metamask_install_page"
       // when the extension isn't available. Guard against non-object values.
-      if (typeof window.ethereum !== 'object') return;
+      if (typeof window.ethereum !== 'object' || typeof window.ethereum.request !== 'function') return;
+
+      // Pre-validate: ensure the provider returns a real chain ID, not a redirect string
+      try {
+        const rawChainId = await window.ethereum.request({ method: 'eth_chainId' });
+        if (typeof rawChainId !== 'string' || !rawChainId.startsWith('0x')) return;
+      } catch {
+        return; // Not a real EIP-1193 provider
+      }
       
       try {
         const browserProvider = new BrowserProvider(window.ethereum);
