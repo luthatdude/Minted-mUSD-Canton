@@ -3,13 +3,13 @@ import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { formatUSD, formatBps, formatHealthFactor, formatTimestamp, shortenAddress } from "@/lib/format";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 import BridgeOutPanel from "@/components/BridgeOutPanel";
 
 export function BridgePage() {
-  const { isConnected } = useWalletConnect();
+  const { isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
   const [data, setData] = useState({
     attestedAssets: 0n,

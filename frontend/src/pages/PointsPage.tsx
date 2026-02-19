@@ -4,11 +4,11 @@
 import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import WalletConnector from "@/components/WalletConnector";
 
 export function PointsPage() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const [referralCode, setReferralCode] = useState("");
 
   return (

@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Contract } from "ethers";
-import { useWalletConnect } from "./useWalletConnect";
+import { useUnifiedWallet } from "./useUnifiedWallet";
 import { CONTRACTS } from "@/lib/config";
 import { MUSD_ABI } from "@/abis/MUSD";
 import { SMUSD_ABI } from "@/abis/SMUSD";
@@ -31,7 +31,7 @@ const ABI_MAP: Record<string, readonly string[]> = {
  * Hook to get a single contract instance using WalletConnect
  */
 export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
-  const { signer, provider, isConnected } = useWalletConnect();
+  const { signer, provider, isConnected } = useUnifiedWallet();
 
   return useMemo(() => {
     const address = CONTRACTS[name];
@@ -49,7 +49,7 @@ export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
  * Hook to get all protocol contracts using WalletConnect
  */
 export function useWCContracts() {
-  const { signer, provider, isConnected } = useWalletConnect();
+  const { signer, provider, isConnected } = useUnifiedWallet();
 
   return useMemo(() => {
     const signerOrProvider = signer || provider;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { Layout } from "@/components/Layout";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
@@ -25,7 +25,7 @@ import { CantonAdmin } from "@/components/canton/CantonAdmin";
 
 export default function Home() {
   const router = useRouter();
-  const wallet = useWalletConnect();
+  const wallet = useUnifiedWallet();
   const contracts = useWCContracts();
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
@@ -90,8 +90,8 @@ export default function Home() {
   return (
     <Layout
       address={wallet.address}
-      onConnect={wallet.connect}
-      onDisconnect={wallet.disconnect}
+      onConnect={() => wallet.connectMetaMask()}
+      onDisconnect={() => wallet.disconnect()}
       onCantonDisconnect={loopWallet.disconnect ?? (() => {})}
       activePage={page}
       onNavigate={handleNavigate}
