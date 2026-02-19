@@ -51,9 +51,9 @@ services:
       dockerfile: Dockerfile
     command: ["npm", "run", "relay:prod"]
     environment:
-      - CANTON_HOST=${CANTON_HOST:-canton}
-      - CANTON_PORT=${CANTON_PORT:-6865}
-      - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
+      - CANTON_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_PORT=${CANTON_PORT:-7575}
+      - CANTON_USE_TLS=${CANTON_USE_TLS:-false}
       - CANTON_PARTY=${CANTON_PARTY}
       # INFRA-H-03: ETHEREUM_RPC_URL moved to secrets (contains API keys)
       # Read from /run/secrets/ethereum_rpc_url at runtime
@@ -65,7 +65,7 @@ services:
       # within the docker network (bridge_internal). External access is
       # restricted by port mapping to 127.0.0.1 and network isolation.
       - HEALTH_BIND_HOST=0.0.0.0
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-development}
     # Mount secrets instead of env vars for sensitive values
     secrets:
       - canton_token
@@ -113,16 +113,16 @@ services:
       dockerfile: Dockerfile
     command: ["npm", "run", "yield-sync:prod"]
     environment:
-      - CANTON_HOST=${CANTON_HOST:-canton}
-      - CANTON_PORT=${CANTON_PORT:-6865}
-      - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
+      - CANTON_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_PORT=${CANTON_PORT:-7575}
+      - CANTON_USE_TLS=${CANTON_USE_TLS:-false}
       - CANTON_PARTY=${CANTON_PARTY}
       # INFRA-H-03: ETHEREUM_RPC_URL moved to secrets (contains API keys)
       - TREASURY_ADDRESS=${TREASURY_ADDRESS}
       - SMUSD_ADDRESS=${SMUSD_ADDRESS}
       - YIELD_SYNC_INTERVAL_MS=${YIELD_SYNC_INTERVAL_MS:-3600000}
       - MIN_YIELD_THRESHOLD=${MIN_YIELD_THRESHOLD:-1000000000}
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-development}
     secrets:
       - canton_token
       - relayer_private_key
@@ -164,9 +164,12 @@ services:
       dockerfile: Dockerfile
     command: ["npm", "run", "validator:prod"]
     environment:
-      - CANTON_HOST=${CANTON_HOST:-canton}
-      - CANTON_PORT=${CANTON_PORT:-6865}
-      - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
+      - CANTON_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_PORT=${CANTON_PORT:-7575}
+      - CANTON_USE_TLS=${CANTON_USE_TLS:-false}
+      # validator-node-v2.ts reads CANTON_LEDGER_HOST/PORT — alias them
+      - CANTON_LEDGER_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_LEDGER_PORT=${CANTON_PORT:-7575}
       - VALIDATOR_PARTY=${VALIDATOR1_PARTY}
       - VALIDATOR_ETH_ADDRESS=${VALIDATOR1_ETH_ADDRESS}
       - KMS_KEY_ID=${VALIDATOR1_KMS_KEY_ID}
@@ -174,8 +177,8 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # Set NODE_ENV for HTTPS enforcement in validator-node-v2
-      - NODE_ENV=production
+      # Set NODE_ENV — use 'production' for mainnet (enforces TLS + KMS)
+      - NODE_ENV=${NODE_ENV:-development}
     # Use secrets for AWS credentials
     secrets:
       - canton_token
@@ -214,9 +217,12 @@ services:
       dockerfile: Dockerfile
     command: ["npm", "run", "validator:prod"]
     environment:
-      - CANTON_HOST=${CANTON_HOST:-canton}
-      - CANTON_PORT=${CANTON_PORT:-6865}
-      - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
+      - CANTON_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_PORT=${CANTON_PORT:-7575}
+      - CANTON_USE_TLS=${CANTON_USE_TLS:-false}
+      # validator-node-v2.ts reads CANTON_LEDGER_HOST/PORT — alias them
+      - CANTON_LEDGER_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_LEDGER_PORT=${CANTON_PORT:-7575}
       - VALIDATOR_PARTY=${VALIDATOR2_PARTY}
       - VALIDATOR_ETH_ADDRESS=${VALIDATOR2_ETH_ADDRESS}
       - KMS_KEY_ID=${VALIDATOR2_KMS_KEY_ID}
@@ -224,8 +230,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # INFRA-H-03: NODE_ENV was missing — required for HTTPS enforcement in validator-node-v2
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-development}
     secrets:
       - canton_token
       - validator2_aws_access_key
@@ -263,9 +268,12 @@ services:
       dockerfile: Dockerfile
     command: ["npm", "run", "validator:prod"]
     environment:
-      - CANTON_HOST=${CANTON_HOST:-canton}
-      - CANTON_PORT=${CANTON_PORT:-6865}
-      - CANTON_USE_TLS=${CANTON_USE_TLS:-true}
+      - CANTON_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_PORT=${CANTON_PORT:-7575}
+      - CANTON_USE_TLS=${CANTON_USE_TLS:-false}
+      # validator-node-v2.ts reads CANTON_LEDGER_HOST/PORT — alias them
+      - CANTON_LEDGER_HOST=${CANTON_HOST:-host.docker.internal}
+      - CANTON_LEDGER_PORT=${CANTON_PORT:-7575}
       - VALIDATOR_PARTY=${VALIDATOR3_PARTY}
       - VALIDATOR_ETH_ADDRESS=${VALIDATOR3_ETH_ADDRESS}
       - KMS_KEY_ID=${VALIDATOR3_KMS_KEY_ID}
@@ -273,8 +281,7 @@ services:
       - BRIDGE_CONTRACT_ADDRESS=${BRIDGE_CONTRACT_ADDRESS}
       - MIN_COLLATERAL_RATIO_BPS=${MIN_COLLATERAL_RATIO_BPS:-11000}
       - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-3000}
-      # INFRA-H-03: NODE_ENV was missing — required for HTTPS enforcement in validator-node-v2
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-development}
     secrets:
       - canton_token
       - validator3_aws_access_key
