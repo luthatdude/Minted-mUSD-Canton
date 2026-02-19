@@ -98,6 +98,9 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
   useEffect(() => {
     async function detectChain() {
       if (typeof window === 'undefined' || !window.ethereum) return;
+      // MetaMask SDK can set window.ethereum to a string like "open_metamask_install_page"
+      // when the extension isn't available. Guard against non-object values.
+      if (typeof window.ethereum !== 'object') return;
       
       try {
         const browserProvider = new BrowserProvider(window.ethereum);
@@ -123,7 +126,7 @@ export function MultiChainDepositProvider({ children }: { children: ReactNode })
     detectChain();
 
     // Listen for chain changes
-    if (window.ethereum) {
+    if (window.ethereum && typeof window.ethereum === 'object') {
       window.ethereum.on('chainChanged', detectChain);
       window.ethereum.on('accountsChanged', detectChain);
       return () => {
