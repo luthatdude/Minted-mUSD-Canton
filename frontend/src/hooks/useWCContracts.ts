@@ -12,6 +12,8 @@ import { LIQUIDATION_ENGINE_ABI } from "@/abis/LiquidationEngine";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
+import { ETH_POOL_ABI } from "@/abis/ETHPool";
+import { SMUSDE_ABI } from "@/abis/SMUSDE";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -26,6 +28,8 @@ const ABI_MAP: Record<string, readonly string[]> = {
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
   USDT: ERC20_ABI,
+  ETHPool: ETH_POOL_ABI,
+  SMUSDE: SMUSDE_ABI,
 };
 
 /**
@@ -67,6 +71,8 @@ export function useWCContracts() {
         liquidation: null,
         bridge: null,
         oracle: null,
+        ethPool: null,
+        smusde: null,
       };
     }
 
@@ -89,6 +95,8 @@ export function useWCContracts() {
       liquidation: createContract("LiquidationEngine"),
       bridge: createContract("BLEBridgeV9"),
       oracle: createContract("PriceOracle"),
+      ethPool: createContract("ETHPool"),
+      smusde: createContract("SMUSDE"),
     };
   }, [signer, provider, isConnected]);
 }
