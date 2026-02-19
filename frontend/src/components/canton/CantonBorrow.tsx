@@ -74,9 +74,11 @@ export function CantonBorrow() {
       const args: Record<string, unknown> = { user: data!.party };
       if (collateralAsset === "CTN") {
         choice = "Lending_DepositCTN"; args.coinCid = token.contractId;
-      } else {
+      } else if (collateralAsset === "smUSD") {
         choice = "Lending_DepositSMUSD"; args.smusdCid = token.contractId;
-        args.collateralType = collateralAsset === "smUSD" ? "CTN_SMUSD" : "CTN_SMUSDE";
+      } else {
+        // smUSD-E uses its own choice with different arg name
+        choice = "Lending_DepositSMUSDE"; args.smusdeCid = token.contractId;
       }
       const resp = await cantonExercise("CantonLendingService", lendingService.contractId, choice, args);
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
@@ -92,13 +94,19 @@ export function CantonBorrow() {
     try {
       const amt = parseFloat(borrowAmount);
       if (isNaN(amt) || amt <= 0) throw new Error("Enter a valid borrow amount");
-      const escrow = escrowPositions[selectedIdx];
-      if (!escrow) throw new Error("No collateral position selected");
+      // Lending_Borrow needs ALL escrow positions + matching price feeds (1:1)
+      const pf = data?.priceFeeds || [];
+      const allEscrowCids = escrowPositions.map(e => e.contractId);
+      const allPriceFeedCids = escrowPositions.map(e => {
+        const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
+        return pf.find(p => p.asset === sym)?.contractId || "";
+      });
+      if (allPriceFeedCids.some(c => !c)) throw new Error("Missing price feed for one or more collateral types");
       const resp = await cantonExercise("CantonLendingService", lendingService.contractId, "Lending_Borrow", {
-        user: data!.party, escrowCid: escrow.contractId, borrowAmount: String(amt),
+        user: data!.party, borrowAmount: String(amt), escrowCids: allEscrowCids, priceFeedCids: allPriceFeedCids,
       });
       if (!resp.success) throw new Error(resp.error || "Borrow failed");
-      setTxSuccess(`Borrowed ${fmtAmount(amt)} mUSD against ${escrow.collateralType} collateral`);
+      setTxSuccess(`Borrowed ${fmtAmount(amt)} mUSD against collateral`);
       setBorrowAmount(""); await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -128,8 +136,24 @@ export function CantonBorrow() {
     try {
       const escrow = escrowPositions[selectedIdx];
       if (!escrow) throw new Error("No collateral position selected");
-      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, "Lending_WithdrawCTN", {
-        user: data!.party, escrowCid: escrow.contractId,
+      // Pick correct withdraw choice per collateral type
+      const choiceMap: Record<string, string> = {
+        "CTN_Coin": "Lending_WithdrawCTN",
+        "CTN_SMUSD": "Lending_WithdrawSMUSD",
+        "CTN_SMUSDE": "Lending_WithdrawSMUSDE",
+      };
+      const choice = choiceMap[escrow.collateralType] || "Lending_WithdrawCTN";
+      // Collect other escrow positions + price feeds for health check
+      const pf = data?.priceFeeds || [];
+      const otherEscrows = escrowPositions.filter((_, i) => i !== selectedIdx);
+      const otherEscrowCids = otherEscrows.map(e => e.contractId);
+      const priceFeedCids = otherEscrows.map(e => {
+        const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
+        return pf.find(p => p.asset === sym)?.contractId || "";
+      });
+      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, choice, {
+        user: data!.party, escrowCid: escrow.contractId, withdrawAmount: escrow.amount,
+        otherEscrowCids, priceFeedCids,
       });
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");
       setTxSuccess(`Withdrew ${fmtAmount(escrow.amount)} ${escrow.collateralType} collateral`);

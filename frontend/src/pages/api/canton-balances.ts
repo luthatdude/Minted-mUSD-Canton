@@ -375,11 +375,11 @@ export default async function handler(
         const p = evt.createArgument;
         debtPositions.push({
           contractId: evt.contractId,
-          owner: (p.owner as string) || "",
-          collateralType: (p.collateralType as string) || "",
-          collateralAmount: (p.collateralAmount as string) || "0",
-          debtMusd: (p.debtMusd as string) || "0",
-          interestAccrued: (p.interestAccrued as string) || "0",
+          owner: (p.borrower as string) || "",
+          collateralType: "",  // Debt position is global — backed by all escrows
+          collateralAmount: "0",
+          debtMusd: (p.principalDebt as string) || "0",
+          interestAccrued: (p.accruedInterest as string) || "0",
         });
       } else if (entityName === "CantonDirectMintService") {
         const p = evt.createArgument;

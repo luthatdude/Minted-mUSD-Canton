@@ -176,6 +176,12 @@ export async function cantonExercise(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ templateId, contractId, choice, argument }),
   });
+  // Handle non-JSON responses (e.g. Next.js error pages returning HTML)
+  const contentType = resp.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await resp.text().catch(() => "Unknown error");
+    return { success: false, error: `HTTP ${resp.status}: ${text.slice(0, 300)}` };
+  }
   return resp.json();
 }
 
