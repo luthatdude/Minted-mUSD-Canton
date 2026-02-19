@@ -23,6 +23,7 @@ import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
 import { CantonBalancesPage } from "@/components/canton/CantonBalances";
+import { DevnetFaucet } from "@/components/canton/DevnetFaucet";
 
 export default function Home() {
   const router = useRouter();
@@ -64,6 +65,8 @@ export default function Home() {
           return <CantonAdmin />;
         case "canton-balances":
           return <CantonBalancesPage />;
+        case "faucet":
+          return <DevnetFaucet />;
         default:
           return <CantonBalancesPage />;
       }
