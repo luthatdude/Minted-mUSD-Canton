@@ -174,7 +174,7 @@ async function waitTx(
   if (!receipt || receipt.status === 0) {
     throw new Error(`Transaction reverted: ${label} — ${tx.hash}`);
   }
-  const cost = receipt.gasUsed * receipt.gasPrice;
+  const cost = BigInt(receipt.gasUsed) * BigInt(receipt.gasPrice);
   gasTracker.totalGas += cost;
   gasTracker.count++;
   console.log(
@@ -213,7 +213,8 @@ async function main() {
   // Resolve the deployer from KMS
   // In hardhat context, accounts=[] so ethers.getSigners() returns empty.
   // We construct the KMS signer directly.
-  let deployer: ethers.Signer;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let deployer: any;
 
   if (DRY_RUN) {
     // In dry-run mode (typically on hardhat network), use the first hardhat signer
@@ -555,7 +556,7 @@ async function main() {
   const oracleContract = await ethers.getContractAt("PriceOracle", oracleAddr, deployer);
 
   for (const [name, cfg] of Object.entries(COLLATERAL_CONFIG)) {
-    let feedAddress = cfg.feed;
+    let feedAddress: string = cfg.feed;
     const feedCode = await ethers.provider.getCode(feedAddress);
     if (feedCode === "0x") {
       if (!DRY_RUN) {

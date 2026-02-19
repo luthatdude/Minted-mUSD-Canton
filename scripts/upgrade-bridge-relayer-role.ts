@@ -70,7 +70,7 @@ async function scheduleUpgrade(
   console.log("✅ New implementation deployed:", newImplAddress);
 
   // Verify RELAYER_ROLE constant exists on new impl
-  const newImpl = BridgeFactory.attach(newImplAddress);
+  const newImpl = BridgeFactory.attach(newImplAddress) as any;
   const RELAYER_ROLE = await newImpl.RELAYER_ROLE();
   console.log("✅ RELAYER_ROLE constant:", RELAYER_ROLE);
 

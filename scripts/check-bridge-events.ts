@@ -1,4 +1,5 @@
 import { ethers } from "hardhat";
+import { EventLog } from "ethers";
 
 async function main() {
   const bridgeAddr = "0x155d6618dcdeb2F4145395CA57C80e6931D7941e"; // Check if this is right
@@ -79,7 +80,7 @@ async function main() {
       console.log(`  Found ${events.length} BridgeToCantonRequested events`);
       
       for (const evt of events) {
-        const e = evt as ethers.EventLog;
+        const e = evt as EventLog;
         console.log(`\n  Event at block ${e.blockNumber}, tx: ${e.transactionHash}`);
         console.log(`    requestId: ${e.args.requestId}`);
         console.log(`    sender: ${e.args.sender}`);

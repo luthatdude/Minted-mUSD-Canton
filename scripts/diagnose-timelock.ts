@@ -41,7 +41,7 @@ async function main() {
 
   // Get RELAYER_ROLE from the new impl
   const BridgeFactory = await ethers.getContractFactory("BLEBridgeV9");
-  const newImplContract = BridgeFactory.attach(newImpl);
+  const newImplContract = BridgeFactory.attach(newImpl) as any;
   const RELAYER_ROLE = await newImplContract.RELAYER_ROLE();
   console.log("\nRELAYER_ROLE:", RELAYER_ROLE);
 

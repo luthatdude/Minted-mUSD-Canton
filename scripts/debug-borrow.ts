@@ -40,15 +40,15 @@ async function main() {
   // 4. Check BorrowModule state
   const borrow = await ethers.getContractAt("BorrowModule", borrowModule);
   try {
-    const debt = await borrow.debt(target);
+    const debt = await borrow.totalDebt(target);
     console.log("Target debt:", ethers.formatUnits(debt, 18));
   } catch (e: any) {
-    console.log("BorrowModule.debt() failed:", e.message?.slice(0, 200));
+    console.log("BorrowModule.totalDebt() failed:", e.message?.slice(0, 200));
   }
 
   // 5. Try to simulate a borrow
   try {
-    const borrowable = await borrow.maxBorrowable(target);
+    const borrowable = await borrow.maxBorrow(target);
     console.log("Max borrowable:", ethers.formatUnits(borrowable, 18), "mUSD");
   } catch (e: any) {
     console.log("maxBorrowable failed:", e.message?.slice(0, 200));
