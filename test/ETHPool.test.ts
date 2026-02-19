@@ -44,6 +44,7 @@ describe("ETHPool", function () {
       await oracle.getAddress(),
       await weth.getAddress(),
       poolCap,
+      deployer.address, // timelockController
     );
     const poolAddr = await pool.getAddress();
 
@@ -84,18 +85,18 @@ describe("ETHPool", function () {
     });
 
     it("reverts on zero musd address", async function () {
-      const { smUsdE, oracle, weth } = await loadFixture(deployFixture);
+      const { deployer, smUsdE, oracle, weth } = await loadFixture(deployFixture);
       const ETHPool = await ethers.getContractFactory("ETHPool");
       await expect(
-        ETHPool.deploy(ethers.ZeroAddress, await smUsdE.getAddress(), await oracle.getAddress(), await weth.getAddress(), 1000n)
+        ETHPool.deploy(ethers.ZeroAddress, await smUsdE.getAddress(), await oracle.getAddress(), await weth.getAddress(), 1000n, deployer.address)
       ).to.be.reverted;
     });
 
     it("reverts on zero oracle address", async function () {
-      const { musd, smUsdE, weth } = await loadFixture(deployFixture);
+      const { deployer, musd, smUsdE, weth } = await loadFixture(deployFixture);
       const ETHPool = await ethers.getContractFactory("ETHPool");
       await expect(
-        ETHPool.deploy(await musd.getAddress(), await smUsdE.getAddress(), ethers.ZeroAddress, await weth.getAddress(), 1000n)
+        ETHPool.deploy(await musd.getAddress(), await smUsdE.getAddress(), ethers.ZeroAddress, await weth.getAddress(), 1000n, deployer.address)
       ).to.be.reverted;
     });
 
