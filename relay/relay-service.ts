@@ -1520,13 +1520,24 @@ class RelayService {
     try {
       // Create CantonMUSD token for the user
       // Use a deterministic agreementHash for idempotency checking
-      const agreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
+      // IMPORTANT: Use a delimiter AFTER the nonce to prevent hash collisions.
+      // Previously `bridge-in-nonce-1` padded === `bridge-in-nonce-10` padded (same string!)
+      const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
       const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
 
       // Check for existing CantonMUSD with this agreement hash (idempotency)
+      // Also check the old hash format for backwards compatibility, but ONLY
+      // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10)
+      const oldAgreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
       const existingMusd = await this.canton.queryContracts(
         TEMPLATES.CantonMUSD,
-        (payload: any) => payload.agreementHash === agreementHash
+        (payload: any) => {
+          if (payload.agreementHash === agreementHash) return true;
+          // For old format, also verify agreementUri to avoid hash collisions
+          if (payload.agreementHash === oldAgreementHash &&
+              payload.agreementUri === agreementUri) return true;
+          return false;
+        }
       );
 
       if (existingMusd.length > 0) {
