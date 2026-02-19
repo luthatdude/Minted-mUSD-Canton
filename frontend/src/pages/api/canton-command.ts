@@ -43,6 +43,15 @@ const TEMPLATE_MAP: Record<string, string> = {
   CantonSMUSD:             `${PACKAGE_ID}:CantonSMUSD:CantonSMUSD`,
   // CantonETHPool module
   CantonETHPoolService:    `${PACKAGE_ID}:CantonETHPool:CantonETHPoolService`,
+  CantonSMUSD_E:           `${PACKAGE_ID}:CantonETHPool:CantonSMUSD_E`,
+  // CantonBoostPool module
+  CantonBoostPoolService:  `${PACKAGE_ID}:CantonBoostPool:CantonBoostPoolService`,
+  BoostPoolLP:             `${PACKAGE_ID}:CantonBoostPool:BoostPoolLP`,
+  // CantonLending module
+  CantonLendingService:    `${PACKAGE_ID}:CantonLending:CantonLendingService`,
+  CantonPriceFeed:         `${PACKAGE_ID}:CantonLending:CantonPriceFeed`,
+  EscrowedCollateral:      `${PACKAGE_ID}:CantonLending:EscrowedCollateral`,
+  CantonDebtPosition:      `${PACKAGE_ID}:CantonLending:CantonDebtPosition`,
   // CantonCoinToken module
   CantonCoin:              `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
   // Minted.Protocol.V3 module

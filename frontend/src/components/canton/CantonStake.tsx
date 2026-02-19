@@ -9,13 +9,14 @@ import {
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 
-type CantonPoolTab = "smusd" | "ethpool";
+type CantonPoolTab = "smusd" | "ethpool" | "boostpool";
 type StakeAction = "stake" | "unstake";
 type DepositAsset = "USDC" | "USDCx" | "CTN";
 
 const POOL_TAB_CONFIG = [
   { key: "smusd" as CantonPoolTab, label: "smUSD", badge: "Yield Vault", color: "from-emerald-500 to-teal-500" },
   { key: "ethpool" as CantonPoolTab, label: "ETH Pool", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
+  { key: "boostpool" as CantonPoolTab, label: "Boost Pool", badge: "CTN Yield", color: "from-yellow-400 to-orange-500" },
 ];
 
 const TIER_LABELS: Record<string, string> = {
@@ -49,12 +50,23 @@ export function CantonStake() {
   const tokens = data?.tokens || [];
   const stakingService = data?.stakingService || null;
   const ethPoolService = data?.ethPoolService || null;
+  const boostPoolService = data?.boostPoolService || null;
   const smusdTokens = data?.smusdTokens || [];
   const totalSmusd = data?.totalSmusd ? parseFloat(data.totalSmusd) : 0;
+  const smusdETokens = data?.smusdETokens || [];
+  const totalSmusdE = data?.totalSmusdE ? parseFloat(data.totalSmusdE) : 0;
+  const boostLPTokens = data?.boostLPTokens || [];
+  const totalBoostLP = data?.totalBoostLP ? parseFloat(data.totalBoostLP) : 0;
   const usdcTokens = data?.usdcTokens || [];
   const totalUsdc = data?.totalUsdc ? parseFloat(data.totalUsdc) : 0;
   const coinTokens = data?.cantonCoinTokens || [];
   const totalCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
+
+  // Filter USDC vs USDCx for proper routing
+  const pureUsdcTokens = usdcTokens.filter(t => t.template !== "USDCx");
+  const usdcxTokens = usdcTokens.filter(t => t.template === "USDCx");
+  const totalPureUsdc = pureUsdcTokens.reduce((s, t) => s + parseFloat(t.amount), 0);
+  const totalUsdcx = usdcxTokens.reduce((s, t) => s + parseFloat(t.amount), 0);
 
   const smusdSharePrice = stakingService ? parseFloat(stakingService.sharePrice) : 1.0;
   const smusdTVL = stakingService ? parseFloat(stakingService.pooledMusd) : 0;
@@ -107,23 +119,83 @@ export function CantonStake() {
       let choice = "";
       const args: Record<string, unknown> = { user: data!.party, selectedTier: lockTier };
       if (depositAsset === "USDC") {
-        const token = usdcTokens[selectedAssetIdx];
+        const token = pureUsdcTokens[selectedAssetIdx];
         if (!token) throw new Error("No USDC token selected");
         choice = "ETHPool_StakeWithUSDC"; args.usdcCid = token.contractId;
       } else if (depositAsset === "USDCx") {
-        const token = usdcTokens[selectedAssetIdx];
+        const token = usdcxTokens[selectedAssetIdx];
         if (!token) throw new Error("No USDCx token selected");
         choice = "ETHPool_StakeWithUSDCx"; args.usdcxCid = token.contractId;
       } else {
         const token = coinTokens[selectedAssetIdx];
         if (!token) throw new Error("No Canton Coin selected");
+        // For CTN deposits, operator provides USDCx backing via the choice controller
         choice = "ETHPool_StakeWithCantonCoin"; args.coinCid = token.contractId;
-        args.operatorUsdcxCid = "";
+        // operatorUsdcxCid is provided by the operator (controller) — pass first available USDCx
+        if (usdcxTokens.length > 0) {
+          args.operatorUsdcxCid = usdcxTokens[0].contractId;
+        } else {
+          throw new Error("No USDCx available for Canton Coin deposit backing");
+        }
       }
       const resp = await cantonExercise("CantonETHPoolService", ethPoolService.contractId, choice, args);
       if (!resp.success) throw new Error(resp.error || "Stake failed");
       setTxSuccess(`Deposited ${depositAsset} \u2192 smUSD-E shares`);
       setAmount(""); await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  /* ── ETH Pool unstake handler ── */
+  async function handleEthPoolUnstake() {
+    if (!ethPoolService || smusdETokens.length === 0) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      const smusdE = smusdETokens[selectedAssetIdx];
+      if (!smusdE) throw new Error("No smUSD-E shares selected");
+      const resp = await cantonExercise("CantonETHPoolService", ethPoolService.contractId, "ETHPool_Unstake", {
+        user: data!.party, smusdECid: smusdE.contractId,
+      });
+      if (!resp.success) throw new Error(resp.error || "Unstake failed");
+      setTxSuccess(`Unstaked ${fmtAmount(smusdE.amount)} smUSD-E \u2192 mUSD`);
+      await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  /* ── Boost Pool handlers ── */
+  async function handleBoostDeposit() {
+    if (!boostPoolService) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      const coin = coinTokens[selectedAssetIdx];
+      if (!coin) throw new Error("No Canton Coin selected");
+      // Need a CantonSMUSD CID for eligibility check
+      const smusd = smusdTokens.length > 0 ? smusdTokens[0] : null;
+      const resp = await cantonExercise("CantonBoostPoolService", boostPoolService.contractId, "Deposit", {
+        depositor: data!.party,
+        coinCid: coin.contractId,
+        smusdCid: smusd?.contractId || "",
+      });
+      if (!resp.success) throw new Error(resp.error || "Deposit failed");
+      setTxSuccess(`Deposited ${fmtAmount(coin.amount)} CTN \u2192 Boost LP`);
+      setAmount(""); await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  async function handleBoostWithdraw() {
+    if (!boostPoolService || boostLPTokens.length === 0) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      const lp = boostLPTokens[selectedAssetIdx];
+      if (!lp) throw new Error("No Boost LP selected");
+      const resp = await cantonExercise("CantonBoostPoolService", boostPoolService.contractId, "Withdraw", {
+        user: data!.party, lpCid: lp.contractId,
+      });
+      if (!resp.success) throw new Error(resp.error || "Withdraw failed");
+      setTxSuccess(`Withdrew Boost LP \u2192 CTN`);
+      await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
   }
@@ -176,6 +248,7 @@ export function CantonStake() {
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pool === key ? `bg-gradient-to-r ${color} text-white` : "bg-surface-600 text-gray-500"}`}>{badge}</span>
               {key === "smusd" && stakingService && <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />}
               {key === "ethpool" && ethPoolService && <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />}
+              {key === "boostpool" && boostPoolService && <span className="h-2 w-2 rounded-full bg-yellow-400 animate-pulse" />}
             </span>
             {pool === key && <span className={`absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r ${color}`} />}
           </button>
@@ -433,15 +506,15 @@ export function CantonStake() {
                           </div>
                         </div>
                         {/* Contract Selector */}
-                        {(depositAsset === "CTN" ? coinTokens : usdcTokens).length > 0 ? (
+                        {(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).length > 0 ? (
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
                               <label className="text-sm font-medium text-gray-400">Select {depositAsset} Contract</label>
-                              <span className="text-xs text-gray-500">Balance: {fmtAmount(depositAsset === "CTN" ? totalCoin : totalUsdc)} {depositAsset}</span>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(depositAsset === "CTN" ? totalCoin : depositAsset === "USDCx" ? totalUsdcx : totalPureUsdc)} {depositAsset}</span>
                             </div>
                             <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-blue-500/50 focus:outline-none"
                               value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
-                              {(depositAsset === "CTN" ? coinTokens : usdcTokens).map((t, i) => (
+                              {(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).map((t, i) => (
                                 <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {depositAsset} — {t.contractId.slice(0, 12)}…</option>
                               ))}
                             </select>
@@ -451,15 +524,36 @@ export function CantonStake() {
                             <p className="text-sm text-gray-400">No {depositAsset} tokens available on Canton</p>
                           </div>
                         )}
-                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={(depositAsset === "CTN" ? coinTokens : usdcTokens).length === 0} className="w-full">
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).length === 0} className="w-full">
                           Deposit {depositAsset} → smUSD-E
                         </TxButton>
                       </>
                     ) : (
-                      <div className="text-center py-12">
-                        <p className="text-gray-400 font-medium">No smUSD-E positions yet</p>
-                        <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
-                      </div>
+                      smusdETokens.length === 0 ? (
+                        <div className="text-center py-12">
+                          <p className="text-gray-400 font-medium">No smUSD-E positions yet</p>
+                          <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Select smUSD-E Position to Unstake</label>
+                          {smusdETokens.map((smusdE, idx) => (
+                            <button key={smusdE.contractId} onClick={() => setSelectedAssetIdx(idx)}
+                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-blue-500 bg-blue-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="font-semibold text-white">{fmtAmount(smusdE.amount, 4)} smUSD-E</span>
+                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(smusdE.amount) * ethPoolSharePrice)} mUSD</p>
+                                </div>
+                                <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-xs text-blue-400">Active</span>
+                              </div>
+                            </button>
+                          ))}
+                          <TxButton onClick={handleEthPoolUnstake} loading={txLoading} disabled={smusdETokens.length === 0} className="w-full">
+                            Unstake smUSD-E \u2192 mUSD
+                          </TxButton>
+                        </div>
+                      )
                     )}
                     {txError && <div className="alert-error flex items-center gap-3"><span className="text-sm">{txError}</span></div>}
                     {txSuccess && <div className="alert-success flex items-center gap-3"><span className="text-sm">{txSuccess}</span></div>}
@@ -522,6 +616,173 @@ export function CantonStake() {
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm mb-3">4</div>
                 <h3 className="font-medium text-white mb-1">Unstake for mUSD</h3>
                 <p className="text-sm text-gray-400">Redeem smUSD-E shares for CantonMUSD at the current share price.</p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ========= BOOST POOL ========= */}
+      {pool === "boostpool" && (
+        <>
+          {!boostPoolService ? (
+            <div className="card-gradient-border p-8 text-center space-y-4">
+              <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center">
+                <span className="text-white font-bold text-2xl">\u26A1</span>
+              </div>
+              <h3 className="text-2xl font-bold text-white">Canton Coin Boost Pool</h3>
+              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
+                <p className="text-sm text-gray-400">The Boost Pool service is not yet deployed on this Canton participant.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-8 lg:grid-cols-2">
+              <div>
+                <div className="card-gradient-border overflow-hidden">
+                  <div className="flex border-b border-white/10">
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("stake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Deposit CTN</span>
+                      {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500" />}
+                    </button>
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("unstake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Withdraw</span>
+                      {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500" />}
+                    </button>
+                  </div>
+
+                  <div className="space-y-6 p-6">
+                    {tab === "stake" ? (
+                      coinTokens.length > 0 ? (
+                        <>
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">Select Canton Coin</label>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalCoin)} CTN</span>
+                            </div>
+                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-yellow-500/50 focus:outline-none"
+                              value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
+                              {coinTokens.map((t, i) => (
+                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} CTN \u2014 {t.contractId.slice(0, 12)}\u2026</option>
+                              ))}
+                            </select>
+                          </div>
+                          {smusdTokens.length === 0 && (
+                            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4">
+                              <p className="text-sm text-yellow-400">You need smUSD to verify eligibility for the Boost Pool. Stake mUSD first.</p>
+                            </div>
+                          )}
+                          <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">Entry Fee</span>
+                              <span className="text-white font-medium">{(boostPoolService.entryFeeBps / 100).toFixed(2)}%</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">Exit Fee</span>
+                              <span className="text-white font-medium">{(boostPoolService.exitFeeBps / 100).toFixed(2)}%</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">CTN Price</span>
+                              <span className="text-white font-medium">{parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD</span>
+                            </div>
+                          </div>
+                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0} className="w-full">
+                            Deposit CTN \u2192 Boost LP
+                          </TxButton>
+                        </>
+                      ) : (
+                        <div className="text-center py-12">
+                          <p className="text-gray-400 font-medium">No Canton Coin available</p>
+                          <p className="text-sm text-gray-500 mt-1">You need CTN tokens to deposit into the Boost Pool</p>
+                        </div>
+                      )
+                    ) : (
+                      boostLPTokens.length === 0 ? (
+                        <div className="text-center py-12">
+                          <p className="text-gray-400 font-medium">No Boost LP positions</p>
+                          <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a position</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Select Boost LP to Withdraw</label>
+                          {boostLPTokens.map((lp, idx) => (
+                            <button key={lp.contractId} onClick={() => setSelectedAssetIdx(idx)}
+                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-yellow-500 bg-yellow-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="font-semibold text-white">{fmtAmount(lp.amount, 4)} Boost LP</span>
+                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(lp.amount) * parseFloat(boostPoolService.globalSharePrice))} CTN</p>
+                                </div>
+                                <span className="rounded-full bg-yellow-500/20 px-2 py-0.5 text-xs text-yellow-400">Active</span>
+                              </div>
+                            </button>
+                          ))}
+                          <TxButton onClick={handleBoostWithdraw} loading={txLoading} disabled={boostLPTokens.length === 0} className="w-full">
+                            Withdraw Boost LP \u2192 CTN
+                          </TxButton>
+                        </div>
+                      )
+                    )}
+                    {txError && <div className="alert-error flex items-center gap-3"><span className="text-sm">{txError}</span></div>}
+                    {txSuccess && <div className="alert-success flex items-center gap-3"><span className="text-sm">{txSuccess}</span></div>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Boost Pool Stats */}
+              <div className="space-y-4">
+                <div className="grid gap-4 grid-cols-2">
+                  <StatCard label="CTN Price" value={`${parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD`} color="yellow" />
+                  <StatCard label="Share Price" value={`${parseFloat(boostPoolService.globalSharePrice).toFixed(4)}`} subValue="per Boost LP" color="green" />
+                  <StatCard label="Total CTN Deposited" value={fmtAmount(boostPoolService.totalCantonDeposited)} color="blue" />
+                  <StatCard label="Total LP Shares" value={fmtAmount(boostPoolService.totalLPShares)} color="purple" />
+                </div>
+                <div className="card overflow-hidden">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Your Boost Positions</h3>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Boost LP</span><span className="text-white font-medium">{fmtAmount(totalBoostLP, 4)} ({boostLPTokens.length})</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Canton Coin</span><span className="text-white font-medium">{fmtAmount(totalCoin)} ({coinTokens.length})</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">smUSD (eligibility)</span><span className="text-white font-medium">{fmtAmount(totalSmusd, 4)} ({smusdTokens.length})</span></div>
+                  </div>
+                </div>
+                <div className="card overflow-hidden border-l-4 border-yellow-500">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-500/20 flex-shrink-0">
+                      <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Canton Coin Boost Pool</h3>
+                      <p className="text-sm text-gray-400">Deposit CTN alongside your smUSD position. Earn boosted validator rewards and LP fee distributions. Entry fee {(boostPoolService.entryFeeBps / 100).toFixed(2)}%, exit fee {(boostPoolService.exitFeeBps / 100).toFixed(2)}%.</p>
+                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {boostPoolService.contractId.slice(0, 24)}\u2026</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* How Boost Pool Works */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-white mb-5">How Boost Pool Works</h2>
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-yellow-500/20 text-yellow-400 font-bold text-sm mb-3">1</div>
+                <h3 className="font-medium text-white mb-1">Deposit CTN</h3>
+                <p className="text-sm text-gray-400">Deposit Canton Coin (requires smUSD eligibility).</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500/20 text-orange-400 font-bold text-sm mb-3">2</div>
+                <h3 className="font-medium text-white mb-1">Receive Boost LP</h3>
+                <p className="text-sm text-gray-400">Get LP shares representing your pool position.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm mb-3">3</div>
+                <h3 className="font-medium text-white mb-1">Earn Rewards</h3>
+                <p className="text-sm text-gray-400">Earn validator rewards and protocol LP fee distributions.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm mb-3">4</div>
+                <h3 className="font-medium text-white mb-1">Withdraw CTN</h3>
+                <p className="text-sm text-gray-400">Burn LP shares to reclaim your CTN plus accrued rewards.</p>
               </div>
             </div>
           </div>
