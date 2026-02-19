@@ -1436,21 +1436,10 @@ class RelayService {
           status: "pending",
         };
 
-        // CRIT-02 compat: Try to include validators/requiredSignatures for new DAML templates.
-        // If the Canton DAML is old (no validators field), the extra fields
-        // will be ignored by Canton's JSON API — but we guard with try/catch.
-        try {
-          const bridgeServices = await this.canton.queryContracts<{
-            validators: string[];
-            requiredSignatures: number;
-          }>(TEMPLATES.BridgeService);
-          if (bridgeServices.length > 0) {
-            payload.validators = bridgeServices[0].payload.validators;
-            payload.requiredSignatures = bridgeServices[0].payload.requiredSignatures;
-          }
-        } catch (err) {
-          console.warn(`[Relay] Could not fetch BridgeService for validators: ${(err as Error).message}`);
-        }
+        // NOTE: Do NOT add validators/requiredSignatures to the BridgeInRequest payload.
+        // The old DAML package on Canton does not have those fields on BridgeInRequest
+        // and Canton rejects unexpected fields with INVALID_ARGUMENT.
+        // These fields only exist on BridgeService (for governance) — not on individual requests.
 
         try {
           // Create BridgeInRequest on Canton with the original user party
