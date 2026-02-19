@@ -56,6 +56,7 @@ interface ETHPoolServiceInfo {
 interface SimpleToken {
   contractId: string;
   amount: string;
+  template?: string;
 }
 
 interface BalancesResponse {
@@ -67,7 +68,7 @@ interface BalancesResponse {
   supplyService: boolean;
   stakingService: StakingServiceInfo | null;
   ethPoolService: ETHPoolServiceInfo | null;
-  directMintService: { contractId: string; paused: boolean } | null;
+  directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
   cantonCoinTokens: SimpleToken[];
@@ -149,7 +150,8 @@ export default async function handler(
     let supplyService = false;
     let stakingService: StakingServiceInfo | null = null;
     let ethPoolService: ETHPoolServiceInfo | null = null;
-    let directMintService: { contractId: string; paused: boolean } | null = null;
+    let directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null = null;
+    let stakingHasValidCompliance = false;
     const smusdTokens: SimpleToken[] = [];
     const cantonCoinTokens: SimpleToken[] = [];
     const usdcTokens: SimpleToken[] = [];
@@ -195,15 +197,25 @@ export default async function handler(
         const tvl = pm > 0 ? pm : (ts * gsp);
         // Share price: prefer pool-derived, fall back to globalSharePrice
         const sharePrice = pm > 0 && ts > 0 ? pm / ts : gsp;
-        stakingService = {
+        const isPaused = p.paused === true || p.paused === "True";
+        const compCid = (p.complianceRegistryCid as string) || "";
+        const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+        const candidate: StakingServiceInfo = {
           contractId: evt.contractId,
           totalShares: String(ts),
           pooledMusd: String(tvl),
           sharePrice: String(sharePrice),
           cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
           minDeposit: String(p.minDeposit || "0.01"),
-          paused: p.paused === true || p.paused === "True",
+          paused: isPaused,
         };
+        // Prefer service with valid complianceRegistryCid and unpaused
+        if (!stakingService
+            || (hasValidCompliance && !stakingHasValidCompliance)
+            || (hasValidCompliance === stakingHasValidCompliance && !isPaused && stakingService.paused)) {
+          stakingService = candidate;
+          stakingHasValidCompliance = hasValidCompliance;
+        }
       } else if (entityName === "CantonETHPoolService") {
         const p = evt.createArgument;
         ethPoolService = {
@@ -217,13 +229,21 @@ export default async function handler(
         };
       } else if (entityName === "CantonDirectMintService") {
         const p = evt.createArgument;
-        // Pick the active (unpaused) service, or the one with highest nonce
+        // Pick the best service: prefer unpaused + valid complianceRegistryCid
         const isPaused = p.paused === true || p.paused === "True";
-        if (!directMintService || (!isPaused && directMintService.paused)) {
-          directMintService = {
-            contractId: evt.contractId,
-            paused: isPaused,
-          };
+        const compCid = (p.complianceRegistryCid as string) || "";
+        const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+        const candidate = {
+          contractId: evt.contractId,
+          paused: isPaused,
+          serviceName: (p.serviceName as string) || "",
+          hasValidCompliance,
+        };
+        // Prefer: (1) valid compliance, (2) unpaused, (3) latest seen
+        if (!directMintService
+            || (hasValidCompliance && !directMintService.hasValidCompliance)
+            || (hasValidCompliance === directMintService.hasValidCompliance && !isPaused && directMintService.paused)) {
+          directMintService = candidate;
         }
       } else if (entityName === "CantonSMUSD") {
         const p = evt.createArgument;
@@ -237,11 +257,20 @@ export default async function handler(
           contractId: evt.contractId,
           amount: (p.amount as string) || "0",
         });
-      } else if (entityName === "CantonUSDC" || entityName === "USDCx") {
+      } else if (entityName === "CantonUSDC") {
         const p = evt.createArgument;
         usdcTokens.push({
           contractId: evt.contractId,
           amount: (p.amount as string) || "0",
+        });
+      } else if (entityName === "USDCx") {
+        // USDCx is a separate template; track separately so DirectMint_Mint
+        // (which expects CantonUSDC) doesn't accidentally receive a USDCx CID.
+        const p = evt.createArgument;
+        usdcTokens.push({
+          contractId: evt.contractId,
+          amount: (p.amount as string) || "0",
+          template: "USDCx",
         });
       }
     }
