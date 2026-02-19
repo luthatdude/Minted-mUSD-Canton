@@ -38,6 +38,7 @@ export function BorrowPage() {
   const [interestRate, setInterestRate] = useState(0n);
   const [isLiquidatable, setIsLiquidatable] = useState(false);
   const [musdBalance, setMusdBalance] = useState(0n);
+  const [walletBalances, setWalletBalances] = useState<Record<string, bigint>>({});
   const tx = useTx();
 
   const { vault, borrow, oracle, musd, liquidation } = contracts;
@@ -79,6 +80,19 @@ export function BorrowPage() {
           });
         }
         setCollaterals(infos);
+
+        // Load wallet balances for each collateral token
+        const balances: Record<string, bigint> = {};
+        for (const token of tokens) {
+          const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
+          try {
+            balances[token] = BigInt(await erc20.balanceOf(address));
+          } catch {
+            balances[token] = 0n;
+          }
+        }
+        setWalletBalances(balances);
+
         if (tokens.length > 0 && !selectedToken) setSelectedToken(tokens[0]);
 
         const [d, hf, mb, ir, bal] = await Promise.all([
@@ -329,6 +343,12 @@ export function BorrowPage() {
                   <label className="text-sm font-medium text-gray-400">
                     {action === "deposit" ? "Deposit Amount" : action === "borrow" ? "Borrow Amount (mUSD)" : action === "repay" ? "Repay Amount (mUSD)" : "Withdraw Amount"}
                   </label>
+                  {action === "deposit" && selectedToken && (
+                    <span className="text-xs text-gray-500">Balance: {formatToken(walletBalances[selectedToken] ?? 0n, collaterals.find(c => c.token === selectedToken)?.decimals ?? 18)}</span>
+                  )}
+                  {action === "withdraw" && selectedToken && (
+                    <span className="text-xs text-gray-500">Deposited: {formatToken(collaterals.find(c => c.token === selectedToken)?.deposited ?? 0n, collaterals.find(c => c.token === selectedToken)?.decimals ?? 18)}</span>
+                  )}
                   {action === "borrow" && (
                     <span className="text-xs text-gray-500">Max: {formatUSD(maxBorrowable)}</span>
                   )}
@@ -346,6 +366,31 @@ export function BorrowPage() {
                       onChange={(e) => setAmount(e.target.value)}
                     />
                     <div className="flex items-center gap-2">
+                      {action === "deposit" && selectedToken && (walletBalances[selectedToken] ?? 0n) > 0n && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => {
+                            const info = collaterals.find(c => c.token === selectedToken);
+                            if (info) setAmount(ethers.formatUnits(walletBalances[selectedToken], info.decimals));
+                          }}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "withdraw" && selectedToken && (() => {
+                        const info = collaterals.find(c => c.token === selectedToken);
+                        return info && info.deposited > 0n;
+                      })() && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => {
+                            const info = collaterals.find(c => c.token === selectedToken);
+                            if (info) setAmount(ethers.formatUnits(info.deposited, info.decimals));
+                          }}
+                        >
+                          MAX
+                        </button>
+                      )}
                       {action === "borrow" && maxBorrowable > 0n && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
