@@ -1,7 +1,7 @@
-sdk-version: 3.4.10
+sdk-version: 2.10.3
 name: ble-protocol
 source: .
-version: 2.4.0
+version: 1.0.0
 dependencies:
   - daml-prim
   - daml-stdlib

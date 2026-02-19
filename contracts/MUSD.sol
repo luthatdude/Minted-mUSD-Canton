@@ -7,20 +7,17 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
-import "./GlobalPausable.sol";
 import "./Errors.sol";
 
 /// @title MUSD
 /// @notice ERC-20 stablecoin with supply cap, compliance, and emergency pause
-contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
+contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @dev LiquidationEngine needs burn permission
     bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
-    /// @notice SOL-H-17: TIMELOCK_ROLE for critical operations (48h governance delay)
-    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
@@ -45,23 +42,19 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
     /// @dev Event for when cap drops below current supply (undercollateralization response)
     event SupplyCapBelowSupply(uint256 newCap, uint256 currentSupply);
 
-    /// @param _initialSupplyCap Initial mUSD supply cap
-    /// @param _globalPauseRegistry Address of the GlobalPauseRegistry (address(0) to skip global pause)
-    constructor(uint256 _initialSupplyCap, address _globalPauseRegistry) ERC20("Minted USD", "mUSD") GlobalPausable(_globalPauseRegistry) {
+    constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(TIMELOCK_ROLE, msg.sender);
-        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
         if (_initialSupplyCap == 0) revert InvalidSupplyCap();
         supplyCap = _initialSupplyCap;
         emit SupplyCapUpdated(0, _initialSupplyCap);
     }
 
-    /// @notice Set supply cap - callable by timelock admin or cap manager (BLEBridgeV9)
-    /// @dev SOL-H-18: Admin increases now require TIMELOCK_ROLE (48h delay).
-    ///      CAP_MANAGER_ROLE (BLEBridgeV9) can still adjust via attestation logic.
-    ///      Decreases are always allowed (emergency undercollateralization response).
+    /// @notice Set supply cap - callable by admin or cap manager (BLEBridgeV9)
+    /// @dev Allows cap decreases for undercollateralization response.
+    ///      When attestations report lower backing, cap MUST be able to drop.
+    ///      If cap < totalSupply, no new mints allowed but existing holders unaffected.
     function setSupplyCap(uint256 _cap) external {
-        if (!hasRole(TIMELOCK_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(CAP_MANAGER_ROLE, msg.sender)) revert Unauthorized();
         if (_cap == 0) revert InvalidSupplyCap();
         
         uint256 oldCap = supplyCap;
@@ -121,25 +114,8 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
         emit Burn(from, amount);
     }
 
-    /// @dev SOL-H-16: Added whenNotGloballyPaused for protocol-wide emergency stop
-    /// @dev SYS-H-01: Liquidation burns are exempt from pause to prevent bad debt
-    ///      accumulation during emergencies. Liquidations are the most critical
-    ///      operations during a crisis — blocking them causes cascading insolvency.
-    function _update(address from, address to, uint256 value) internal override {
-        // Burns by LIQUIDATOR_ROLE bypass pause so liquidations always work.
-        // A burn is: from != address(0) && to == address(0).
-        bool isLiquidationBurn = (to == address(0)) && hasRole(LIQUIDATOR_ROLE, msg.sender);
-        if (!isLiquidationBurn) {
-            _requireNotPaused();
-            // GlobalPausable check
-            if (address(globalPauseRegistry) != address(0) && globalPauseRegistry.isGloballyPaused()) {
-                revert GloballyPaused();
-            }
-        }
+    function _update(address from, address to, uint256 value) internal override whenNotPaused {
         if (isBlacklisted[from] || isBlacklisted[to]) revert ComplianceReject();
-        // SOL-M-5: Also check msg.sender (operator/spender) for blacklist
-        // This prevents blacklisted addresses from using transferFrom via approval
-        if (from != address(0) && to != address(0) && isBlacklisted[msg.sender]) revert ComplianceReject();
         super._update(from, to, value);
     }
 
@@ -148,9 +124,8 @@ contract MUSD is ERC20, AccessControl, Pausable, GlobalPausable {
         _pause();
     }
 
-    /// @notice Unpause requires timelock (separation of duties)
-    /// @dev SOL-H-17: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE (48h governance delay)
-    function unpause() external onlyRole(TIMELOCK_ROLE) {
+    /// @notice Unpause requires admin (separation of duties)
+    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 }

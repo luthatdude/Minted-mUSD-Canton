@@ -248,7 +248,6 @@ contract EulerV2CrossStableLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════
 
     event Deposited(uint256 principal, uint256 totalSupplied, uint256 leverageX100);
-    event ActiveUpdated(bool active);
     event Withdrawn(uint256 requested, uint256 returned);
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
@@ -339,16 +338,10 @@ contract EulerV2CrossStableLoopStrategy is
         _grantRole(KEEPER_ROLE, p.admin);
     }
 
-    /// @notice Whether EVC has been set up
-    bool public evcSetup;
-
     /**
      * @notice Set up EVC relationships (called once after deployment)
-     * @dev M-08: Can only be called once.
      */
     function setupEVC() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (evcSetup) revert EVCAlreadySetup();
-        evcSetup = true;
         evc.enableCollateral(address(this), address(supplyVault));
         evc.enableController(address(this), address(borrowVault));
     }
@@ -624,10 +617,8 @@ contract EulerV2CrossStableLoopStrategy is
                 }
             }
         } else {
-            // M-03: withdrawAmount, flashAmount, premium are in USDC (6 decimals).
-            // supplyVault operates on RLUSD (18 decimals). Scale up before withdrawal.
-            uint256 usdcNeeded = withdrawAmount + flashAmount + premium;
-            uint256 rlusdToWithdraw = usdcNeeded * 1e12; // scale 6 → 18 decimals
+            // Proportional withdrawal
+            uint256 rlusdToWithdraw = withdrawAmount + flashAmount + premium;
             uint256 maxW = supplyVault.maxWithdraw(address(this));
             if (rlusdToWithdraw > maxW) rlusdToWithdraw = maxW;
             if (rlusdToWithdraw > 0) {
@@ -650,19 +641,17 @@ contract EulerV2CrossStableLoopStrategy is
 
     /**
      * @notice Swap USDC → RLUSD via Uniswap V3
-     * @param usdcAmount Amount of USDC to swap (6 decimals)
-     * @return rlusdReceived Amount of RLUSD received (18 decimals)
+     * @param usdcAmount Amount of USDC to swap
+     * @return rlusdReceived Amount of RLUSD received
      */
     function _swapUsdcToRlusd(uint256 usdcAmount) internal returns (uint256 rlusdReceived) {
         if (usdcAmount == 0) return 0;
 
         usdc.forceApprove(address(swapRouter), usdcAmount);
 
-        // C-02: RLUSD is 18 decimals, USDC is 6 decimals.
-        // At 1:1 peg, 1 USDC (1e6) = 1 RLUSD (1e18).
-        // Scale minOut to RLUSD decimals for proper slippage protection.
-        uint256 expectedRlusd = usdcAmount * 1e12; // scale 6 → 18 decimals
-        uint256 minOut = (expectedRlusd * minSwapOutputBps) / BPS;
+        // For stablecoin pairs, expect near 1:1 (both 6 decimals on mainnet)
+        // RLUSD is 18 decimals, so adjust minimum output
+        uint256 minOut = (usdcAmount * minSwapOutputBps) / BPS;
 
         rlusdReceived = swapRouter.exactInputSingle(
             ISwapRouterV3CrossStable.ExactInputSingleParams({
@@ -681,19 +670,15 @@ contract EulerV2CrossStableLoopStrategy is
 
     /**
      * @notice Swap RLUSD → USDC via Uniswap V3
-     * @param rlusdAmount Amount of RLUSD to swap (18 decimals)
-     * @return usdcReceived Amount of USDC received (6 decimals)
+     * @param rlusdAmount Amount of RLUSD to swap
+     * @return usdcReceived Amount of USDC received
      */
     function _swapRlusdToUsdc(uint256 rlusdAmount) internal returns (uint256 usdcReceived) {
         if (rlusdAmount == 0) return 0;
 
         rlusd.forceApprove(address(swapRouter), rlusdAmount);
 
-        // C-02: RLUSD is 18 decimals, USDC is 6 decimals.
-        // At 1:1 peg, 1 RLUSD (1e18) = 1 USDC (1e6).
-        // Scale minOut to USDC decimals for proper slippage protection.
-        uint256 expectedUsdc = rlusdAmount / 1e12; // scale 18 → 6 decimals
-        uint256 minOut = (expectedUsdc * minSwapOutputBps) / BPS;
+        uint256 minOut = (rlusdAmount * minSwapOutputBps) / BPS;
 
         usdcReceived = swapRouter.exactInputSingle(
             ISwapRouterV3CrossStable.ExactInputSingleParams({
@@ -1016,7 +1001,6 @@ contract EulerV2CrossStableLoopStrategy is
 
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
-        emit ActiveUpdated(_active);
     }
 
     function pause() external onlyRole(GUARDIAN_ROLE) {
@@ -1036,7 +1020,7 @@ contract EulerV2CrossStableLoopStrategy is
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[29] private __gap;  // reduced from 30 → 29 (evcSetup added)
+    uint256[30] private __gap;
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

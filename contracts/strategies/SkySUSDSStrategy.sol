@@ -224,13 +224,10 @@ contract SkySUSDSStrategy is
         usdc.forceApprove(address(psm), amount);
 
         // Step 1: Swap USDC → USDS via PSM (1:1, zero slippage)
-        uint256 usdsBefore = usds.balanceOf(address(this));
         psm.sellGem(address(this), amount);
-        uint256 usdsReceived = usds.balanceOf(address(this)) - usdsBefore;
 
-        // L-02: Verify PSM actually delivered expected USDS (guards against fee changes or depeg)
+        // Step 2: Deposit USDS into sUSDS savings vault
         uint256 usdsAmount = amount * USDC_TO_USDS_SCALE; // Scale 6→18 decimals
-        if (usdsReceived < usdsAmount) revert InsufficientOutput();
         // Per-operation approval for sUSDS deposit
         usds.forceApprove(address(sUsds), usdsAmount);
         uint256 shares = sUsds.deposit(usdsAmount, address(this));
@@ -271,11 +268,7 @@ contract SkySUSDSStrategy is
         uint256 usdcAmount = usdsNeeded / USDC_TO_USDS_SCALE;
         // Per-operation approval for PSM buyGem
         usds.forceApprove(address(psm), usdsNeeded);
-        uint256 usdcBefore = usdc.balanceOf(address(this));
         psm.buyGem(address(this), usdcAmount);
-        // L-02: Verify PSM delivered expected USDC
-        uint256 usdcActual = usdc.balanceOf(address(this)) - usdcBefore;
-        if (usdcActual < usdcAmount) revert InsufficientOutput();
 
         // Update principal tracking
         if (usdcAmount >= totalPrincipal) {

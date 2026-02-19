@@ -14,18 +14,6 @@ export const CONTRACTS: Record<string, string> = {
   BLEBridgeV9: process.env.NEXT_PUBLIC_BRIDGE_ADDRESS || "",
   PriceOracle: process.env.NEXT_PUBLIC_PRICE_ORACLE_ADDRESS || "",
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
-  ETHPool: process.env.NEXT_PUBLIC_ETH_POOL_ADDRESS || "",
-  SMUSDE: process.env.NEXT_PUBLIC_SMUSDE_ADDRESS || "",
-  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
-  MetaVault1: process.env.NEXT_PUBLIC_VAULT1_ADDRESS || "",
-  MetaVault2: process.env.NEXT_PUBLIC_VAULT2_ADDRESS || "",
-  MetaVault3: process.env.NEXT_PUBLIC_VAULT3_ADDRESS || "",
-  GlobalPauseRegistry: process.env.NEXT_PUBLIC_GLOBAL_PAUSE_REGISTRY_ADDRESS || "",
-  Timelock: process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS || "",
-  InterestRateModel: process.env.NEXT_PUBLIC_INTEREST_RATE_MODEL_ADDRESS || "",
-  DepositRouter: process.env.NEXT_PUBLIC_DEPOSIT_ROUTER_ADDRESS || "",
-  TreasuryV2: process.env.NEXT_PUBLIC_TREASURY_V2_ADDRESS || "",
-  WETH: process.env.NEXT_PUBLIC_WETH_ADDRESS || "",
 };
 
 // Validate contract addresses at config time

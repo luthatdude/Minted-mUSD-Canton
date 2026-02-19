@@ -21,7 +21,7 @@ async function main() {
   console.log("Deployer has ADMIN:", await timelock.hasRole(DEFAULT_ADMIN, deployer.address));
 
   // --- TreasuryV2 ---
-  const treasury = await ethers.getContractAt("TreasuryV2", "0xf2051bDfc738f638668DF2f8c00d01ba6338C513");
+  const treasury = await ethers.getContractAt("TreasuryV2", "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d");
   console.log("\nTreasuryV2 proxy:");
   console.log("  deployer has DEFAULT_ADMIN:", await treasury.hasRole(DEFAULT_ADMIN, deployer.address));
   console.log("  timelock has DEFAULT_ADMIN:", await treasury.hasRole(DEFAULT_ADMIN, timelockAddr));

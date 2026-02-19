@@ -82,7 +82,7 @@ export function MetaMaskProvider({ children }: MetaMaskProviderProps) {
   const [signer, setSigner] = useState<Signer | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Browser-only detection — must run in useEffect to avoid hydration mismatch
+  // Defer browser-only checks to avoid SSR hydration mismatch
   const [installed, setInstalled] = useState(false);
   const [mobile, setMobile] = useState(false);
   useEffect(() => {

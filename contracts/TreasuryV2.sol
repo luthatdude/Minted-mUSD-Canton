@@ -13,19 +13,9 @@ import "./Errors.sol";
 
 /**
  * @title TreasuryV2
- * @notice USDC treasury with manual admin-driven deployment and auto-distributing yield.
- *
- *         Deposit flow:  USDC deposits stay idle in reserve. ALLOCATOR_ROLE manually
- *                        calls deployToStrategy() to move funds into strategies.
- *
- *         Yield flow:    Strategy yields auto-compound in place → totalValue() rises →
- *                        smUSD.globalTotalAssets() increases → share price goes up
- *                        automatically. YieldDistributor separately routes mUSD-denominated
- *                        yield to SMUSD (ETH pool) and BLEBridge (Canton pool).
- *
- * @dev Strategies are dynamically added/removed via addStrategy()/removeStrategy().
- *      The per-strategy `autoAllocate` flag controls whether _autoAllocate() routes
- *      to that strategy. Production default: false (all deployment is manual).
+ * @notice Auto-allocating treasury that distributes deposits across strategies on mint
+ * @dev When USDC comes in, it's automatically split according to target allocations.
+ *      Strategies are dynamically added/removed via addStrategy()/removeStrategy().
  *
  * Available Strategies (contracts/strategies/):
  *   EulerV2CrossStableLoopStrategy — Euler V2 cross-stable looping (RLUSD/USDC)
@@ -143,7 +133,6 @@ contract TreasuryV2 is
     event StrategyWithdrawn(address indexed strategy, uint256 amount);
     event FeesAccrued(uint256 yield_, uint256 protocolFee);
     event FeesClaimed(address indexed recipient, uint256 amount);
-    event YieldHarvested(uint256 netYield, uint256 protocolFee);
     event Rebalanced(uint256 totalValue);
     event EmergencyWithdraw(uint256 amount);
     event StrategyDepositFailed(address indexed strategy, uint256 amount, bytes reason);
@@ -470,8 +459,7 @@ contract TreasuryV2 is
 
         _accrueFees();
 
-        // Pull funds from caller only. `from` is retained for legacy interface compatibility.
-        asset.safeTransferFrom(msg.sender, address(this), amount);
+        asset.safeTransferFrom(from, address(this), amount);
 
         // Auto-allocate if above minimum
         if (amount >= minAutoAllocateAmount) {
@@ -483,43 +471,6 @@ contract TreasuryV2 is
 
         uint256[] memory allocs = new uint256[](0);
         emit Deposited(from, amount, allocs);
-    }
-
-    /**
-     * @notice Deposit USDC and route it to a specific strategy (no auto-allocation)
-     * @dev Used by the relay to direct ETH Pool deposits to MetaVault #3 (Fluid).
-     *      Pulls USDC from caller, deposits directly into the target strategy,
-     *      bypassing the general _autoAllocate distribution.
-     * @param strategy Address of the target strategy (must be registered & active)
-     * @param amount USDC amount to deposit
-     * @return deposited Actual amount deposited into the strategy
-     */
-    function depositToStrategy(
-        address strategy,
-        uint256 amount
-    ) external nonReentrant whenNotPaused onlyRole(VAULT_ROLE) returns (uint256 deposited) {
-        if (amount == 0) revert ZeroAmount();
-        if (!isStrategy[strategy]) revert StrategyNotFound();
-
-        uint256 idx = strategyIndex[strategy];
-        if (!strategies[idx].active) revert StrategyNotFound();
-
-        _accrueFees();
-
-        // Pull USDC from caller
-        asset.safeTransferFrom(msg.sender, address(this), amount);
-
-        // Deploy directly to target strategy (bypasses auto-allocate)
-        asset.forceApprove(strategy, amount);
-        deposited = IStrategy(strategy).deposit(amount);
-        asset.forceApprove(strategy, 0);
-
-        lastRecordedValue = totalValue();
-
-        uint256[] memory allocs = new uint256[](strategies.length);
-        allocs[idx] = deposited;
-        emit Deposited(msg.sender, amount, allocs);
-        return deposited;
     }
 
     /**
@@ -542,11 +493,6 @@ contract TreasuryV2 is
         if (available < amount) revert InsufficientReserves();
 
         asset.safeTransfer(to, amount);
-
-        // SOL-L-9: Update lastRecordedValue after withdrawal to prevent fee drift
-        // Without this, the next _accrueFees() sees currentValue < lastRecordedValue
-        // and skips fee accrual even if real yield was earned.
-        lastRecordedValue = totalValue();
 
         emit Withdrawn(to, amount);
     }
@@ -763,72 +709,6 @@ contract TreasuryV2 is
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // YIELD HARVEST — Automated distribution to smUSD holders
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * @notice View: net yield available for distribution (80% after protocol fee)
-     * @return netYield USDC amount that stays in strategies for smUSD holders
-     * @return grossYield Total yield above high-water mark
-     * @return protocolFee 20% protocol share (tracked in accruedFees, claimable separately)
-     */
-    function pendingYield() external view returns (uint256 netYield, uint256 grossYield, uint256 protocolFee) {
-        uint256 currentValue = totalValue();
-        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
-
-        if (currentValue <= peak) return (0, 0, 0);
-
-        grossYield = currentValue - peak;
-        protocolFee = (grossYield * fees.performanceFeeBps) / BPS;
-        netYield = grossYield - protocolFee;
-    }
-
-    /**
-     * @notice Keeper-callable yield harvest: accrues fees, auto-claims if above
-     *         threshold, and redeploys idle reserve back into strategies.
-     * @dev The 80% net yield auto-compounds in strategies — smUSD share price
-     *      reflects it via globalTotalAssets() → Treasury.totalValue().
-     *      This function handles the protocol's 20% fee collection and redeployment.
-     *      Caller needs ALLOCATOR_ROLE.
-     * @return claimedFees Amount of USDC protocol fees claimed to feeRecipient
-     */
-    function harvestYield() external nonReentrant whenNotPaused onlyRole(ALLOCATOR_ROLE) returns (uint256 claimedFees) {
-        // 1. Snapshot yield for event
-        uint256 currentValue = totalValue();
-        uint256 peak = peakRecordedValue > lastRecordedValue ? peakRecordedValue : lastRecordedValue;
-
-        // 2. Accrue protocol fees (updates peakRecordedValue + accruedFees)
-        _accrueFees();
-
-        uint256 grossYield = currentValue > peak ? currentValue - peak : 0;
-        uint256 protocolFee = grossYield > 0 ? (grossYield * fees.performanceFeeBps) / BPS : 0;
-
-        // 3. Auto-claim accrued fees if any
-        claimedFees = fees.accruedFees;
-        if (claimedFees > 0) {
-            uint256 reserve = reserveBalance();
-            if (reserve < claimedFees) {
-                _withdrawFromStrategies(claimedFees - reserve);
-            }
-            uint256 available = reserveBalance();
-            uint256 toSend = available < claimedFees ? available : claimedFees;
-            fees.accruedFees = claimedFees - toSend;
-            claimedFees = toSend;
-
-            asset.safeTransfer(fees.feeRecipient, toSend);
-            emit FeesClaimed(fees.feeRecipient, toSend);
-        }
-
-        // 4. 80% net yield auto-distributes back through strategies:
-        //    strategy.totalAssets() rises → totalValue() rises → smUSD share price rises.
-        //    Reserve stays idle — ALLOCATOR_ROLE deploys via deployToStrategy().
-
-        lastRecordedValue = totalValue();
-
-        emit YieldHarvested(grossYield > protocolFee ? grossYield - protocolFee : 0, protocolFee);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
     // STRATEGY MANAGEMENT
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -975,15 +855,8 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
-            // SOL-L-10: Wrap in try/catch to prevent a single reverting strategy from DoS-ing rebalance
-            uint256 currentValue;
             // slither-disable-next-line calls-loop
-            try IStrategy(strat).totalValue() returns (uint256 val) {
-                currentValue = val;
-            } catch {
-                emit RebalanceWithdrawFailed(strat, 0);
-                continue;
-            }
+            uint256 currentValue = IStrategy(strat).totalValue();
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue > targetValue) {
@@ -1008,15 +881,8 @@ contract TreasuryV2 is
             if (!strategies[i].active) continue;
 
             address strat = strategies[i].strategy;
-            // SOL-L-10: Wrap in try/catch to prevent a single reverting strategy from DoS-ing rebalance
-            uint256 currentValue;
             // slither-disable-next-line calls-loop
-            try IStrategy(strat).totalValue() returns (uint256 val) {
-                currentValue = val;
-            } catch {
-                emit RebalanceDepositFailed(strat, 0);
-                continue;
-            }
+            uint256 currentValue = IStrategy(strat).totalValue();
             uint256 targetValue = (total * strategies[i].targetBps) / BPS;
 
             if (currentValue < targetValue) {
@@ -1120,10 +986,6 @@ contract TreasuryV2 is
         // on next _accrueFees() call after emergency withdrawal
         lastRecordedValue = totalValue();
 
-        // SOL-L-12: Auto-pause to prevent deposits from re-deploying to strategies
-        // between emergency withdrawal and manual pause. TIMELOCK_ROLE required to unpause.
-        _pause();
-
         emit EmergencyWithdraw(reserveBalance());
     }
 
@@ -1168,12 +1030,6 @@ contract TreasuryV2 is
      */
     function setReserveBps(uint256 _reserveBps) external onlyTimelock {
         if (_reserveBps > 3000) revert ReserveTooHigh();
-        // SOL-L-11: Validate that reserveBps + active strategy targetBps <= 10000
-        uint256 totalTarget = _reserveBps;
-        for (uint256 i = 0; i < strategies.length; i++) {
-            if (strategies[i].active) totalTarget += strategies[i].targetBps;
-        }
-        if (totalTarget > BPS) revert TotalAllocationInvalid();
         uint256 oldBps = reserveBps;
         reserveBps = _reserveBps;
         emit ReserveBpsUpdated(oldBps, _reserveBps);

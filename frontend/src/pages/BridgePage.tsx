@@ -3,16 +3,14 @@ import { ethers } from "ethers";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { formatUSD, formatBps, formatHealthFactor, formatTimestamp, shortenAddress } from "@/lib/format";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
-import { useLoopWallet } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
 import BridgeOutPanel from "@/components/BridgeOutPanel";
 
 export function BridgePage() {
-  const { isConnected } = useUnifiedWallet();
+  const { isConnected } = useWalletConnect();
   const contracts = useWCContracts();
-  const loopWallet = useLoopWallet();
   const [data, setData] = useState({
     attestedAssets: 0n,
     supplyCap: 0n,
@@ -119,12 +117,7 @@ export function BridgePage() {
   const attestationFresh = timeSinceAttestation < 3600; // less than 1 hour
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-4xl space-y-8">
-        <PageHeader title="Canton Bridge" subtitle="Real-time view of Canton Network attestations governing mUSD supply" badge="Bridge" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (
@@ -137,7 +130,7 @@ export function BridgePage() {
       />
 
       {/* ── Bridge to Canton (ETH → Canton) ── */}
-      <BridgeOutPanel existingCantonParty={loopWallet.partyId} />
+      <BridgeOutPanel />
 
       {/* Paused Alert */}
       {data.paused && (

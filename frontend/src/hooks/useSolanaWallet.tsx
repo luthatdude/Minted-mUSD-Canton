@@ -123,13 +123,9 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Detect installed wallets — must be in useEffect to avoid hydration mismatch
-  const [isPhantomInstalled, setIsPhantomInstalled] = useState(false);
-  const [isSolflareInstalled, setIsSolflareInstalled] = useState(false);
-  useEffect(() => {
-    setIsPhantomInstalled(!!window.phantom?.solana?.isPhantom);
-    setIsSolflareInstalled(!!window.solflare?.isSolflare);
-  }, []);
+  // Detect installed wallets
+  const isPhantomInstalled = typeof window !== 'undefined' && !!window.phantom?.solana?.isPhantom;
+  const isSolflareInstalled = typeof window !== 'undefined' && !!window.solflare?.isSolflare;
 
   // Update connection when network changes
   useEffect(() => {

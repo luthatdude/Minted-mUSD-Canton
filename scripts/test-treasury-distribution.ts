@@ -3,13 +3,13 @@
 
 import { ethers } from "hardhat";
 
-// Deployed contract addresses on Sepolia (updated 2026-02-17)
+// Deployed contract addresses on Sepolia
 const CONTRACTS = {
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
-  MUSD: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
-  SMUSD: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540",
-  TreasuryV2: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
-  DirectMintV2: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
+  MUSD: "0x2bD1671c378A525dDA911Cc53eE9E8929D54fd9b",
+  SMUSD: "0xbe47E05f8aE025D03D034a50bE0Efd23E591AA68",
+  TreasuryV2: "0x76c6bFB36931293D3e4BAC6564074d5B5C55d987E",
+  DirectMintV2: "0x14a728791716d3898d073eA408B458773F7ABeC1",
 };
 
 async function main() {
@@ -31,21 +31,19 @@ async function main() {
   // ═══════════════════════════════════════════════════════════
   console.log("\n1️⃣ Checking Treasury configuration...");
   
-  const treasuryAsset = await treasury.asset();
+  const treasuryUSDC = await treasury.usdc();
   const reserveBps = await treasury.reserveBps();
-  const minAutoAllocate = await treasury.minAutoAllocateAmount();
+  const minAutoAllocate = await treasury.minAutoAllocate();
   
-  console.log(`   Asset address: ${treasuryAsset}`);
+  console.log(`   USDC address: ${treasuryUSDC}`);
   console.log(`   Reserve BPS: ${reserveBps} (${Number(reserveBps) / 100}%)`);
   console.log(`   Min Auto-Allocate: ${ethers.formatUnits(minAutoAllocate, 6)} USDC`);
   
   const totalValue = await treasury.totalValue();
-  const reserveBal = await treasury.reserveBalance();
+  const reserve = await treasury.reserve();
   console.log(`   Total Value: $${ethers.formatUnits(totalValue, 6)}`);
-  console.log(`   Reserve Balance: $${ethers.formatUnits(reserveBal, 6)}`);
+  console.log(`   Reserve: $${ethers.formatUnits(reserve, 6)}`);
 
-  // Gas limit constant for public RPC compatibility
-  const GAS = { gasLimit: 300_000 };
   // ═══════════════════════════════════════════════════════════
   // Step 2: Deposit USDC into Treasury
   // ═══════════════════════════════════════════════════════════
@@ -54,8 +52,8 @@ async function main() {
   const depositAmount = ethers.parseUnits("50000", 6); // 50,000 USDC
   
   // Mint and approve USDC
-  await (await mockUSDC.mint(deployer.address, depositAmount, GAS)).wait();
-  await (await mockUSDC.approve(CONTRACTS.TreasuryV2, depositAmount, GAS)).wait();
+  await mockUSDC.mint(deployer.address, depositAmount);
+  await mockUSDC.approve(CONTRACTS.TreasuryV2, depositAmount);
   console.log(`   ✅ Minted and approved ${ethers.formatUnits(depositAmount, 6)} USDC`);
 
   // Check if we have VAULT_ROLE to deposit
@@ -68,7 +66,7 @@ async function main() {
     const isAdmin = await treasury.hasRole(DEFAULT_ADMIN_ROLE, deployer.address);
     
     if (isAdmin) {
-      const grantTx = await treasury.grantRole(VAULT_ROLE, deployer.address, GAS);
+      const grantTx = await treasury.grantRole(VAULT_ROLE, deployer.address);
       await grantTx.wait();
       console.log("   ✅ Granted VAULT_ROLE");
     } else {
@@ -77,21 +75,21 @@ async function main() {
       
       // Use DirectMint which deposits to Treasury
       const mintAmount = ethers.parseUnits("10000", 6);
-      await (await mockUSDC.mint(deployer.address, mintAmount, GAS)).wait();
-      await (await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount, GAS)).wait();
-      await (await directMint.mint(mintAmount, { gasLimit: 500_000 })).wait();
+      await mockUSDC.mint(deployer.address, mintAmount);
+      await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount);
+      await directMint.mint(mintAmount);
       console.log(`   ✅ Minted ${ethers.formatUnits(mintAmount, 6)} mUSD via DirectMint`);
     }
   } else {
     // Direct deposit to treasury
-    const depositTx = await treasury.depositFromVault(depositAmount, { gasLimit: 500_000 });
+    const depositTx = await treasury.depositFromVault(depositAmount);
     await depositTx.wait();
     console.log(`   ✅ Deposited ${ethers.formatUnits(depositAmount, 6)} USDC to Treasury`);
   }
 
   // Check new treasury balance
   const newTotalValue = await treasury.totalValue();
-  const newReserve = await treasury.reserveBalance();
+  const newReserve = await treasury.reserve();
   console.log(`   📊 New Total Value: $${ethers.formatUnits(newTotalValue, 6)}`);
   console.log(`   📊 New Reserve: $${ethers.formatUnits(newReserve, 6)}`);
 
@@ -107,15 +105,15 @@ async function main() {
   if (currentMusdBalance < stakeAmount) {
     // Mint mUSD via DirectMint
     const mintAmount = ethers.parseUnits("10000", 6);
-    await (await mockUSDC.mint(deployer.address, mintAmount, GAS)).wait();
-    await (await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount, GAS)).wait();
-    await (await directMint.mint(mintAmount, { gasLimit: 500_000 })).wait();
+    await mockUSDC.mint(deployer.address, mintAmount);
+    await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount);
+    await directMint.mint(mintAmount);
     console.log(`   ✅ Minted ${ethers.formatUnits(mintAmount, 6)} mUSD`);
   }
 
   // Stake mUSD
-  await (await musd.approve(CONTRACTS.SMUSD, stakeAmount, GAS)).wait();
-  const stakeTx = await smusd.deposit(stakeAmount, deployer.address, GAS);
+  await musd.approve(CONTRACTS.SMUSD, stakeAmount);
+  const stakeTx = await smusd.deposit(stakeAmount, deployer.address);
   await stakeTx.wait();
   console.log(`   ✅ Staked ${ethers.formatUnits(stakeAmount, 18)} mUSD`);
 
@@ -138,7 +136,7 @@ async function main() {
   
   if (!hasYieldRole) {
     console.log("   ⚠️ Granting YIELD_MANAGER_ROLE...");
-    const grantTx = await smusd.grantRole(YIELD_MANAGER_ROLE, deployer.address, GAS);
+    const grantTx = await smusd.grantRole(YIELD_MANAGER_ROLE, deployer.address);
     await grantTx.wait();
     console.log("   ✅ Granted YIELD_MANAGER_ROLE");
   }
@@ -151,14 +149,14 @@ async function main() {
   const yieldMusdBalance = await musd.balanceOf(deployer.address);
   if (yieldMusdBalance < yieldAmount) {
     const mintAmount = ethers.parseUnits("1000", 6);
-    await (await mockUSDC.mint(deployer.address, mintAmount, GAS)).wait();
-    await (await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount, GAS)).wait();
-    await (await directMint.mint(mintAmount, { gasLimit: 500_000 })).wait();
+    await mockUSDC.mint(deployer.address, mintAmount);
+    await mockUSDC.approve(CONTRACTS.DirectMintV2, mintAmount);
+    await directMint.mint(mintAmount);
   }
 
   // Approve and distribute yield
-  await (await musd.approve(CONTRACTS.SMUSD, yieldAmount, GAS)).wait();
-  const yieldTx = await smusd.distributeYield(yieldAmount, { gasLimit: 200_000 });
+  await musd.approve(CONTRACTS.SMUSD, yieldAmount);
+  const yieldTx = await smusd.distributeYield(yieldAmount);
   await yieldTx.wait();
   console.log(`   ✅ Distributed ${ethers.formatUnits(yieldAmount, 18)} mUSD yield`);
 
@@ -180,16 +178,10 @@ async function main() {
   console.log(`   Treasury in SMUSD: ${treasuryInSmusd}`);
   
   if (treasuryInSmusd === ethers.ZeroAddress) {
-    console.log("   ⚠️ Treasury not set in SMUSD.");
-    // setTreasury requires TIMELOCK_ROLE (self-governed)
-    const TIMELOCK_ROLE = ethers.keccak256(ethers.toUtf8Bytes("TIMELOCK_ROLE"));
-    if (await smusd.hasRole(TIMELOCK_ROLE, deployer.address)) {
-      const setTreasuryTx = await smusd.setTreasury(CONTRACTS.TreasuryV2, GAS);
-      await setTreasuryTx.wait();
-      console.log("   ✅ Treasury set in SMUSD");
-    } else {
-      console.log("   ⚠️ Cannot set treasury (requires TIMELOCK_ROLE). globalTotalAssets uses local fallback.");
-    }
+    console.log("   ⚠️ Treasury not set in SMUSD. Setting now...");
+    const setTreasuryTx = await smusd.setTreasury(CONTRACTS.TreasuryV2);
+    await setTreasuryTx.wait();
+    console.log("   ✅ Treasury set in SMUSD");
   } else if (treasuryInSmusd.toLowerCase() === CONTRACTS.TreasuryV2.toLowerCase()) {
     console.log("   ✅ Treasury correctly configured in SMUSD");
   } else {
@@ -210,7 +202,7 @@ async function main() {
 | Metric                    | Value                          |
 |---------------------------|--------------------------------|
 | Treasury Total Value      | $${ethers.formatUnits(await treasury.totalValue(), 6).padEnd(30)} |
-| Treasury Reserve          | $${ethers.formatUnits(await treasury.reserveBalance(), 6).padEnd(30)} |
+| Treasury Reserve          | $${ethers.formatUnits(await treasury.reserve(), 6).padEnd(30)} |
 | SMUSD Total Supply        | ${ethers.formatUnits(await smusd.totalSupply(), 18).padEnd(30)} |
 | SMUSD Total Assets        | ${ethers.formatUnits(await smusd.totalAssets(), 18).padEnd(30)} |
 | Share Value               | ${ethers.formatUnits(shareValueAfter, 18).padEnd(30)} |

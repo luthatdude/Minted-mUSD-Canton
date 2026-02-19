@@ -25,13 +25,6 @@ describe("DepositRouter", function () {
     const MockWormholeTokenBridge = await ethers.getContractFactory("MockWormholeTokenBridge");
     const tokenBridge = await MockWormholeTokenBridge.deploy();
 
-    // Deploy MockWormhole core (for messageFee) and link to token bridge
-    const MockWormhole = await ethers.getContractFactory("MockWormhole");
-    const wormholeCore = await MockWormhole.deploy();
-    await tokenBridge.setWormholeCore(await wormholeCore.getAddress());
-    // Set messageFee to match MOCK_BRIDGE_COST
-    await wormholeCore.setMessageFee(MOCK_BRIDGE_COST);
-
     // Deploy DepositRouter
     const DepositRouter = await ethers.getContractFactory("DepositRouter");
     const router = await DepositRouter.deploy(

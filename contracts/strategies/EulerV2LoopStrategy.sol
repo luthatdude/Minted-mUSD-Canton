@@ -208,7 +208,6 @@ contract EulerV2LoopStrategy is
     // ═══════════════════════════════════════════════════════════════════
 
     event Deposited(uint256 principal, uint256 totalSupplied, uint256 leverageX100);
-    event ActiveUpdated(bool active);
     event Withdrawn(uint256 requested, uint256 returned);
     event ParametersUpdated(uint256 targetLtvBps, uint256 targetLoops);
     event RewardTokenToggled(address indexed token, bool allowed);
@@ -294,17 +293,11 @@ contract EulerV2LoopStrategy is
         _grantRole(KEEPER_ROLE, _admin);
     }
 
-    /// @notice Whether EVC has been set up
-    bool public evcSetup;
-
     /**
      * @notice Set up EVC relationships (called once after deployment)
      * @dev Must be called by admin to enable collateral/controller linkages
-     *      M-08: Can only be called once to prevent re-enabling after intentional disable.
      */
     function setupEVC() external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (evcSetup) revert EVCAlreadySetup();
-        evcSetup = true;
         // Enable supply vault as collateral for this account
         evc.enableCollateral(address(this), address(supplyVault));
         // Enable borrow vault as controller for this account
@@ -823,7 +816,6 @@ contract EulerV2LoopStrategy is
 
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
-        emit ActiveUpdated(_active);
     }
 
     function pause() external onlyRole(GUARDIAN_ROLE) {
@@ -843,7 +835,7 @@ contract EulerV2LoopStrategy is
     // STORAGE GAP & UPGRADES
     // ═══════════════════════════════════════════════════════════════════
 
-    uint256[34] private __gap;  // reduced from 35 → 34 (evcSetup added)
+    uint256[35] private __gap;
 
     function _authorizeUpgrade(address) internal override onlyTimelock {}
 }

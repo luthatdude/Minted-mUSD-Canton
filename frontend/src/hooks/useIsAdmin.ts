@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { useUnifiedWallet } from "./useUnifiedWallet";
+import { useWalletConnect } from "./useWalletConnect";
 import { useWCContracts } from "./useWCContracts";
 
 // bytes32(0) — DEFAULT_ADMIN_ROLE in OpenZeppelin AccessControl
@@ -20,7 +20,7 @@ const DEFAULT_ADMIN_ROLE = "0x00000000000000000000000000000000000000000000000000
 const TIMELOCK_ROLE = "0xf66846415d2bf9eabda9e84793ff9c0ea96d87f50fc41e66aa16469c6a442f05";
 
 export function useIsAdmin(): { isAdmin: boolean; isLoading: boolean } {
-  const { address, isConnected } = useUnifiedWallet();
+  const { address, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
   const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);

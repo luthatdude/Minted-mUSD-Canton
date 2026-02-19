@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { Layout } from "@/components/Layout";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useChainState } from "@/hooks/useChain";
 import { useLoopWallet } from "@/hooks/useLoopWallet";
@@ -22,12 +22,10 @@ import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
-import { CantonBalancesPage } from "@/components/canton/CantonBalances";
-import { DevnetFaucet } from "@/components/canton/DevnetFaucet";
 
 export default function Home() {
   const router = useRouter();
-  const wallet = useUnifiedWallet();
+  const wallet = useWalletConnect();
   const contracts = useWCContracts();
   const chainState = useChainState();
   const loopWallet = useLoopWallet();
@@ -63,8 +61,6 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
-        case "faucet":
-          return <DevnetFaucet />;
         default:
           return <CantonDashboard />;
       }
@@ -94,9 +90,9 @@ export default function Home() {
   return (
     <Layout
       address={wallet.address}
-      onConnect={() => wallet.connectMetaMask()}
-      onDisconnect={() => wallet.disconnect()}
-      onCantonDisconnect={() => loopWallet.disconnect()}
+      onConnect={wallet.connect}
+      onDisconnect={wallet.disconnect}
+      onCantonDisconnect={loopWallet.disconnect ?? (() => {})}
       activePage={page}
       onNavigate={handleNavigate}
       chain={chainState.chain}
