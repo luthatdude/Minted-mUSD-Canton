@@ -92,11 +92,82 @@ export function CantonBridge() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-4">
-        <StatCard label="mUSD Balance" value={totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} color="green" />
-        <StatCard label="Bridge Service" value={data?.bridgeService ? "Active" : "—"} color={data?.bridgeService ? "green" : "default"} />
-        <StatCard label="Last Nonce" value={data?.bridgeService ? String(data.bridgeService.lastNonce) : "—"} color="blue" />
-        <StatCard label="Pending Bridge-Ins" value={String(data?.pendingBridgeIns || 0)} color={data?.pendingBridgeIns ? "yellow" : "default"} />
+      {/* Primary Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard label="mUSD Balance" value={totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} color="green" variant="glow"
+          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
+        <StatCard label="Bridge Service" value={data?.bridgeService ? "Active" : "—"} color={data?.bridgeService ? "green" : "default"}
+          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>} />
+        <StatCard label="Bridge Nonce" value={data?.bridgeService ? String(data.bridgeService.lastNonce) : "—"} color="blue"
+          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" /></svg>} />
+        <StatCard label="Pending Bridge-Ins" value={String(data?.pendingBridgeIns || 0)} color={data?.pendingBridgeIns ? "yellow" : "default"}
+          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
+      </div>
+
+      {/* Supply Overview & Protocol Parameters */}
+      <div className="grid gap-6 sm:grid-cols-2">
+        {/* Supply Overview Gauge */}
+        <div className="card-gradient-border overflow-hidden">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-purple-500">
+              <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Canton mUSD Supply</h2>
+              <p className="text-sm text-gray-400">{tokens.length} contracts across Canton ledger</p>
+            </div>
+          </div>
+          <div className="text-center mb-4">
+            <p className="text-4xl font-bold text-emerald-400">{totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+            <p className="text-sm text-gray-400 mt-1">Total mUSD on Canton</p>
+          </div>
+          <div className="space-y-3">
+            <div className="progress h-4 rounded-full">
+              <div className="h-full rounded-full progress-bar transition-all duration-1000" style={{ width: `${Math.min(100, (totalMusd / 1_000_000) * 100)}%` }} />
+            </div>
+            <div className="flex justify-between text-sm">
+              <div><p className="text-gray-400">Bridged</p><p className="font-semibold text-white">{tokens.length} tokens</p></div>
+              <div className="text-right"><p className="text-gray-400">Supply Service</p><p className="font-semibold text-emerald-400">{data?.supplyService ? "Active" : "—"}</p></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Protocol Parameters */}
+        <div className="card-gradient-border overflow-hidden">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/20">
+              <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Protocol Parameters</h2>
+              <p className="text-sm text-gray-400">Canton bridge configuration</p>
+            </div>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm rounded-lg bg-surface-800/30 px-4 py-3">
+              <span className="text-gray-400">Bridge Service</span>
+              <span className={`font-medium ${data?.bridgeService ? "text-emerald-400" : "text-yellow-400"}`}>{data?.bridgeService ? "Deployed" : "Not Deployed"}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm rounded-lg bg-surface-800/30 px-4 py-3">
+              <span className="text-gray-400">Supply Service</span>
+              <span className={`font-medium ${data?.supplyService ? "text-emerald-400" : "text-yellow-400"}`}>{data?.supplyService ? "Deployed" : "Not Deployed"}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm rounded-lg bg-surface-800/30 px-4 py-3">
+              <span className="text-gray-400">Current Nonce</span>
+              <span className="font-medium text-white font-mono">{data?.bridgeService?.lastNonce ?? "—"}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm rounded-lg bg-surface-800/30 px-4 py-3">
+              <span className="text-gray-400">Pending Requests</span>
+              <span className={`font-medium ${(data?.pendingBridgeIns || 0) > 0 ? "text-yellow-400" : "text-gray-300"}`}>{data?.pendingBridgeIns || 0}</span>
+            </div>
+            {data?.bridgeService && (
+              <div className="flex items-center justify-between text-sm rounded-lg bg-surface-800/30 px-4 py-3">
+                <span className="text-gray-400">Contract ID</span>
+                <span className="font-mono text-xs text-gray-500">{data.bridgeService.contractId.slice(0, 20)}…</span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="card-gradient-border overflow-hidden">
@@ -284,17 +355,19 @@ export function CantonBridge() {
           </div>
           <h2 className="text-lg font-semibold text-white">How Canton Bridge Works</h2>
         </div>
-        <div className="grid gap-4 sm:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
           {[
-            { step: "1", title: "Bridge In", desc: "Deposit mUSD on Ethereum — relay mints CantonMUSD on Canton.", color: "purple" },
-            { step: "2", title: "Hold on Canton", desc: "mUSD is held as CantonMUSD tokens with full provenance.", color: "blue" },
-            { step: "3", title: "Lock to Bridge Out", desc: "Lock CantonMUSD to begin bridging back to Ethereum.", color: "emerald" },
-            { step: "4", title: "Claim on Ethereum", desc: "Attestation completes, claim mUSD on the target chain.", color: "yellow" },
+            { step: "1", title: "Deposit on ETH", desc: "User deposits mUSD into the BLE Bridge contract on Ethereum.", color: "purple" },
+            { step: "2", title: "Relay Detects", desc: "The relay service monitors for bridge events and fetches attestation data.", color: "blue" },
+            { step: "3", title: "Canton Mint", desc: "Relay exercises BridgeService to mint CantonMUSD with full provenance.", color: "emerald" },
+            { step: "4", title: "Hold & Earn", desc: "mUSD is held as CantonMUSD — stake into smUSD or ETH Pool for yield.", color: "green" },
+            { step: "5", title: "Lock for Bridge", desc: "Lock CantonMUSD tokens to initiate bridging back to Ethereum.", color: "yellow" },
+            { step: "6", title: "Claim on ETH", desc: "Multi-sig attestation completes, claim mUSD on the target chain.", color: "brand" },
           ].map(({ step, title, desc, color }) => (
             <div key={step} className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
               <div className={`flex h-8 w-8 items-center justify-center rounded-full bg-${color}-500/20 text-${color}-400 font-bold text-sm mb-3`}>{step}</div>
-              <h3 className="font-medium text-white mb-1">{title}</h3>
-              <p className="text-sm text-gray-400">{desc}</p>
+              <h3 className="font-medium text-white mb-1 text-sm">{title}</h3>
+              <p className="text-xs text-gray-400">{desc}</p>
             </div>
           ))}
         </div>

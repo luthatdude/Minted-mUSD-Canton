@@ -1,35 +1,144 @@
 import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger } from "@/hooks/useCantonLedger";
+import { TxButton } from "@/components/TxButton";
+import {
+  useCantonLedger,
+  cantonExercise,
+  type CantonMUSDToken,
+  type SimpleToken,
+} from "@/hooks/useCantonLedger";
 
-// ─── Pool Definitions ──────────────────────────────────────────────────────
-type CantonPoolTab = "smusd" | "ethpool" | "boost";
+type CantonPoolTab = "smusd" | "ethpool";
+type StakeAction = "stake" | "unstake";
+type DepositAsset = "USDC" | "USDCx" | "CTN";
 
-const CANTON_POOL_CONFIG = [
-  { key: "smusd" as CantonPoolTab, label: "smUSD", badge: "Global Yield", color: "from-emerald-500 to-teal-500", desc: "Stake mUSD to earn protocol yield as smUSD. Auto-compounding with no lock period.", apy: "4.5%" },
-  { key: "ethpool" as CantonPoolTab, label: "ETH Pool", badge: "smUSD-E", color: "from-blue-500 to-indigo-500", desc: "Provide ETH-denominated liquidity for smUSD-E with lock tier multipliers.", apy: "8.2%" },
-  { key: "boost" as CantonPoolTab, label: "Boost Pool", badge: "Validator", color: "from-yellow-400 to-orange-500", desc: "Stake Canton Coin (CTN) to boost validator rewards and earn protocol fees.", apy: "12.0%" },
+const POOL_TAB_CONFIG = [
+  { key: "smusd" as CantonPoolTab, label: "smUSD", badge: "Yield Vault", color: "from-emerald-500 to-teal-500" },
+  { key: "ethpool" as CantonPoolTab, label: "ETH Pool", badge: "smUSD-E", color: "from-blue-500 to-indigo-500" },
 ];
 
-// ─── Component ──────────────────────────────────────────────────────────────
+const TIER_LABELS: Record<string, string> = {
+  NoLock: "No Lock (1.0\u00d7)",
+  ShortLock: "30 Days (1.25\u00d7)",
+  MediumLock: "90 Days (1.5\u00d7)",
+  LongLock: "180 Days (2.0\u00d7)",
+};
+
+function fmtAmount(v: string | number, decimals = 2): string {
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  if (isNaN(n)) return "0.00";
+  return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 export function CantonStake() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
+
   const [pool, setPool] = useState<CantonPoolTab>("smusd");
+  const [tab, setTab] = useState<StakeAction>("stake");
+  const [amount, setAmount] = useState("");
+  const [selectedMusdIdx, setSelectedMusdIdx] = useState(0);
+  const [depositAsset, setDepositAsset] = useState<DepositAsset>("USDC");
+  const [selectedAssetIdx, setSelectedAssetIdx] = useState(0);
+  const [lockTier, setLockTier] = useState("NoLock");
+  const [txLoading, setTxLoading] = useState(false);
+  const [txError, setTxError] = useState<string | null>(null);
+  const [txSuccess, setTxSuccess] = useState<string | null>(null);
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
+  const tokens = data?.tokens || [];
+  const stakingService = data?.stakingService || null;
+  const ethPoolService = data?.ethPoolService || null;
+  const smusdTokens = data?.smusdTokens || [];
+  const totalSmusd = data?.totalSmusd ? parseFloat(data.totalSmusd) : 0;
+  const usdcTokens = data?.usdcTokens || [];
+  const totalUsdc = data?.totalUsdc ? parseFloat(data.totalUsdc) : 0;
+  const coinTokens = data?.cantonCoinTokens || [];
+  const totalCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
 
+  const smusdSharePrice = stakingService ? parseFloat(stakingService.sharePrice) : 1.0;
+  const smusdTVL = stakingService ? parseFloat(stakingService.pooledMusd) : 0;
+  const smusdApy = Math.max(0, (smusdSharePrice - 1) * 100);
+  const smusdPositionValue = totalSmusd * smusdSharePrice;
+
+  const ethPoolSharePrice = ethPoolService ? parseFloat(ethPoolService.sharePrice) : 1.0;
+  const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
+  const ethPoolCapNum = ethPoolService ? parseFloat(ethPoolService.poolCap) : 10_000_000;
+  const ethPoolUtil = ethPoolCapNum > 0 ? (ethPoolTVL / ethPoolCapNum) * 100 : 0;
+
+  /* ── smUSD Staking handlers ── */
+  async function handleSmusdStake() {
+    if (!stakingService || tokens.length === 0) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      const token = tokens[selectedMusdIdx];
+      if (!token) throw new Error("No mUSD token selected");
+      const resp = await cantonExercise("CantonStakingService", stakingService.contractId, "Stake", {
+        user: data!.party, musdCid: token.contractId,
+      });
+      if (!resp.success) throw new Error(resp.error || "Stake failed");
+      setTxSuccess(`Staked ${fmtAmount(token.amount)} mUSD \u2192 smUSD shares`);
+      setAmount(""); await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  async function handleSmusdUnstake() {
+    if (!stakingService || smusdTokens.length === 0) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      const smusd = smusdTokens[selectedAssetIdx];
+      if (!smusd) throw new Error("No smUSD shares selected");
+      const resp = await cantonExercise("CantonStakingService", stakingService.contractId, "Unstake", {
+        user: data!.party, smusdCid: smusd.contractId,
+      });
+      if (!resp.success) throw new Error(resp.error || "Unstake failed");
+      setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD \u2192 mUSD`);
+      await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  /* ── ETH Pool handler ── */
+  async function handleEthPoolStake() {
+    if (!ethPoolService) return;
+    setTxLoading(true); setTxError(null); setTxSuccess(null);
+    try {
+      let choice = "";
+      const args: Record<string, unknown> = { user: data!.party, selectedTier: lockTier };
+      if (depositAsset === "USDC") {
+        const token = usdcTokens[selectedAssetIdx];
+        if (!token) throw new Error("No USDC token selected");
+        choice = "ETHPool_StakeWithUSDC"; args.usdcCid = token.contractId;
+      } else if (depositAsset === "USDCx") {
+        const token = usdcTokens[selectedAssetIdx];
+        if (!token) throw new Error("No USDCx token selected");
+        choice = "ETHPool_StakeWithUSDCx"; args.usdcxCid = token.contractId;
+      } else {
+        const token = coinTokens[selectedAssetIdx];
+        if (!token) throw new Error("No Canton Coin selected");
+        choice = "ETHPool_StakeWithCantonCoin"; args.coinCid = token.contractId;
+        args.operatorUsdcxCid = "";
+      }
+      const resp = await cantonExercise("CantonETHPoolService", ethPoolService.contractId, choice, args);
+      if (!resp.success) throw new Error(resp.error || "Stake failed");
+      setTxSuccess(`Deposited ${depositAsset} \u2192 smUSD-E shares`);
+      setAmount(""); await refresh();
+    } catch (err: any) { setTxError(err.message); }
+    finally { setTxLoading(false); }
+  }
+
+  /* ── Loading / Error states ── */
   if (loading && !data) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-emerald-500/20 border-t-emerald-500" />
-          <p className="text-gray-400">Loading Canton ledger…</p>
+          <p className="text-gray-400">Loading Canton ledger\u2026</p>
         </div>
       </div>
     );
   }
-
   if (error && !data) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -42,128 +151,382 @@ export function CantonStake() {
     );
   }
 
-  const selectedPool = CANTON_POOL_CONFIG.find((p) => p.key === pool)!;
-
   return (
-    <div className="mx-auto max-w-5xl space-y-8">
+    <div className="mx-auto max-w-6xl space-y-8">
       <PageHeader
-        title="Stake"
-        subtitle="Stake mUSD and Canton assets to earn protocol yield"
+        title="Stake & Earn"
+        subtitle="Earn yield by staking into Canton mUSD vaults \u2014 choose your pool"
         badge="Canton"
         badgeColor="emerald"
         action={
           <button onClick={refresh} className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20">
-            <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
+            <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
             Refresh
           </button>
         }
       />
 
-      {/* Balance Banner */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Available mUSD"
-          value={totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          color="green"
-          variant="glow"
-        />
-        <StatCard label="mUSD Contracts" value={String(data?.tokenCount || 0)} color="blue" />
-        <StatCard label="Staked Balance" value="0.00" subValue="Services deploying…" />
+      {/* Pool Selector */}
+      <div className="flex gap-2 rounded-xl bg-surface-800/50 p-1.5 border border-white/10">
+        {POOL_TAB_CONFIG.map(({ key, label, badge, color }) => (
+          <button key={key} onClick={() => { setPool(key); setTab("stake"); setAmount(""); }}
+            className={`relative flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-300 ${pool === key ? "bg-surface-700 text-white shadow-lg" : "text-gray-400 hover:text-white hover:bg-surface-700/50"}`}>
+            <span className="flex items-center justify-center gap-2">
+              {label}
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pool === key ? `bg-gradient-to-r ${color} text-white` : "bg-surface-600 text-gray-500"}`}>{badge}</span>
+              {key === "smusd" && stakingService && <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />}
+              {key === "ethpool" && ethPoolService && <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />}
+            </span>
+            {pool === key && <span className={`absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r ${color}`} />}
+          </button>
+        ))}
       </div>
 
-      {/* Pool Tabs */}
-      <div className="flex gap-3">
-        {CANTON_POOL_CONFIG.map(({ key, label, badge, color }) => (
-          <button
-            key={key}
-            className={`group relative flex-1 rounded-xl border p-4 text-left transition-all duration-300 ${
-              pool === key
-                ? "border-white/20 bg-white/[0.04] shadow-lg"
-                : "border-white/5 bg-white/[0.01] hover:border-white/10"
-            }`}
-            onClick={() => setPool(key)}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`h-10 w-10 rounded-full bg-gradient-to-br ${color} flex items-center justify-center`}>
-                <span className="text-white font-bold text-sm">{label[0]}</span>
+      {/* ========= smUSD POOL ========= */}
+      {pool === "smusd" && (
+        <>
+          {!stakingService ? (
+            <div className="card-gradient-border p-8 text-center space-y-4">
+              <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
+                <span className="text-white font-bold text-2xl">s</span>
               </div>
+              <h3 className="text-2xl font-bold text-white">smUSD Staking Service</h3>
+              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
+                <p className="text-sm text-gray-400">The smUSD staking service is not yet deployed on this Canton participant.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-8 lg:grid-cols-2">
+              {/* Left: Stake/Unstake Card */}
               <div>
-                <p className="font-semibold text-white">{label}</p>
-                <p className="text-xs text-gray-500">{badge}</p>
+                <div className="card-gradient-border overflow-hidden">
+                  <div className="flex border-b border-white/10">
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("stake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+                        Stake mUSD
+                      </span>
+                      {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
+                    </button>
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("unstake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                        Unstake smUSD
+                      </span>
+                      {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />}
+                    </button>
+                  </div>
+
+                  <div className="space-y-6 p-6">
+                    {tab === "stake" ? (
+                      tokens.length > 0 ? (
+                        <>
+                          <div className="space-y-3">
+                            <label className="text-sm font-medium text-gray-400">Select mUSD Contract to Stake</label>
+                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-emerald-500/50 focus:outline-none"
+                              value={selectedMusdIdx} onChange={(e) => setSelectedMusdIdx(Number(e.target.value))}>
+                              {tokens.map((t, i) => (
+                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} mUSD \u2014 nonce {t.nonce} \u2014 {t.contractId.slice(0, 12)}\u2026</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm text-gray-400">You Stake</p>
+                                <p className="text-2xl font-semibold text-white">{fmtAmount(tokens[selectedMusdIdx]?.amount || "0")} mUSD</p>
+                              </div>
+                              <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                <div className="h-6 w-6 rounded-full bg-gradient-to-br from-brand-500 to-purple-500" />
+                                <span className="font-semibold text-white">mUSD</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex justify-center">
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-surface-800">
+                              <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm text-gray-400">You Receive</p>
+                                <p className="text-2xl font-semibold text-white">~{fmtAmount(parseFloat(tokens[selectedMusdIdx]?.amount || "0") / smusdSharePrice, 4)} smUSD</p>
+                              </div>
+                              <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                <div className="h-6 w-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500" />
+                                <span className="font-semibold text-white">smUSD</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">Share Price</span>
+                              <span className="font-medium text-white">1 smUSD = {smusdSharePrice.toFixed(4)} mUSD</span>
+                            </div>
+                            <div className="divider my-2" />
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">Cooldown Period</span>
+                              <span className="text-gray-300">{Math.round((stakingService?.cooldownSeconds || 86400) / 3600)}h</span>
+                            </div>
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-gray-400">Min Deposit</span>
+                              <span className="text-gray-300">{stakingService?.minDeposit || "0.01"} mUSD</span>
+                            </div>
+                          </div>
+                          <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0} className="w-full">
+                            <span className="flex items-center justify-center gap-2">
+                              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
+                              Stake mUSD \u2192 smUSD
+                            </span>
+                          </TxButton>
+                        </>
+                      ) : (
+                        <div className="text-center py-12">
+                          <p className="text-gray-400 font-medium">No mUSD tokens available</p>
+                          <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum first</p>
+                        </div>
+                      )
+                    ) : (
+                      smusdTokens.length === 0 ? (
+                        <div className="text-center py-12">
+                          <div className="flex h-16 w-16 mx-auto items-center justify-center rounded-full bg-surface-700/50 mb-4">
+                            <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" /></svg>
+                          </div>
+                          <p className="text-gray-400 font-medium">No smUSD positions</p>
+                          <p className="text-sm text-gray-500 mt-1">Switch to Stake tab to create a position</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Select smUSD Position to Unstake</label>
+                          {smusdTokens.map((smusd, idx) => (
+                            <button key={smusd.contractId} onClick={() => setSelectedAssetIdx(idx)}
+                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedAssetIdx === idx ? "border-emerald-500 bg-emerald-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <span className="font-semibold text-white">{fmtAmount(smusd.amount, 4)} smUSD</span>
+                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(smusd.amount) * smusdSharePrice)} mUSD</p>
+                                </div>
+                                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Active</span>
+                              </div>
+                            </button>
+                          ))}
+                          <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0} className="w-full">
+                            <span className="flex items-center justify-center gap-2">
+                              Unstake smUSD \u2192 mUSD
+                            </span>
+                          </TxButton>
+                        </div>
+                      )
+                    )}
+                    {txError && <div className="alert-error flex items-center gap-3"><span className="text-sm">{txError}</span></div>}
+                    {txSuccess && <div className="alert-success flex items-center gap-3"><span className="text-sm">{txSuccess}</span></div>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Stats & Position */}
+              <div className="space-y-4">
+                <div className="grid gap-4 grid-cols-2">
+                  <StatCard label="Share Price" value={`${smusdSharePrice.toFixed(4)} mUSD`} subValue="per smUSD" color="green" />
+                  <StatCard label="Estimated APY" value={`${smusdApy.toFixed(2)}%`} color="green" />
+                  <StatCard label="Available mUSD" value={fmtAmount(totalMusd)} subValue={`${tokens.length} contracts`} color="blue" />
+                  <StatCard label="Your smUSD" value={fmtAmount(totalSmusd, 4)} subValue={totalSmusd > 0 ? `\u2248 ${fmtAmount(smusdPositionValue)} mUSD` : undefined} color="purple" />
+                </div>
+                <div className="grid gap-4 grid-cols-2">
+                  <StatCard label="Pool TVL" value={fmtAmount(smusdTVL) + " mUSD"} color="blue" />
+                  <StatCard label="Total Shares" value={fmtAmount(parseFloat(stakingService?.totalShares || "0"), 4)} color="purple" />
+                </div>
+                <div className="card overflow-hidden border-l-4 border-emerald-500">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/20 flex-shrink-0">
+                      <svg className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">Canton smUSD Vault \u2014 Live</h3>
+                      <p className="text-sm text-gray-400">Stake mUSD into the Canton yield vault. Your mUSD is held in the pool and you receive smUSD shares. The share price increases as protocol revenue accrues.</p>
+                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {stakingService.contractId.slice(0, 24)}\u2026</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            {pool === key && <span className="absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500" />}
-          </button>
-        ))}
-      </div>
+          )}
 
-      {/* Selected Pool Card */}
-      <div className="card-emerald overflow-hidden">
-        <div className="p-8 text-center space-y-6">
-          <div className={`mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br ${selectedPool.color} flex items-center justify-center`}>
-            <span className="text-white font-bold text-2xl">{selectedPool.label[0]}</span>
-          </div>
-          <div>
-            <h3 className="text-2xl font-bold text-white">{selectedPool.label} Pool</h3>
-            <p className="text-sm text-gray-400 mt-2 max-w-md mx-auto">{selectedPool.desc}</p>
-          </div>
-
-          {/* Projected APY */}
-          <div className="rounded-xl bg-surface-800/50 border border-white/10 p-4 max-w-xs mx-auto">
-            <p className="text-xs text-gray-500 uppercase tracking-wider">Projected APY</p>
-            <p className="text-3xl font-bold text-emerald-400 mt-1">{selectedPool.apy}</p>
-          </div>
-
-          {/* Coming Soon Banner */}
-          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
-            <div className="flex items-center justify-center gap-3 mb-2">
-              <svg className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-lg font-semibold text-yellow-300">Coming Soon</span>
-            </div>
-            <p className="text-sm text-gray-400">
-              The {selectedPool.label} staking service is not yet deployed on this Canton participant.
-              Your {totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} mUSD will be stakeable once the DAML templates are uploaded.
-            </p>
-          </div>
-
-          {/* Disabled Stake Button */}
-          <button
-            disabled
-            className="mx-auto flex items-center gap-2 rounded-xl bg-emerald-600/30 px-8 py-3 font-semibold text-emerald-300/50 cursor-not-allowed"
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-            Stake mUSD — Awaiting Deployment
-          </button>
-        </div>
-      </div>
-
-      {/* Pool Descriptions Grid */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        {CANTON_POOL_CONFIG.map(({ key, label, desc, color, apy }) => (
-          <div key={key} className="card group transition-all duration-300 hover:border-white/20">
-            <div className={`mb-4 h-12 w-12 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center`}>
-              <span className="text-white font-bold">{label[0]}</span>
-            </div>
-            <h4 className="text-sm font-bold text-white mb-1">{label} Pool</h4>
-            <p className="text-xs text-gray-400 mb-3">{desc}</p>
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">Projected APY</span>
-              <span className="text-sm font-bold text-emerald-400">{apy}</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs text-gray-500">Status</span>
-              <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-400">Not Deployed</span>
+          {/* How Staking Works */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-white mb-5">How Staking Works</h2>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500/20 text-brand-400 font-bold text-sm mb-3">1</div>
+                <h3 className="font-medium text-white mb-1">Deposit mUSD</h3>
+                <p className="text-sm text-gray-400">Select a CantonMUSD contract and stake it into the vault.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm mb-3">2</div>
+                <h3 className="font-medium text-white mb-1">Earn Yield</h3>
+                <p className="text-sm text-gray-400">The smUSD share price increases as protocol revenue accrues.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm mb-3">3</div>
+                <h3 className="font-medium text-white mb-1">Withdraw After Cooldown</h3>
+                <p className="text-sm text-gray-400">Redeem smUSD for mUSD at the current share price.</p>
+              </div>
             </div>
           </div>
-        ))}
-      </div>
+        </>
+      )}
+
+      {/* ========= ETH POOL ========= */}
+      {pool === "ethpool" && (
+        <>
+          {!ethPoolService ? (
+            <div className="card-gradient-border p-8 text-center space-y-4">
+              <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center">
+                <span className="text-white font-bold text-2xl">E</span>
+              </div>
+              <h3 className="text-2xl font-bold text-white">ETH Pool Service</h3>
+              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
+                <p className="text-sm text-gray-400">The ETH Pool service is not yet deployed on this Canton participant.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-8 lg:grid-cols-2">
+              <div>
+                <div className="card-gradient-border overflow-hidden">
+                  <div className="flex border-b border-white/10">
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "stake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("stake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Deposit</span>
+                      {tab === "stake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
+                    </button>
+                    <button className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === "unstake" ? "text-white" : "text-gray-400 hover:text-white"}`} onClick={() => { setTab("unstake"); setAmount(""); }}>
+                      <span className="relative z-10 flex items-center justify-center gap-2">Withdraw</span>
+                      {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
+                    </button>
+                  </div>
+
+                  <div className="space-y-6 p-6">
+                    {tab === "stake" ? (
+                      <>
+                        {/* Deposit Asset Selector */}
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Deposit Asset</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {(["USDC", "USDCx", "CTN"] as DepositAsset[]).map(asset => (
+                              <button key={asset} onClick={() => { setDepositAsset(asset); setSelectedAssetIdx(0); setAmount(""); }}
+                                className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${depositAsset === asset ? "border-blue-500 bg-blue-500/20 text-white" : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"}`}>
+                                {asset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Lock Tier */}
+                        <div className="space-y-3">
+                          <label className="text-sm font-medium text-gray-400">Time-Lock Boost</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {Object.entries(TIER_LABELS).map(([tier, label]) => (
+                              <button key={tier} onClick={() => setLockTier(tier)}
+                                className={`rounded-xl border px-4 py-3 text-sm font-semibold transition-all ${lockTier === tier ? "border-blue-500 bg-blue-500/20 text-white" : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Contract Selector */}
+                        {(depositAsset === "CTN" ? coinTokens : usdcTokens).length > 0 ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">Select {depositAsset} Contract</label>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(depositAsset === "CTN" ? totalCoin : totalUsdc)} {depositAsset}</span>
+                            </div>
+                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-blue-500/50 focus:outline-none"
+                              value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
+                              {(depositAsset === "CTN" ? coinTokens : usdcTokens).map((t, i) => (
+                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {depositAsset} \u2014 {t.contractId.slice(0, 12)}\u2026</option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
+                            <p className="text-sm text-gray-400">No {depositAsset} tokens available on Canton</p>
+                          </div>
+                        )}
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={(depositAsset === "CTN" ? coinTokens : usdcTokens).length === 0} className="w-full">
+                          Deposit {depositAsset} \u2192 smUSD-E
+                        </TxButton>
+                      </>
+                    ) : (
+                      <div className="text-center py-12">
+                        <p className="text-gray-400 font-medium">No smUSD-E positions yet</p>
+                        <p className="text-sm text-gray-500 mt-1">Switch to Deposit tab to create a staking position</p>
+                      </div>
+                    )}
+                    {txError && <div className="alert-error flex items-center gap-3"><span className="text-sm">{txError}</span></div>}
+                    {txSuccess && <div className="alert-success flex items-center gap-3"><span className="text-sm">{txSuccess}</span></div>}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Pool Stats */}
+              <div className="space-y-4">
+                <div className="grid gap-4 grid-cols-2">
+                  <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
+                  <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " USDC"} color="green" />
+                  <StatCard label="Pool Utilization" value={`${ethPoolUtil.toFixed(1)}%`} color="yellow" />
+                  <StatCard label="Pool Cap" value={fmtAmount(ethPoolCapNum, 0) + " USDC"} color="purple" />
+                </div>
+                <div className="card overflow-hidden">
+                  <h3 className="text-sm font-medium text-gray-400 mb-3">Your Canton Assets</h3>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">USDC</span><span className="text-white font-medium">{fmtAmount(totalUsdc)} ({usdcTokens.length} contracts)</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Canton Coin (CTN)</span><span className="text-white font-medium">{fmtAmount(totalCoin)} ({coinTokens.length} contracts)</span></div>
+                    <div className="flex items-center justify-between text-sm"><span className="text-gray-400">mUSD</span><span className="text-white font-medium">{fmtAmount(totalMusd)} ({tokens.length} contracts)</span></div>
+                  </div>
+                </div>
+                <div className="card overflow-hidden border-l-4 border-blue-500">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500/20 flex-shrink-0">
+                      <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-white mb-1">ETH Pool \u2014 Fluid Strategy Yield</h3>
+                      <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin. Capital flows to Ethereum Treasury \u2192 Fluid T2/T4 vaults. Receive smUSD-E shares with optional time-lock boost multipliers (up to 2\u00d7).</p>
+                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {ethPoolService.contractId.slice(0, 24)}\u2026</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* How ETH Pool Works */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-white mb-5">How ETH Pool Works</h2>
+            <div className="grid gap-4 sm:grid-cols-4">
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-blue-400 font-bold text-sm mb-3">1</div>
+                <h3 className="font-medium text-white mb-1">Deposit Assets</h3>
+                <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-400 font-bold text-sm mb-3">2</div>
+                <h3 className="font-medium text-white mb-1">Receive smUSD-E</h3>
+                <p className="text-sm text-gray-400">Get smUSD-E shares with optional time-lock multipliers.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm mb-3">3</div>
+                <h3 className="font-medium text-white mb-1">Earn Yield</h3>
+                <p className="text-sm text-gray-400">Pool capital is deployed to Fluid leveraged loop strategies.</p>
+              </div>
+              <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-purple-400 font-bold text-sm mb-3">4</div>
+                <h3 className="font-medium text-white mb-1">Unstake for mUSD</h3>
+                <p className="text-sm text-gray-400">Redeem smUSD-E shares for CantonMUSD at the current share price.</p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
-

@@ -33,6 +33,31 @@ interface BridgeServiceInfo {
   lastNonce: number;
 }
 
+interface StakingServiceInfo {
+  contractId: string;
+  totalShares: string;
+  pooledMusd: string;
+  sharePrice: string;
+  cooldownSeconds: number;
+  minDeposit: string;
+  paused: boolean;
+}
+
+interface ETHPoolServiceInfo {
+  contractId: string;
+  totalShares: string;
+  poolCap: string;
+  sharePrice: string;
+  pooledUsdc: string;
+  paused: boolean;
+  totalMusdStaked: string;
+}
+
+interface SimpleToken {
+  contractId: string;
+  amount: string;
+}
+
 interface BalancesResponse {
   tokens: CantonMUSDToken[];
   totalBalance: string;
@@ -40,6 +65,15 @@ interface BalancesResponse {
   bridgeService: BridgeServiceInfo | null;
   pendingBridgeIns: number;
   supplyService: boolean;
+  stakingService: StakingServiceInfo | null;
+  ethPoolService: ETHPoolServiceInfo | null;
+  directMintService: { contractId: string; paused: boolean } | null;
+  smusdTokens: SimpleToken[];
+  totalSmusd: string;
+  cantonCoinTokens: SimpleToken[];
+  totalCoin: string;
+  usdcTokens: SimpleToken[];
+  totalUsdc: string;
   ledgerOffset: number;
   party: string;
   timestamp: string;
@@ -113,6 +147,12 @@ export default async function handler(
     let bridgeService: BridgeServiceInfo | null = null;
     let pendingBridgeIns = 0;
     let supplyService = false;
+    let stakingService: StakingServiceInfo | null = null;
+    let ethPoolService: ETHPoolServiceInfo | null = null;
+    let directMintService: { contractId: string; paused: boolean } | null = null;
+    const smusdTokens: SimpleToken[] = [];
+    const cantonCoinTokens: SimpleToken[] = [];
+    const usdcTokens: SimpleToken[] = [];
 
     for (const entry of entries) {
       const ac = entry.contractEntry?.JsActiveContract;
@@ -145,6 +185,54 @@ export default async function handler(
         pendingBridgeIns++;
       } else if (entityName === "MUSDSupplyService") {
         supplyService = true;
+      } else if (entityName === "CantonStakingService") {
+        const p = evt.createArgument;
+        const ts = parseFloat(String(p.totalShares || "0"));
+        const pm = parseFloat(String(p.pooledMusd || "0"));
+        stakingService = {
+          contractId: evt.contractId,
+          totalShares: String(ts),
+          pooledMusd: String(pm),
+          sharePrice: ts > 0 ? String(pm / ts) : "1.0",
+          cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
+          minDeposit: (p.minDeposit as string) || "0.01",
+          paused: p.paused === true || p.paused === "True",
+        };
+      } else if (entityName === "CantonETHPoolService") {
+        const p = evt.createArgument;
+        ethPoolService = {
+          contractId: evt.contractId,
+          totalShares: (p.totalShares as string) || "0",
+          poolCap: (p.poolCap as string) || "0",
+          sharePrice: (p.sharePrice as string) || "1.0",
+          pooledUsdc: (p.pooledUsdc as string) || "0",
+          paused: p.paused === true || p.paused === "True",
+          totalMusdStaked: (p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0",
+        };
+      } else if (entityName === "CantonDirectMintService") {
+        const p = evt.createArgument;
+        directMintService = {
+          contractId: evt.contractId,
+          paused: p.paused === true || p.paused === "True",
+        };
+      } else if (entityName === "CantonSMUSD") {
+        const p = evt.createArgument;
+        smusdTokens.push({
+          contractId: evt.contractId,
+          amount: (p.shares as string) || (p.amount as string) || "0",
+        });
+      } else if (entityName === "CantonCoin") {
+        const p = evt.createArgument;
+        cantonCoinTokens.push({
+          contractId: evt.contractId,
+          amount: (p.amount as string) || "0",
+        });
+      } else if (entityName === "CantonUSDC" || entityName === "USDCx") {
+        const p = evt.createArgument;
+        usdcTokens.push({
+          contractId: evt.contractId,
+          amount: (p.amount as string) || "0",
+        });
       }
     }
 
@@ -156,6 +244,11 @@ export default async function handler(
       .reduce((sum, t) => sum + parseFloat(t.amount), 0)
       .toFixed(6);
 
+    // Sum token balances for non-mUSD tokens
+    const totalSmusd = smusdTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+    const totalCoin = cantonCoinTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+    const totalUsdc = usdcTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+
     return res.status(200).json({
       tokens,
       totalBalance,
@@ -163,6 +256,15 @@ export default async function handler(
       bridgeService,
       pendingBridgeIns,
       supplyService,
+      stakingService,
+      ethPoolService,
+      directMintService,
+      smusdTokens,
+      totalSmusd,
+      cantonCoinTokens,
+      totalCoin,
+      usdcTokens,
+      totalUsdc,
       ledgerOffset: offset,
       party: CANTON_PARTY,
       timestamp: new Date().toISOString(),
