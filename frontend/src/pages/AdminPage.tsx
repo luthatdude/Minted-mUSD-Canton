@@ -204,7 +204,20 @@ export function AdminPage() {
   const [oracleStale, setOracleStale] = useState("3600");
   const [oracleDecimals, setOracleDecimals] = useState("18");
 
-  const { musd, directMint, treasury, bridge, borrow, oracle } = contracts;
+  // MetaVault Admin
+  const [mvSubStrategies, setMvSubStrategies] = useState<{strategy: string; weightBps: bigint; capUsd: bigint; enabled: boolean; currentValue: bigint}[]>([]);
+  const [mvNewSubAddr, setMvNewSubAddr] = useState("");
+  const [mvNewSubWeight, setMvNewSubWeight] = useState("");
+  const [mvNewSubCap, setMvNewSubCap] = useState("");
+  const [mvWeights, setMvWeights] = useState<string[]>([]);
+  const [mvDriftBps, setMvDriftBps] = useState("");
+  const [mvCooldown, setMvCooldown] = useState("");
+  const [mvToggleIdx, setMvToggleIdx] = useState("");
+  const [mvCapIdx, setMvCapIdx] = useState("");
+  const [mvCapAmount, setMvCapAmount] = useState("");
+  const [mvInfo, setMvInfo] = useState<{totalValue: string; idleBalance: string; drift: string; paused: boolean; active: boolean; driftThreshold: string; cooldown: string}>({ totalValue: "...", idleBalance: "...", drift: "...", paused: false, active: false, driftThreshold: "...", cooldown: "..." });
+
+  const { musd, directMint, treasury, bridge, borrow, oracle, metaVault } = contracts;
 
   // Current values display
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
@@ -252,11 +265,49 @@ export function AdminPage() {
           vals.interestRate = formatBps(await borrow.interestRateBps());
           vals.minDebt = formatUSD(await borrow.minDebt());
         }
+        if (metaVault) {
+          try {
+            const [tv, idle, drift, paused, active, driftTh, cd] = await Promise.all([
+              metaVault.totalValue(),
+              metaVault.idleBalance(),
+              metaVault.currentDrift(),
+              metaVault.paused(),
+              metaVault.isActive(),
+              metaVault.driftThresholdBps(),
+              metaVault.rebalanceCooldown(),
+            ]);
+            setMvInfo({
+              totalValue: formatUSD(tv, 6),
+              idleBalance: formatUSD(idle, 6),
+              drift: (Number(drift) / 100).toFixed(2) + "%",
+              paused: paused as boolean,
+              active: active as boolean,
+              driftThreshold: (Number(driftTh) / 100).toFixed(2) + "%",
+              cooldown: cd.toString() + "s",
+            });
+            const count = Number(await metaVault.subStrategyCount());
+            const subs = [];
+            for (let i = 0; i < count; i++) {
+              const s = await metaVault.getSubStrategy(i);
+              subs.push({
+                strategy: s.strategy || s[0],
+                weightBps: s.weightBps ?? s[1],
+                capUsd: s.capUsd ?? s[2],
+                enabled: s.enabled ?? s[3],
+                currentValue: s.currentValue ?? s[4],
+              });
+            }
+            setMvSubStrategies(subs);
+            setMvWeights(subs.map((s) => String(Number(s.weightBps))));
+          } catch (e) {
+            console.error("[MetaVault] load failed:", e);
+          }
+        }
       } catch {}
       setCurrentValues(vals);
     }
     loadCurrentValues();
-  }, [musd, directMint, treasury, bridge, borrow, address, tx.success]);
+  }, [musd, directMint, treasury, bridge, borrow, metaVault, address, tx.success]);
 
   // H-08: Role gate — only render admin controls if wallet has admin/timelock role
   if (!isConnected) {
