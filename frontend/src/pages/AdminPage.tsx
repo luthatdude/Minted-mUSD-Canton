@@ -876,6 +876,282 @@ export function AdminPage() {
               Emergency Withdraw All
             </TxButton>
           </div>
+
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {/* ── MetaVault (Vault-of-Vaults) Management ── */}
+          {/* ═══════════════════════════════════════════════════════════════ */}
+          {metaVault && (
+            <>
+              <div className="mt-6 border-t border-pink-700/30 pt-4">
+                <h2 className="text-lg font-bold text-pink-400 flex items-center gap-2">
+                  <div className="h-3 w-3 rounded-full bg-pink-500" />
+                  MetaVault — Sub-Strategy Management
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  The MetaVault aggregates multiple sub-strategies with weighted allocation, drift monitoring, and auto-rebalance.
+                </p>
+              </div>
+
+              {/* ── MetaVault Overview ── */}
+              <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
+                <StatCard label="Total Value" value={mvInfo.totalValue} />
+                <StatCard label="Idle USDC" value={mvInfo.idleBalance} color="green" />
+                <StatCard label="Current Drift" value={mvInfo.drift} color={parseFloat(mvInfo.drift) > 5 ? "red" : "green"} />
+                <StatCard label="Drift Threshold" value={mvInfo.driftThreshold} />
+                <StatCard label="Active" value={mvInfo.active ? "Yes" : "No"} color={mvInfo.active ? "green" : "red"} />
+                <StatCard label="Paused" value={mvInfo.paused ? "Yes" : "No"} color={mvInfo.paused ? "red" : "green"} />
+              </div>
+
+              {/* ── Sub-Strategies List ── */}
+              <div className="card">
+                <h3 className="mb-3 font-semibold text-gray-300">
+                  Sub-Strategies
+                  <span className="ml-2 rounded bg-pink-800/40 px-2 py-0.5 text-xs text-pink-400">
+                    {mvSubStrategies.length} registered
+                  </span>
+                </h3>
+                {mvSubStrategies.length === 0 ? (
+                  <p className="text-sm text-gray-500">No sub-strategies registered yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {mvSubStrategies.map((s, i) => {
+                      const name = strategyName(s.strategy);
+                      const color = strategyColor(s.strategy);
+                      return (
+                        <div key={i} className={`flex items-center justify-between rounded-lg px-4 py-3 text-sm ${s.enabled ? "bg-gray-800/50" : "bg-red-900/10 border border-red-800/30"}`}>
+                          <div className="flex items-center gap-3">
+                            <div className="text-xs font-mono text-gray-500 w-5">#{i}</div>
+                            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: color }} />
+                            <div>
+                              <span className="font-medium text-white">{name}</span>
+                              <span className="ml-2 font-mono text-xs text-gray-500">
+                                {s.strategy.slice(0, 6)}…{s.strategy.slice(-4)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs text-gray-400">
+                              {formatUSD(s.currentValue, 6)}
+                            </span>
+                            <span className="rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
+                              {Number(s.weightBps) / 100}%
+                            </span>
+                            <span className="rounded bg-gray-700/80 px-2 py-0.5 text-xs text-gray-300">
+                              Cap: {formatUSD(s.capUsd, 6)}
+                            </span>
+                            {s.enabled ? (
+                              <span className="rounded bg-green-800/60 px-1.5 py-0.5 text-[10px] text-green-400">ON</span>
+                            ) : (
+                              <span className="rounded bg-red-800/60 px-1.5 py-0.5 text-[10px] text-red-400">OFF</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Adjust Weights ── */}
+              {mvSubStrategies.length > 0 && (
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Adjust Weights</h3>
+                  <p className="mb-2 text-xs text-gray-500">Set weight (bps) per sub-strategy. Must sum to 10000.</p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {mvSubStrategies.map((s, i) => (
+                      <div key={i}>
+                        <label className="label text-xs">#{i} {strategyName(s.strategy)}</label>
+                        <input
+                          className="input"
+                          type="number"
+                          placeholder={String(Number(s.weightBps))}
+                          value={mvWeights[i] || ""}
+                          onChange={(e) => {
+                            const updated = [...mvWeights];
+                            updated[i] = e.target.value;
+                            setMvWeights(updated);
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-gray-400">
+                    Total: {mvWeights.reduce((sum, w) => sum + (parseInt(w) || 0), 0)} / 10000
+                  </p>
+                  <TxButton
+                    className="mt-3 w-full"
+                    onClick={() => tx.send(() => metaVault!.setWeights(mvWeights.map((w) => BigInt(parseInt(w) || 0))))}
+                    loading={tx.loading}
+                    disabled={mvWeights.reduce((sum, w) => sum + (parseInt(w) || 0), 0) !== 10000}
+                  >
+                    Set Weights
+                  </TxButton>
+                </div>
+              )}
+
+              {/* ── Add Sub-Strategy ── */}
+              <div className="card">
+                <h3 className="mb-3 font-semibold text-gray-300">Add Sub-Strategy</h3>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <label className="label">Strategy Address</label>
+                    <select className="input" value={mvNewSubAddr} onChange={(e) => setMvNewSubAddr(e.target.value)}>
+                      <option value="">Select or paste…</option>
+                      {KNOWN_STRATEGIES.filter((ks) => ks.address && ks.shortName !== "MetaVault").map((ks, i) => (
+                        <option key={i} value={ks.address}>{ks.shortName} — {ks.apy}</option>
+                      ))}
+                    </select>
+                    <input className="input mt-1" type="text" placeholder="0x… (custom)" value={mvNewSubAddr} onChange={(e) => setMvNewSubAddr(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Weight (bps)</label>
+                    <input className="input" type="number" placeholder="3333" value={mvNewSubWeight} onChange={(e) => setMvNewSubWeight(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Cap (USDC)</label>
+                    <input className="input" type="number" placeholder="1000000" value={mvNewSubCap} onChange={(e) => setMvNewSubCap(e.target.value)} />
+                  </div>
+                </div>
+                <TxButton
+                  className="mt-3 w-full"
+                  onClick={() => tx.send(() => metaVault!.addSubStrategy(mvNewSubAddr, BigInt(mvNewSubWeight), ethers.parseUnits(mvNewSubCap, 6)))}
+                  loading={tx.loading}
+                  disabled={!mvNewSubAddr || !mvNewSubWeight || !mvNewSubCap}
+                >
+                  Add Sub-Strategy
+                </TxButton>
+              </div>
+
+              {/* ── Toggle / Cap / Remove Sub-Strategy ── */}
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Toggle Sub-Strategy</h3>
+                  <select className="input" value={mvToggleIdx} onChange={(e) => setMvToggleIdx(e.target.value)}>
+                    <option value="">Select index…</option>
+                    {mvSubStrategies.map((s, i) => (
+                      <option key={i} value={i}>#{i} {strategyName(s.strategy)} ({s.enabled ? "ON" : "OFF"})</option>
+                    ))}
+                  </select>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <TxButton
+                      onClick={() => tx.send(() => metaVault!.toggleSubStrategy(BigInt(mvToggleIdx), true))}
+                      loading={tx.loading}
+                      disabled={mvToggleIdx === ""}
+                    >
+                      Enable
+                    </TxButton>
+                    <TxButton
+                      onClick={() => tx.send(() => metaVault!.toggleSubStrategy(BigInt(mvToggleIdx), false))}
+                      loading={tx.loading}
+                      disabled={mvToggleIdx === ""}
+                      variant="danger"
+                    >
+                      Disable
+                    </TxButton>
+                  </div>
+                </div>
+
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Set Sub-Strategy Cap</h3>
+                  <select className="input" value={mvCapIdx} onChange={(e) => setMvCapIdx(e.target.value)}>
+                    <option value="">Select index…</option>
+                    {mvSubStrategies.map((s, i) => (
+                      <option key={i} value={i}>#{i} {strategyName(s.strategy)}</option>
+                    ))}
+                  </select>
+                  <input className="input mt-2" type="number" placeholder="Cap (USDC)" value={mvCapAmount} onChange={(e) => setMvCapAmount(e.target.value)} />
+                  <TxButton
+                    className="mt-2 w-full"
+                    onClick={() => tx.send(() => metaVault!.setSubStrategyCap(BigInt(mvCapIdx), ethers.parseUnits(mvCapAmount, 6)))}
+                    loading={tx.loading}
+                    disabled={mvCapIdx === "" || !mvCapAmount}
+                  >
+                    Set Cap
+                  </TxButton>
+                </div>
+
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Remove Sub-Strategy</h3>
+                  <select className="input" value={mvCapIdx} onChange={(e) => setMvCapIdx(e.target.value)}>
+                    <option value="">Select index…</option>
+                    {mvSubStrategies.map((s, i) => (
+                      <option key={i} value={i}>#{i} {strategyName(s.strategy)}</option>
+                    ))}
+                  </select>
+                  <TxButton
+                    className="mt-2 w-full"
+                    onClick={() => tx.send(() => metaVault!.removeSubStrategy(BigInt(mvCapIdx)))}
+                    loading={tx.loading}
+                    disabled={mvCapIdx === ""}
+                    variant="danger"
+                  >
+                    Remove
+                  </TxButton>
+                </div>
+              </div>
+
+              {/* ── MetaVault Config & Actions ── */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Drift Threshold (bps)</h3>
+                  <p className="mb-2 text-xs text-gray-500">Current: {mvInfo.driftThreshold}</p>
+                  <input className="input" type="number" placeholder="500" value={mvDriftBps} onChange={(e) => setMvDriftBps(e.target.value)} />
+                  <TxButton
+                    className="mt-2 w-full"
+                    onClick={() => tx.send(() => metaVault!.setDriftThreshold(BigInt(mvDriftBps)))}
+                    loading={tx.loading}
+                    disabled={!mvDriftBps}
+                  >
+                    Set Drift Threshold
+                  </TxButton>
+                </div>
+                <div className="card">
+                  <h3 className="mb-3 font-semibold text-gray-300">Rebalance Cooldown (seconds)</h3>
+                  <p className="mb-2 text-xs text-gray-500">Current: {mvInfo.cooldown}</p>
+                  <input className="input" type="number" placeholder="3600" value={mvCooldown} onChange={(e) => setMvCooldown(e.target.value)} />
+                  <TxButton
+                    className="mt-2 w-full"
+                    onClick={() => tx.send(() => metaVault!.setRebalanceCooldown(BigInt(mvCooldown)))}
+                    loading={tx.loading}
+                    disabled={!mvCooldown}
+                  >
+                    Set Cooldown
+                  </TxButton>
+                </div>
+              </div>
+
+              {/* ── MetaVault Global Actions ── */}
+              <div className="grid gap-4 sm:grid-cols-4">
+                <TxButton
+                  onClick={() => tx.send(() => metaVault!.rebalance())}
+                  loading={tx.loading}
+                >
+                  Rebalance MetaVault
+                </TxButton>
+                <TxButton
+                  onClick={() => tx.send(() => metaVault!.setActive(!mvInfo.active))}
+                  loading={tx.loading}
+                  variant="secondary"
+                >
+                  {mvInfo.active ? "Deactivate" : "Activate"}
+                </TxButton>
+                <TxButton
+                  onClick={() => tx.send(() => mvInfo.paused ? metaVault!.unpause() : metaVault!.pause())}
+                  loading={tx.loading}
+                  variant={mvInfo.paused ? "secondary" : "danger"}
+                >
+                  {mvInfo.paused ? "Unpause" : "Pause"}
+                </TxButton>
+                <TxButton
+                  onClick={() => tx.send(() => metaVault!.emergencyWithdrawAll())}
+                  loading={tx.loading}
+                  variant="danger"
+                >
+                  Emergency Withdraw All
+                </TxButton>
+              </div>
+            </>
+          )}
         </div>
       )}
 
