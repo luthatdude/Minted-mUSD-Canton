@@ -34,6 +34,7 @@ if (process.env.NODE_ENV !== "production") {
 import { ethers } from "ethers";
 import { CantonClient, ActiveContract, TEMPLATES } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
+import { validateCreatePayload, validateExerciseArgs, DamlValidationError } from "./daml-schema-validator";
 // Use shared readSecret utility
 // Use readAndValidatePrivateKey for secp256k1 range validation
 // INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
@@ -1442,6 +1443,8 @@ class RelayService {
         };
 
         try {
+          // Validate payload against DAML ensure constraints before submission
+          validateCreatePayload("BridgeInRequest", payload);
           // Create BridgeInRequest on Canton with the original user party
           await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
           console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
@@ -1451,6 +1454,7 @@ class RelayService {
           if (errMsg.includes("UNKNOWN_INFORMEES") || errMsg.includes("NO_SYNCHRONIZER") || errMsg.includes("PARTY_NOT_KNOWN")) {
             console.warn(`[Relay] User party not on this participant for bridge-out #${nonce}, using operator as user fallback`);
             payload.user = this.config.cantonParty;
+            validateCreatePayload("BridgeInRequest", payload);
             await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
             console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
           } else {
@@ -1541,14 +1545,16 @@ class RelayService {
       // CantonMUSD template requires `signatory issuer, owner` — if the user party
       // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
       // Instead: operator mints (both signatory slots satisfied), then transfers to user.
-      const createResult = await this.canton.createContract(TEMPLATES.CantonMUSD, {
+      const cantonMusdPayload = {
         issuer: this.config.cantonParty,
         owner: this.config.cantonParty,  // Operator-owned initially
         amount: amountStr,
         agreementHash,
         agreementUri,
         privacyObservers: [] as string[],
-      });
+      };
+      validateCreatePayload("CantonMUSD", cantonMusdPayload);
+      const createResult = await this.canton.createContract(TEMPLATES.CantonMUSD, cantonMusdPayload);
       console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
 
       // Transfer to user if different from operator
@@ -1573,11 +1579,13 @@ class RelayService {
             ).catch(() => []);
 
             if (complianceContracts.length > 0) {
+              const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
+              validateExerciseArgs("CantonMUSD_Transfer", transferArgs);
               await this.canton.exerciseChoice(
                 TEMPLATES.CantonMUSD,
                 musdCid,
                 "CantonMUSD_Transfer",
-                { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId }
+                transferArgs
               );
               console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
             } else {
@@ -1626,9 +1634,7 @@ class RelayService {
               };
 
               // Create AttestationRequest on Canton for the bridge-in direction
-              const attestResult = await this.canton.createContract(
-                TEMPLATES.AttestationRequest,
-                {
+              const attestPayload = {
                   aggregator: this.config.cantonParty,
                   validatorGroup: req.payload.validators,
                   payload: attestationPayload,
@@ -1637,7 +1643,11 @@ class RelayService {
                   ecdsaSignatures: [],
                   requiredSignatures: req.payload.requiredSignatures,
                   direction: "EthereumToCanton",
-                }
+              };
+              validateCreatePayload("AttestationRequest", attestPayload);
+              const attestResult = await this.canton.createContract(
+                TEMPLATES.AttestationRequest,
+                attestPayload
               );
 
               // Extract attestation CID
@@ -1652,11 +1662,13 @@ class RelayService {
               }
 
               if (attestCid) {
+                const completeArgs = { attestationCid: attestCid };
+                validateExerciseArgs("BridgeIn_Complete", completeArgs);
                 await this.canton.exerciseChoice(
                   TEMPLATES.BridgeInRequest,
                   req.contractId,
                   "BridgeIn_Complete",
-                  { attestationCid: attestCid }
+                  completeArgs
                 );
                 console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with attestation ${attestCid.slice(0, 16)}...`);
               } else {
@@ -1834,16 +1846,18 @@ class RelayService {
         }
 
         // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
-        const createResult = await this.canton.createContract(
-          TEMPLATES.CantonMUSD,
-          {
+        const yieldMusdPayload = {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
             agreementHash,
             agreementUri: `ethereum:yield-distributor:${this.config.yieldDistributorAddress}`,
             privacyObservers: [] as string[],
-          }
+        };
+        validateCreatePayload("CantonMUSD", yieldMusdPayload);
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          yieldMusdPayload
         );
 
         // Extract contractId from create response
@@ -1915,11 +1929,13 @@ class RelayService {
 
     // Step 3: Exercise ReceiveYield — merges mUSD into vault, pooledMusd ↑
     // ReceiveYield requires `controller operator, governance` — include governance in actAs
+    const receiveYieldArgs = { yieldMusdCid: musdContractId };
+    validateExerciseArgs("ReceiveYield", receiveYieldArgs as unknown as Record<string, unknown>);
     await this.canton.exerciseChoice(
       TEMPLATES.CantonStakingService,
       stakingService.contractId,
       "ReceiveYield",
-      { yieldMusdCid: musdContractId },
+      receiveYieldArgs,
       this.config.cantonGovernanceParty ? [this.config.cantonGovernanceParty] : []
     );
 
@@ -2038,16 +2054,18 @@ class RelayService {
         }
 
         // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
-        const createResult = await this.canton.createContract(
-          TEMPLATES.CantonMUSD,
-          {
+        const ethPoolMusdPayload = {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
             agreementHash,
             agreementUri: `ethereum:ethpool-yield-distributor:${this.config.ethPoolYieldDistributorAddress}`,
             privacyObservers: [] as string[],
-          }
+        };
+        validateCreatePayload("CantonMUSD", ethPoolMusdPayload);
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          ethPoolMusdPayload
         );
 
         // Extract contractId from create response
