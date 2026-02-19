@@ -63,12 +63,10 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
-        case "canton-balances":
-          return <CantonBalancesPage />;
         case "faucet":
           return <DevnetFaucet />;
         default:
-          return <CantonBalancesPage />;
+          return <CantonDashboard />;
       }
     }
 
@@ -88,8 +86,6 @@ export default function Home() {
         return <PointsPage />;
       case "admin":
         return <AdminPage />;
-      case "canton-balances":
-        return <CantonBalancesPage />;
       default:
         return <DashboardPage />;
     }

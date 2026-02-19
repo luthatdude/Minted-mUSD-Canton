@@ -53,6 +53,55 @@ interface ETHPoolServiceInfo {
   totalMusdStaked: string;
 }
 
+interface BoostPoolServiceInfo {
+  contractId: string;
+  totalCantonDeposited: string;
+  totalLPShares: string;
+  cantonPriceMusd: string;
+  globalSharePrice: string;
+  entryFeeBps: number;
+  exitFeeBps: number;
+  cooldownSeconds: number;
+  paused: boolean;
+}
+
+interface LendingServiceInfo {
+  contractId: string;
+  totalBorrows: string;
+  interestRateBps: number;
+  reserveFactorBps: number;
+  protocolReserves: string;
+  minBorrow: string;
+  closeFactorBps: number;
+  paused: boolean;
+  cantonSupplyCap: string;
+  cantonCurrentSupply: string;
+  configs: Record<string, { ltvBps: number; liqThresholdBps: number; liqPenaltyBps: number }>;
+}
+
+interface PriceFeedInfo {
+  contractId: string;
+  asset: string;
+  priceMusd: string;
+  lastUpdate: string;
+}
+
+interface EscrowInfo {
+  contractId: string;
+  owner: string;
+  collateralType: string;
+  amount: string;
+}
+
+interface DebtPositionInfo {
+  contractId: string;
+  owner: string;
+  collateralType: string;
+  collateralAmount: string;
+  debtMusd: string;
+  interestAccrued: string;
+}
+
 interface SimpleToken {
   contractId: string;
   amount: string;
@@ -68,13 +117,22 @@ interface BalancesResponse {
   supplyService: boolean;
   stakingService: StakingServiceInfo | null;
   ethPoolService: ETHPoolServiceInfo | null;
+  boostPoolService: BoostPoolServiceInfo | null;
+  lendingService: LendingServiceInfo | null;
+  priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
+  smusdETokens: SimpleToken[];
+  totalSmusdE: string;
+  boostLPTokens: SimpleToken[];
+  totalBoostLP: string;
   cantonCoinTokens: SimpleToken[];
   totalCoin: string;
   usdcTokens: SimpleToken[];
   totalUsdc: string;
+  escrowPositions: EscrowInfo[];
+  debtPositions: DebtPositionInfo[];
   ledgerOffset: number;
   party: string;
   timestamp: string;
@@ -150,11 +208,19 @@ export default async function handler(
     let supplyService = false;
     let stakingService: StakingServiceInfo | null = null;
     let ethPoolService: ETHPoolServiceInfo | null = null;
+    let ethPoolHasValidCompliance = false;
+    let boostPoolService: BoostPoolServiceInfo | null = null;
+    let lendingService: LendingServiceInfo | null = null;
     let directMintService: { contractId: string; paused: boolean; serviceName?: string; hasValidCompliance?: boolean } | null = null;
     let stakingHasValidCompliance = false;
     const smusdTokens: SimpleToken[] = [];
+    const smusdETokens: SimpleToken[] = [];
+    const boostLPTokens: SimpleToken[] = [];
     const cantonCoinTokens: SimpleToken[] = [];
     const usdcTokens: SimpleToken[] = [];
+    const priceFeeds: PriceFeedInfo[] = [];
+    const escrowPositions: EscrowInfo[] = [];
+    const debtPositions: DebtPositionInfo[] = [];
 
     for (const entry of entries) {
       const ac = entry.contractEntry?.JsActiveContract;
@@ -218,15 +284,103 @@ export default async function handler(
         }
       } else if (entityName === "CantonETHPoolService") {
         const p = evt.createArgument;
-        ethPoolService = {
+        const isPaused = p.paused === true || p.paused === "True";
+        const compCid = (p.complianceRegistryCid as string) || "";
+        const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+        const candidate: ETHPoolServiceInfo = {
           contractId: evt.contractId,
           totalShares: (p.totalShares as string) || "0",
           poolCap: (p.poolCap as string) || "0",
           sharePrice: (p.sharePrice as string) || "1.0",
           pooledUsdc: (p.pooledUsdc as string) || "0",
-          paused: p.paused === true || p.paused === "True",
+          paused: isPaused,
           totalMusdStaked: (p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0",
         };
+        if (!ethPoolService
+            || (hasValidCompliance && !ethPoolHasValidCompliance)
+            || (hasValidCompliance === ethPoolHasValidCompliance && !isPaused && ethPoolService.paused)) {
+          ethPoolService = candidate;
+          ethPoolHasValidCompliance = hasValidCompliance;
+        }
+      } else if (entityName === "CantonBoostPoolService") {
+        const p = evt.createArgument;
+        boostPoolService = {
+          contractId: evt.contractId,
+          totalCantonDeposited: (p.totalCantonDeposited as string) || "0",
+          totalLPShares: (p.totalLPShares as string) || "0",
+          cantonPriceMusd: (p.cantonPriceMusd as string) || "1.0",
+          globalSharePrice: (p.globalSharePrice as string) || "1.0",
+          entryFeeBps: parseInt(String(p.entryFeeBps || "25"), 10),
+          exitFeeBps: parseInt(String(p.exitFeeBps || "50"), 10),
+          cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
+          paused: p.paused === true || p.paused === "True",
+        };
+      } else if (entityName === "CantonLendingService") {
+        const p = evt.createArgument;
+        // Parse configs array (ACS returns array of collateral config objects)
+        const rawConfigs = (p.configs as Array<Record<string, unknown>>) || [];
+        const configs: Record<string, { ltvBps: number; liqThresholdBps: number; liqPenaltyBps: number }> = {};
+        for (const val of rawConfigs) {
+          const key = (val.collateralType as string) || "";
+          if (key) {
+            configs[key] = {
+              ltvBps: parseInt(String(val.collateralFactorBps || "0"), 10),
+              liqThresholdBps: parseInt(String(val.liquidationThresholdBps || "0"), 10),
+              liqPenaltyBps: parseInt(String(val.liquidationPenaltyBps || "0"), 10),
+            };
+          }
+        }
+        lendingService = {
+          contractId: evt.contractId,
+          totalBorrows: (p.totalBorrows as string) || "0",
+          interestRateBps: parseInt(String(p.interestRateBps || "500"), 10),
+          reserveFactorBps: parseInt(String(p.reserveFactorBps || "1000"), 10),
+          protocolReserves: (p.protocolReserves as string) || "0",
+          minBorrow: (p.minBorrow as string) || "100",
+          closeFactorBps: parseInt(String(p.closeFactorBps || "5000"), 10),
+          paused: p.paused === true || p.paused === "True",
+          cantonSupplyCap: (p.cantonSupplyCap as string) || "0",
+          cantonCurrentSupply: (p.cantonCurrentSupply as string) || "0",
+          configs,
+        };
+      } else if (entityName === "CantonPriceFeed") {
+        const p = evt.createArgument;
+        priceFeeds.push({
+          contractId: evt.contractId,
+          asset: (p.symbol as string) || "",
+          priceMusd: (p.priceUsd as string) || "0",
+          lastUpdate: (p.lastUpdated as string) || evt.createdAt || "",
+        });
+      } else if (entityName === "CantonSMUSD_E") {
+        const p = evt.createArgument;
+        smusdETokens.push({
+          contractId: evt.contractId,
+          amount: (p.shares as string) || (p.amount as string) || "0",
+        });
+      } else if (entityName === "BoostPoolLP") {
+        const p = evt.createArgument;
+        boostLPTokens.push({
+          contractId: evt.contractId,
+          amount: (p.shares as string) || (p.amount as string) || "0",
+        });
+      } else if (entityName === "EscrowedCollateral") {
+        const p = evt.createArgument;
+        escrowPositions.push({
+          contractId: evt.contractId,
+          owner: (p.owner as string) || "",
+          collateralType: (p.collateralType as string) || "",
+          amount: (p.amount as string) || "0",
+        });
+      } else if (entityName === "CantonDebtPosition") {
+        const p = evt.createArgument;
+        debtPositions.push({
+          contractId: evt.contractId,
+          owner: (p.owner as string) || "",
+          collateralType: (p.collateralType as string) || "",
+          collateralAmount: (p.collateralAmount as string) || "0",
+          debtMusd: (p.debtMusd as string) || "0",
+          interestAccrued: (p.interestAccrued as string) || "0",
+        });
       } else if (entityName === "CantonDirectMintService") {
         const p = evt.createArgument;
         // Pick the best service: prefer unpaused + valid complianceRegistryCid
@@ -285,6 +439,8 @@ export default async function handler(
 
     // Sum token balances for non-mUSD tokens
     const totalSmusd = smusdTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+    const totalSmusdE = smusdETokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
+    const totalBoostLP = boostLPTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
     const totalCoin = cantonCoinTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
     const totalUsdc = usdcTokens.reduce((s, t) => s + parseFloat(t.amount), 0).toFixed(6);
 
@@ -297,13 +453,22 @@ export default async function handler(
       supplyService,
       stakingService,
       ethPoolService,
+      boostPoolService,
+      lendingService,
+      priceFeeds,
       directMintService,
       smusdTokens,
       totalSmusd,
+      smusdETokens,
+      totalSmusdE,
+      boostLPTokens,
+      totalBoostLP,
       cantonCoinTokens,
       totalCoin,
       usdcTokens,
       totalUsdc,
+      escrowPositions,
+      debtPositions,
       ledgerOffset: offset,
       party: CANTON_PARTY,
       timestamp: new Date().toISOString(),

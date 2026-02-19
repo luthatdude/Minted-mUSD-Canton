@@ -41,6 +41,55 @@ export interface ETHPoolServiceInfo {
   totalMusdStaked: string;
 }
 
+export interface BoostPoolServiceInfo {
+  contractId: string;
+  totalCantonDeposited: string;
+  totalLPShares: string;
+  cantonPriceMusd: string;
+  globalSharePrice: string;
+  entryFeeBps: number;
+  exitFeeBps: number;
+  cooldownSeconds: number;
+  paused: boolean;
+}
+
+export interface LendingServiceInfo {
+  contractId: string;
+  totalBorrows: string;
+  interestRateBps: number;
+  reserveFactorBps: number;
+  protocolReserves: string;
+  minBorrow: string;
+  closeFactorBps: number;
+  paused: boolean;
+  cantonSupplyCap: string;
+  cantonCurrentSupply: string;
+  configs: Record<string, { ltvBps: number; liqThresholdBps: number; liqPenaltyBps: number }>;
+}
+
+export interface PriceFeedInfo {
+  contractId: string;
+  asset: string;
+  priceMusd: string;
+  lastUpdate: string;
+}
+
+export interface EscrowInfo {
+  contractId: string;
+  owner: string;
+  collateralType: string;
+  amount: string;
+}
+
+export interface DebtPositionInfo {
+  contractId: string;
+  owner: string;
+  collateralType: string;
+  collateralAmount: string;
+  debtMusd: string;
+  interestAccrued: string;
+}
+
 export interface SimpleToken {
   contractId: string;
   amount: string;
@@ -56,13 +105,22 @@ export interface CantonBalancesData {
   supplyService: boolean;
   stakingService: StakingServiceInfo | null;
   ethPoolService: ETHPoolServiceInfo | null;
+  boostPoolService: BoostPoolServiceInfo | null;
+  lendingService: LendingServiceInfo | null;
+  priceFeeds: PriceFeedInfo[];
   directMintService: { contractId: string; paused: boolean } | null;
   smusdTokens: SimpleToken[];
   totalSmusd: string;
+  smusdETokens: SimpleToken[];
+  totalSmusdE: string;
+  boostLPTokens: SimpleToken[];
+  totalBoostLP: string;
   cantonCoinTokens: SimpleToken[];
   totalCoin: string;
   usdcTokens: SimpleToken[];
   totalUsdc: string;
+  escrowPositions: EscrowInfo[];
+  debtPositions: DebtPositionInfo[];
   ledgerOffset: number;
   party: string;
   timestamp: string;
