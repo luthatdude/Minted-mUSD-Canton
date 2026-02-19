@@ -17,6 +17,7 @@ export const CONTRACTS: Record<string, string> = {
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
   ETHPool: process.env.NEXT_PUBLIC_ETH_POOL_ADDRESS || "",
   SMUSDE: process.env.NEXT_PUBLIC_SMUSDE_ADDRESS || "",
+  MetaVault: process.env.NEXT_PUBLIC_METAVAULT_ADDRESS || "",
 };
 
 // Validate contract addresses at config time
