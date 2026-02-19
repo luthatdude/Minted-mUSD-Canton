@@ -2,7 +2,9 @@ import React, { useState } from "react";
 import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
-import { useCantonLedger, cantonExercise } from "@/hooks/useCantonLedger";
+import { useCantonLedger, cantonExercise, cantonCreate } from "@/hooks/useCantonLedger";
+
+const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 
 export function CantonMint() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
@@ -66,6 +68,53 @@ export function CantonMint() {
       );
       if (!resp.success) throw new Error(resp.error || "Redeem failed");
       setResult(`Redeemed ${amount} mUSD on Canton`);
+      setAmount("");
+      await refresh();
+    } catch (err: any) {
+      setTxError(err.message);
+    } finally {
+      setTxLoading(false);
+    }
+  }
+
+  async function handleCoinMint() {
+    if (!amount || parseFloat(amount) <= 0 || coinTokens.length === 0) return;
+    setTxLoading(true);
+    setTxError(null);
+    setResult(null);
+    try {
+      const coin = coinTokens[selectedCoinIdx];
+      if (!coin) throw new Error("No Canton Coin selected");
+
+      const coinAmount = parseFloat(coin.amount);
+      const mintAmount = parseFloat(amount);
+      if (mintAmount > coinAmount) throw new Error(`Insufficient coin balance: ${coinAmount.toFixed(2)} < ${mintAmount.toFixed(2)}`);
+
+      // Step 1: Burn the Canton Coin
+      const burnResp = await cantonExercise(
+        `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
+        coin.contractId,
+        "CantonCoin_Burn",
+        {}
+      );
+      if (!burnResp.success) throw new Error(burnResp.error || "Coin burn failed");
+
+      // Step 2: Create CantonMUSD with the burned amount (devnet: operator=issuer=owner)
+      const party = data?.party || "";
+      const createResp = await cantonCreate(
+        `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
+        {
+          issuer: party,
+          owner: party,
+          amount: amount,
+          sourceChain: "canton-coin-swap",
+          bridgeNonce: Date.now(),
+          privacyObservers: [],
+        }
+      );
+      if (!createResp.success) throw new Error(createResp.error || "mUSD creation failed");
+
+      setResult(`Swapped ${amount} Coin → ${amount} mUSD on Canton`);
       setAmount("");
       await refresh();
     } catch (err: any) {
@@ -382,7 +431,7 @@ export function CantonMint() {
 
           {/* Action */}
           <TxButton
-            onClick={tab === "mint" ? handleMint : tab === "coin" ? handleMint : handleRedeem}
+            onClick={tab === "mint" ? handleMint : tab === "coin" ? handleCoinMint : handleRedeem}
             loading={txLoading}
             disabled={!amount || parseFloat(amount) <= 0 || (tab === "coin" && coinTokens.length === 0)}
             variant={tab === "coin" ? "secondary" : "success"}
