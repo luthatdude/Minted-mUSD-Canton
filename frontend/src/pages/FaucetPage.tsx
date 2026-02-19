@@ -39,6 +39,17 @@ const FAUCET_TOKENS: TokenFaucet[] = [
     icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
   },
   {
+    key: "usdt",
+    label: "Mock USDT",
+    symbol: "USDT",
+    description: "Testnet USDT — mint freely for ETH Pool deposits and testing",
+    address: CONTRACTS.USDT,
+    decimals: 6,
+    defaultAmount: "10000",
+    gradient: "from-green-500 to-emerald-500",
+    icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  },
+  {
     key: "musd",
     label: "mUSD (via DirectMint)",
     symbol: "mUSD",
@@ -62,6 +73,7 @@ export function FaucetPage() {
   const contracts = useWCContracts();
   const [amounts, setAmounts] = useState<Record<string, string>>({
     usdc: "10000",
+    usdt: "10000",
     musd: "1000",
   });
   const [balances, setBalances] = useState<Record<string, bigint>>({});
@@ -114,6 +126,30 @@ export function FaucetPage() {
       setStates((s) => ({
         ...s,
         usdc: { minting: false, success: null, error: err?.reason || err?.message || "Mint failed" },
+      }));
+    }
+  }
+
+  async function handleMintUSDT() {
+    if (!signer || !address) return;
+    const amt = amounts.usdt;
+    if (!amt || parseFloat(amt) <= 0) return;
+
+    setStates((s) => ({ ...s, usdt: { minting: true, success: null, error: null } }));
+    try {
+      const usdtContract = new Contract(CONTRACTS.USDT, MOCK_ERC20_ABI, signer);
+      const parsed = ethers.parseUnits(amt, 6);
+      const tx = await usdtContract.mint(address, parsed);
+      await tx.wait();
+      setStates((s) => ({
+        ...s,
+        usdt: { minting: false, success: `Minted ${amt} USDT`, error: null },
+      }));
+      loadBalances();
+    } catch (err: any) {
+      setStates((s) => ({
+        ...s,
+        usdt: { minting: false, success: null, error: err?.reason || err?.message || "Mint failed" },
       }));
     }
   }
@@ -269,7 +305,7 @@ export function FaucetPage() {
                   </span>
                 </div>
                 <button
-                  onClick={token.key === "usdc" ? handleMintUSDC : handleMintMUSD}
+                  onClick={token.key === "usdc" ? handleMintUSDC : token.key === "usdt" ? handleMintUSDT : handleMintMUSD}
                   disabled={state.minting || isWrongChain}
                   className={`flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r ${token.gradient} px-6 py-3 font-medium text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50`}
                 >
@@ -310,6 +346,9 @@ export function FaucetPage() {
         <div className="space-y-2 text-sm text-gray-400">
           <p>
             <span className="font-medium text-white">USDC:</span> Calls <code className="rounded bg-surface-900 px-1.5 py-0.5 text-xs text-brand-400">MockERC20.mint()</code> — unlimited, instant.
+          </p>
+          <p>
+            <span className="font-medium text-white">USDT:</span> Same as USDC — calls <code className="rounded bg-surface-900 px-1.5 py-0.5 text-xs text-brand-400">MockERC20.mint()</code> on the USDT contract.
           </p>
           <p>
             <span className="font-medium text-white">mUSD:</span> Mints USDC first, approves the DirectMint contract, then swaps USDC → mUSD (minus protocol fee).

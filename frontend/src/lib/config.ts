@@ -6,6 +6,7 @@ export const CONTRACTS: Record<string, string> = {
   MUSD: process.env.NEXT_PUBLIC_MUSD_ADDRESS || "",
   SMUSD: process.env.NEXT_PUBLIC_SMUSD_ADDRESS || "",
   USDC: process.env.NEXT_PUBLIC_USDC_ADDRESS || "",
+  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
   DirectMint: process.env.NEXT_PUBLIC_DIRECT_MINT_ADDRESS || "",
   Treasury: process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "",
   CollateralVault: process.env.NEXT_PUBLIC_COLLATERAL_VAULT_ADDRESS || "",

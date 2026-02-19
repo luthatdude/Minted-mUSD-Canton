@@ -25,6 +25,7 @@ const ABI_MAP: Record<string, readonly string[]> = {
   BLEBridgeV9: BLE_BRIDGE_V9_ABI,
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
+  USDT: ERC20_ABI,
 };
 
 /**
@@ -58,6 +59,7 @@ export function useWCContracts() {
         musd: null,
         smusd: null,
         usdc: null,
+        usdt: null,
         directMint: null,
         treasury: null,
         vault: null,
@@ -79,6 +81,7 @@ export function useWCContracts() {
       musd: createContract("MUSD"),
       smusd: createContract("SMUSD"),
       usdc: createContract("USDC"),
+      usdt: createContract("USDT"),
       directMint: createContract("DirectMint"),
       treasury: createContract("Treasury"),
       vault: createContract("CollateralVault"),
