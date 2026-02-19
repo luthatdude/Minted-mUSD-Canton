@@ -5,3 +5,4 @@ export { CantonStake } from "./CantonStake";
 export { CantonBorrow } from "./CantonBorrow";
 export { CantonBridge } from "./CantonBridge";
 export { CantonAdmin } from "./CantonAdmin";
+export { CantonBalancesPage } from "./CantonBalances";

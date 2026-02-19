@@ -22,6 +22,7 @@ import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
+import { CantonBalancesPage } from "@/components/canton/CantonBalances";
 
 export default function Home() {
   const router = useRouter();
@@ -61,8 +62,10 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
+        case "canton-balances":
+          return <CantonBalancesPage />;
         default:
-          return <CantonDashboard />;
+          return <CantonBalancesPage />;
       }
     }
 
@@ -82,6 +85,8 @@ export default function Home() {
         return <PointsPage />;
       case "admin":
         return <AdminPage />;
+      case "canton-balances":
+        return <CantonBalancesPage />;
       default:
         return <DashboardPage />;
     }
