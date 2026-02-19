@@ -170,12 +170,14 @@ export function CantonStake() {
     try {
       const coin = coinTokens[selectedAssetIdx];
       if (!coin) throw new Error("No Canton Coin selected");
-      // Need a CantonSMUSD CID for eligibility check
-      const smusd = smusdTokens.length > 0 ? smusdTokens[0] : null;
+      // Boost Pool requires smUSD stake for eligibility — pick LARGEST for maximum deposit cap
+      const sorted = [...smusdTokens].sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
+      const smusd = sorted.length > 0 ? sorted[0] : null;
+      if (!smusd) throw new Error("Boost Pool requires smUSD stake. Stake mUSD into the smUSD pool first.");
       const resp = await cantonExercise("CantonBoostPoolService", boostPoolService.contractId, "Deposit", {
-        depositor: data!.party,
-        coinCid: coin.contractId,
-        smusdCid: smusd?.contractId || "",
+        user: data!.party,
+        cantonCid: coin.contractId,
+        smusdCid: smusd.contractId,
       });
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
       setTxSuccess(`Deposited ${fmtAmount(coin.amount)} CTN \u2192 Boost LP`);
