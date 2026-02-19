@@ -151,11 +151,6 @@ export function CantonStake() {
         const token = freshCoins[selectedAssetIdx] || freshCoins[0];
         if (!token) throw new Error("No Canton Coin available");
         choice = "ETHPool_StakeWithCantonCoin"; args.coinCid = token.contractId;
-        if (freshUsdcx.length > 0) {
-          args.operatorUsdcxCid = freshUsdcx[0].contractId;
-        } else {
-          throw new Error("No USDCx available for Canton Coin deposit backing");
-        }
       }
       const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, choice, args);
       if (!resp.success) throw new Error(resp.error || "Stake failed");
@@ -178,7 +173,7 @@ export function CantonStake() {
       const smusdE = freshSmusdE[selectedAssetIdx] || freshSmusdE[0];
       if (!smusdE) throw new Error("No smUSD-E shares found");
       const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, "ETHPool_Unstake", {
-        user: fresh.party, smusdECid: smusdE.contractId,
+        user: fresh.party, smusdeCid: smusdE.contractId,
       });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
       setTxSuccess(`Unstaked ${fmtAmount(smusdE.amount)} smUSD-E → mUSD`);
