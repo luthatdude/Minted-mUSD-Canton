@@ -21,6 +21,31 @@ export interface BridgeServiceInfo {
   lastNonce: number;
 }
 
+export interface StakingServiceInfo {
+  contractId: string;
+  totalShares: string;
+  pooledMusd: string;
+  sharePrice: string;
+  cooldownSeconds: number;
+  minDeposit: string;
+  paused: boolean;
+}
+
+export interface ETHPoolServiceInfo {
+  contractId: string;
+  totalShares: string;
+  poolCap: string;
+  sharePrice: string;
+  pooledUsdc: string;
+  paused: boolean;
+  totalMusdStaked: string;
+}
+
+export interface SimpleToken {
+  contractId: string;
+  amount: string;
+}
+
 export interface CantonBalancesData {
   tokens: CantonMUSDToken[];
   totalBalance: string;
@@ -28,6 +53,15 @@ export interface CantonBalancesData {
   bridgeService: BridgeServiceInfo | null;
   pendingBridgeIns: number;
   supplyService: boolean;
+  stakingService: StakingServiceInfo | null;
+  ethPoolService: ETHPoolServiceInfo | null;
+  directMintService: { contractId: string; paused: boolean } | null;
+  smusdTokens: SimpleToken[];
+  totalSmusd: string;
+  cantonCoinTokens: SimpleToken[];
+  totalCoin: string;
+  usdcTokens: SimpleToken[];
+  totalUsdc: string;
   ledgerOffset: number;
   party: string;
   timestamp: string;
