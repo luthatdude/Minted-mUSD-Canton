@@ -5,7 +5,7 @@ import { StatCard } from "@/components/StatCard";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatBps, formatToken } from "@/lib/format";
 import { USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
@@ -156,7 +156,7 @@ function strategyKey(addr: string): string {
 }
 
 export function AdminPage() {
-  const { address, isConnected } = useWalletConnect();
+  const { address, isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
   const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
   const [section, setSection] = useState<AdminSection>("musd");

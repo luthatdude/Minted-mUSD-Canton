@@ -4,7 +4,7 @@ import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
 import { formatUSD, formatToken, formatBps, formatHealthFactor } from "@/lib/format";
-import { useWalletConnect } from "@/hooks/useWalletConnect";
+import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
@@ -62,7 +62,8 @@ interface DashboardPageProps {
 }
 
 export function DashboardPage({ onNavigate }: DashboardPageProps) {
-  const { address, signer, isConnected, ensName, chain } = useWalletConnect();
+  const { address, signer, isConnected, ensName, chainName } = useUnifiedWallet();
+  const chain = chainName ? { name: chainName } : null;
   const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
