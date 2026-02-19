@@ -44,6 +44,7 @@ export interface ETHPoolServiceInfo {
 export interface SimpleToken {
   contractId: string;
   amount: string;
+  template?: string;
 }
 
 export interface CantonBalancesData {

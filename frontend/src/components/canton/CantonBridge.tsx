@@ -1,55 +1,25 @@
 import React, { useState } from "react";
-import { TxButton } from "@/components/TxButton";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useCantonLedger, cantonExercise } from "@/hooks/useCantonLedger";
+import { useCantonLedger } from "@/hooks/useCantonLedger";
 
 export function CantonBridge() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
 
   const [tab, setTab] = useState<"status" | "lock">("status");
-  const [amount, setAmount] = useState("");
-  const [selectedTokenIdx, setSelectedTokenIdx] = useState(0);
-  const [targetChain, setTargetChain] = useState("1");
-  const [targetAddress, setTargetAddress] = useState("");
-  const [slippageBps, setSlippageBps] = useState("50");
-  const [txLoading, setTxLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
   const tokens = data?.tokens || [];
 
   async function handleLockForBridge() {
-    if (!amount || parseFloat(amount) <= 0 || !targetAddress) return;
-    setTxLoading(true);
-    setTxError(null);
-    setResult(null);
-    try {
-      if (!data?.bridgeService) throw new Error("BridgeService not deployed on Canton");
-      const token = tokens[selectedTokenIdx];
-      if (!token) throw new Error("No CantonMUSD token selected");
-      const resp = await cantonExercise(
-        "BridgeService",
-        data.bridgeService.contractId,
-        "Lock_Musd_For_Bridge",
-        {
-          musdCid: token.contractId,
-          amount,
-          targetChainId: targetChain,
-          targetAddress,
-          slippageToleranceBps: parseInt(slippageBps) || 50,
-        }
-      );
-      if (!resp.success) throw new Error(resp.error || "Lock failed");
-      setResult(`Locked ${amount} mUSD for bridge to chain ${targetChain}`);
-      setAmount("");
-      await refresh();
-    } catch (err: any) {
-      setTxError(err.message);
-    } finally {
-      setTxLoading(false);
-    }
+    // In V3 protocol, bridge-out is automatic via BridgeOutRequest created during minting.
+    // The Lock_Musd_For_Bridge choice doesn't exist on V3 BridgeService.
+    setTxError(
+      "Canton→Ethereum bridging is handled automatically. " +
+      "When you mint mUSD via DirectMint, a BridgeOutRequest is created for relay settlement. " +
+      "Use the Mint page to create mUSD — the bridge relay handles Ethereum settlement automatically."
+    );
   }
 
   if (loading && !data) {
@@ -279,69 +249,52 @@ export function CantonBridge() {
             </div>
           )}
 
-          {/* Lock Tab */}
+          {/* Lock Tab — V3 protocol handles bridge-out automatically */}
           {tab === "lock" && (
-            <div className="space-y-4">
-              {tokens.length > 0 ? (
-                <>
-                  <div>
-                    <label className="label">mUSD Contract</label>
-                    <select className="input" value={selectedTokenIdx} onChange={(e) => setSelectedTokenIdx(Number(e.target.value))}>
-                      {tokens.map((t, i) => (
-                        <option key={t.contractId} value={i}>
-                          {parseFloat(t.amount).toFixed(2)} mUSD — nonce {t.nonce} — {t.contractId.slice(0, 16)}…
-                        </option>
-                      ))}
-                    </select>
+            <div className="space-y-6">
+              <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-6">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-purple-500/20 flex-shrink-0">
+                    <svg className="h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
                   </div>
                   <div>
-                    <label className="label">Amount to Lock</label>
-                    <input type="number" className="input" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="label">Slippage Tolerance (bps)</label>
-                    <div className="flex gap-2 items-center">
-                      <input type="number" className="input w-24" min="1" max="500" value={slippageBps} onChange={(e) => setSlippageBps(e.target.value)} />
-                      <span className="text-gray-400 text-sm">({((parseInt(slippageBps) || 0) / 100).toFixed(2)}%)</span>
-                      <div className="flex gap-1 ml-2">
-                        {[10, 50, 100].map((v) => (
-                          <button key={v} onClick={() => setSlippageBps(v.toString())} className={`px-2 py-1 text-xs rounded ${slippageBps === v.toString() ? "bg-emerald-600 text-white" : "bg-gray-700 text-gray-300 hover:bg-gray-600"}`}>
-                            {(v / 100).toFixed(1)}%
-                          </button>
-                        ))}
-                      </div>
+                    <h3 className="text-lg font-semibold text-white mb-2">Automatic Bridge Settlement</h3>
+                    <p className="text-sm text-gray-300 mb-3">
+                      In the V3 protocol, Canton→Ethereum bridging is handled automatically by the relay service.
+                    </p>
+                    <div className="space-y-2 text-sm text-gray-400">
+                      <p>• When you <strong className="text-emerald-400">Mint mUSD</strong> via DirectMint, a <code className="text-purple-300">BridgeOutRequest</code> is created automatically.</p>
+                      <p>• The <strong className="text-blue-400">relay service</strong> picks up pending BridgeOutRequests and settles them on Ethereum.</p>
+                      <p>• No manual locking is needed — the bridge relay handles Ethereum settlement.</p>
                     </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="label">Target Chain ID</label>
-                      <select className="input" value={targetChain} onChange={(e) => setTargetChain(e.target.value)}>
-                        <option value="1">Ethereum Mainnet (1)</option>
-                        <option value="11155111">Sepolia Testnet (11155111)</option>
-                        <option value="137">Polygon (137)</option>
-                        <option value="42161">Arbitrum (42161)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="label">Target Address</label>
-                      <input type="text" className="input" placeholder="0x..." value={targetAddress} onChange={(e) => setTargetAddress(e.target.value)} />
-                    </div>
-                  </div>
-                  <TxButton onClick={handleLockForBridge} loading={txLoading} disabled={!amount || parseFloat(amount) <= 0 || !targetAddress} variant="primary" className="w-full">
-                    Lock mUSD for Bridge
-                  </TxButton>
-                </>
-              ) : (
-                <div className="text-center py-12">
-                  <p className="text-gray-400">No mUSD tokens available to lock.</p>
-                  <p className="text-sm text-gray-500 mt-1">Bridge mUSD from Ethereum first.</p>
                 </div>
-              )}
+              </div>
+
+              {/* Quick Stats */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                  <p className="text-xs text-gray-500 mb-1">Your Canton mUSD</p>
+                  <p className="text-2xl font-bold text-emerald-400">{totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                  <p className="text-xs text-gray-500 mt-1">{tokens.length} contract{tokens.length !== 1 ? "s" : ""}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+                  <p className="text-xs text-gray-500 mb-1">Pending Bridge-Outs</p>
+                  <p className="text-2xl font-bold text-yellow-400">{data?.pendingBridgeIns || 0}</p>
+                  <p className="text-xs text-gray-500 mt-1">Awaiting relay settlement</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                <p className="text-sm text-blue-300 font-medium mb-1">Want to mint more mUSD?</p>
+                <p className="text-xs text-gray-400">Go to the <strong className="text-white">Mint &amp; Redeem</strong> page to deposit USDC and receive mUSD. Bridge settlement happens automatically.</p>
+              </div>
             </div>
           )}
 
           {txError && <div className="alert-error mt-4 text-sm">{txError}</div>}
-          {result && <div className="alert-success mt-4 text-sm">{result}</div>}
         </div>
       </div>
 

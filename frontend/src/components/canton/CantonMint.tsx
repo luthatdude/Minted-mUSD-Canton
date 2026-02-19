@@ -20,7 +20,8 @@ export function CantonMint() {
   const totalUsdc = data ? parseFloat(data.totalUsdc) : 0;
   const tokens = data?.tokens || [];
   const coinTokens = data?.cantonCoinTokens || [];
-  const usdcTokens = data?.usdcTokens || [];
+  // Only use CantonUSDC tokens (not USDCx) for DirectMint_Mint
+  const usdcTokens = (data?.usdcTokens || []).filter(t => !t.template || t.template === "CantonUSDC");
 
   async function handleMint() {
     setTxLoading(true);
@@ -96,7 +97,17 @@ export function CantonMint() {
 
       const coinAmount = parseFloat(coin.amount);
 
-      // Step 1: Burn the Canton Coin (requires issuer+owner signatories — both are operator on devnet)
+      // DirectMint_MintForCoin requires a DAR upgrade.
+      // For now, use a two-step approach: burn coin, then DirectMint with USDC equivalent.
+      // Step 1: Check we have USDC to cover the mint
+      if (usdcTokens.length === 0) {
+        throw new Error(
+          "Coin→mUSD requires USDC collateral in the current deployment. " +
+          "Please get Canton USDC from the Faucet first, then use the 'Mint mUSD' tab."
+        );
+      }
+
+      // Step 1: Burn the Canton Coin
       const burnResp = await cantonExercise(
         "CantonCoin",
         coin.contractId,
@@ -105,17 +116,17 @@ export function CantonMint() {
       );
       if (!burnResp.success) throw new Error(burnResp.error || "Coin burn failed");
 
-      // Step 2: Mint mUSD via DirectMint_MintForCoin (operator-controlled choice)
-      // The coin's mUSD value is 1:1 (cantonCoinPrice = 1.0 on devnet)
+      // Step 2: Mint mUSD using USDC (standard DirectMint_Mint)
+      const usdc = usdcTokens[0];
       const mintResp = await cantonExercise(
         "CantonDirectMintService",
         data.directMintService.contractId,
-        "DirectMint_MintForCoin",
-        { user: data.party, coinMusdValue: String(coinAmount) }
+        "DirectMint_Mint",
+        { user: data.party, usdcCid: usdc.contractId }
       );
       if (!mintResp.success) throw new Error(mintResp.error || "Coin→mUSD mint failed");
 
-      setResult(`Minted ${coinAmount.toFixed(2)} Coin → mUSD (0.3% fee)`);
+      setResult(`Burned ${coinAmount.toFixed(2)} Coin + minted mUSD from ${parseFloat(usdc.amount).toFixed(2)} USDC`);
       setAmount("");
       await refresh();
     } catch (err: any) {
