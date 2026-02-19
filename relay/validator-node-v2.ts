@@ -59,8 +59,8 @@ interface ValidatorConfig {
 }
 
 const DEFAULT_CONFIG: ValidatorConfig = {
-  cantonLedgerHost: process.env.CANTON_LEDGER_HOST || "localhost",
-  cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || "7575", 10),
+  cantonLedgerHost: process.env.CANTON_LEDGER_HOST || process.env.CANTON_HOST || "localhost",
+  cantonLedgerPort: parseInt(process.env.CANTON_LEDGER_PORT || process.env.CANTON_PORT || "7575", 10),
   cantonLedgerToken: readSecret("canton_token", "CANTON_LEDGER_TOKEN"),
   validatorParty: process.env.VALIDATOR_PARTY || "",
 

@@ -1311,6 +1311,8 @@ template CantonDirectMint
           nonce = nextNonce
           createdAt = now
           status = "pending"
+          validators = validators
+          requiredSignatures = 1
         
         newService <- create this with
           currentSupply = currentSupply - musd.amount
@@ -1822,7 +1824,7 @@ template AttestationRequest
         -- collectedSignatures and ecdsaSignatures must start empty — validators
         -- add their signatures via Attestation_Sign with ValidatorSelfAttestation proof.
         && Set.null collectedSignatures
-        && null ecdsaSignatures
+        && Prelude.null ecdsaSignatures
 
     -- | Validator signs the attestation
     -- BRIDGE-C-01: Now stores ECDSA signature bytes alongside party tracking
