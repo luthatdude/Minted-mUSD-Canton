@@ -1537,39 +1537,142 @@ class RelayService {
         return;
       }
 
-      // Create CantonMUSD — operator is both issuer and owner initially
-      // (owner set to userParty for proper visibility)
-      await this.canton.createContract(TEMPLATES.CantonMUSD, {
+      // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
+      // CantonMUSD template requires `signatory issuer, owner` — if the user party
+      // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
+      // Instead: operator mints (both signatory slots satisfied), then transfers to user.
+      const createResult = await this.canton.createContract(TEMPLATES.CantonMUSD, {
         issuer: this.config.cantonParty,
-        owner: userParty,
+        owner: this.config.cantonParty,  // Operator-owned initially
         amount: amountStr,
         agreementHash,
         agreementUri,
         privacyObservers: [] as string[],
       });
-      console.log(`[Relay] ✅ Created CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → ${userParty.slice(0, 30)}...`);
+      console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
 
-      // Try to exercise BridgeIn_Complete to mark the request as completed
-      // This may fail for old contracts without attestation fields — that's OK
+      // Transfer to user if different from operator
+      if (userParty !== this.config.cantonParty) {
+        try {
+          // Extract the contractId of the just-created CantonMUSD
+          let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
+          if (!musdCid) {
+            // Fallback: query by agreementHash
+            const created = await this.canton.queryContracts(
+              TEMPLATES.CantonMUSD,
+              (p: any) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty
+            );
+            if (created.length > 0) musdCid = created[0].contractId;
+          }
+
+          if (musdCid) {
+            // Exercise CantonMUSD_Transfer to propose transfer to user
+            await this.canton.exerciseChoice(
+              TEMPLATES.CantonMUSD,
+              musdCid,
+              "CantonMUSD_Transfer",
+              { newOwner: userParty }
+            );
+            console.log(`[Relay] ✅ Transferred CantonMUSD #${nonce} to user ${userParty.slice(0, 30)}...`);
+          } else {
+            console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
+          }
+        } catch (transferErr: any) {
+          // Non-fatal: mUSD exists operator-owned; user can claim later
+          console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
+        }
+      } else {
+        console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+      }
+
+      // Exercise BridgeIn_Complete properly: create an AttestationRequest on Canton,
+      // then exercise BridgeIn_Complete with the attestation CID.
       try {
         const pendingRequests = await this.canton.queryContracts<{
           nonce: number;
           status: string;
+          validators: string[];
+          requiredSignatures: number;
         }>(TEMPLATES.BridgeInRequest, (p) => Number(p.nonce) === nonce && p.status === "pending");
 
         if (pendingRequests.length > 0) {
-          // Old contracts (no validators/requiredSignatures) — try simple completion
-          // If BridgeIn_Complete requires attestation (new template), skip for now
-          try {
-            await this.canton.exerciseChoice(
-              TEMPLATES.BridgeInRequest,
-              pendingRequests[0].contractId,
-              "BridgeIn_Cancel",  // Use cancel to archive old pending requests
-              {}
-            );
-            console.log(`[Relay] Archived old BridgeInRequest #${nonce} (cancelled after minting)`);
-          } catch (exerciseErr: any) {
-            console.warn(`[Relay] Could not archive BridgeInRequest #${nonce}: ${exerciseErr.message?.slice(0, 100)}`);
+          const req = pendingRequests[0];
+          const hasAttestationFields = req.payload.validators && req.payload.requiredSignatures > 0;
+
+          if (hasAttestationFields) {
+            // New template: create AttestationRequest, collect sigs, exercise BridgeIn_Complete
+            try {
+              const chainId = Number((await this.provider.getNetwork()).chainId);
+              const attestationPayload = {
+                attestationId: `bridge-in-attest-${nonce}`,
+                globalCantonAssets: "0.0",
+                targetAddress: ethers.ZeroAddress,
+                amount: amountStr,
+                isMint: false,
+                nonce: String(nonce),
+                chainId: String(chainId),
+                expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+                entropy: ethers.hexlify(crypto.randomBytes(32)),
+                cantonStateHash: ethers.ZeroHash,
+              };
+
+              // Create AttestationRequest on Canton for the bridge-in direction
+              const attestResult = await this.canton.createContract(
+                TEMPLATES.AttestationRequest,
+                {
+                  aggregator: this.config.cantonParty,
+                  validatorGroup: req.payload.validators,
+                  payload: attestationPayload,
+                  positionCids: [],
+                  collectedSignatures: req.payload.validators,  // All validators attest (operator-controlled)
+                  ecdsaSignatures: [],
+                  requiredSignatures: req.payload.requiredSignatures,
+                  direction: "EthereumToCanton",
+                }
+              );
+
+              // Extract attestation CID
+              let attestCid = this.extractCreatedContractId(attestResult, "AttestationRequest");
+              if (!attestCid) {
+                const attestContracts = await this.canton.queryContracts(
+                  TEMPLATES.AttestationRequest,
+                  (p: any) => p.payload?.attestationId === `bridge-in-attest-${nonce}` &&
+                              p.direction === "EthereumToCanton"
+                );
+                if (attestContracts.length > 0) attestCid = attestContracts[0].contractId;
+              }
+
+              if (attestCid) {
+                await this.canton.exerciseChoice(
+                  TEMPLATES.BridgeInRequest,
+                  req.contractId,
+                  "BridgeIn_Complete",
+                  { attestationCid: attestCid }
+                );
+                console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with attestation ${attestCid.slice(0, 16)}...`);
+              } else {
+                console.warn(`[Relay] Could not find AttestationRequest CID for BridgeIn_Complete #${nonce}`);
+              }
+            } catch (attestErr: any) {
+              console.warn(`[Relay] BridgeIn_Complete with attestation failed for #${nonce}: ${attestErr.message?.slice(0, 120)}`);
+              // Fallback: cancel to archive
+              try {
+                await this.canton.exerciseChoice(
+                  TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Cancel", {}
+                );
+                console.log(`[Relay] Archived BridgeInRequest #${nonce} via cancel (attestation flow failed)`);
+              } catch { /* best-effort */ }
+            }
+          } else {
+            // Old template without attestation fields — cancel to archive
+            try {
+              await this.canton.exerciseChoice(
+                TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Cancel", {}
+              );
+              console.log(`[Relay] Archived old BridgeInRequest #${nonce} (no attestation fields)`);
+            } catch (cancelErr: any) {
+              console.warn(`[Relay] Could not archive BridgeInRequest #${nonce}: ${cancelErr.message?.slice(0, 100)}`);
+            }
           }
         }
       } catch (queryErr: any) {
@@ -1605,11 +1708,6 @@ class RelayService {
 
       for (const req of pendingRequests) {
         const nonce = Number(req.payload.nonce);
-        // Skip test/cancelled nonces (e.g., 999)
-        if (nonce >= 900) {
-          console.log(`[Relay] Skipping nonce ${nonce} (test/special)`);
-          continue;
-        }
         await this.completeBridgeInAndMintMusd(
           nonce,
           req.payload.amount,
@@ -1707,12 +1805,14 @@ class RelayService {
 
       try {
         // MEDIUM-02: Canton-side duplicate check before creating CantonMUSD
-        const agreementHash = `yield-epoch-${epoch}`;
+        // FIX: Pad agreementHash to 64 characters for consistency with bridge-in flow
+        const agreementHash = `yield-epoch:${epoch}:`.padEnd(64, "0");
         const existingMusd = await this.canton.queryContracts(
           TEMPLATES.CantonMUSD,
           (payload: any) =>
             payload.owner === this.config.cantonParty &&
-            payload.agreementHash === agreementHash
+            (payload.agreementHash === agreementHash ||
+             payload.agreementHash === `yield-epoch-${epoch}`)  // backwards compat
         );
         if (existingMusd.length > 0) {
           console.log(
@@ -1731,7 +1831,7 @@ class RelayService {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
-            agreementHash: `yield-epoch-${epoch}`,
+            agreementHash,
             agreementUri: `ethereum:yield-distributor:${this.config.yieldDistributorAddress}`,
             privacyObservers: [] as string[],
           }
@@ -1746,7 +1846,8 @@ class RelayService {
             TEMPLATES.CantonMUSD,
             (payload: any) =>
               payload.owner === this.config.cantonParty &&
-              payload.agreementHash === `yield-epoch-${epoch}`
+              (payload.agreementHash === agreementHash ||
+               payload.agreementHash === `yield-epoch-${epoch}`)  // backwards compat
           );
           if (musdContracts.length === 0) {
             throw new Error("Created CantonMUSD not found on Canton after create");
@@ -1804,11 +1905,13 @@ class RelayService {
     const stakingService = stakingServices[0];
 
     // Step 3: Exercise ReceiveYield — merges mUSD into vault, pooledMusd ↑
+    // ReceiveYield requires `controller operator, governance` — include governance in actAs
     await this.canton.exerciseChoice(
       TEMPLATES.CantonStakingService,
       stakingService.contractId,
       "ReceiveYield",
-      { yieldMusdCid: musdContractId }
+      { yieldMusdCid: musdContractId },
+      this.config.cantonGovernanceParty ? [this.config.cantonGovernanceParty] : []
     );
 
     console.log(
@@ -1906,12 +2009,14 @@ class RelayService {
         // with matching agreementHash before creating a new one. This prevents
         // orphaned CantonMUSD contracts if the relay restarts and re-encounters
         // an event that was processed but not persisted.
-        const agreementHash = `ethpool-yield-epoch-${epoch}`;
+        // FIX: Pad agreementHash to 64 characters for consistency with bridge-in flow
+        const agreementHash = `ethpool-yield-epoch:${epoch}:`.padEnd(64, "0");
         const existingMusd = await this.canton.queryContracts(
           TEMPLATES.CantonMUSD,
           (payload: any) =>
             payload.owner === this.config.cantonParty &&
-            payload.agreementHash === agreementHash
+            (payload.agreementHash === agreementHash ||
+             payload.agreementHash === `ethpool-yield-epoch-${epoch}`)  // backwards compat
         );
         if (existingMusd.length > 0) {
           console.log(
@@ -1930,7 +2035,7 @@ class RelayService {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
-            agreementHash: `ethpool-yield-epoch-${epoch}`,
+            agreementHash,
             agreementUri: `ethereum:ethpool-yield-distributor:${this.config.ethPoolYieldDistributorAddress}`,
             privacyObservers: [] as string[],
           }
@@ -1944,7 +2049,8 @@ class RelayService {
             TEMPLATES.CantonMUSD,
             (payload: any) =>
               payload.owner === this.config.cantonParty &&
-              payload.agreementHash === `ethpool-yield-epoch-${epoch}`
+              (payload.agreementHash === agreementHash ||
+               payload.agreementHash === `ethpool-yield-epoch-${epoch}`)  // backwards compat
           );
           if (musdContracts.length === 0) {
             throw new Error("Created CantonMUSD not found on Canton after create (ETH Pool)");
@@ -2003,11 +2109,13 @@ class RelayService {
     const ethPoolService = ethPoolServices[0];
 
     // Exercise ETHPool_ReceiveYield — archives mUSD, increments pooledUsdc
+    // ETHPool_ReceiveYield may require `controller operator, governance` — include governance in actAs
     await this.canton.exerciseChoice(
       TEMPLATES.CantonETHPoolService,
       ethPoolService.contractId,
       "ETHPool_ReceiveYield",
-      { yieldMusdCid: musdContractId }
+      { yieldMusdCid: musdContractId },
+      this.config.cantonGovernanceParty ? [this.config.cantonGovernanceParty] : []
     );
 
     console.log(
@@ -2477,7 +2585,12 @@ class RelayService {
     messageHash: string
   ): Promise<string[]> {
     const formatted: string[] = [];
-    // Use Ethereum-signed message hash for ecrecover validation
+    // EIP-191 prefixed hash for ecrecover validation.
+    // Validators sign via eth_sign / KMS signMessage, which applies the
+    // "\x19Ethereum Signed Message:\n32" prefix before ECDSA signing.
+    // We must use the SAME prefixed hash for recovery.
+    // IMPORTANT: Use recoverAddress (not verifyMessage) downstream to avoid
+    // double-prefixing — recoverAddress takes the already-prefixed digest.
     const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
 
     for (const sig of validatorSigs) {

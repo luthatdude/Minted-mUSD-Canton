@@ -134,7 +134,7 @@ export function CantonStake() {
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-emerald-500/20 border-t-emerald-500" />
-          <p className="text-gray-400">Loading Canton ledger\u2026</p>
+          <p className="text-gray-400">Loading Canton ledger…</p>
         </div>
       </div>
     );
@@ -226,7 +226,7 @@ export function CantonStake() {
                             <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-emerald-500/50 focus:outline-none"
                               value={selectedMusdIdx} onChange={(e) => setSelectedMusdIdx(Number(e.target.value))}>
                               {tokens.map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} mUSD \u2014 nonce {t.nonce} \u2014 {t.contractId.slice(0, 12)}\u2026</option>
+                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} mUSD — nonce {t.nonce} — {t.contractId.slice(0, 12)}…</option>
                               ))}
                             </select>
                           </div>
@@ -271,13 +271,13 @@ export function CantonStake() {
                             </div>
                             <div className="flex items-center justify-between text-sm">
                               <span className="text-gray-400">Min Deposit</span>
-                              <span className="text-gray-300">{stakingService?.minDeposit || "0.01"} mUSD</span>
+                              <span className="text-gray-300">{fmtAmount(stakingService?.minDeposit || "0.01")} mUSD</span>
                             </div>
                           </div>
                           <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
-                              Stake mUSD \u2192 smUSD
+                              Stake mUSD → smUSD
                             </span>
                           </TxButton>
                         </>
@@ -305,7 +305,7 @@ export function CantonStake() {
                               <div className="flex items-center justify-between">
                                 <div>
                                   <span className="font-semibold text-white">{fmtAmount(smusd.amount, 4)} smUSD</span>
-                                  <p className="text-xs text-gray-500 mt-1">\u2248 {fmtAmount(parseFloat(smusd.amount) * smusdSharePrice)} mUSD</p>
+                                  <p className="text-xs text-gray-500 mt-1">≈ {fmtAmount(parseFloat(smusd.amount) * smusdSharePrice)} mUSD</p>
                                 </div>
                                 <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Active</span>
                               </div>
@@ -313,7 +313,7 @@ export function CantonStake() {
                           ))}
                           <TxButton onClick={handleSmusdUnstake} loading={txLoading} disabled={smusdTokens.length === 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
-                              Unstake smUSD \u2192 mUSD
+                              Unstake smUSD → mUSD
                             </span>
                           </TxButton>
                         </div>
@@ -343,9 +343,9 @@ export function CantonStake() {
                       <svg className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                     </div>
                     <div>
-                      <h3 className="font-semibold text-white mb-1">Canton smUSD Vault \u2014 Live</h3>
+                      <h3 className="font-semibold text-white mb-1">Canton smUSD Vault — Live</h3>
                       <p className="text-sm text-gray-400">Stake mUSD into the Canton yield vault. Your mUSD is held in the pool and you receive smUSD shares. The share price increases as protocol revenue accrues.</p>
-                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {stakingService.contractId.slice(0, 24)}\u2026</p>
+                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {stakingService.contractId.slice(0, 24)}…</p>
                     </div>
                   </div>
                 </div>
@@ -442,7 +442,7 @@ export function CantonStake() {
                             <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-blue-500/50 focus:outline-none"
                               value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
                               {(depositAsset === "CTN" ? coinTokens : usdcTokens).map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {depositAsset} \u2014 {t.contractId.slice(0, 12)}\u2026</option>
+                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {depositAsset} — {t.contractId.slice(0, 12)}…</option>
                               ))}
                             </select>
                           </div>
@@ -452,7 +452,7 @@ export function CantonStake() {
                           </div>
                         )}
                         <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={(depositAsset === "CTN" ? coinTokens : usdcTokens).length === 0} className="w-full">
-                          Deposit {depositAsset} \u2192 smUSD-E
+                          Deposit {depositAsset} → smUSD-E
                         </TxButton>
                       </>
                     ) : (
@@ -489,9 +489,9 @@ export function CantonStake() {
                       <svg className="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                     </div>
                     <div>
-                      <h3 className="font-semibold text-white mb-1">ETH Pool \u2014 Fluid Strategy Yield</h3>
-                      <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin. Capital flows to Ethereum Treasury \u2192 Fluid T2/T4 vaults. Receive smUSD-E shares with optional time-lock boost multipliers (up to 2\u00d7).</p>
-                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {ethPoolService.contractId.slice(0, 24)}\u2026</p>
+                      <h3 className="font-semibold text-white mb-1">ETH Pool — Fluid Strategy Yield</h3>
+                      <p className="text-sm text-gray-400">Deposit USDC, USDCx, or Canton Coin. Capital flows to Ethereum Treasury → Fluid T2/T4 vaults. Receive smUSD-E shares with optional time-lock boost multipliers (up to 2×).</p>
+                      <p className="text-xs text-gray-500 mt-2 font-mono">Service: {ethPoolService.contractId.slice(0, 24)}…</p>
                     </div>
                   </div>
                 </div>

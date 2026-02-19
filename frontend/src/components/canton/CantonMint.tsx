@@ -2,9 +2,7 @@ import React, { useState } from "react";
 import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
-import { useCantonLedger, cantonExercise, cantonCreate } from "@/hooks/useCantonLedger";
-
-const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+import { useCantonLedger, cantonExercise } from "@/hooks/useCantonLedger";
 
 export function CantonMint() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
@@ -25,24 +23,27 @@ export function CantonMint() {
   const usdcTokens = data?.usdcTokens || [];
 
   async function handleMint() {
-    if (!amount || parseFloat(amount) <= 0) return;
     setTxLoading(true);
     setTxError(null);
     setResult(null);
     try {
-      // Canton direct mint requires MUSDSupplyService contract
-      if (!data?.supplyService) {
-        throw new Error("MUSDSupplyService not deployed on Canton. Mint via Ethereum bridge instead.");
+      // Require DirectMintService + a USDC token to deposit
+      if (!data?.directMintService) {
+        throw new Error("CantonDirectMintService not deployed. Cannot mint.");
       }
-      // Exercise the Mint choice on SupplyService
+      if (usdcTokens.length === 0) {
+        throw new Error("No Canton USDC tokens available. Use the Faucet to get USDC first.");
+      }
+      const usdc = usdcTokens[selectedTokenIdx] || usdcTokens[0];
+      // Exercise DirectMint_Mint: deposit USDC → get CantonMUSD
       const resp = await cantonExercise(
-        "MUSDSupplyService",
-        "", // service contract ID would be needed
-        "Mint",
-        { amount, recipient: data.party }
+        "CantonDirectMintService",
+        data.directMintService.contractId,
+        "DirectMint_Mint",
+        { user: data.party, usdcCid: usdc.contractId }
       );
       if (!resp.success) throw new Error(resp.error || "Mint failed");
-      setResult(`Minted ${amount} mUSD on Canton`);
+      setResult(`Minted mUSD from ${parseFloat(usdc.amount).toFixed(2)} USDC (0.3% fee)`);
       setAmount("");
       await refresh();
     } catch (err: any) {
@@ -53,21 +54,25 @@ export function CantonMint() {
   }
 
   async function handleRedeem() {
-    if (!amount || parseFloat(amount) <= 0 || tokens.length === 0) return;
+    if (tokens.length === 0) return;
     setTxLoading(true);
     setTxError(null);
     setResult(null);
     try {
+      if (!data?.directMintService) {
+        throw new Error("CantonDirectMintService not deployed. Cannot redeem.");
+      }
       const token = tokens[selectedTokenIdx];
       if (!token) throw new Error("No CantonMUSD token selected");
+      // Exercise DirectMint_Redeem: burn mUSD → get RedemptionRequest
       const resp = await cantonExercise(
-        "CantonMUSD",
-        token.contractId,
-        "Burn",
-        { amount }
+        "CantonDirectMintService",
+        data.directMintService.contractId,
+        "DirectMint_Redeem",
+        { user: data.party, musdCid: token.contractId }
       );
       if (!resp.success) throw new Error(resp.error || "Redeem failed");
-      setResult(`Redeemed ${amount} mUSD on Canton`);
+      setResult(`Redeemed ${parseFloat(token.amount).toFixed(2)} mUSD → USDC redemption request created`);
       setAmount("");
       await refresh();
     } catch (err: any) {
@@ -78,43 +83,39 @@ export function CantonMint() {
   }
 
   async function handleCoinMint() {
-    if (!amount || parseFloat(amount) <= 0 || coinTokens.length === 0) return;
+    if (coinTokens.length === 0) return;
     setTxLoading(true);
     setTxError(null);
     setResult(null);
     try {
+      if (!data?.directMintService) {
+        throw new Error("CantonDirectMintService not deployed. Cannot mint from coin.");
+      }
       const coin = coinTokens[selectedCoinIdx];
       if (!coin) throw new Error("No Canton Coin selected");
 
       const coinAmount = parseFloat(coin.amount);
-      const mintAmount = parseFloat(amount);
-      if (mintAmount > coinAmount) throw new Error(`Insufficient coin balance: ${coinAmount.toFixed(2)} < ${mintAmount.toFixed(2)}`);
 
-      // Step 1: Burn the Canton Coin
+      // Step 1: Burn the Canton Coin (requires issuer+owner signatories — both are operator on devnet)
       const burnResp = await cantonExercise(
-        `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
+        "CantonCoin",
         coin.contractId,
         "CantonCoin_Burn",
         {}
       );
       if (!burnResp.success) throw new Error(burnResp.error || "Coin burn failed");
 
-      // Step 2: Create CantonMUSD with the burned amount (devnet: operator=issuer=owner)
-      const party = data?.party || "";
-      const createResp = await cantonCreate(
-        `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
-        {
-          issuer: party,
-          owner: party,
-          amount: amount,
-          sourceChain: "canton-coin-swap",
-          bridgeNonce: Date.now(),
-          privacyObservers: [],
-        }
+      // Step 2: Mint mUSD via DirectMint_MintForCoin (operator-controlled choice)
+      // The coin's mUSD value is 1:1 (cantonCoinPrice = 1.0 on devnet)
+      const mintResp = await cantonExercise(
+        "CantonDirectMintService",
+        data.directMintService.contractId,
+        "DirectMint_MintForCoin",
+        { user: data.party, coinMusdValue: String(coinAmount) }
       );
-      if (!createResp.success) throw new Error(createResp.error || "mUSD creation failed");
+      if (!mintResp.success) throw new Error(mintResp.error || "Coin→mUSD mint failed");
 
-      setResult(`Swapped ${amount} Coin → ${amount} mUSD on Canton`);
+      setResult(`Minted ${coinAmount.toFixed(2)} Coin → mUSD (0.3% fee)`);
       setAmount("");
       await refresh();
     } catch (err: any) {
@@ -247,7 +248,41 @@ export function CantonMint() {
         </div>
 
         <div className="space-y-6 p-6">
-          {/* Contract Selector (redeem tab) */}
+          {/* Contract Selector (mint & redeem tabs) */}
+          {tab === "mint" && usdcTokens.length > 0 && (
+            <div className="space-y-2">
+              <label className="label">USDC Contract to Deposit</label>
+              <div className="relative">
+                <select
+                  className="input appearance-none pr-10"
+                  value={selectedTokenIdx}
+                  onChange={(e) => setSelectedTokenIdx(Number(e.target.value))}
+                >
+                  {usdcTokens.map((t, i) => (
+                    <option key={t.contractId} value={i}>
+                      {parseFloat(t.amount).toFixed(2)} USDC — {t.contractId.slice(0, 16)}…
+                    </option>
+                  ))}
+                </select>
+                <svg className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          )}
+          {tab === "mint" && usdcTokens.length === 0 && (
+            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4">
+              <div className="flex items-center gap-3">
+                <svg className="h-5 w-5 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <div>
+                  <p className="text-sm font-medium text-yellow-300">No Canton USDC</p>
+                  <p className="text-xs text-yellow-400/70">Use the Faucet page to mint Canton USDC for testing.</p>
+                </div>
+              </div>
+            </div>
+          )}
           {tab === "redeem" && tokens.length > 0 && (
             <div className="space-y-2">
               <label className="label">mUSD Contract</label>
@@ -306,14 +341,16 @@ export function CantonMint() {
             </div>
           )}
 
-          {/* Amount Input */}
+          {/* Amount Display / Input */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium text-gray-400">
-                {tab === "mint" ? "Amount to Mint" : tab === "coin" ? "Coin Amount" : "Amount to Redeem"}
+                {tab === "mint" ? "You Deposit" : tab === "coin" ? "You Mint" : "You Redeem"}
               </label>
               <span className="text-xs text-gray-500">
-                {tab === "coin"
+                {tab === "mint"
+                  ? `USDC Balance: ${totalUsdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : tab === "coin"
                   ? `Coin Balance: ${totalCoin.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                   : `mUSD Balance: ${totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                 }
@@ -325,32 +362,26 @@ export function CantonMint() {
                 : "focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]"
             }`}>
               <div className="flex items-center gap-4">
-                <input
-                  type="number"
-                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
-                  placeholder="0.00"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
+                {tab === "mint" ? (
+                  <span className="flex-1 text-2xl font-semibold text-white">
+                    {usdcTokens[selectedTokenIdx]
+                      ? parseFloat(usdcTokens[selectedTokenIdx].amount).toFixed(2)
+                      : "0.00"}
+                  </span>
+                ) : tab === "coin" ? (
+                  <span className="flex-1 text-2xl font-semibold text-white">
+                    {coinTokens[selectedCoinIdx]
+                      ? parseFloat(coinTokens[selectedCoinIdx].amount).toFixed(2)
+                      : "0.00"}
+                  </span>
+                ) : (
+                  <span className="flex-1 text-2xl font-semibold text-white">
+                    {tokens[selectedTokenIdx]
+                      ? parseFloat(tokens[selectedTokenIdx].amount).toFixed(2)
+                      : "0.00"}
+                  </span>
+                )}
                 <div className="flex items-center gap-2">
-                  {tab === "redeem" && (
-                    <button
-                      className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
-                      onClick={() => {
-                        const sel = tokens[selectedTokenIdx];
-                        if (sel) setAmount(sel.amount);
-                      }}
-                    >MAX</button>
-                  )}
-                  {tab === "coin" && coinTokens.length > 0 && (
-                    <button
-                      className="rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-400 transition-colors hover:bg-amber-500/30"
-                      onClick={() => {
-                        const sel = coinTokens[selectedCoinIdx];
-                        if (sel) setAmount(sel.amount);
-                      }}
-                    >MAX</button>
-                  )}
                   <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                     <div className={`h-6 w-6 rounded-full bg-gradient-to-br ${
                       tab === "coin" ? "from-amber-500 to-orange-500" :
@@ -380,7 +411,18 @@ export function CantonMint() {
             <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
               <div className="flex items-center gap-4">
                 <span className="flex-1 text-2xl font-semibold text-white">
-                  {amount && parseFloat(amount) > 0 ? parseFloat(amount).toFixed(2) : "0.00"}
+                  {tab === "mint"
+                    ? (usdcTokens[selectedTokenIdx]
+                        ? (parseFloat(usdcTokens[selectedTokenIdx].amount) * 0.997).toFixed(2)
+                        : "0.00")
+                    : tab === "coin"
+                    ? (coinTokens[selectedCoinIdx]
+                        ? (parseFloat(coinTokens[selectedCoinIdx].amount) * 0.997).toFixed(2)
+                        : "0.00")
+                    : (tokens[selectedTokenIdx]
+                        ? (parseFloat(tokens[selectedTokenIdx].amount) * 0.997).toFixed(2)
+                        : "0.00")
+                  }
                 </span>
                 <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                   <div className={`h-6 w-6 rounded-full bg-gradient-to-br ${
@@ -397,43 +439,37 @@ export function CantonMint() {
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Exchange Rate</span>
               <span className="text-gray-300">
-                {tab === "coin" ? "1 Coin = 1 mUSD (oracle)" : "1:1"}
+                {tab === "coin" ? "1 Coin = 1 mUSD (oracle)" : "1 USDC = 1 mUSD"}
               </span>
             </div>
             <div className="h-px bg-white/10" />
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-400">Protocol Fee</span>
-              <span className="text-emerald-400">0%</span>
+              <span className="text-emerald-400">0.3%</span>
             </div>
             {tab === "coin" && (
-              <>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-400">CoinMint Service</span>
-                  <span className="font-mono text-xs text-yellow-400">
-                    Requires CoinMintService deployment
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-400">Flow</span>
-                  <span className="text-xs text-gray-500">Coin → Burn → USDCx → mUSD</span>
-                </div>
-              </>
-            )}
-            {tab !== "coin" && (
               <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-400">Supply Service</span>
-                <span className={`font-mono text-xs ${data?.supplyService ? "text-emerald-400" : "text-yellow-400"}`}>
-                  {data?.supplyService ? "Deployed" : "Not deployed — use bridge"}
-                </span>
+                <span className="text-gray-400">Flow</span>
+                <span className="text-xs text-gray-500">Coin → Burn → DirectMint → mUSD</span>
               </div>
             )}
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-400">DirectMint Service</span>
+              <span className={`font-mono text-xs ${data?.directMintService ? "text-emerald-400" : "text-yellow-400"}`}>
+                {data?.directMintService ? "Deployed" : "Not deployed"}
+              </span>
+            </div>
           </div>
 
           {/* Action */}
           <TxButton
             onClick={tab === "mint" ? handleMint : tab === "coin" ? handleCoinMint : handleRedeem}
             loading={txLoading}
-            disabled={!amount || parseFloat(amount) <= 0 || (tab === "coin" && coinTokens.length === 0)}
+            disabled={
+              tab === "mint" ? (usdcTokens.length === 0 || !data?.directMintService)
+              : tab === "coin" ? (coinTokens.length === 0 || !data?.directMintService)
+              : (tokens.length === 0 || !data?.directMintService)
+            }
             variant={tab === "coin" ? "secondary" : "success"}
             className="w-full"
           >
@@ -450,7 +486,7 @@ export function CantonMint() {
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
-                  Swap Coin → mUSD
+                  Mint from Coin
                 </>
               ) : (
                 <>
