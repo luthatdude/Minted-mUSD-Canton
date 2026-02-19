@@ -8,10 +8,12 @@ import WalletConnector from "@/components/WalletConnector";
 // DAML template IDs
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
-  BridgeService: `${PACKAGE_ID}:MUSD_Protocol:BridgeService`,
-  AttestationRequest: `${PACKAGE_ID}:MintedProtocolV2Fixed:AttestationRequest`,
-  BridgeClaim: `${PACKAGE_ID}:MUSD_Protocol:BridgeClaim`,
-  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+  BridgeService: `${PACKAGE_ID}:Minted.Protocol.V3:BridgeService`,
+  AttestationRequest: `${PACKAGE_ID}:Minted.Protocol.V3:AttestationRequest`,
+  BridgeOutRequest: `${PACKAGE_ID}:Minted.Protocol.V3:BridgeOutRequest`,
+  BridgeInRequest: `${PACKAGE_ID}:Minted.Protocol.V3:BridgeInRequest`,
+  MUSD: `${PACKAGE_ID}:Minted.Protocol.V3:MintedMUSD`,
+  CantonMUSD: `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
 };
 
 export function CantonBridge() {
@@ -38,7 +40,7 @@ export function CantonBridge() {
       const [svc, att, cl, musd] = await Promise.all([
         loopWallet.queryContracts(templates.BridgeService).catch(() => []),
         loopWallet.queryContracts(templates.AttestationRequest).catch(() => []),
-        loopWallet.queryContracts(templates.BridgeClaim).catch(() => []),
+        loopWallet.queryContracts(templates.BridgeOutRequest).catch(() => []),
         loopWallet.queryContracts(templates.MUSD).catch(() => []),
       ]);
       setBridgeServices(svc);
@@ -88,7 +90,7 @@ export function CantonBridge() {
     setError(null);
     try {
       await loopWallet.exerciseChoice(
-        templates.BridgeClaim,
+        templates.BridgeOutRequest,
         claimCid,
         "Finalize_Bridge_Mint",
         {}

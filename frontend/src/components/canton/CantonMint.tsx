@@ -8,9 +8,10 @@ import WalletConnector from "@/components/WalletConnector";
 // DAML template IDs
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
-  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
-  USDC: `${PACKAGE_ID}:MintedProtocolV2Fixed:USDC`,
-  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+  DirectMintService: `${PACKAGE_ID}:Minted.Protocol.V3:CantonDirectMint`,
+  USDC: `${PACKAGE_ID}:Minted.Protocol.V3:CantonUSDC`,
+  MUSD: `${PACKAGE_ID}:Minted.Protocol.V3:MintedMUSD`,
+  CantonMUSD: `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
 };
 
 export function CantonMint() {
