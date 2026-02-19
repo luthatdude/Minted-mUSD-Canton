@@ -8,17 +8,19 @@ import WalletConnector from "@/components/WalletConnector";
 // DAML template IDs
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
-  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
-  USDC: `${PACKAGE_ID}:MintedProtocolV2Fixed:USDC`,
-  Collateral: `${PACKAGE_ID}:MintedProtocolV2Fixed:Collateral`,
-  Vault: `${PACKAGE_ID}:MintedProtocolV2Fixed:Vault`,
-  TransferProposal: `${PACKAGE_ID}:MintedProtocolV2Fixed:TransferProposal`,
-  AttestationRequest: `${PACKAGE_ID}:MintedProtocolV2Fixed:AttestationRequest`,
-  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
-  StakingService: `${PACKAGE_ID}:MintedProtocolV2Fixed:StakingService`,
-  PriceOracle: `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`,
-  IssuerRole: `${PACKAGE_ID}:MintedProtocolV2Fixed:IssuerRole`,
-  LiquidityPool: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidityPool`,
+  MUSD: `${PACKAGE_ID}:Minted.Protocol.V3:MintedMUSD`,
+  CantonMUSD: `${PACKAGE_ID}:CantonDirectMint:CantonMUSD`,
+  USDC: `${PACKAGE_ID}:Minted.Protocol.V3:CantonUSDC`,
+  Collateral: `${PACKAGE_ID}:Minted.Protocol.V3:CollateralDepositProof`,
+  Vault: `${PACKAGE_ID}:Minted.Protocol.V3:Vault`,
+  TransferProposal: `${PACKAGE_ID}:Minted.Protocol.V3:MUSDTransferProposal`,
+  AttestationRequest: `${PACKAGE_ID}:Minted.Protocol.V3:AttestationRequest`,
+  DirectMintService: `${PACKAGE_ID}:Minted.Protocol.V3:CantonDirectMint`,
+  StakingService: `${PACKAGE_ID}:Minted.Protocol.V3:CantonSMUSD`,
+  PriceOracle: `${PACKAGE_ID}:Minted.Protocol.V3:PriceOracle`,
+  IssuerRole: `${PACKAGE_ID}:Minted.Protocol.V3:MUSDSupplyService`,
+  LiquidityPool: `${PACKAGE_ID}:Minted.Protocol.V3:LiquidityPool`,
+  BridgeInRequest: `${PACKAGE_ID}:Minted.Protocol.V3:BridgeInRequest`,
 };
 
 export function CantonDashboard() {

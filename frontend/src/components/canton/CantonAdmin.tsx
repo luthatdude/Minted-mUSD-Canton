@@ -9,10 +9,10 @@ import WalletConnector from "@/components/WalletConnector";
 // DAML template IDs
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
-  IssuerRole: `${PACKAGE_ID}:MintedProtocolV2Fixed:IssuerRole`,
-  PriceOracle: `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`,
-  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
-  LiquidityPool: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidityPool`,
+  IssuerRole: `${PACKAGE_ID}:Minted.Protocol.V3:MUSDSupplyService`,
+  PriceOracle: `${PACKAGE_ID}:Minted.Protocol.V3:PriceOracle`,
+  DirectMintService: `${PACKAGE_ID}:Minted.Protocol.V3:CantonDirectMint`,
+  LiquidityPool: `${PACKAGE_ID}:Minted.Protocol.V3:LiquidityPool`,
 };
 
 export function CantonAdmin() {
