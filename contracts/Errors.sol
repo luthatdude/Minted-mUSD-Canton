@@ -98,8 +98,6 @@ error FeeTooHigh();
 error InvalidRecipientAddr();
 error ReserveTooHigh();
 error ZeroMinAmount();
-error EVCAlreadySetup();
-error InsufficientOutput();
 
 // ─── Interest Rate / Borrowing ──────────────────────────────────────────
 error RateTooHigh();
@@ -210,8 +208,8 @@ error NoValidMarket();
 error InvalidPtToken();
 error ZeroRecipient();
 error LengthMismatch();
-error ZeroTimelock();/// @dev SOL-M-2: Full deleverage did not fully unwind position
-error PositionNotCleared();
+error ZeroTimelock();
+
 // ─── Timelock ───────────────────────────────────────────────────────────
 error DelayTooShort();
 

@@ -37,12 +37,6 @@ describe("PriceOracle — Circuit Breaker (Audit)", function () {
     const ORACLE_ADMIN_ROLE = await oracle.ORACLE_ADMIN_ROLE();
     await oracle.grantRole(ORACLE_ADMIN_ROLE, admin.address);
 
-    const TIMELOCK_ROLE = await oracle.TIMELOCK_ROLE();
-    await oracle.grantRole(TIMELOCK_ROLE, admin.address);
-
-    const KEEPER_ROLE = await oracle.KEEPER_ROLE();
-    await oracle.grantRole(KEEPER_ROLE, admin.address);
-
     const WETH = "0x0000000000000000000000000000000000000001";
     await oracle.connect(admin).setFeed(WETH, await ethFeed.getAddress(), 3600, 18, 0);
 
@@ -1169,10 +1163,6 @@ describe("SMUSD — ERC-4626 Compliance (Audit)", function () {
       await musd.connect(deployer).approve(await smusd.getAddress(), ethers.parseEther("500"));
       await smusd.connect(deployer).distributeYield(ethers.parseEther("500"));
 
-      // SOL-M-9: Fast-forward past vesting period so yield is fully realized
-      await ethers.provider.send("evm_increaseTime", [43200]); // 12 hours
-      await ethers.provider.send("evm_mine", []);
-
       // Preview should match actual deposit
       const depositAmount = ethers.parseEther("1000");
       const previewShares = await smusd.convertToShares(depositAmount);
@@ -1676,7 +1666,7 @@ describe("BLEBridgeV9 — Additional Coverage (Audit)", function () {
     const BLEBridgeV9 = await ethers.getContractFactory("BLEBridgeV9");
     const bridge = await upgrades.deployProxy(
       BLEBridgeV9,
-      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000"), deployer.address],
+      [3, await musd.getAddress(), 10000, ethers.parseEther("1000000")],
       { kind: 'uups' }
     );
     await bridge.waitForDeployment();

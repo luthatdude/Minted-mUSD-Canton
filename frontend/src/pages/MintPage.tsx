@@ -5,18 +5,16 @@ import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatToken, formatBps } from "@/lib/format";
-import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS, CHAIN_ID } from "@/lib/config";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 import ChainSelector from "@/components/ChainSelector";
 import { useMultiChainDeposit, DepositQuote } from "@/hooks/useMultiChainDeposit";
 import { ChainConfig, requiresBridging, estimateBridgeTime, getUSDCDecimals, USDC_DECIMALS_BY_CHAIN } from "@/lib/chains";
-import { SlippageInput } from "@/components/SlippageInput";
-import { ClearTestnetBalances } from "@/components/ClearTestnetBalances";
 
 export function MintPage() {
-  const { address, isConnected } = useUnifiedWallet();
+  const { address, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
   const multiChain = useMultiChainDeposit();
 
@@ -38,28 +36,8 @@ export function MintPage() {
     maxRedeem: 0n,
   });
   const tx = useTx();
-  const [faucetLoading, setFaucetLoading] = useState(false);
-  const [slippageBps, setSlippageBps] = useState(50);
 
   const { directMint, usdc, musd } = contracts;
-
-  // Testnet faucet: mint test USDC (MockERC20 has public mint)
-  async function handleFaucetMint() {
-    if (!usdc || !address) return;
-    setFaucetLoading(true);
-    try {
-      const amount = ethers.parseUnits("10000", USDC_DECIMALS);
-      const mintTx = await (usdc as any).mint(address, amount, { gasLimit: 100_000 });
-      await mintTx.wait(1);
-      // Refresh balances
-      const newBal = await usdc.balanceOf(address);
-      setStats(s => ({ ...s, usdcBal: newBal }));
-    } catch (e: any) {
-      console.error("Faucet mint failed:", e);
-    } finally {
-      setFaucetLoading(false);
-    }
-  }
 
   useEffect(() => {
     async function load() {
@@ -118,23 +96,6 @@ export function MintPage() {
   async function handleMint() {
     const parsed = ethers.parseUnits(amount, USDC_DECIMALS);
 
-    // Pre-flight validation
-    if (parsed <= 0n) return;
-    if (stats.usdcBal < parsed) {
-      tx.reset();
-      // Use internal state setter via a failed send simulation
-      await tx.send(async () => { throw new Error(`Insufficient USDC balance. You have ${formatToken(stats.usdcBal, 6)} USDC but tried to mint with ${amount} USDC.`); });
-      return;
-    }
-    if (parsed < stats.minMint) {
-      await tx.send(async () => { throw new Error(`Minimum mint amount is ${formatToken(stats.minMint, 6)} USDC.`); });
-      return;
-    }
-    if (parsed > stats.maxMint) {
-      await tx.send(async () => { throw new Error(`Maximum mint amount is ${formatToken(stats.maxMint, 6)} USDC per transaction.`); });
-      return;
-    }
-
     // Cross-chain deposit
     if (showCrossChain && multiChain.selectedChain && requiresBridging(multiChain.selectedChain)) {
       const txHash = await multiChain.deposit(parsed);
@@ -176,13 +137,6 @@ export function MintPage() {
   async function handleRedeem() {
     if (!directMint || !musd) return;
     const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
-
-    if (stats.musdBal < parsed) {
-      tx.reset();
-      await tx.send(async () => { throw new Error(`Insufficient mUSD balance. You have ${formatToken(stats.musdBal)} mUSD.`); });
-      return;
-    }
-
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.DirectMint);
       if (allowance < parsed) {
@@ -201,12 +155,7 @@ export function MintPage() {
   }
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-6xl space-y-8">
-        <PageHeader title="Mint & Redeem" subtitle="Convert between USDC and mUSD at 1:1 ratio" badge="Mint" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (
@@ -217,9 +166,6 @@ export function MintPage() {
         badge={showCrossChain ? (multiChain.selectedChain?.name || "Select Chain") : "Ethereum"}
         badgeColor="brand"
       />
-
-      {/* Testnet Reset */}
-      <ClearTestnetBalances address={address ?? null} musd={musd} />
 
       {/* Cross-Chain Toggle */}
       <div className="flex items-center justify-between rounded-xl bg-surface-800/50 p-4 border border-white/10">
@@ -434,33 +380,6 @@ export function MintPage() {
                 </div>
               )}
 
-              {/* Testnet USDC Faucet */}
-              {CHAIN_ID === 11155111 && tab === "mint" && stats.usdcBal === 0n && (
-                <div className="rounded-xl bg-yellow-500/10 border border-yellow-500/30 p-4">
-                  <div className="flex items-center gap-3">
-                    <svg className="h-5 w-5 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                    </svg>
-                    <div>
-                      <p className="text-sm font-medium text-yellow-300">No test USDC</p>
-                      <p className="text-xs text-yellow-400/70">You need test USDC to mint mUSD on Sepolia.</p>
-                    </div>
-                  </div>
-                  <button
-                    className="mt-3 w-full rounded-lg bg-yellow-500/20 px-4 py-2 text-sm font-semibold text-yellow-300 transition-colors hover:bg-yellow-500/30"
-                    onClick={handleFaucetMint}
-                    disabled={faucetLoading}
-                  >
-                    {faucetLoading ? "Minting..." : "🚰 Get 10,000 Test USDC"}
-                  </button>
-                </div>
-              )}
-
-              {/* Slippage Tolerance (redeem tab) */}
-              {tab === "redeem" && (
-                <SlippageInput value={slippageBps} onChange={setSlippageBps} />
-              )}
-
               {/* Action Button */}
               <TxButton
                 onClick={showCrossChain && multiChain.selectedChain && requiresBridging(multiChain.selectedChain)
@@ -497,9 +416,7 @@ export function MintPage() {
                   <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <span className="text-sm">{(tx.error || multiChain.error || '')
-                    .replace('execution reverted (unknown custom error)', 'Transaction failed — check your balance and try again')
-                    .replace('user rejected transaction', 'Transaction cancelled by user')}</span>
+                  <span className="text-sm">{tx.error || multiChain.error}</span>
                 </div>
               )}
               {tx.success && (
@@ -509,7 +426,7 @@ export function MintPage() {
                   </svg>
                   <span className="text-sm">
                     Transaction confirmed! {tx.hash && (
-                      <a href={`https://${CHAIN_ID === 11155111 ? 'sepolia.' : ''}etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                      <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
                         View on Etherscan
                       </a>
                     )}

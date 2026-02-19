@@ -31,7 +31,7 @@ async function main() {
   const vaultAddress    = "0x155d6618dcdeb2F4145395CA57C80e6931D7941e";
 
   // UUPS proxy addresses (stay the same, implementation upgraded)
-  const treasuryProxyAddress = "0xf2051bDfc738f638668DF2f8c00d01ba6338C513";
+  const treasuryProxyAddress = "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d";
   const bridgeProxyAddress   = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
 
   const USDC_ADDRESS  = deployer.address; // placeholder for testnet

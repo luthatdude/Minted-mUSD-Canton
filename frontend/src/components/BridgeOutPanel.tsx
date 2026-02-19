@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useEthWallet } from "@/hooks/useEthWallet";
 import { CONTRACTS } from "@/lib/config";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { MUSD_ABI } from "@/abis/MUSD";
 import OnboardingFlow from "./OnboardingFlow";
-import WalletConnector from "./WalletConnector";
 
 // ── Types ──────────────────────────────────────────────────────
 type TxStatus = "idle" | "approving" | "bridging" | "confirming" | "success" | "error";
@@ -25,7 +24,7 @@ interface BridgeOutPanelProps {
  *   4. Relay picks up BridgeToCantonRequested event and mints on Canton
  */
 export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
-  const { address, signer, provider, isConnected } = useUnifiedWallet();
+  const wallet = useEthWallet();
 
   // Form state
   const [amount, setAmount] = useState("");
@@ -34,20 +33,11 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   );
   const [showOnboarding, setShowOnboarding] = useState(false);
 
-  // Keep cantonParty in sync with Loop Wallet connection
-  useEffect(() => {
-    if (existingCantonParty && !cantonParty) {
-      setCantonParty(existingCantonParty);
-    }
-  }, [existingCantonParty]);
-
   // Contract state
   const [musdBalance, setMusdBalance] = useState<bigint>(0n);
   const [allowance, setAllowance] = useState<bigint>(0n);
   const [minAmount, setMinAmount] = useState<bigint>(0n);
   const [bridgePaused, setBridgePaused] = useState(false);
-  const [dataLoading, setDataLoading] = useState(true);
-  const [dataError, setDataError] = useState<string | null>(null);
 
   // Transaction state
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
@@ -59,32 +49,39 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
 
   // ── Load balances and contract state ──────────────────────
   const refreshData = useCallback(async () => {
-    if (!isConnected || !address || !provider || !bridgeAddress || !musdAddress) return;
+    if (!wallet.isConnected || !wallet.address || !bridgeAddress || !musdAddress) return;
 
-    setDataLoading(true);
-    setDataError(null);
     try {
-      const musdContract = new ethers.Contract(musdAddress, MUSD_ABI, provider);
-      const bridgeContract = new ethers.Contract(bridgeAddress, BLE_BRIDGE_V9_ABI, provider);
-
       const [bal, allow, minAmt, paused] = await Promise.all([
-        musdContract.balanceOf(address),
-        musdContract.allowance(address, bridgeAddress),
-        bridgeContract.bridgeOutMinAmount().catch(() => 0n),
-        bridgeContract.paused().catch(() => false),
+        wallet.readContract<bigint>(musdAddress, [...MUSD_ABI], "balanceOf", [
+          wallet.address,
+        ]),
+        wallet.readContract<bigint>(musdAddress, [...MUSD_ABI], "allowance", [
+          wallet.address,
+          bridgeAddress,
+        ]),
+        wallet.readContract<bigint>(
+          bridgeAddress,
+          [...BLE_BRIDGE_V9_ABI],
+          "bridgeOutMinAmount",
+          []
+        ),
+        wallet.readContract<boolean>(
+          bridgeAddress,
+          [...BLE_BRIDGE_V9_ABI],
+          "paused",
+          []
+        ),
       ]);
 
       setMusdBalance(bal);
       setAllowance(allow);
       setMinAmount(minAmt);
       setBridgePaused(paused);
-      setDataLoading(false);
     } catch (err) {
       console.error("[BridgeOut] Failed to load contract data:", err);
-      setDataError("Failed to load mUSD data. Check your network connection.");
-      setDataLoading(false);
     }
-  }, [isConnected, address, provider, bridgeAddress, musdAddress]);
+  }, [wallet.isConnected, wallet.address, bridgeAddress, musdAddress]);
 
   useEffect(() => {
     refreshData();
@@ -107,44 +104,27 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   const isValidAmount = parsedAmount > 0n && hasEnoughBalance && meetsMinimum;
 
   const canBridge =
-    isConnected &&
+    wallet.isConnected &&
     cantonParty &&
     isValidAmount &&
     !bridgePaused &&
     !needsApproval &&
     txStatus === "idle";
 
-  // ── Add mUSD token to MetaMask ────────────────────────────
-  const handleAddToWallet = async () => {
-    try {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum) return;
-      await ethereum.request({
-        method: "wallet_watchAsset",
-        params: {
-          type: "ERC20",
-          options: {
-            address: musdAddress,
-            symbol: "mUSD",
-            decimals: 18,
-          },
-        },
-      });
-    } catch (err) {
-      console.error("[BridgeOut] Failed to add token to wallet:", err);
-    }
-  };
-
   // ── Approve mUSD spending ─────────────────────────────────
   const handleApprove = async () => {
-    if (!isConnected || !signer || !musdAddress || !bridgeAddress) return;
+    if (!wallet.isConnected || !musdAddress || !bridgeAddress) return;
 
     setTxStatus("approving");
     setTxError(null);
 
     try {
-      const musdContract = new ethers.Contract(musdAddress, MUSD_ABI, signer);
-      const tx = await musdContract.approve(bridgeAddress, parsedAmount);
+      const tx = await wallet.writeContract(
+        musdAddress,
+        [...MUSD_ABI],
+        "approve",
+        [bridgeAddress, parsedAmount]
+      );
       await tx.wait();
       setAllowance(parsedAmount);
       setTxStatus("idle");
@@ -166,8 +146,12 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
     setTxHash(null);
 
     try {
-      const bridgeContract = new ethers.Contract(bridgeAddress, BLE_BRIDGE_V9_ABI, signer);
-      const tx = await bridgeContract.bridgeToCanton(parsedAmount, cantonParty);
+      const tx = await wallet.writeContract(
+        bridgeAddress,
+        [...BLE_BRIDGE_V9_ABI],
+        "bridgeToCanton",
+        [parsedAmount, cantonParty]
+      );
 
       setTxHash(tx.hash);
       setTxStatus("confirming");
@@ -194,7 +178,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   };
 
   // ── Not connected ─────────────────────────────────────────
-  if (!isConnected) {
+  if (!wallet.isConnected) {
     return (
       <div className="card-gradient-border overflow-hidden">
         <div className="flex items-center gap-3 mb-5">
@@ -222,7 +206,34 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
             </p>
           </div>
         </div>
-        <WalletConnector mode="ethereum" />
+
+        <div className="text-center py-12">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-surface-800 mb-4">
+            <svg
+              className="h-8 w-8 text-gray-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"
+              />
+            </svg>
+          </div>
+          <p className="text-gray-400 font-medium">
+            Connect your Ethereum wallet to bridge mUSD
+          </p>
+          <button
+            onClick={wallet.connect}
+            disabled={wallet.isConnecting}
+            className="mt-4 rounded-xl bg-gradient-to-r from-brand-500 to-purple-500 px-6 py-3 font-semibold text-white transition-all hover:from-brand-400 hover:to-purple-400 disabled:opacity-50"
+          >
+            {wallet.isConnecting ? "Connecting…" : "Connect Wallet"}
+          </button>
+        </div>
       </div>
     );
   }
@@ -231,7 +242,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   if (showOnboarding && !cantonParty) {
     return (
       <OnboardingFlow
-        ethAddress={address!}
+        ethAddress={wallet.address!}
         onComplete={(party) => {
           setCantonParty(party);
           setShowOnboarding(false);
@@ -279,58 +290,6 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
           </p>
         </div>
       )}
-
-      {/* Data Error Warning */}
-      {dataError && (
-        <div className="mb-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20 p-3">
-          <div className="flex items-center gap-2">
-            <svg className="h-4 w-4 text-yellow-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-            <p className="text-sm text-yellow-300 font-medium">{dataError}</p>
-          </div>
-          <button onClick={refreshData} className="mt-2 text-xs text-yellow-400 hover:text-yellow-300 underline">
-            Retry
-          </button>
-        </div>
-      )}
-
-      {/* mUSD Balance Card */}
-      <div className="mb-6 rounded-xl bg-gradient-to-r from-brand-500/10 to-purple-500/10 border border-brand-500/20 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">Your mUSD Balance (Sepolia)</p>
-            {dataLoading ? (
-              <div className="flex items-center gap-2 mt-1">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-brand-400 border-t-transparent" />
-                <span className="text-sm text-gray-400">Loading…</span>
-              </div>
-            ) : (
-              <p className="text-2xl font-bold text-white mt-1">
-                {Number(ethers.formatEther(musdBalance)).toLocaleString(undefined, {
-                  maximumFractionDigits: 2,
-                })}{" "}
-                <span className="text-base font-medium text-gray-400">mUSD</span>
-              </p>
-            )}
-          </div>
-          <button
-            onClick={handleAddToWallet}
-            className="flex items-center gap-1.5 rounded-lg bg-surface-700 border border-white/10 px-3 py-2 text-xs font-medium text-gray-300 hover:text-white hover:border-white/20 transition-all"
-            title="Add mUSD token to MetaMask"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/>
-            </svg>
-            Add to Wallet
-          </button>
-        </div>
-        {musdAddress && (
-          <p className="mt-2 text-xs text-gray-500 font-mono">
-            Token: {musdAddress.slice(0, 6)}…{musdAddress.slice(-4)}
-          </p>
-        )}
-      </div>
 
       {/* Canton Party Status */}
       <div className="mb-6">

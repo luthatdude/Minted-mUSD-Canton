@@ -7,11 +7,9 @@ import { useTx } from "@/hooks/useTx";
 import { formatToken, formatUSD, formatBps, formatHealthFactor } from "@/lib/format";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
-import { getTreasuryChain } from "@/lib/chains";
 import WalletConnector from "@/components/WalletConnector";
-import { SlippageInput } from "@/components/SlippageInput";
 
 interface CollateralInfo {
   token: string;
@@ -28,7 +26,7 @@ interface CollateralInfo {
 type TabType = "deposit" | "borrow" | "repay" | "withdraw";
 
 export function BorrowPage() {
-  const { address, signer, isConnected } = useUnifiedWallet();
+  const { address, signer, isConnected } = useWalletConnect();
   const contracts = useWCContracts();
   const [action, setAction] = useState<TabType>("deposit");
   const [selectedToken, setSelectedToken] = useState("");
@@ -40,9 +38,7 @@ export function BorrowPage() {
   const [interestRate, setInterestRate] = useState(0n);
   const [isLiquidatable, setIsLiquidatable] = useState(false);
   const [musdBalance, setMusdBalance] = useState(0n);
-  const [reloadKey, setReloadKey] = useState(0);
   const tx = useTx();
-  const [slippageBps, setSlippageBps] = useState(50);
 
   const { vault, borrow, oracle, musd, liquidation } = contracts;
 
@@ -108,7 +104,7 @@ export function BorrowPage() {
       }
     }
     load();
-  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success, reloadKey]);
+  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success]);
 
   async function handleDeposit() {
     if (!vault || !signer || !selectedToken) return;
@@ -138,11 +134,9 @@ export function BorrowPage() {
     if (!borrow || !musd || !address) return;
     const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
     await tx.send(async () => {
-      // Approve MaxUint256: BorrowModule's minDebt dust protection may force
-      // a higher repayAmount than entered (e.g. full debt) after interest accrues.
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < parsed) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, parsed);
         await approveTx.wait();
       }
       return borrow.repay(parsed);
@@ -156,11 +150,9 @@ export function BorrowPage() {
     if (repayAmount === 0n) return;
 
     await tx.send(async () => {
-      // Approve MaxUint256: interest accrues between approval and execution,
-      // so the actual burn amount may exceed the read debt amount.
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < repayAmount) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, repayAmount);
         await approveTx.wait();
       }
       return borrow.repay(repayAmount);
@@ -176,8 +168,8 @@ export function BorrowPage() {
     setAmount("");
   }
 
-  // Health factor thresholds (contract returns bps: 10000 = 1.0)
-  const hfValue = healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff") ? 999 : Number(healthFactor) / 10000;
+  // Health factor thresholds
+  const hfValue = Number(ethers.formatUnits(healthFactor, 18));
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
   const isAtRisk = hfValue < 1.5 && debt > 0n;
   const isCritical = hfValue < 1.2 && debt > 0n;
@@ -190,27 +182,6 @@ export function BorrowPage() {
     ? Math.min(100, Number((debt * 10000n) / totalCollateralUsd) / 100)
     : 0;
 
-  // Testnet faucet: mint test collateral tokens (MockERC20 has public mint)
-  const [faucetLoading, setFaucetLoading] = useState(false);
-  async function handleFaucetMint() {
-    if (!signer || !selectedToken) return;
-    setFaucetLoading(true);
-    try {
-      const info = collaterals.find(c => c.token === selectedToken);
-      const decimals = info?.decimals ?? 18;
-      const faucetAmount = ethers.parseUnits("10", decimals); // 10 tokens
-      const erc20 = new ethers.Contract(selectedToken, [...ERC20_ABI, "function mint(address to, uint256 amount)"], signer);
-      const mintTx = await erc20.mint(address, faucetAmount, { gasLimit: 100_000 });
-      await mintTx.wait();
-      // Trigger data reload
-      setReloadKey(k => k + 1);
-    } catch (e: any) {
-      console.error("Faucet mint failed:", e);
-    } finally {
-      setFaucetLoading(false);
-    }
-  }
-
   // Health factor gauge (map from 1.0-3.0 to 0%-100%)
   const hfGaugePct = debt > 0n
     ? Math.min(100, Math.max(0, ((Math.min(hfValue, 3) - 1) / 2) * 100))
@@ -218,12 +189,7 @@ export function BorrowPage() {
   const hfGaugeColor = hfValue < 1.2 ? "from-red-500 to-red-400" : hfValue < 1.5 ? "from-yellow-500 to-yellow-400" : "from-emerald-500 to-teal-400";
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-6xl space-y-8">
-        <PageHeader title="Borrow & Lend" subtitle="Deposit collateral to borrow mUSD with overcollateralization" badge="Borrow" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (
@@ -354,16 +320,6 @@ export function BorrowPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
-                  {/* Testnet Faucet — hidden on mainnet */}
-                  {action === "deposit" && selectedToken && getTreasuryChain().isTestnet && (
-                    <button
-                      className="mt-2 w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
-                      onClick={handleFaucetMint}
-                      disabled={faucetLoading}
-                    >
-                      {faucetLoading ? "Minting..." : `🚰 Get 10 Test ${collaterals.find(c => c.token === selectedToken)?.symbol || "Tokens"}`}
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -473,11 +429,6 @@ export function BorrowPage() {
                 </span>
               </TxButton>
 
-              {/* Slippage Tolerance (withdraw tab) */}
-              {action === "withdraw" && (
-                <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
-              )}
-
               {/* Transaction Status */}
               {tx.error && (
                 <div className="alert-error flex items-center gap-3">
@@ -494,7 +445,7 @@ export function BorrowPage() {
                   </svg>
                   <span className="text-sm">
                     Transaction confirmed! {tx.hash && (
-                      <a href={`https://sepolia.etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                      <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
                         View on Etherscan
                       </a>
                     )}

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Contract } from "ethers";
-import { useUnifiedWallet } from "./useUnifiedWallet";
-import { CONTRACTS, CHAIN_ID } from "@/lib/config";
+import { useWalletConnect } from "./useWalletConnect";
+import { CONTRACTS } from "@/lib/config";
 import { MUSD_ABI } from "@/abis/MUSD";
 import { SMUSD_ABI } from "@/abis/SMUSD";
 import { DIRECT_MINT_ABI } from "@/abis/DirectMint";
@@ -12,11 +12,6 @@ import { LIQUIDATION_ENGINE_ABI } from "@/abis/LiquidationEngine";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PRICE_ORACLE_ABI } from "@/abis/PriceOracle";
 import { ERC20_ABI } from "@/abis/ERC20";
-import { ETH_POOL_ABI } from "@/abis/ETHPool";
-import { SMUSDE_ABI } from "@/abis/SMUSDE";
-import { META_VAULT_ABI } from "@/abis/MetaVault";
-import { GLOBAL_PAUSE_REGISTRY_ABI } from "@/abis/GlobalPauseRegistry";
-import { TIMELOCK_ABI } from "@/abis/MintedTimelockController";
 
 // ABI mapping for all contracts
 const ABI_MAP: Record<string, readonly string[]> = {
@@ -30,29 +25,15 @@ const ABI_MAP: Record<string, readonly string[]> = {
   BLEBridgeV9: BLE_BRIDGE_V9_ABI,
   PriceOracle: PRICE_ORACLE_ABI,
   USDC: ERC20_ABI,
-  USDT: ERC20_ABI,
-  ETHPool: ETH_POOL_ABI,
-  SMUSDE: SMUSDE_ABI,
-  MetaVault1: META_VAULT_ABI,
-  MetaVault2: META_VAULT_ABI,
-  MetaVault3: META_VAULT_ABI,
-  GlobalPauseRegistry: GLOBAL_PAUSE_REGISTRY_ABI,
-  Timelock: TIMELOCK_ABI,
 };
 
 /**
- * Hook to get a single contract instance using WalletConnect.
- * Returns null if the wallet is on the wrong network.
+ * Hook to get a single contract instance using WalletConnect
  */
 export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
-  const { signer, provider, isConnected, chainId } = useUnifiedWallet();
+  const { signer, provider, isConnected } = useWalletConnect();
 
   return useMemo(() => {
-    // Block contract creation when wallet is on the wrong chain
-    if (isConnected && chainId !== null && chainId !== CHAIN_ID) {
-      return null;
-    }
-
     const address = CONTRACTS[name];
     const abi = ABI_MAP[name];
     if (!address || !abi) return null;
@@ -61,28 +42,22 @@ export function useWCContract(name: keyof typeof CONTRACTS): Contract | null {
     if (!signerOrProvider) return null;
     
     return new Contract(address, abi, signerOrProvider);
-  }, [name, signer, provider, isConnected, chainId]);
+  }, [name, signer, provider, isConnected]);
 }
 
 /**
- * Hook to get all protocol contracts using WalletConnect.
- * Returns all-null contracts if the wallet is on the wrong network,
- * preventing accidental cross-chain transactions.
+ * Hook to get all protocol contracts using WalletConnect
  */
 export function useWCContracts() {
-  const { signer, provider, isConnected, chainId } = useUnifiedWallet();
+  const { signer, provider, isConnected } = useWalletConnect();
 
   return useMemo(() => {
     const signerOrProvider = signer || provider;
-
-    // Return null contracts when disconnected OR on the wrong chain
-    const wrongNetwork = isConnected && chainId !== null && chainId !== CHAIN_ID;
-    if (!signerOrProvider || wrongNetwork) {
+    if (!signerOrProvider) {
       return {
         musd: null,
         smusd: null,
         usdc: null,
-        usdt: null,
         directMint: null,
         treasury: null,
         vault: null,
@@ -90,13 +65,6 @@ export function useWCContracts() {
         liquidation: null,
         bridge: null,
         oracle: null,
-        ethPool: null,
-        smusde: null,
-        metaVault1: null,
-        metaVault2: null,
-        metaVault3: null,
-        globalPause: null,
-        timelock: null,
       };
     }
 
@@ -111,7 +79,6 @@ export function useWCContracts() {
       musd: createContract("MUSD"),
       smusd: createContract("SMUSD"),
       usdc: createContract("USDC"),
-      usdt: createContract("USDT"),
       directMint: createContract("DirectMint"),
       treasury: createContract("Treasury"),
       vault: createContract("CollateralVault"),
@@ -119,15 +86,8 @@ export function useWCContracts() {
       liquidation: createContract("LiquidationEngine"),
       bridge: createContract("BLEBridgeV9"),
       oracle: createContract("PriceOracle"),
-      ethPool: createContract("ETHPool"),
-      smusde: createContract("SMUSDE"),
-      metaVault1: createContract("MetaVault1"),
-      metaVault2: createContract("MetaVault2"),
-      metaVault3: createContract("MetaVault3"),
-      globalPause: createContract("GlobalPauseRegistry"),
-      timelock: createContract("Timelock"),
     };
-  }, [signer, provider, isConnected, chainId]);
+  }, [signer, provider, isConnected]);
 }
 
 // Type exports

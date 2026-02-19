@@ -2,7 +2,7 @@
 
 ## Deployed Contracts (Sepolia)
 
-> **Updated 2026-02-19** — Fresh bridge deployed with correct MUSD token (commit `ad4c77b9`). E2E bridge test 4/4 passing.
+> **Updated 2026-02-16** — Redeployed with audit fixes (commit `041d154`). All verified on Etherscan.
 
 | Contract | Address | Verified |
 |----------|---------|----------|
@@ -15,65 +15,14 @@
 | BorrowModule | [`0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8`](https://sepolia.etherscan.io/address/0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8#code) | ✅ |
 | SMUSD | [`0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540`](https://sepolia.etherscan.io/address/0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540#code) | ✅ |
 | LiquidationEngine | [`0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8`](https://sepolia.etherscan.io/address/0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8#code) | ✅ |
-| DirectMintV2 | [`0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7`](https://sepolia.etherscan.io/address/0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7#code) | ✅ (redeployed 2026-02-17) |
-| LeverageVault | [`0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4`](https://sepolia.etherscan.io/address/0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4#code) | ✅ | Redeployed 2026-02-17 (swapRouter fix) |
-| TreasuryV2 (proxy) | [`0xf2051bDfc738f638668DF2f8c00d01ba6338C513`](https://sepolia.etherscan.io/address/0xf2051bDfc738f638668DF2f8c00d01ba6338C513) | ✅ (redeployed 2026-02-17) |
-| BLEBridgeV9 (proxy) | [`0x708957bFfA312D1730BdF87467E695D3a9F26b0f`](https://sepolia.etherscan.io/address/0x708957bFfA312D1730BdF87467E695D3a9F26b0f) | ✅ E2E tested |
-
-### Strategies (Sepolia)
-
-| Contract | Address | Verified |
-|----------|---------|----------|
-| PendleMarketSelector | [`0x17Fb251e4580891590633848f3ea9d8d99DA77F6`](https://sepolia.etherscan.io/address/0x17Fb251e4580891590633848f3ea9d8d99DA77F6#code) | ✅ |
-| PendleStrategyV2 | [`0xd0055C2002af04BA0622fFA8284767123e70390f`](https://sepolia.etherscan.io/address/0xd0055C2002af04BA0622fFA8284767123e70390f#code) | ✅ |
-| MorphoLoopStrategy | [`0xA3A4D625C2c53833c7dDF9B358A4D8996B8061C6`](https://sepolia.etherscan.io/address/0xA3A4D625C2c53833c7dDF9B358A4D8996B8061C6#code) | ✅ |
-| SkySUSDSStrategy | [`0x427dF673BCa0233cC16B1fdAB3895f7854358857`](https://sepolia.etherscan.io/address/0x427dF673BCa0233cC16B1fdAB3895f7854358857#code) | ✅ |
-| FluidLoopStrategy | [`0x337ECA06Dc2A4cEa064554f6aeF62b0167145Cf2`](https://sepolia.etherscan.io/address/0x337ECA06Dc2A4cEa064554f6aeF62b0167145Cf2#code) | ✅ |
-| EulerV2LoopStrategy | [`0x67Ab12b2Aabe6147833784A2a84870B074a8a33e`](https://sepolia.etherscan.io/address/0x67Ab12b2Aabe6147833784A2a84870B074a8a33e#code) | ✅ |
-| EulerV2CrossStableLoopStrategy | [`0x38e1D17621f73b7Cf3367C5971e05612673de59d`](https://sepolia.etherscan.io/address/0x38e1D17621f73b7Cf3367C5971e05612673de59d#code) | ✅ |
-| MetaVault | [`0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6`](https://sepolia.etherscan.io/address/0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6#code) | ✅ |
-
-### Mock Infrastructure (Sepolia)
-
-| Contract | Address |
-|----------|---------|
-| MockUSDC | [`0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474`](https://sepolia.etherscan.io/address/0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474#code) |
-| MockWETH | [`0x7999F2894290F2Ce34a508eeff776126D9a7D46e`](https://sepolia.etherscan.io/address/0x7999F2894290F2Ce34a508eeff776126D9a7D46e#code) |
-| MockWBTC | [`0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F`](https://sepolia.etherscan.io/address/0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F#code) |
-| MockSwapRouter | [`0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e`](https://sepolia.etherscan.io/address/0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e#code) |
-| MockMorphoBlue | [`0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26`](https://sepolia.etherscan.io/address/0x737Da1acFC41f8A206356d7F8fB0d2f00b633B26#code) |
-
-### BLEBridgeV9 Validators (Sepolia)
-
-| Role | Address |
-|------|---------|
-| Validator 1 (deployer) | `0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0` |
-| Validator 2 | `0x2Fe44803dfE94c1C911A4733A76b89114D7B6e0D` |
-
-> **Note:** `minSignatures = 2`. Both validators must sign attestations.
-> The old bridge at `0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125` was initialized
-> with the wrong MUSD address and should NOT be used.
-
-### Pending Deployments (Tier 1-3)
-
-> Run `deploy-testnet-resume4.ts` to deploy remaining 15 contracts:
-> - **Tier 1** (zero deps): SMUSDE, PriceAggregator, API3OracleAdapter, ChainlinkOracleAdapter, YieldScanner, YieldVerifier
-> - **Tier 2** (depend on deployed): MorphoMarketRegistry, ERC4626Adapter×2, MorphoBlueAdapter, SMUSDPriceAdapter, RedemptionQueue, ETHPoolYieldDistributor, YieldDistributor
-> - **Tier 3** (depend on Tier 1): ETHPool, UniswapV3TWAPOracle
+| DirectMintV2 | [`0xa869f58c213634Dda2Ef522b66E9587b953279C2`](https://sepolia.etherscan.io/address/0xa869f58c213634Dda2Ef522b66E9587b953279C2#code) | ✅ |
+| LeverageVault | [`0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC`](https://sepolia.etherscan.io/address/0x8a5D24bAc265d5ed0fa49AB1C2402C02823A2fbC#code) | ✅ |
+| TreasuryV2 (proxy) | [`0x11Cc7750F2033d21FC3762b94D1355eD15F7913d`](https://sepolia.etherscan.io/address/0x11Cc7750F2033d21FC3762b94D1355eD15F7913d) | ⏳ upgrade via timelock |
+| BLEBridgeV9 (proxy) | [`0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125`](https://sepolia.etherscan.io/address/0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125) | ⏳ upgrade via timelock |
 
 ---
 
 ## Test Scripts Available
-
-### 0. E2E Bridge Test (Full Round-Trip) ✅
-```bash
-npx hardhat run scripts/e2e-bridge-test.ts --network sepolia
-```
-Tests the complete bridge lifecycle — **4/4 passing** (2026-02-19):
-- **Test 1:** DirectMint (100 USDC → 99 mUSD, 1% fee)
-- **Test 2:** Bridge ETH→Canton (50 mUSD burned, `BridgeToCantonRequested` event)
-- **Test 3:** Supply cap enforcement (headroom verification)
-- **Test 4:** Canton→ETH `processAttestation` (2-of-2 validator signatures, supply cap update)
 
 ### 1. Deploy Mock Oracles (Required First)
 ```bash
@@ -196,22 +145,3 @@ Liquidation requires:
 1. Mock oracle prices to be manipulated
 2. Sufficient liquidity in MockSwapRouter
 3. LiquidationEngine to have LIQUIDATOR_ROLE
-
-### Granting RELAYER_ROLE on BLEBridgeV9
-
-After the BRIDGE-M-04 audit fix, `processAttestation` requires `RELAYER_ROLE`.
-The relay EOA must be granted this role. On the current bridge (`0x708957...`),
-the deployer has DEFAULT_ADMIN_ROLE and can grant directly:
-
-```bash
-npx hardhat run scripts/deploy-fresh-bridge.ts --network sepolia  # Already done
-```
-
-For production bridges behind a timelock, use:
-```bash
-# Phase 1 — Deploy new impl + schedule upgrade (creates timelock proposal)
-npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
-
-# Phase 2 — Execute after 24h timelock delay
-PHASE=execute npx hardhat run scripts/upgrade-bridge-relayer-role.ts --network sepolia
-```

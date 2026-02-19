@@ -360,7 +360,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       weth = await MockERC20.deploy("Wrapped Ether", "WETH", 18);
 
       const MUSD = await ethers.getContractFactory("MUSD");
-      musd = await MUSD.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
+      musd = await MUSD.deploy(ethers.parseEther("100000000"));
 
       const PriceOracle = await ethers.getContractFactory("PriceOracle");
       priceOracle = await PriceOracle.deploy();
@@ -588,7 +588,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       wbtc = await MockERC20.deploy("WBTC", "WBTC", 8);
 
       const VF = await ethers.getContractFactory("CollateralVault");
-      vault = await VF.deploy(ethers.ZeroAddress);
+      vault = await VF.deploy();
 
       await vault.grantRole(await vault.BORROW_MODULE_ROLE(), borrowModule.address);
       await vault.grantRole(await vault.LIQUIDATION_ROLE(), liquidator.address);
@@ -780,7 +780,6 @@ describe("CoverageBoost — Misc Contracts", function () {
         treasury.address,
         directMint.address,
         30, // 0.30%
-        admin.address,
         admin.address
       );
 
@@ -794,28 +793,28 @@ describe("CoverageBoost — Misc Contracts", function () {
     it("should revert constructor with zero wormhole relayer", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), ethers.ZeroAddress, await tokenBridge.getAddress(), treasury.address, directMint.address, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero token bridge", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), ethers.ZeroAddress, treasury.address, directMint.address, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero directMint", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, ethers.ZeroAddress, 30, admin.address)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
     it("should revert constructor with zero admin", async function () {
       const DR = await ethers.getContractFactory("DepositRouter");
       await expect(
-        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress, admin.address)
+        DR.deploy(await usdc.getAddress(), await wormholeRelayer.getAddress(), await tokenBridge.getAddress(), treasury.address, directMint.address, 30, ethers.ZeroAddress)
       ).to.be.revertedWithCustomError(DR, "InvalidAddress");
     });
 
@@ -1068,18 +1067,14 @@ describe("CoverageBoost — Misc Contracts", function () {
 
     // --- emergencyWithdraw: InvalidAddress ---
     it("should revert emergencyWithdraw to zero address", async function () {
-      await receiver.grantRole(await receiver.PAUSER_ROLE(), admin.address);
-      await receiver.pause();
       await expect(
         receiver.emergencyWithdraw(await usdc.getAddress(), ethers.ZeroAddress, 100)
       ).to.be.revertedWithCustomError(receiver, "InvalidAddress");
     });
 
-    // --- emergencyWithdraw: USDC allowed when paused ---
-    it("should allow USDC emergencyWithdraw when paused", async function () {
+    // --- emergencyWithdraw: USDC allowed without pause requirement ---
+    it("should allow USDC emergencyWithdraw without pause requirement", async function () {
       await usdc.mint(await receiver.getAddress(), 1000);
-      await receiver.grantRole(await receiver.PAUSER_ROLE(), admin.address);
-      await receiver.pause();
       await receiver.emergencyWithdraw(await usdc.getAddress(), admin.address, 100);
     });
 
@@ -1125,7 +1120,7 @@ describe("CoverageBoost — Misc Contracts", function () {
       [deployer, bridge, yieldManager, interestRouter, user1, user2, pauser] = await ethers.getSigners();
 
       const MF = await ethers.getContractFactory("MUSD");
-      musd = await MF.deploy(ethers.parseEther("100000000"), ethers.ZeroAddress);
+      musd = await MF.deploy(ethers.parseEther("100000000"));
 
       const SF = await ethers.getContractFactory("SMUSD");
       smusd = await SF.deploy(await musd.getAddress(), ethers.ZeroAddress);
@@ -1270,16 +1265,16 @@ describe("CoverageBoost — Misc Contracts", function () {
       expect(await smusd.maxRedeem(user1.address)).to.equal(0);
     });
 
-    // --- maxDeposit: returns 0 when paused ---
-    it("should return 0 for maxDeposit when paused", async function () {
+    // --- maxDeposit: returns type(uint256).max (not overridden for pause) ---
+    it("should return type(uint256).max for maxDeposit even when paused", async function () {
       await smusd.connect(pauser).pause();
-      expect(await smusd.maxDeposit(user1.address)).to.equal(0);
+      expect(await smusd.maxDeposit(user1.address)).to.equal(ethers.MaxUint256);
     });
 
-    // --- maxMint: returns 0 when paused ---
-    it("should return 0 for maxMint when paused", async function () {
+    // --- maxMint: returns type(uint256).max (not overridden for pause) ---
+    it("should return type(uint256).max for maxMint even when paused", async function () {
       await smusd.connect(pauser).pause();
-      expect(await smusd.maxMint(user1.address)).to.equal(0);
+      expect(await smusd.maxMint(user1.address)).to.equal(ethers.MaxUint256);
     });
 
     // --- maxWithdraw/maxRedeem: returns 0 during cooldown ---
@@ -1304,13 +1299,15 @@ describe("CoverageBoost — Misc Contracts", function () {
     });
 
     // --- globalTotalAssets: treasury set, catch fallback to cache ---
-    it("should revert with NoTreasury when treasury reverts and no cache", async function () {
-      // SOL-H-2: globalTotalAssets now reverts instead of silently falling back
+    it("should fall back to cached globalAssets when treasury reverts", async function () {
+      // Deploy any contract that does NOT have totalValue() — call will revert
       const MockERC20 = await ethers.getContractFactory("MockERC20");
       const fakeTreasury = await MockERC20.deploy("Fake", "FK", 18);
       await smusd.setTreasury(await fakeTreasury.getAddress());
-      // globalTotalAssets should revert because treasury call fails and no cache exists
-      await expect(smusd.globalTotalAssets()).to.be.revertedWithCustomError(smusd, "NoTreasury");
+      // Deposit — globalTotalAssets should catch the revert and fall back to totalAssets
+      await smusd.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
+      const gta = await smusd.globalTotalAssets();
+      expect(gta).to.be.gt(0);
     });
 
     // --- globalSharePrice: zero shares ---
@@ -1335,13 +1332,13 @@ describe("CoverageBoost — Misc Contracts", function () {
       mockSmusd = await MockSMUSD.deploy(1e18.toString()); // 1:1 price
 
       const Adapter = await ethers.getContractFactory("SMUSDPriceAdapter");
-      adapter = await Adapter.deploy(await mockSmusd.getAddress(), admin.address, admin.address);
+      adapter = await Adapter.deploy(await mockSmusd.getAddress(), admin.address);
     });
 
     // --- constructor: zero address revert ---
     it("should revert constructor with zero smusd", async function () {
       const A = await ethers.getContractFactory("SMUSDPriceAdapter");
-      await expect(A.deploy(ethers.ZeroAddress, admin.address, admin.address))
+      await expect(A.deploy(ethers.ZeroAddress, admin.address))
         .to.be.revertedWithCustomError(A, "SMUSDZeroAddress");
     });
 

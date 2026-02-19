@@ -4,7 +4,7 @@ import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
 import { formatUSD, formatToken, formatBps, formatHealthFactor } from "@/lib/format";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useWalletConnect } from "@/hooks/useWalletConnect";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { CONTRACTS, MUSD_DECIMALS } from "@/lib/config";
 import { ERC20_ABI } from "@/abis/ERC20";
@@ -62,7 +62,7 @@ interface DashboardPageProps {
 }
 
 export function DashboardPage({ onNavigate }: DashboardPageProps) {
-  const { address, signer, isConnected, ensName, chainName } = useUnifiedWallet();
+  const { address, signer, isConnected, ensName, chain } = useWalletConnect();
   const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -216,12 +216,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   }, [address, signer, contracts]);
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-6xl space-y-8">
-        <PageHeader title="Dashboard" subtitle="Overview of the Minted Protocol" badge="Dashboard" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   if (loading) {
@@ -273,7 +268,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         <PageHeader
           title="Dashboard"
           subtitle={`Welcome back${ensName ? `, ${ensName}` : ''}`}
-          badge={chainName || "Ethereum"}
+          badge={chain?.name || "Ethereum"}
           badgeColor="brand"
         />
         <div className="flex items-center gap-2">
