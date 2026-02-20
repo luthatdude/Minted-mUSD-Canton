@@ -748,7 +748,7 @@ class RelayService {
 
   /**
    * Shape of the persisted relay state file.
-   * Stores processed epoch/attestation IDs and last scanned block numbers
+   * Stores processed IDs and last scanned block numbers
    * so the relay can survive restarts without re-processing events.
    */
   private static readonly STATE_VERSION = 1;
@@ -810,6 +810,13 @@ class RelayService {
         }
       }
 
+      // Restore processed Ethereum bridge-out request IDs
+      if (Array.isArray(state.processedBridgeOuts)) {
+        for (const requestId of state.processedBridgeOuts) {
+          this.processedBridgeOuts.add(requestId);
+        }
+      }
+
       // Restore last scanned blocks (use persisted value if ahead of default 0)
       if (typeof state.lastScannedBlock === "number" && state.lastScannedBlock > this.lastScannedBlock) {
         this.lastScannedBlock = state.lastScannedBlock;
@@ -824,6 +831,7 @@ class RelayService {
       console.log(
         `[Relay] Loaded persisted state: ` +
         `${state.processedAttestations?.length || 0} attestations, ` +
+        `${state.processedBridgeOuts?.length || 0} bridge-outs, ` +
         `${state.processedYieldEpochs?.length || 0} yield epochs, ` +
         `${state.processedETHPoolYieldEpochs?.length || 0} ETH Pool yield epochs, ` +
         `${state.processedRedemptionRequests?.length || 0} redemptions, ` +
@@ -850,6 +858,7 @@ class RelayService {
         version: RelayService.STATE_VERSION,
         timestamp: new Date().toISOString(),
         processedAttestations: Array.from(this.processedAttestations),
+        processedBridgeOuts: Array.from(this.processedBridgeOuts),
         processedYieldEpochs: Array.from(this.processedYieldEpochs),
         processedETHPoolYieldEpochs: Array.from(this.processedETHPoolYieldEpochs),
         processedRedemptionRequests: Array.from(this.processedRedemptionRequests),
@@ -1665,16 +1674,23 @@ class RelayService {
       events = events.concat(chunk);
     }
 
-    this.lastScannedBlock = confirmedBlock;
-    metricLastScannedBlock.set(this.lastScannedBlock);
+    let stateDirty = false;
+    let encounteredProcessingError = false;
+    let highestHandledBlock = this.lastScannedBlock;
 
-    if (events.length === 0) return;
-
-    console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
+    if (events.length > 0) {
+      console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
+    }
 
     for (const event of events) {
-      const args = (event as ethers.EventLog).args;
-      if (!args) continue;
+      const eventLog = event as ethers.EventLog;
+      const eventBlock = Number(eventLog.blockNumber || 0);
+      const args = eventLog.args;
+      if (!args) {
+        // Defensive: malformed logs should not block cursor progression forever.
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
+        continue;
+      }
 
       const requestId: string = args.requestId;
       const sender: string = args.sender;
@@ -1685,6 +1701,7 @@ class RelayService {
 
       // Skip if already processed
       if (this.processedBridgeOuts.has(requestId)) {
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
         continue;
       }
 
@@ -1695,6 +1712,8 @@ class RelayService {
       ) {
         console.log(`[Relay] Skipping yield bridge-out #${nonce} from YieldDistributor (handled by Direction 4)`);
         this.processedBridgeOuts.add(requestId); // Mark processed to avoid re-checking
+        stateDirty = true;
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
         continue;
       }
 
@@ -1705,6 +1724,8 @@ class RelayService {
       ) {
         console.log(`[Relay] Skipping ETH Pool yield bridge-out #${nonce} from ETHPoolYieldDistributor (handled by Direction 4b)`);
         this.processedBridgeOuts.add(requestId);
+        stateDirty = true;
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
         continue;
       }
 
@@ -1719,6 +1740,8 @@ class RelayService {
         bridgeOutsTotal.labels("validation_error").inc();
         bridgeValidationFailuresTotal.inc();
         this.processedBridgeOuts.add(requestId); // Mark processed to avoid retrying invalid data
+        stateDirty = true;
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
         continue;
       }
 
@@ -1783,6 +1806,8 @@ class RelayService {
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
         bridgeOutsTotal.labels("success").inc();
+        stateDirty = true;
+        highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
 
         // Evict oldest entries if cache exceeds limit
         if (this.processedBridgeOuts.size > this.MAX_PROCESSED_CACHE) {
@@ -1794,12 +1819,27 @@ class RelayService {
             evicted++;
           }
         }
-
       } catch (error: any) {
         console.error(`[Relay] Failed to relay bridge-out #${nonce} to Canton:`, error.message);
         bridgeOutsTotal.labels("error").inc();
-        // Don't mark as processed — will retry next cycle
+        // Stop here so failed event is retried next cycle. Cursor will only
+        // advance up to the last successfully handled block.
+        encounteredProcessingError = true;
+        break;
       }
+    }
+
+    // Advance cursor only after processing. If any event failed, preserve
+    // retryability by advancing only to the last handled block.
+    const nextScannedBlock = encounteredProcessingError ? highestHandledBlock : confirmedBlock;
+    if (nextScannedBlock > this.lastScannedBlock) {
+      this.lastScannedBlock = nextScannedBlock;
+      metricLastScannedBlock.set(this.lastScannedBlock);
+      stateDirty = true;
+    }
+
+    if (stateDirty) {
+      this.persistState();
     }
   }
 
