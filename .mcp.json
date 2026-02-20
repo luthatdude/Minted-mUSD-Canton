@@ -1,8 +1,12 @@
 {
   "mcpServers": {
-    "relay": {
+    "fetch": {
       "command": "npx",
       "args": ["-y", "@anthropic-ai/mcp-server-fetch"]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-sequential-thinking"]
     }
   }
 }
