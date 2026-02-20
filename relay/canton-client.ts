@@ -364,7 +364,8 @@ export class CantonClient {
       if (templateId) {
         const templateLabel = this.formatTemplateId(templateId);
         console.warn(
-          `[CantonClient] Active-contracts query reached limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT} for ${templateLabel}; falling back to /v2/updates replay`
+          `[CantonClient] Active-contracts returned HTTP 200 with entries capped at ` +
+            `limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT} for ${templateLabel}; falling back to /v2/updates replay`
         );
         const replayed = await this.queryContractsViaUpdates<T>(templateId, offset);
         return payloadFilter ? replayed.filter((c) => payloadFilter(c.payload)) : replayed;
