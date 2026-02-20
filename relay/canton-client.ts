@@ -340,6 +340,19 @@ export class CantonClient {
           `[CantonClient] Active-contracts template lookup returned 404: ${templateIdString}`
         );
       }
+
+      // Canton returned HTTP 413 directly (payload too large).  For template-
+      // scoped queries we can recover via the /v2/updates replay path instead
+      // of surfacing an unrecoverable error to the caller.
+      if (error instanceof CantonApiError && error.status === 413 && templateId) {
+        const templateLabel = this.formatTemplateId(templateId);
+        console.warn(
+          `[CantonClient] Active-contracts returned HTTP 413 for ${templateLabel}; falling back to /v2/updates replay`
+        );
+        const replayed = await this.queryContractsViaUpdates<T>(templateId, offset);
+        return payloadFilter ? replayed.filter((c) => payloadFilter(c.payload)) : replayed;
+      }
+
       throw error;
     }
 
