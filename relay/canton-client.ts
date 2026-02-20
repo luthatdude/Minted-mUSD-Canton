@@ -86,6 +86,7 @@ export class CantonClient {
   private static readonly MAX_RETRIES = 3;
   private static readonly BASE_RETRY_DELAY_MS = 1000;
   private static readonly MAX_RETRY_DELAY_MS = 15000;
+  private static readonly ACTIVE_CONTRACTS_LIMIT = 200;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -311,9 +312,12 @@ export class CantonClient {
       };
     };
 
+    const activeContractsPath =
+      `/v2/state/active-contracts?limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT}`;
+
     let entries: RawEntry[];
     try {
-      entries = await this.request<RawEntry[]>("POST", "/v2/state/active-contracts", body);
+      entries = await this.request<RawEntry[]>("POST", activeContractsPath, body);
     } catch (error: any) {
       if (error instanceof CantonApiError && error.status === 404 && templateId) {
         const templateIdString = this.formatTemplateId(templateId);
@@ -322,6 +326,14 @@ export class CantonClient {
         );
       }
       throw error;
+    }
+
+    // The active-contracts endpoint lacks cursor pagination. If we hit the hard
+    // cap, results may be truncated (typically oldest-first), which is unsafe for
+    // bridge correctness. Fail loudly instead of silently dropping newer contracts.
+    if (entries.length >= CantonClient.ACTIVE_CONTRACTS_LIMIT) {
+      const templateLabel = templateId ? this.formatTemplateId(templateId) : "wildcard";
+      throw new CantonQueryLimitError(CantonClient.ACTIVE_CONTRACTS_LIMIT, templateLabel);
     }
 
     const contracts: ActiveContract<T>[] = [];
@@ -494,6 +506,18 @@ export class CantonApiError extends Error {
   backoffMultiplier(): number {
     // Give rate-limit responses extra breathing room.
     return this.status === 429 ? 3 : 1;
+  }
+}
+
+export class CantonQueryLimitError extends CantonApiError {
+  constructor(limit: number, templateLabel: string) {
+    super(
+      413,
+      "/v2/state/active-contracts",
+      `Potentially truncated response at limit=${limit} for ${templateLabel}. ` +
+        `Use archival hygiene or migrate this flow to /v2/updates-based consumption.`
+    );
+    this.name = "CantonQueryLimitError";
   }
 }
 
