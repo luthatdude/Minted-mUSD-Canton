@@ -177,6 +177,66 @@ export const anomalyConsecutiveReverts = new Gauge({
 });
 
 // ============================================================
+//  BRIDGE HARDENING — Per-direction & Canton API observability
+// ============================================================
+
+/**
+ * Per-direction health status gauge.
+ *   direction: "attestations" | "bridge_out_watcher" | "canton_bridge_outs" | "yield_bridge_in" | "ethpool_yield_bridge_in"
+ *   Values: 0 = ok, 1 = degraded (retryable errors), 2 = failed (permanent error)
+ */
+export const directionStatus = new Gauge({
+  name: "minted_relay_direction_status",
+  help: "Health status of each relay direction (0=ok, 1=degraded, 2=failed)",
+  labelNames: ["direction"] as const,
+  registers: [register],
+});
+
+/** Per-direction consecutive failure count. */
+export const directionConsecutiveFailures = new Gauge({
+  name: "minted_relay_direction_consecutive_failures",
+  help: "Consecutive failures for each relay direction",
+  labelNames: ["direction"] as const,
+  registers: [register],
+});
+
+/**
+ * Canton API errors by HTTP status code and endpoint.
+ * Enables alerting on 413 (payload too large), 429 (rate limit), 503 (unavailable).
+ */
+export const cantonApiErrorsTotal = new Counter({
+  name: "minted_canton_api_errors_total",
+  help: "Canton API errors by status code and path",
+  labelNames: ["status", "path"] as const,
+  registers: [register],
+});
+
+/** Canton API retry attempts. */
+export const cantonApiRetriesTotal = new Counter({
+  name: "minted_canton_api_retries_total",
+  help: "Canton API retry attempts by status code and path",
+  labelNames: ["status", "path"] as const,
+  registers: [register],
+});
+
+/** Orphan CantonMUSD recovery attempts. */
+export const orphanRecoveryTotal = new Counter({
+  name: "minted_orphan_recovery_total",
+  help: "Orphan CantonMUSD recovery attempts",
+  labelNames: ["status"] as const, // success | error | skipped
+  registers: [register],
+});
+
+/** Canton API call duration (seconds). */
+export const cantonApiDuration = new Histogram({
+  name: "minted_canton_api_duration_seconds",
+  help: "Canton API call duration",
+  labelNames: ["method", "path"] as const,
+  buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  registers: [register],
+});
+
+// ============================================================
 //  HISTOGRAMS
 // ============================================================
 
