@@ -13,6 +13,11 @@
  */
 
 import * as crypto from "crypto";
+import {
+  cantonApiErrorsTotal,
+  cantonApiRetriesTotal,
+  cantonApiDuration,
+} from "./metrics";
 
 // ============================================================
 //                     TYPES
@@ -78,6 +83,10 @@ export class CantonClient {
   private readAs: string[];
   private timeoutMs: number;
   private defaultPackageId: string;
+  private static readonly MAX_RETRIES = 3;
+  private static readonly BASE_RETRY_DELAY_MS = 1000;
+  private static readonly MAX_RETRY_DELAY_MS = 15000;
+  private static readonly ACTIVE_CONTRACTS_LIMIT = 200;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -94,7 +103,7 @@ export class CantonClient {
   //  Private helpers
   // ----------------------------------------------------------
 
-  private async request<T>(
+  private async requestOnce<T>(
     method: string,
     path: string,
     body?: unknown
@@ -130,43 +139,131 @@ export class CantonClient {
     }
   }
 
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<T> {
+    const pathLabel = path.split("?")[0];
+    const timer = cantonApiDuration.labels(method, pathLabel).startTimer();
+    let lastError: unknown;
+
+    try {
+      const maxRetries = this.getMaxRetriesForPath(path);
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          return await this.requestOnce<T>(method, path, body);
+        } catch (err: any) {
+          lastError = err;
+
+          if (err instanceof CantonApiError) {
+            cantonApiErrorsTotal.labels(String(err.status), pathLabel).inc();
+            if (!err.isRetryable() || attempt >= maxRetries) {
+              throw err;
+            }
+            cantonApiRetriesTotal.labels(String(err.status), pathLabel).inc();
+            const delay = Math.min(
+              CantonClient.BASE_RETRY_DELAY_MS * Math.pow(2, attempt) * err.backoffMultiplier(),
+              CantonClient.MAX_RETRY_DELAY_MS
+            );
+            // Add bounded jitter to avoid synchronized retry storms.
+            const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4));
+            await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
+            continue;
+          }
+
+          if (this.isNetworkError(err)) {
+            cantonApiErrorsTotal.labels("network", pathLabel).inc();
+            if (attempt >= maxRetries) {
+              throw err;
+            }
+            cantonApiRetriesTotal.labels("network", pathLabel).inc();
+            const delay = Math.min(
+              CantonClient.BASE_RETRY_DELAY_MS * Math.pow(2, attempt),
+              CantonClient.MAX_RETRY_DELAY_MS
+            );
+            const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4));
+            await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
+            continue;
+          }
+
+          throw err;
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error("Unknown Canton API failure");
+    } finally {
+      timer();
+    }
+  }
+
+  private isNetworkError(err: any): boolean {
+    if (!err) return false;
+    const code = String(err.code || "");
+    if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT") {
+      return true;
+    }
+    const message = String(err.message || "");
+    return message.includes("timeout") || message.includes("ENOTFOUND");
+  }
+
+  private getMaxRetriesForPath(path: string): number {
+    // Avoid nested retry windows for write commands (create/exercise). The relay
+    // poll loop already retries naturally on the next cycle, and command IDs are
+    // per-operation, so extending this call can silently delay settlement paths.
+    if (path === "/v2/commands/submit-and-wait") {
+      return 0;
+    }
+    return CantonClient.MAX_RETRIES;
+  }
+
   /**
-   * Build the filter object for active-contracts queries.
-   * If templateId is provided, filters by that template for the actAs party.
-   * If null, returns all contracts visible to the party.
+   * Build the eventFormat object for active-contracts queries.
+   *
+   * NOTE: On Canton 3.4, the legacy `filter` field may silently broaden queries
+   * and return the full ACS. We therefore use `eventFormat` with oneof-encoded
+   * identifier filters and fully qualified template IDs.
    */
-  private buildFilter(templateId?: TemplateId | null): Record<string, unknown> {
-    if (!templateId) {
-      // Wildcard — all templates visible to this party
-      return {
-        filtersByParty: {
-          [this.actAs]: {
-            identifierFilter: {
-              wildcardFilter: {},
+  private buildEventFormat(templateId?: TemplateId | null): Record<string, unknown> {
+    const wildcard = {
+      filtersByParty: {
+        [this.actAs]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                WildcardFilter: {
+                  value: { includeCreatedEventBlob: false },
+                },
+              },
             },
-          },
+          ],
         },
-      };
-    }
-
-    const tid: Record<string, string> = {
-      moduleName: templateId.moduleName,
-      entityName: templateId.entityName,
+      },
+      verbose: true,
     };
-    if (templateId.packageId) {
-      tid.packageId = templateId.packageId;
+
+    if (!templateId) {
+      return wildcard;
     }
 
+    const templateIdString = this.formatTemplateId(templateId);
     return {
       filtersByParty: {
         [this.actAs]: {
-          identifierFilter: {
-            templateFilter: {
-              value: { templateId: tid },
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: {
+                  value: {
+                    templateId: templateIdString,
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
             },
-          },
+          ],
         },
       },
+      verbose: true,
     };
   }
 
@@ -195,7 +292,7 @@ export class CantonClient {
     const offset = await this.getLedgerEnd();
 
     const body = {
-      filter: this.buildFilter(templateId),
+      eventFormat: this.buildEventFormat(templateId),
       activeAtOffset: offset,
     };
 
@@ -215,7 +312,29 @@ export class CantonClient {
       };
     };
 
-    const entries = await this.request<RawEntry[]>("POST", "/v2/state/active-contracts", body);
+    const activeContractsPath =
+      `/v2/state/active-contracts?limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT}`;
+
+    let entries: RawEntry[];
+    try {
+      entries = await this.request<RawEntry[]>("POST", activeContractsPath, body);
+    } catch (error: any) {
+      if (error instanceof CantonApiError && error.status === 404 && templateId) {
+        const templateIdString = this.formatTemplateId(templateId);
+        console.warn(
+          `[CantonClient] Active-contracts template lookup returned 404: ${templateIdString}`
+        );
+      }
+      throw error;
+    }
+
+    // The active-contracts endpoint lacks cursor pagination. If we hit the hard
+    // cap, results may be truncated (typically oldest-first), which is unsafe for
+    // bridge correctness. Fail loudly instead of silently dropping newer contracts.
+    if (entries.length >= CantonClient.ACTIVE_CONTRACTS_LIMIT) {
+      const templateLabel = templateId ? this.formatTemplateId(templateId) : "wildcard";
+      throw new CantonQueryLimitError(CantonClient.ACTIVE_CONTRACTS_LIMIT, templateLabel);
+    }
 
     const contracts: ActiveContract<T>[] = [];
     for (const entry of entries) {
@@ -378,6 +497,28 @@ export class CantonApiError extends Error {
     super(`Canton API error ${status} on ${path}: ${body.slice(0, 200)}`);
     this.name = "CantonApiError";
   }
+
+  isRetryable(): boolean {
+    // 413 is intentionally excluded: payload size will not shrink on retry.
+    return [429, 500, 502, 503, 504].includes(this.status);
+  }
+
+  backoffMultiplier(): number {
+    // Give rate-limit responses extra breathing room.
+    return this.status === 429 ? 3 : 1;
+  }
+}
+
+export class CantonQueryLimitError extends CantonApiError {
+  constructor(limit: number, templateLabel: string) {
+    super(
+      413,
+      "/v2/state/active-contracts",
+      `Potentially truncated response at limit=${limit} for ${templateLabel}. ` +
+        `Use archival hygiene or migrate this flow to /v2/updates-based consumption.`
+    );
+    this.name = "CantonQueryLimitError";
+  }
 }
 
 // ============================================================
@@ -406,10 +547,18 @@ export const TEMPLATES = {
   BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
   BridgeInRequest:    { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" } as TemplateId,
   MUSDSupplyService:  { moduleName: "Minted.Protocol.V3", entityName: "MUSDSupplyService" } as TemplateId,
+  ComplianceRegistry: { moduleName: "Compliance", entityName: "ComplianceRegistry" } as TemplateId,
   // Standalone module bridge-out requests (from CantonDirectMint USDC/USDCx minting)
   StandaloneBridgeOutRequest: { moduleName: "CantonDirectMint", entityName: "BridgeOutRequest" } as TemplateId,
+  // Standalone module redemption requests (mUSD burned; Canton USDC owed)
+  RedemptionRequest: { moduleName: "CantonDirectMint", entityName: "RedemptionRequest" } as TemplateId,
+  // On-ledger marker for Ethereum-side redemption settlement idempotency
+  RedemptionEthereumSettlement: { moduleName: "CantonDirectMint", entityName: "RedemptionEthereumSettlement" } as TemplateId,
+  // Canton-side USDC token used for redemption fulfillment
+  CantonUSDC: { moduleName: "CantonDirectMint", entityName: "CantonUSDC" } as TemplateId,
   // Canton mUSD token (CantonDirectMint module)
   CantonMUSD:             { moduleName: "CantonDirectMint", entityName: "CantonMUSD" } as TemplateId,
+  CantonMUSDTransferProposal: { moduleName: "CantonDirectMint", entityName: "CantonMUSDTransferProposal" } as TemplateId,
   // smUSD staking service (yield → pooledMusd, share price ↑)
   CantonStakingService:   { moduleName: "CantonSMUSD", entityName: "CantonStakingService" } as TemplateId,
   // ETH Pool service (yield → pooledUsdc counter, share price ↑)
