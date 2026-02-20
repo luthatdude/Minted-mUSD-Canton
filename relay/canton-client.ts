@@ -87,6 +87,8 @@ export class CantonClient {
   private static readonly BASE_RETRY_DELAY_MS = 1000;
   private static readonly MAX_RETRY_DELAY_MS = 15000;
   private static readonly ACTIVE_CONTRACTS_LIMIT = 200;
+  private static readonly UPDATES_PAGE_LIMIT = 50;
+  private static readonly MAX_UPDATES_PAGES = 50;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -267,6 +269,19 @@ export class CantonClient {
     };
   }
 
+  /**
+   * Build an updateFormat that streams ACS-delta transaction events.
+   * This is used as a fallback when active-contract snapshots hit element limits.
+   */
+  private buildUpdateFormat(templateId: TemplateId): Record<string, unknown> {
+    return {
+      includeTransactions: {
+        eventFormat: this.buildEventFormat(templateId),
+        transactionShape: "TRANSACTION_SHAPE_ACS_DELTA",
+      },
+    };
+  }
+
   // ----------------------------------------------------------
   //  Public API
   // ----------------------------------------------------------
@@ -330,9 +345,20 @@ export class CantonClient {
 
     // The active-contracts endpoint lacks cursor pagination. If we hit the hard
     // cap, results may be truncated (typically oldest-first), which is unsafe for
-    // bridge correctness. Fail loudly instead of silently dropping newer contracts.
+    // bridge correctness.
     if (entries.length >= CantonClient.ACTIVE_CONTRACTS_LIMIT) {
-      const templateLabel = templateId ? this.formatTemplateId(templateId) : "wildcard";
+      // For template-scoped queries, fall back to replaying ACS-delta updates.
+      if (templateId) {
+        const templateLabel = this.formatTemplateId(templateId);
+        console.warn(
+          `[CantonClient] Active-contracts query reached limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT} for ${templateLabel}; falling back to /v2/updates replay`
+        );
+        const replayed = await this.queryContractsViaUpdates<T>(templateId, offset);
+        return payloadFilter ? replayed.filter((c) => payloadFilter(c.payload)) : replayed;
+      }
+
+      // Wildcard scans cannot be recovered via this path without full-ledger replay.
+      const templateLabel = "wildcard";
       throw new CantonQueryLimitError(CantonClient.ACTIVE_CONTRACTS_LIMIT, templateLabel);
     }
 
@@ -375,6 +401,134 @@ export class CantonClient {
     }
 
     return contracts;
+  }
+
+  /**
+   * Reconstruct active contracts for a template from ACS-delta updates.
+   * Used only as overflow fallback when /v2/state/active-contracts reaches cap.
+   */
+  private async queryContractsViaUpdates<T = Record<string, unknown>>(
+    templateId: TemplateId,
+    ledgerEndOffset: number
+  ): Promise<ActiveContract<T>[]> {
+    type RawCreatedEvent = {
+      contractId: string;
+      templateId: string;
+      createArgument: T;
+      createdAt?: string;
+      offset?: number;
+      signatories?: string[];
+      observers?: string[];
+    };
+
+    type RawArchivedEvent = {
+      contractId: string;
+      offset?: number;
+    };
+
+    type RawEvent = {
+      CreatedEvent?: RawCreatedEvent;
+      ArchivedEvent?: RawArchivedEvent;
+    };
+
+    type RawTx = {
+      offset?: number;
+      events?: RawEvent[];
+    };
+
+    type RawUpdateWrapper = {
+      update?: {
+        Transaction?: {
+          value?: RawTx;
+        };
+      };
+    };
+
+    const active = new Map<string, ActiveContract<T>>();
+    const templateLabel = this.formatTemplateId(templateId);
+    let beginExclusive = 0;
+    let completed = false;
+
+    for (let page = 0; page < CantonClient.MAX_UPDATES_PAGES; page++) {
+      const body = {
+        beginExclusive,
+        endInclusive: ledgerEndOffset,
+        updateFormat: this.buildUpdateFormat(templateId),
+      };
+
+      const updates = await this.request<RawUpdateWrapper[]>(
+        "POST",
+        `/v2/updates?limit=${CantonClient.UPDATES_PAGE_LIMIT}`,
+        body
+      );
+
+      if (!updates.length) {
+        completed = true;
+        break;
+      }
+
+      let maxSeenOffset = beginExclusive;
+      for (const wrapper of updates) {
+        const tx = wrapper.update?.Transaction?.value;
+        if (!tx) continue;
+
+        const txOffset = Number(tx.offset || 0);
+        if (txOffset > maxSeenOffset) {
+          maxSeenOffset = txOffset;
+        }
+
+        for (const event of tx.events || []) {
+          const created = event.CreatedEvent;
+          if (created) {
+            // Defensive filter in case node broadens responses.
+            const parts = String(created.templateId || "").split(":");
+            const mod = parts.length >= 3 ? parts[parts.length - 2] : "";
+            const ent = parts.length >= 3 ? parts[parts.length - 1] : "";
+            if (mod !== templateId.moduleName || ent !== templateId.entityName) {
+              continue;
+            }
+
+            active.set(created.contractId, {
+              contractId: created.contractId,
+              templateId: created.templateId,
+              payload: created.createArgument,
+              createdAt: created.createdAt || "",
+              offset: Number(created.offset || txOffset || 0),
+              signatories: created.signatories || [],
+              observers: created.observers || [],
+            });
+            continue;
+          }
+
+          const archived = event.ArchivedEvent;
+          if (archived) {
+            active.delete(archived.contractId);
+          }
+        }
+      }
+
+      if (maxSeenOffset <= beginExclusive) {
+        throw new CantonUpdatesReplayError(
+          templateLabel,
+          `No offset progress while replaying updates at beginExclusive=${beginExclusive}`
+        );
+      }
+      beginExclusive = maxSeenOffset;
+
+      if (updates.length < CantonClient.UPDATES_PAGE_LIMIT || beginExclusive >= ledgerEndOffset) {
+        completed = true;
+        break;
+      }
+    }
+
+    if (!completed) {
+      throw new CantonUpdatesReplayError(
+        templateLabel,
+        `Exceeded max update pages (${CantonClient.MAX_UPDATES_PAGES}) while replaying updates up to ledgerEnd=${ledgerEndOffset}`
+      );
+    }
+
+    return Array.from(active.values()).sort((a, b) => a.offset - b.offset);
   }
 
   /**
@@ -518,6 +672,17 @@ export class CantonQueryLimitError extends CantonApiError {
         `Use archival hygiene or migrate this flow to /v2/updates-based consumption.`
     );
     this.name = "CantonQueryLimitError";
+  }
+}
+
+export class CantonUpdatesReplayError extends CantonApiError {
+  constructor(templateLabel: string, reason: string) {
+    super(
+      500,
+      "/v2/updates",
+      `Failed replaying updates for ${templateLabel}: ${reason}`
+    );
+    this.name = "CantonUpdatesReplayError";
   }
 }
 
