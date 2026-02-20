@@ -3876,15 +3876,17 @@ async function main(): Promise<void> {
   await relay.start();
 }
 
-// Handle unhandled promise rejections to prevent silent failures
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
-  process.exit(1);
-});
+if (require.main === module) {
+  // Handle unhandled promise rejections to prevent silent failures
+  process.on("unhandledRejection", (reason, promise) => {
+    console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+    process.exit(1);
+  });
 
-main().catch((error) => {
-  console.error("[Main] Fatal error:", error);
-  process.exit(1);
-});
+  main().catch((error) => {
+    console.error("[Main] Fatal error:", error);
+    process.exit(1);
+  });
+}
 
 export { RelayService, RelayConfig };
