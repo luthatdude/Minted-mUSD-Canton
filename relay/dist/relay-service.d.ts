@@ -316,6 +316,8 @@ declare class RelayService {
      * If configured and possible, self-grants BRIDGE_ROLE.
      */
     private ensureBridgeRoleForRedemptionPayouts;
+    private getMusdCapState;
+    private decodeMusdMintError;
     /**
      * Settle pending RedemptionRequests by minting mUSD on Ethereum.
      * Requests remain pending on Canton; idempotency is enforced by local persistence.
