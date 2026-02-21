@@ -14,6 +14,7 @@ import { ethers, upgrades } from "hardhat";
 // All UUPS-upgradeable contracts that must pass layout validation.
 // Add new contracts here as they are created.
 const UPGRADEABLE_CONTRACTS = [
+  "BLEBridgeSimple",
   "BLEBridgeV9",
   "TreasuryV2",
   "PendleStrategyV2",
