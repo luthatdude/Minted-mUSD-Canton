@@ -1580,6 +1580,72 @@ class RelayService {
   /**
    * Load bridge-out request IDs that have already been relayed to Canton
    */
+  private buildBridgeInRequestDedupKey(
+    nonce: number,
+    amountWei: bigint,
+    eventTimestampSec: number,
+    userParty: string
+  ): string {
+    return `${nonce}|${amountWei.toString()}|${eventTimestampSec}|${userParty}`;
+  }
+
+  private parseBridgeInRequestDedupKeyFromPayload(
+    payload: {
+      nonce?: number | string;
+      amount?: string;
+      createdAt?: string;
+      user?: string;
+    }
+  ): string | null {
+    const nonce = Number(payload.nonce);
+    if (!Number.isFinite(nonce)) return null;
+
+    const createdAtMs = Date.parse(String(payload.createdAt || ""));
+    if (!Number.isFinite(createdAtMs)) return null;
+    const eventTimestampSec = Math.floor(createdAtMs / 1000);
+
+    const userParty = String(payload.user || "");
+    if (!userParty) return null;
+
+    let amountWei: bigint;
+    try {
+      amountWei = ethers.parseUnits(String(payload.amount || "0"), 18);
+    } catch {
+      return null;
+    }
+
+    return this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, userParty);
+  }
+
+  private buildBridgeInRequestDedupIndex(
+    requests: ActiveContract<{
+      nonce?: number | string;
+      amount?: string;
+      createdAt?: string;
+      user?: string;
+    }>[]
+  ): Set<string> {
+    const dedupIndex = new Set<string>();
+    for (const req of requests) {
+      const key = this.parseBridgeInRequestDedupKeyFromPayload(req.payload || {});
+      if (key) dedupIndex.add(key);
+    }
+    return dedupIndex;
+  }
+
+  private buildBridgeInRequestCandidateKeys(
+    nonce: number,
+    amountWei: bigint,
+    eventTimestampSec: number,
+    resolvedRecipient: string
+  ): string[] {
+    const keys = new Set<string>();
+    keys.add(this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, resolvedRecipient));
+    // If relay previously fell back to operator-as-user, treat that as already relayed too.
+    keys.add(this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, this.config.cantonParty));
+    return Array.from(keys);
+  }
+
   private async loadProcessedBridgeOuts(): Promise<void> {
     console.log("[Relay] Loading processed bridge-out requests from chain...");
 
@@ -1602,15 +1668,19 @@ class RelayService {
       events = events.concat(chunk as ethers.EventLog[]);
     }
 
-    // FIX: Cross-check against Canton — only mark events as processed if a
-    // BridgeInRequest already exists on the ledger for that nonce.
-    // Previously this blindly added ALL on-chain events, causing missed relays
-    // when the relay was down during a bridge-out.
-    let cantonBridgeInNonces: Set<number>;
+    // Cross-check against Canton — only mark events as processed if a
+    // matching BridgeInRequest already exists (nonce + amount + timestamp + user).
+    // Nonce-only checks are unsafe across bridge redeploys where nonces restart.
+    let cantonBridgeInDedupKeys: Set<string>;
     try {
-      const existingRequests = await this.canton.queryContracts<{ nonce: number }>(TEMPLATES.BridgeInRequest);
-      cantonBridgeInNonces = new Set(existingRequests.map(c => Number(c.payload.nonce)));
-      console.log(`[Relay] Found ${cantonBridgeInNonces.size} existing BridgeInRequest contracts on Canton`);
+      const existingRequests = await this.canton.queryContracts<{
+        nonce?: number | string;
+        amount?: string;
+        createdAt?: string;
+        user?: string;
+      }>(TEMPLATES.BridgeInRequest);
+      cantonBridgeInDedupKeys = this.buildBridgeInRequestDedupIndex(existingRequests);
+      console.log(`[Relay] Indexed ${cantonBridgeInDedupKeys.size} existing BridgeInRequest fingerprints on Canton`);
     } catch (error: any) {
       // If Canton query fails (for example JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED),
       // do NOT mark all events as processed. That can permanently skip valid bridge-ins.
@@ -1619,7 +1689,7 @@ class RelayService {
         `[Relay] Could not query Canton for existing BridgeInRequests (${msg.slice(0, 180)}). ` +
         "Proceeding without pre-marking historical bridge-outs."
       );
-      cantonBridgeInNonces = new Set<number>();
+      cantonBridgeInDedupKeys = new Set<string>();
     }
 
     let unrelayed = 0;
@@ -1627,7 +1697,21 @@ class RelayService {
       const args = (event as ethers.EventLog).args;
       if (args) {
         const nonce = Number(args.nonce);
-        if (cantonBridgeInNonces.has(nonce)) {
+        const amountWei = BigInt(args.amount.toString());
+        const eventTimestampSec = Number(args.timestamp);
+        const cantonRecipient = String(args.cantonRecipient || "");
+        const resolvedRecipient = resolveRecipientParty(
+          cantonRecipient,
+          this.config.recipientPartyAliases
+        );
+        const candidateKeys = this.buildBridgeInRequestCandidateKeys(
+          nonce,
+          amountWei,
+          eventTimestampSec,
+          resolvedRecipient
+        );
+
+        if (candidateKeys.some((key) => cantonBridgeInDedupKeys.has(key))) {
           this.processedBridgeOuts.add(args.requestId);
         } else {
           unrelayed++;
@@ -1680,6 +1764,25 @@ class RelayService {
 
     if (events.length > 0) {
       console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
+    }
+
+    let existingBridgeInDedupKeys = new Set<string>();
+    if (events.length > 0) {
+      try {
+        const existingRequests = await this.canton.queryContracts<{
+          nonce?: number | string;
+          amount?: string;
+          createdAt?: string;
+          user?: string;
+        }>(TEMPLATES.BridgeInRequest);
+        existingBridgeInDedupKeys = this.buildBridgeInRequestDedupIndex(existingRequests);
+      } catch (error: any) {
+        const msg = error?.message || String(error || "");
+        console.warn(
+          `[Relay] Could not pre-index BridgeInRequest fingerprints (${msg.slice(0, 180)}). ` +
+          "Proceeding without pre-create dedupe."
+        );
+      }
     }
 
     for (const event of events) {
@@ -1779,12 +1882,36 @@ class RelayService {
           // requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
         };
 
+        const candidateKeys = this.buildBridgeInRequestCandidateKeys(
+          Number(nonce),
+          amount,
+          Number(timestamp),
+          resolvedRecipient
+        );
+        if (candidateKeys.some((key) => existingBridgeInDedupKeys.has(key))) {
+          console.log(
+            `[Relay] BridgeInRequest already exists for bridge-out #${nonce} (fingerprint match); skipping create`
+          );
+          this.processedBridgeOuts.add(requestId);
+          stateDirty = true;
+          highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
+          continue;
+        }
+
         try {
           // Validate payload against DAML ensure constraints before submission
           validateCreatePayload("BridgeInRequest", payload);
           // Create BridgeInRequest on Canton with the original user party
           await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
           console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+          existingBridgeInDedupKeys.add(
+            this.buildBridgeInRequestDedupKey(
+              Number(nonce),
+              amount,
+              Number(timestamp),
+              String(payload.user)
+            )
+          );
         } catch (innerError: any) {
           const errMsg = innerError?.message || "";
           // If user party is unknown on this participant, fallback to operator as user
@@ -1794,6 +1921,14 @@ class RelayService {
             validateCreatePayload("BridgeInRequest", payload);
             await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
             console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
+            existingBridgeInDedupKeys.add(
+              this.buildBridgeInRequestDedupKey(
+                Number(nonce),
+                amount,
+                Number(timestamp),
+                String(payload.user)
+              )
+            );
           } else {
             throw innerError; // Re-throw non-party errors
           }
