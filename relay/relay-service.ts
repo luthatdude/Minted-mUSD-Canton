@@ -2101,12 +2101,23 @@ class RelayService {
             // Extract the contractId of the just-created CantonMUSD
             let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
             if (!musdCid) {
-              // Fallback: query by agreementHash
+              // Fallback: query by agreementUri (bridge-address scoped) to avoid
+              // nonce-hash collisions across bridge redeploys.
               const created = await this.canton.queryContracts(
                 TEMPLATES.CantonMUSD,
-                (p: any) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty
+                (p: any) =>
+                  p.owner === this.config.cantonParty &&
+                  (
+                    p.agreementUri === agreementUri ||
+                    (!p.agreementUri &&
+                      (p.agreementHash === agreementHash || p.agreementHash === oldAgreementHash) &&
+                      p.amount === amountStr)
+                  )
               );
-              if (created.length > 0) musdCid = created[0].contractId;
+              if (created.length > 0) {
+                created.sort((a, b) => b.offset - a.offset);
+                musdCid = created[0].contractId;
+              }
             }
 
             if (musdCid) {
