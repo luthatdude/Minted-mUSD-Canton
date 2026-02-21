@@ -477,14 +477,16 @@ test_DoubleSpendPrevented = do
       blacklisted = Set.empty
       frozen = Set.empty
       lastUpdated = now
-  proposalCid <- submitMulti [owner] [operator] do
+  -- Canton 3.x / LF 2.x: operator must be actAs (not readAs) for inner
+  -- exercise visibility on ComplianceRegistry within MUSD_Transfer choice body.
+  proposalCid <- submitMulti [owner, operator] [] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver1
       complianceRegistryCid = complianceCid
 
   -- Contract is now archived. Try to transfer again (double-spend)
   -- This will fail because the contract no longer exists
-  submitMultiMustFail [owner] [operator] do
+  submitMultiMustFail [owner, operator] [] do
     exerciseCmd musdCid MUSD_Transfer with
       newOwner = receiver2
       complianceRegistryCid = complianceCid

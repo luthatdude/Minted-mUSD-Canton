@@ -48,3 +48,4 @@ subgraph/generated/
 nohup.out
 *.bak
 *.bak2
+.next/

@@ -117,12 +117,7 @@ export function BridgePage() {
   const attestationFresh = timeSinceAttestation < 3600; // less than 1 hour
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-4xl space-y-8">
-        <PageHeader title="Canton Bridge" subtitle="Real-time view of Canton Network attestations governing mUSD supply" badge="Bridge" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   return (

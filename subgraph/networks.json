@@ -1,0 +1,30 @@
+{
+  "sepolia": {
+    "MUSD": { "address": "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B", "startBlock": 10276940 },
+    "SMUSD": { "address": "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540", "startBlock": 10276940 },
+    "BLEBridgeV9": { "address": "0x708957bFfA312D1730BdF87467E695D3a9F26b0f", "startBlock": 10276940 },
+    "BorrowModule": { "address": "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8", "startBlock": 10276940 },
+    "CollateralVault": { "address": "0x155d6618dcdeb2F4145395CA57C80e6931D7941e", "startBlock": 10276940 },
+    "DirectMintV2": { "address": "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7", "startBlock": 10276940 },
+    "LiquidationEngine": { "address": "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8", "startBlock": 10276940 },
+    "LeverageVault": { "address": "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4", "startBlock": 10276940 },
+    "MintedTimelockController": { "address": "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410", "startBlock": 10276940 },
+    "GlobalPauseRegistry": { "address": "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F", "startBlock": 10276940 },
+    "PriceOracle": { "address": "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025", "startBlock": 10276940 },
+    "TreasuryV2": { "address": "0xf2051bDfc738f638668DF2f8c00d01ba6338C513", "startBlock": 10276940 }
+  },
+  "mainnet": {
+    "MUSD": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "SMUSD": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "BLEBridgeV9": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "BorrowModule": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "CollateralVault": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "DirectMintV2": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "LiquidationEngine": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "LeverageVault": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "MintedTimelockController": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "GlobalPauseRegistry": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "PriceOracle": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 },
+    "TreasuryV2": { "address": "0x0000000000000000000000000000000000000000", "startBlock": 0 }
+  }
+}

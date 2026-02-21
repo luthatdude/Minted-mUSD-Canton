@@ -1,8 +1,7 @@
 # ── Minted mUSD Protocol Subgraph Manifest ─────────────────────────
 # Provides on-chain observability for critical protocol events.
-# Deployed: Sepolia testnet (chainId 11155111), block 10276940+
-# Deployer: 0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0 (2026-02-17)
-# For mainnet: update addresses, startBlock, and network field.
+# Contract addresses below are placeholders — replace with deployed addresses.
+# Network: sepolia (chainId 11155111). Change to mainnet for production.
 
 specVersion: 1.0.0
 indexerHints:
@@ -16,9 +15,9 @@ dataSources:
     name: MUSD
     network: sepolia
     source:
-      address: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B"
+      address: "0x0000000000000000000000000000000000000001" # TODO: Replace with deployed MUSD address
       abi: MUSD
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -47,9 +46,9 @@ dataSources:
     name: SMUSD
     network: sepolia
     source:
-      address: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540"
+      address: "0x0000000000000000000000000000000000000002" # TODO: Replace with deployed SMUSD address
       abi: SMUSD
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -76,9 +75,9 @@ dataSources:
     name: BLEBridgeV9
     network: sepolia
     source:
-      address: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+      address: "0x0000000000000000000000000000000000000003" # TODO: Replace with deployed BLEBridgeV9 proxy address
       abi: BLEBridgeV9
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -106,9 +105,9 @@ dataSources:
     name: BorrowModule
     network: sepolia
     source:
-      address: "0xC5A1c2F5CF40dCFc33e7FCda1e6042EF4456Eae8"
+      address: "0x0000000000000000000000000000000000000004" # TODO: Replace with deployed BorrowModule address
       abi: BorrowModule
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -134,9 +133,9 @@ dataSources:
     name: CollateralVault
     network: sepolia
     source:
-      address: "0x155d6618dcdeb2F4145395CA57C80e6931D7941e"
+      address: "0x0000000000000000000000000000000000000005" # TODO: Replace with deployed CollateralVault address
       abi: CollateralVault
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -161,9 +160,9 @@ dataSources:
     name: DirectMintV2
     network: sepolia
     source:
-      address: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7"
+      address: "0x0000000000000000000000000000000000000006" # TODO: Replace with deployed DirectMintV2 address
       abi: DirectMintV2
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -186,9 +185,9 @@ dataSources:
     name: LiquidationEngine
     network: sepolia
     source:
-      address: "0xbaf131Ee1AfdA4207f669DCd9F94634131D111f8"
+      address: "0x0000000000000000000000000000000000000007" # TODO: Replace with deployed LiquidationEngine address
       abi: LiquidationEngine
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -214,9 +213,9 @@ dataSources:
     name: LeverageVault
     network: sepolia
     source:
-      address: "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4"
+      address: "0x0000000000000000000000000000000000000008" # TODO: Replace with deployed LeverageVault address
       abi: LeverageVault
-      startBlock: 10276940
+      startBlock: 0 # TODO: Replace with deployment block
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.7
@@ -233,128 +232,3 @@ dataSources:
         - event: LeverageClosed(indexed address,indexed address,uint256,uint256,uint256)
           handler: handleLeverageClosed
       file: ./src/leverage-vault.ts
-
-  # ── Timelock Governance ────────────────────────────────────────
-  - kind: ethereum
-    name: MintedTimelockController
-    network: sepolia
-    source:
-      address: "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410"
-      abi: MintedTimelockController
-      startBlock: 10276940
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.7
-      language: wasm/assemblyscript
-      entities:
-        - TimelockOperation
-        - TimelockDelayChange
-        - RoleChange
-      abis:
-        - name: MintedTimelockController
-          file: ../artifacts/contracts/MintedTimelockController.sol/MintedTimelockController.json
-      eventHandlers:
-        - event: CallScheduled(indexed bytes32,indexed uint256,address,uint256,bytes,bytes32,uint256)
-          handler: handleCallScheduled
-        - event: CallExecuted(indexed bytes32,indexed uint256,address,uint256,bytes)
-          handler: handleCallExecuted
-        - event: Cancelled(indexed bytes32)
-          handler: handleCancelled
-        - event: MinDelayChange(uint256,uint256)
-          handler: handleMinDelayChange
-        - event: RoleGranted(indexed bytes32,indexed address,indexed address)
-          handler: handleRoleGranted
-        - event: RoleRevoked(indexed bytes32,indexed address,indexed address)
-          handler: handleRoleRevoked
-      file: ./src/timelock.ts
-
-  # ── Global Pause Registry ──────────────────────────────────────
-  - kind: ethereum
-    name: GlobalPauseRegistry
-    network: sepolia
-    source:
-      address: "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F"
-      abi: GlobalPauseRegistry
-      startBlock: 10276940
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.7
-      language: wasm/assemblyscript
-      entities:
-        - GlobalPauseEvent
-      abis:
-        - name: GlobalPauseRegistry
-          file: ../artifacts/contracts/GlobalPauseRegistry.sol/GlobalPauseRegistry.json
-      eventHandlers:
-        - event: GlobalPauseStateChanged(bool,indexed address)
-          handler: handleGlobalPauseStateChanged
-      file: ./src/global-pause.ts
-
-  # ── Price Oracle ───────────────────────────────────────────────
-  - kind: ethereum
-    name: PriceOracle
-    network: sepolia
-    source:
-      address: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025"
-      abi: PriceOracle
-      startBlock: 10276940
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.7
-      language: wasm/assemblyscript
-      entities:
-        - FeedUpdate
-        - CircuitBreakerEvent
-        - CircuitBreakerRecovery
-      abis:
-        - name: PriceOracle
-          file: ../artifacts/contracts/PriceOracle.sol/PriceOracle.json
-      eventHandlers:
-        - event: FeedUpdated(indexed address,address,uint256,uint8)
-          handler: handleFeedUpdated
-        - event: FeedRemoved(indexed address)
-          handler: handleFeedRemoved
-        - event: CircuitBreakerTriggered(indexed address,uint256,uint256,uint256)
-          handler: handleCircuitBreakerTriggered
-        - event: CircuitBreakerAutoRecovered(indexed address,uint256)
-          handler: handleCircuitBreakerAutoRecovered
-        - event: KeeperRecovery(indexed address,indexed address,uint256)
-          handler: handleKeeperRecovery
-      file: ./src/price-oracle.ts
-
-  # ── Treasury V2 ────────────────────────────────────────────────
-  - kind: ethereum
-    name: TreasuryV2
-    network: sepolia
-    source:
-      address: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513"
-      abi: TreasuryV2
-      startBlock: 10276940
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.7
-      language: wasm/assemblyscript
-      entities:
-        - TreasuryDeposit
-        - TreasuryWithdrawal
-        - StrategyChange
-        - TreasuryRebalance
-      abis:
-        - name: TreasuryV2
-          file: ../artifacts/contracts/TreasuryV2.sol/TreasuryV2.json
-      eventHandlers:
-        - event: Deposited(indexed address,uint256,uint256[])
-          handler: handleTreasuryDeposited
-        - event: Withdrawn(indexed address,uint256)
-          handler: handleTreasuryWithdrawn
-        - event: StrategyAdded(indexed address,uint256)
-          handler: handleStrategyAdded
-        - event: StrategyRemoved(indexed address)
-          handler: handleStrategyRemoved
-        - event: StrategyUpdated(indexed address,uint256)
-          handler: handleStrategyUpdated
-        - event: Rebalanced(uint256)
-          handler: handleRebalanced
-        - event: EmergencyWithdraw(uint256)
-          handler: handleEmergencyWithdraw
-      file: ./src/treasury.ts

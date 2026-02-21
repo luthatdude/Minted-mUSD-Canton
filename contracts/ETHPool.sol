@@ -48,6 +48,8 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant YIELD_MANAGER_ROLE = keccak256("YIELD_MANAGER_ROLE");
     bytes32 public constant STRATEGY_MANAGER_ROLE = keccak256("STRATEGY_MANAGER_ROLE");
+    /// @notice SOL-H-02: TIMELOCK_ROLE for critical parameter changes (48h governance delay)
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     // ═══════════════════════════════════════════════════════════════════════
     //                     EXTERNAL CONTRACTS
@@ -164,13 +166,15 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
         address _smUsdE,
         address _priceOracle,
         address _weth,
-        uint256 _poolCap
+        uint256 _poolCap,
+        address _timelockController
     ) {
         if (_musd == address(0)) revert InvalidMusd();
         if (_smUsdE == address(0)) revert InvalidAddress();
         if (_priceOracle == address(0)) revert InvalidOracle();
         if (_weth == address(0)) revert InvalidAddress();
         if (_poolCap == 0) revert InvalidAmount();
+        if (_timelockController == address(0)) revert InvalidAddress();
 
         musd = IMUSD(_musd);
         smUsdE = ISMUSDE_Pool(_smUsdE);
@@ -181,6 +185,9 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+        // SOL-H-02: Critical admin ops go through 48h timelock
+        _grantRole(TIMELOCK_ROLE, _timelockController);
+        _setRoleAdmin(TIMELOCK_ROLE, TIMELOCK_ROLE);
 
         // Configure time-lock tiers
         tierConfigs[TimeLockTier.None]   = TierConfig({ duration: 0,        multiplierBps: 10000 });  // 1.0x
@@ -423,9 +430,10 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Add an accepted stablecoin (USDC, USDT)
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE (48h governance delay)
     /// @param token Stablecoin contract address
     /// @param decimals Token decimal precision (6 for USDC/USDT)
-    function addStablecoin(address token, uint8 decimals) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function addStablecoin(address token, uint8 decimals) external onlyRole(TIMELOCK_ROLE) {
         if (token == address(0)) revert ZeroAddress();
         if (decimals > 18) revert TokenDecimalsTooHigh();
         if (acceptedStablecoins[token]) revert AlreadyAdded();
@@ -436,21 +444,24 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Remove an accepted stablecoin
-    function removeStablecoin(address token) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE
+    function removeStablecoin(address token) external onlyRole(TIMELOCK_ROLE) {
         if (!acceptedStablecoins[token]) revert NotPreviouslyAdded();
         acceptedStablecoins[token] = false;
         emit StablecoinRemoved(token);
     }
 
     /// @notice Set the Fluid leveraged loop strategy
-    function setFluidStrategy(address _strategy) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — strategy swap is critical
+    function setFluidStrategy(address _strategy) external onlyRole(TIMELOCK_ROLE) {
         address old = address(fluidStrategy);
         fluidStrategy = ILeverageLoopStrategy(_strategy);
         emit FluidStrategyUpdated(old, _strategy);
     }
 
     /// @notice Update pool cap (in mUSD terms, 18 decimals)
-    function setPoolCap(uint256 newCap) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE
+    function setPoolCap(uint256 newCap) external onlyRole(TIMELOCK_ROLE) {
         if (newCap == 0) revert InvalidAmount();
         uint256 oldCap = poolCap;
         poolCap = newCap;
@@ -458,11 +469,12 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Update a time-lock tier configuration
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE
     function setTierConfig(
         TimeLockTier tier,
         uint256 duration,
         uint256 multiplierBps
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    ) external onlyRole(TIMELOCK_ROLE) {
         if (multiplierBps < 10000) revert MultiplierTooLow();
         if (multiplierBps > 30000) revert MultiplierTooHigh();
         tierConfigs[tier] = TierConfig({ duration: duration, multiplierBps: multiplierBps });
@@ -470,7 +482,8 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
     }
 
     /// @notice Update price oracle
-    function setPriceOracle(address newOracle) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @dev SOL-H-02: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE — oracle is critical
+    function setPriceOracle(address newOracle) external onlyRole(TIMELOCK_ROLE) {
         if (newOracle == address(0)) revert InvalidOracle();
         address oldOracle = address(priceOracle);
         priceOracle = IPriceOracle(newOracle);
@@ -521,8 +534,9 @@ contract ETHPool is AccessControl, ReentrancyGuard, Pausable {
         _pause();
     }
 
-    /// @notice Unpause — requires admin for separation of duties
-    function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
+    /// @notice Unpause — requires timelock for governance separation of duties
+    /// @dev SOL-H-02/SOL-H-17: Changed from DEFAULT_ADMIN_ROLE to TIMELOCK_ROLE (48h delay)
+    function unpause() external onlyRole(TIMELOCK_ROLE) {
         _unpause();
     }
 

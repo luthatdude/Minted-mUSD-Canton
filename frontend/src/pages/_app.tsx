@@ -4,7 +4,7 @@ import { MetaMaskProvider } from "@/hooks/useMetaMask";
 import { UnifiedWalletProvider } from "@/hooks/useUnifiedWallet";
 import { LoopWalletProvider } from "@/hooks/useLoopWallet";
 import { MultiChainDepositProvider } from "@/hooks/useMultiChainDeposit";
-import NetworkGuard from "@/components/NetworkGuard";
+import { EthWalletProvider } from "@/hooks/useEthWallet";
 import "@/styles/globals.css";
 
 export default function App({ Component, pageProps }: AppProps) {
@@ -12,13 +12,13 @@ export default function App({ Component, pageProps }: AppProps) {
     <WalletConnectProvider>
       <MetaMaskProvider>
         <UnifiedWalletProvider>
-          <LoopWalletProvider appName="Minted mUSD">
-            <MultiChainDepositProvider>
-              <NetworkGuard>
+          <EthWalletProvider>
+            <LoopWalletProvider appName="Minted mUSD">
+              <MultiChainDepositProvider>
                 <Component {...pageProps} />
-              </NetworkGuard>
-            </MultiChainDepositProvider>
-          </LoopWalletProvider>
+              </MultiChainDepositProvider>
+            </LoopWalletProvider>
+          </EthWalletProvider>
         </UnifiedWalletProvider>
       </MetaMaskProvider>
     </WalletConnectProvider>

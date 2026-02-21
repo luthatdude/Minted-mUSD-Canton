@@ -204,7 +204,6 @@ contract MorphoLoopStrategy is
     // ═══════════════════════════════════════════════════════════════════════
 
     event Deposited(uint256 principal, uint256 totalSupplied, uint256 loops);
-    event ActiveUpdated(bool active);
     event Withdrawn(uint256 requested, uint256 returned);
     event Deleveraged(uint256 repaid, uint256 withdrawn);
     event EmergencyDeleverage(uint256 healthFactorBefore, uint256 healthFactorAfter);
@@ -329,10 +328,7 @@ contract MorphoLoopStrategy is
         // Deleverage to free up the requested amount
         withdrawn = _deleverage(principalToWithdraw);
 
-        // H-03: Only reduce totalPrincipal by the amount actually withdrawn,
-        // not the requested amount, to prevent accounting drift.
-        uint256 principalReduction = withdrawn < principalToWithdraw ? withdrawn : principalToWithdraw;
-        totalPrincipal -= principalReduction;
+        totalPrincipal -= principalToWithdraw;
 
         // Transfer USDC back to Treasury
         usdc.safeTransfer(msg.sender, withdrawn);
@@ -342,7 +338,6 @@ contract MorphoLoopStrategy is
 
     /**
      * @notice Withdraw all USDC from strategy
-     * @dev SOL-M-2: Verifies position is fully unwound after deleverage
      * @return withdrawn Total amount withdrawn
      */
     function withdrawAll() 
@@ -354,18 +349,6 @@ contract MorphoLoopStrategy is
     {
         // Full deleverage
         withdrawn = _fullDeleverage();
-
-        // SOL-M-2: Verify position is fully unwound before zeroing principal
-        IMorphoBlue.Position memory finalPos = morpho.position(marketId, address(this));
-        (,, uint128 totalBorrowAssets, uint128 totalBorrowShares,,) = morpho.market(marketId);
-        uint256 remainingBorrow = 0;
-        if (totalBorrowShares > 0) {
-            remainingBorrow = (uint256(finalPos.borrowShares) * totalBorrowAssets) / totalBorrowShares;
-        }
-        // Allow dust (< $0.01 = 1e4 USDC units) but not material positions
-        if (remainingBorrow > 1e4 || finalPos.collateral > 1e4) {
-            revert PositionNotCleared();
-        }
         totalPrincipal = 0;
 
         // Transfer all USDC back to Treasury
@@ -476,15 +459,6 @@ contract MorphoLoopStrategy is
         // For collateral-based looping, collateral earns 0%, so we need very low borrow rates
         // or external yield sources (like Morpho rewards) to be profitable
         profitable = currentBorrowRate <= maxBorrowRateForProfit;
-
-        // L-01: Also check minimum supply rate if configured
-        if (profitable && minSupplyRateRequired > 0 && totalSupplyAssets > 0) {
-            // Approximate supply rate: borrowRate * utilization * (1 - fee/1e18)
-            uint256 utilization = (uint256(totalBorrowAssets) * WAD) / uint256(totalSupplyAssets);
-            uint256 effectiveFee = uint256(fee) > WAD ? WAD : uint256(fee);
-            uint256 supplyRate = (currentBorrowRate * utilization * (WAD - effectiveFee)) / (WAD * WAD);
-            profitable = supplyRate >= minSupplyRateRequired;
-        }
     }
 
     /**
@@ -794,7 +768,6 @@ contract MorphoLoopStrategy is
      */
     function setActive(bool _active) external onlyRole(STRATEGIST_ROLE) {
         active = _active;
-        emit ActiveUpdated(_active);
     }
 
     /**

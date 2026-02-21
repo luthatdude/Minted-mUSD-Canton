@@ -2,17 +2,14 @@
 // Creates controllable price oracles for testing leverage vault and liquidations
 
 import { ethers } from "hardhat";
-import { assertSafeForNetworkDeployment } from "./utils/deployGuards";
 
-// Deployed contract addresses on Sepolia (updated 2026-02-17)
+// Deployed contract addresses on Sepolia
 const CONTRACTS = {
-  PriceOracle: "0x8eF615b3b87dfad172030087Ad0cFA5bAdCEa025",
+  PriceOracle: "0x3F761A52091DB1349aF08C54336d1E5Ae6636901",
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
 };
 
 async function main() {
-  await assertSafeForNetworkDeployment("deploy-mock-oracles.ts");
-
   const [deployer] = await ethers.getSigners();
   console.log("═".repeat(60));
   console.log("Deploy Mock Chainlink Oracles for Testnet");

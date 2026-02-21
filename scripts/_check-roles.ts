@@ -15,7 +15,7 @@ async function main() {
   const addresses: Record<string, string> = {
     "deployer (0xe640)": deployer.address,
     "timelock itself": "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
-    "bridge proxy": "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125",
+    "bridge proxy": "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",
     "treasury": "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
     "address(0) [open]": ethers.ZeroAddress,
   };
@@ -63,7 +63,7 @@ async function main() {
   }
 
   // Check bridge admin
-  const bridge = await ethers.getContractAt("BLEBridgeV9", "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125");
+  const bridge = await ethers.getContractAt("BLEBridgeV9", "0x708957bFfA312D1730BdF87467E695D3a9F26b0f");
   console.log("\n=== BRIDGE ADMIN CHECK ===");
   const bAdmin = await bridge.DEFAULT_ADMIN_ROLE();
   console.log("Bridge DEFAULT_ADMIN holders:");

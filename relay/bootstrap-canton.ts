@@ -1,0 +1,134 @@
+/**
+ * Bootstrap Canton Protocol Contracts
+ *
+ * Creates the essential BridgeService contract on Canton so the relay
+ * can complete bridge-in operations. Also creates MUSDSupplyService
+ * if it doesn't exist.
+ *
+ * Usage: cd relay && NODE_ENV=development npx ts-node --skip-project bootstrap-canton.ts
+ */
+
+import { CantonClient, TEMPLATES } from "./canton-client";
+import * as dotenv from "dotenv";
+import * as path from "path";
+
+// Load .env.development in dev mode
+const envFile = process.env.NODE_ENV === "development" ? ".env.development" : ".env";
+dotenv.config({ path: path.join(__dirname, envFile) });
+
+async function bootstrap() {
+  const cantonHost = process.env.CANTON_HOST || "localhost";
+  const cantonPort = parseInt(process.env.CANTON_PORT || "7575", 10);
+  const cantonToken = process.env.CANTON_TOKEN || "dummy-no-auth";
+  const cantonParty = process.env.CANTON_PARTY || "";
+  const packageId = process.env.CANTON_PACKAGE_ID || "";
+  const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+
+  if (!cantonParty) {
+    throw new Error("CANTON_PARTY not set");
+  }
+  if (!packageId) {
+    throw new Error("CANTON_PACKAGE_ID not set");
+  }
+
+  console.log(`[Bootstrap] Connecting to Canton at ${cantonHost}:${cantonPort}`);
+  console.log(`[Bootstrap] Party: ${cantonParty.slice(0, 40)}...`);
+  console.log(`[Bootstrap] Package: ${packageId.slice(0, 16)}...`);
+
+  const canton = new CantonClient({
+    baseUrl: `${protocol}://${cantonHost}:${cantonPort}`,
+    token: cantonToken,
+    userId: "administrator",
+    actAs: cantonParty,
+    timeoutMs: 30_000,
+    defaultPackageId: packageId,
+  });
+
+  // Test connection
+  try {
+    const offset = await canton.getLedgerEnd();
+    console.log(`[Bootstrap] ✓ Connected — ledger offset: ${offset}`);
+  } catch (err: any) {
+    console.error(`[Bootstrap] ✗ Failed to connect: ${err.message}`);
+    process.exit(1);
+  }
+
+  // 1. Check/Create BridgeService
+  console.log("\n[Bootstrap] Checking BridgeService...");
+  const governanceParty = process.env.CANTON_GOVERNANCE_PARTY || cantonParty;
+  const existingBridge = await canton.queryContracts(TEMPLATES.BridgeService);
+  if (existingBridge.length > 0) {
+    console.log(`[Bootstrap] ✓ BridgeService already exists (${existingBridge[0].contractId.slice(0, 24)}...)`);
+  } else {
+    console.log("[Bootstrap] Creating BridgeService...");
+    try {
+      await canton.createContract(TEMPLATES.BridgeService, {
+        operator: cantonParty,
+        governance: governanceParty,
+        validators: [cantonParty],
+        requiredSignatures: 1,
+        minValidators: 1,                  // Canton v2 JSON API: Optional Int encodes as just the value (or null)
+        totalBridgedIn: "0.0",
+        totalBridgedOut: "0.0",
+        lastNonce: 0,                      // Old schema on Canton (pre-CRIT-05)
+        paused: false,
+        observers: [cantonParty],
+      });
+      console.log("[Bootstrap] ✓ BridgeService created successfully");
+    } catch (err: any) {
+      console.error(`[Bootstrap] ✗ Failed to create BridgeService: ${err.message}`);
+      // Try with submitMulti approach (governance + operator as actAs)
+      console.log("[Bootstrap] Note: If governance ≠ operator, both parties must be on this participant.");
+    }
+  }
+
+  // 2. Check/Create MUSDSupplyService
+  console.log("\n[Bootstrap] Checking MUSDSupplyService...");
+  const existingSupply = await canton.queryContracts(TEMPLATES.MUSDSupplyService);
+  if (existingSupply.length > 0) {
+    console.log(`[Bootstrap] ✓ MUSDSupplyService already exists (${existingSupply[0].contractId.slice(0, 24)}...)`);
+  } else {
+    console.log("[Bootstrap] Creating MUSDSupplyService...");
+    try {
+      await canton.createContract(TEMPLATES.MUSDSupplyService, {
+        operator: cantonParty,
+        governance: governanceParty,
+        supplyCap: "100000000.0",              // 100M mUSD cap
+        currentSupply: "0.0",
+        largeMintThreshold: "100000.0",        // 100k mUSD
+        pendingLargeMints: [],
+        observers: [],
+      });
+      console.log("[Bootstrap] ✓ MUSDSupplyService created successfully");
+    } catch (err: any) {
+      console.error(`[Bootstrap] ✗ Failed to create MUSDSupplyService: ${err.message}`);
+    }
+  }
+
+  // 3. Verify
+  console.log("\n[Bootstrap] Verifying...");
+  const bridgeCheck = await canton.queryContracts(TEMPLATES.BridgeService);
+  const supplyCheck = await canton.queryContracts(TEMPLATES.MUSDSupplyService);
+  console.log(`  BridgeService: ${bridgeCheck.length > 0 ? "✓ EXISTS" : "✗ MISSING"}`);
+  console.log(`  MUSDSupplyService: ${supplyCheck.length > 0 ? "✓ EXISTS" : "✗ MISSING"}`);
+
+  // 4. Show all active contracts summary
+  console.log("\n[Bootstrap] Active contracts summary:");
+  const allContracts = await canton.queryContracts();
+  const templateCounts: Record<string, number> = {};
+  for (const c of allContracts) {
+    const parts = c.templateId.split(":");
+    const name = parts.length >= 3 ? `${parts[parts.length - 2]}:${parts[parts.length - 1]}` : c.templateId;
+    templateCounts[name] = (templateCounts[name] || 0) + 1;
+  }
+  for (const [tpl, count] of Object.entries(templateCounts).sort()) {
+    console.log(`  ${tpl}: ${count}`);
+  }
+
+  console.log("\n[Bootstrap] Done! Relay should now be able to complete bridge-in operations.");
+}
+
+bootstrap().catch((err) => {
+  console.error("[Bootstrap] Fatal:", err);
+  process.exit(1);
+});

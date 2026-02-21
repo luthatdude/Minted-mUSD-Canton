@@ -6,6 +6,7 @@ export const CONTRACTS: Record<string, string> = {
   MUSD: process.env.NEXT_PUBLIC_MUSD_ADDRESS || "",
   SMUSD: process.env.NEXT_PUBLIC_SMUSD_ADDRESS || "",
   USDC: process.env.NEXT_PUBLIC_USDC_ADDRESS || "",
+  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
   DirectMint: process.env.NEXT_PUBLIC_DIRECT_MINT_ADDRESS || "",
   Treasury: process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "",
   CollateralVault: process.env.NEXT_PUBLIC_COLLATERAL_VAULT_ADDRESS || "",
@@ -16,16 +17,7 @@ export const CONTRACTS: Record<string, string> = {
   LeverageVault: process.env.NEXT_PUBLIC_LEVERAGE_VAULT_ADDRESS || "",
   ETHPool: process.env.NEXT_PUBLIC_ETH_POOL_ADDRESS || "",
   SMUSDE: process.env.NEXT_PUBLIC_SMUSDE_ADDRESS || "",
-  USDT: process.env.NEXT_PUBLIC_USDT_ADDRESS || "",
-  MetaVault1: process.env.NEXT_PUBLIC_VAULT1_ADDRESS || "",
-  MetaVault2: process.env.NEXT_PUBLIC_VAULT2_ADDRESS || "",
-  MetaVault3: process.env.NEXT_PUBLIC_VAULT3_ADDRESS || "",
-  GlobalPauseRegistry: process.env.NEXT_PUBLIC_GLOBAL_PAUSE_REGISTRY_ADDRESS || "",
-  Timelock: process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS || "",
-  InterestRateModel: process.env.NEXT_PUBLIC_INTEREST_RATE_MODEL_ADDRESS || "",
-  DepositRouter: process.env.NEXT_PUBLIC_DEPOSIT_ROUTER_ADDRESS || "",
-  TreasuryV2: process.env.NEXT_PUBLIC_TREASURY_V2_ADDRESS || "",
-  WETH: process.env.NEXT_PUBLIC_WETH_ADDRESS || "",
+  MetaVault: process.env.NEXT_PUBLIC_METAVAULT_ADDRESS || "",
 };
 
 // Validate contract addresses at config time

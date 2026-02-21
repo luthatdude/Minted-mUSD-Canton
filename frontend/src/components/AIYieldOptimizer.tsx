@@ -45,83 +45,6 @@ function timeSince(date: Date): string {
   return `${Math.floor(secs / 3600)}h ago`;
 }
 
-// ── Pendle PT Maturity Helpers ──
-
-function formatTimeRemaining(maturityUnix: number): { text: string; urgency: "safe" | "warning" | "critical" | "expired" } {
-  const now = Math.floor(Date.now() / 1000);
-  const diff = maturityUnix - now;
-  if (diff <= 0) return { text: "Expired", urgency: "expired" };
-
-  const days = Math.floor(diff / 86400);
-  const hours = Math.floor((diff % 86400) / 3600);
-  const mins = Math.floor((diff % 3600) / 60);
-
-  let text: string;
-  if (days > 30) {
-    const months = Math.floor(days / 30);
-    const remDays = days % 30;
-    text = `${months}mo ${remDays}d`;
-  } else if (days > 0) {
-    text = `${days}d ${hours}h`;
-  } else if (hours > 0) {
-    text = `${hours}h ${mins}m`;
-  } else {
-    text = `${mins}m`;
-  }
-
-  const urgency = days <= 3 ? "critical" : days <= 14 ? "warning" : "safe";
-  return { text, urgency };
-}
-
-const urgencyStyles = {
-  safe: "text-green-400 bg-green-900/30 border-green-800/40",
-  warning: "text-amber-400 bg-amber-900/30 border-amber-800/40",
-  critical: "text-red-400 bg-red-900/30 border-red-800/40 animate-pulse",
-  expired: "text-gray-500 bg-gray-900/30 border-gray-700/40 line-through",
-};
-
-function PendlePTCountdown({ maturities }: { maturities: { market: string; maturityUnix: number; label: string }[] }) {
-  const [, setTick] = React.useState(0);
-  React.useEffect(() => {
-    const interval = setInterval(() => setTick((t) => t + 1), 60_000); // update every minute
-    return () => clearInterval(interval);
-  }, []);
-
-  // Sort by nearest maturity first
-  const sorted = [...maturities].sort((a, b) => a.maturityUnix - b.maturityUnix);
-  const nearestActive = sorted.find((m) => m.maturityUnix > Math.floor(Date.now() / 1000));
-
-  return (
-    <div className="rounded-lg border border-purple-800/30 bg-gray-800/40 p-3 space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="text-sm">⏱️</span>
-        <h4 className="text-xs font-medium uppercase text-gray-400">Pendle PT Maturity Countdown</h4>
-        {nearestActive && (
-          <span className="ml-auto text-[10px] text-gray-600">
-            Next rollover: {new Date(nearestActive.maturityUnix * 1000).toLocaleDateString()}
-          </span>
-        )}
-      </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        {sorted.map((m) => {
-          const { text, urgency } = formatTimeRemaining(m.maturityUnix);
-          const maturityDate = new Date(m.maturityUnix * 1000);
-          return (
-            <div
-              key={m.market}
-              className={`rounded-lg border p-2.5 text-center ${urgencyStyles[urgency]}`}
-            >
-              <p className="text-[10px] uppercase tracking-wide opacity-70">{m.market}</p>
-              <p className="text-lg font-bold tabular-nums">{text}</p>
-              <p className="text-[10px] opacity-60">{maturityDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function ActionBadge({ action }: { action: AllocationDiff["action"] }) {
   const styles: Record<string, string> = {
     DEPLOY: "bg-green-800/60 text-green-400",
@@ -202,23 +125,6 @@ function ScoreTable({ scores }: { scores: StrategyScore[] }) {
                 <div className="flex items-center gap-2">
                   <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />
                   <span className="font-medium text-white">{s.shortName}</span>
-                  {s.ptMaturities && s.ptMaturities.length > 0 && (() => {
-                    const nearest = s.ptMaturities
-                      .filter((m) => m.maturityUnix > Math.floor(Date.now() / 1000))
-                      .sort((a, b) => a.maturityUnix - b.maturityUnix)[0];
-                    if (!nearest) return null;
-                    const { text, urgency } = formatTimeRemaining(nearest.maturityUnix);
-                    return (
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[9px] font-medium border ${
-                          urgencyStyles[urgency]
-                        }`}
-                        title={`Nearest PT maturity: ${nearest.label}`}
-                      >
-                        ⏱ {text}
-                      </span>
-                    );
-                  })()}
                 </div>
               </td>
               <td className="py-2 pr-2 text-right font-mono text-green-400">
@@ -479,17 +385,6 @@ export function AIYieldOptimizer({
             </div>
             <ScoreTable scores={result.scores} />
           </div>
-
-          {/* ── Pendle PT Maturity Countdown ── */}
-          {result.scores.some((s) => s.ptMaturities && s.ptMaturities.length > 0) && (
-            <PendlePTCountdown
-              maturities={
-                result.scores
-                  .filter((s) => s.ptMaturities)
-                  .flatMap((s) => s.ptMaturities!)
-              }
-            />
-          )}
 
           {/* ── Risk Preferences (collapsible) ── */}
           <div>

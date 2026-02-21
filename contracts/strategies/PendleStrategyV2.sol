@@ -313,7 +313,6 @@ contract PendleStrategyV2 is
     // ═══════════════════════════════════════════════════════════════════════
 
     event Deposited(address indexed market, uint256 usdcIn, uint256 ptOut);
-    event ActiveUpdated(bool active);
     event Withdrawn(address indexed market, uint256 ptIn, uint256 usdcOut);
     event MarketRolled(address indexed oldMarket, address indexed newMarket, uint256 amount, uint256 newExpiry);
     event RolloverTriggered(address indexed triggeredBy, uint256 daysToExpiry);
@@ -428,12 +427,6 @@ contract PendleStrategyV2 is
 
         // Auto mode: deploy to single current market
         if (currentMarket == address(0) || _shouldRollover()) {
-            // SOL-M-8: Redeem existing PT before switching markets to prevent orphaned positions
-            if (ptBalance > 0 && currentMarket != address(0)) {
-                uint256 recovered = _redeemPt(ptBalance);
-                // recovered USDC will be re-deployed to new market below (added to amount)
-                amount += recovered;
-            }
             _selectNewMarket();
         }
 
@@ -1292,7 +1285,6 @@ contract PendleStrategyV2 is
      */
     function setActive(bool _active) external onlyRole(GUARDIAN_ROLE) {
         active = _active;
-        emit ActiveUpdated(_active);
     }
 
     /**
@@ -1347,15 +1339,15 @@ contract PendleStrategyV2 is
     /**
      * @notice Recover stuck tokens (not USDC or PT)
      */
-    function recoverToken(address token, address to, uint256 amount) external onlyTimelock {
+    function recoverToken(address token, address to) external onlyTimelock {
         if (token == address(usdc)) revert CannotRecoverUsdc();
         if (token == currentPT) revert CannotRecoverPt();
         // Protect all active position PTs
         for (uint256 i = 0; i < activeMarkets.length; i++) {
             if (token == positions[activeMarkets[i]].pt) revert CannotRecoverPt();
         }
-        if (amount == 0) revert ZeroAmount();
-        IERC20(token).safeTransfer(to, amount);
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransfer(to, balance);
     }
 
     // ═══════════════════════════════════════════════════════════════════════

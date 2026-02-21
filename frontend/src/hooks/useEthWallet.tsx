@@ -90,6 +90,12 @@ export function EthWalletProvider({
   useEffect(() => {
     const checkConnection = async () => {
       if (typeof window === 'undefined' || !window.ethereum) return;
+      // Guard against MetaMask SDK shim returning non-provider strings
+      if (typeof window.ethereum !== 'object' || typeof window.ethereum.request !== 'function') return;
+      try {
+        const rawChainId = await window.ethereum.request({ method: 'eth_chainId' });
+        if (typeof rawChainId !== 'string' || !rawChainId.startsWith('0x')) return;
+      } catch { return; }
 
       try {
         const accounts = await window.ethereum.request({ method: 'eth_accounts' });
@@ -118,11 +124,12 @@ export function EthWalletProvider({
     };
 
     const handleChainChanged = (chainIdHex: string) => {
+      if (typeof chainIdHex !== 'string' || !chainIdHex.startsWith('0x')) return;
       const newChainId = parseInt(chainIdHex, 16);
       setChainId(newChainId);
       onChainChange?.(newChainId);
       // Reload provider with new chain
-      if (window.ethereum) {
+      if (window.ethereum && typeof window.ethereum === 'object' && typeof window.ethereum.request === 'function') {
         const newProvider = new BrowserProvider(window.ethereum);
         setProvider(newProvider);
         newProvider.getSigner().then(setSigner).catch(console.error);
@@ -146,8 +153,21 @@ export function EthWalletProvider({
   }, [provider, address, chainId]);
 
   const handleConnect = async () => {
-    if (typeof window === 'undefined' || !window.ethereum) {
+    if (typeof window === 'undefined' || !window.ethereum ||
+        typeof window.ethereum !== 'object' || typeof window.ethereum.request !== 'function') {
       setError('No Ethereum wallet found. Please install MetaMask.');
+      return;
+    }
+
+    // Validate provider returns a real chain ID, not a MetaMask SDK redirect
+    try {
+      const rawChainId = await window.ethereum.request({ method: 'eth_chainId' });
+      if (typeof rawChainId !== 'string' || !rawChainId.startsWith('0x')) {
+        setError('Wallet provider is not ready. Please check MetaMask.');
+        return;
+      }
+    } catch {
+      setError('Wallet provider is not available.');
       return;
     }
 
@@ -260,9 +280,17 @@ export function EthWalletProvider({
     if (!provider) throw new Error('Not connected');
     const contract = new Contract(contractAddress, abi, provider);
     // Validate method name against ABI to prevent arbitrary invocation
+    // Supports both JSON ABI objects and human-readable string ABI entries
     const abiMethods = abi
-      .filter((item: any) => item.type === 'function')
-      .map((item: any) => item.name);
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          // Human-readable: "function balanceOf(address) view returns (uint256)"
+          const match = item.match(/^function\s+(\w+)\s*\(/);
+          return match ? match[1] : null;
+        }
+        return item.type === 'function' ? item.name : null;
+      })
+      .filter(Boolean);
     if (!abiMethods.includes(method)) {
       throw new Error(`Method "${method}" not found in contract ABI`);
     }
@@ -285,9 +313,16 @@ export function EthWalletProvider({
     }
     const contract = new Contract(contractAddress, abi, signer);
     // Validate method name against ABI to prevent arbitrary invocation
+    // Supports both JSON ABI objects and human-readable string ABI entries
     const abiMethods = abi
-      .filter((item: any) => item.type === 'function')
-      .map((item: any) => item.name);
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          const match = item.match(/^function\s+(\w+)\s*\(/);
+          return match ? match[1] : null;
+        }
+        return item.type === 'function' ? item.name : null;
+      })
+      .filter(Boolean);
     if (!abiMethods.includes(method)) {
       throw new Error(`Method "${method}" not found in contract ABI`);
     }

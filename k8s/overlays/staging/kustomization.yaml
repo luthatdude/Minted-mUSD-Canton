@@ -126,7 +126,7 @@ patches:
     patch: |
       - op: replace
         path: /data/BRIDGE_CONTRACT_ADDRESS
-        value: "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125"
+        value: "0x708957bFfA312D1730BdF87467E695D3a9F26b0f"
       - op: replace
         path: /data/TREASURY_ADDRESS
         value: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513"

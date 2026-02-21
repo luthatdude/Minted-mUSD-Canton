@@ -3,13 +3,13 @@
 
 import { ethers } from "hardhat";
 
-// Deployed contract addresses on Sepolia (updated 2026-02-17)
+// Deployed contract addresses on Sepolia
 const CONTRACTS = {
   MockUSDC: "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
-  MUSD: "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
-  SMUSD: "0x8036D2bB19b20C1dE7F9b0742E2B0bB3D8b8c540",
-  DirectMintV2: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
-  TreasuryV2: "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
+  MUSD: "0x2bD1671c378A525dDA911Cc53eE9E8929D54fd9b",
+  SMUSD: "0xbe47E05f8aE025D03D034a50bE0Efd23E591AA68",
+  DirectMintV2: "0x14a728791716d3898d073eA408B458773F7ABeC1",
+  TreasuryV2: "0x76c6bFB36931293D3e4BAC6564074d5B5C55d987E",
 };
 
 async function main() {
@@ -134,11 +134,10 @@ async function main() {
   }
 
   // Approve SMUSD to pull yield
-  const approveYieldTx = await musd.approve(CONTRACTS.SMUSD, yieldAmount);
-  await approveYieldTx.wait();
+  await musd.approve(CONTRACTS.SMUSD, yieldAmount);
   
-  // Distribute yield (explicit gasLimit to avoid estimateGas issues on public RPCs)
-  const yieldTx = await smusd.distributeYield(yieldAmount, { gasLimit: 200_000 });
+  // Distribute yield
+  const yieldTx = await smusd.distributeYield(yieldAmount);
   await yieldTx.wait();
   console.log(`   ✅ Distributed ${ethers.formatUnits(yieldAmount, 18)} mUSD yield`);
 

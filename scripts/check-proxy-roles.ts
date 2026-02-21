@@ -21,7 +21,7 @@ async function main() {
   console.log("Deployer has ADMIN:", await timelock.hasRole(DEFAULT_ADMIN, deployer.address));
 
   // --- TreasuryV2 ---
-  const treasury = await ethers.getContractAt("TreasuryV2", "0xf2051bDfc738f638668DF2f8c00d01ba6338C513");
+  const treasury = await ethers.getContractAt("TreasuryV2", "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d");
   console.log("\nTreasuryV2 proxy:");
   console.log("  deployer has DEFAULT_ADMIN:", await treasury.hasRole(DEFAULT_ADMIN, deployer.address));
   console.log("  timelock has DEFAULT_ADMIN:", await treasury.hasRole(DEFAULT_ADMIN, timelockAddr));
@@ -33,7 +33,7 @@ async function main() {
   } catch { console.log("  (no UPGRADER_ROLE check)"); }
 
   // --- BLEBridgeV9 ---
-  const bridge = await ethers.getContractAt("BLEBridgeV9", "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125");
+  const bridge = await ethers.getContractAt("BLEBridgeV9", "0x708957bFfA312D1730BdF87467E695D3a9F26b0f");
   console.log("\nBLEBridgeV9 proxy:");
   console.log("  deployer has DEFAULT_ADMIN:", await bridge.hasRole(DEFAULT_ADMIN, deployer.address));
   console.log("  timelock has DEFAULT_ADMIN:", await bridge.hasRole(DEFAULT_ADMIN, timelockAddr));

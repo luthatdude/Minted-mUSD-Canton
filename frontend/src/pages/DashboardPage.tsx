@@ -63,6 +63,7 @@ interface DashboardPageProps {
 
 export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const { address, signer, isConnected, ensName, chainName } = useUnifiedWallet();
+  const chain = chainName ? { name: chainName } : null;
   const contracts = useWCContracts();
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
@@ -216,12 +217,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   }, [address, signer, contracts]);
 
   if (!isConnected) {
-    return (
-      <div className="mx-auto max-w-6xl space-y-8">
-        <PageHeader title="Dashboard" subtitle="Overview of the Minted Protocol" badge="Dashboard" badgeColor="brand" />
-        <WalletConnector mode="ethereum" />
-      </div>
-    );
+    return <WalletConnector mode="ethereum" />;
   }
 
   if (loading) {
@@ -263,7 +259,11 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
     Number(ethers.formatUnits(portfolio.totalDebt, MUSD_DECIMALS))
   ) : 0;
 
-  const hfValue = portfolio ? Number(ethers.formatUnits(portfolio.healthFactor, 18)) : 999;
+  const hfValue = portfolio
+    ? (portfolio.healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff")
+      ? Infinity
+      : Number(portfolio.healthFactor) / 10000)
+    : 999;
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
 
   return (
@@ -273,7 +273,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         <PageHeader
           title="Dashboard"
           subtitle={`Welcome back${ensName ? `, ${ensName}` : ''}`}
-          badge={chainName || "Ethereum"}
+          badge={chain?.name || "Ethereum"}
           badgeColor="brand"
         />
         <div className="flex items-center gap-2">

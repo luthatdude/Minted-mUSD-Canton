@@ -29,7 +29,7 @@ import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 
@@ -53,10 +53,13 @@ template BoostPoolLP
     ensure shares > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice BPLP_UpdateObservers : ContractId BoostPoolLP
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     choice BPLP_Transfer : ContractId BoostPoolLPTransferProposal
@@ -263,7 +266,7 @@ template CantonBoostPoolService
         exercise cantonCid CantonCoin_Burn
 
         -- Issue LP token
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         lpCid <- create BoostPoolLP with
           issuer = operator
           owner = user
@@ -316,7 +319,7 @@ template CantonBoostPoolService
         archive lpCid
 
         -- Mint Canton back to user
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         cantonCid <- create CantonCoin with
           issuer = operator
           owner = user

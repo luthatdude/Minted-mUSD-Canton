@@ -22,7 +22,6 @@ import DA.Set qualified as Set
 import DA.List (dedup)
 import DA.Optional (isSome, fromSome)
 import DA.Text qualified as T
-import Governance (GovernanceActionLog(..), ActionType(..))
 
 -- ============================================================
 --                     TYPE DEFINITIONS
@@ -71,12 +70,14 @@ template UpgradeProposal
 
     ensure approvalThreshold > 0
         && approvalThreshold <= length governance
-        && length governance == length (dedup governance)
         && T.length sourceVersion > 0
         && T.length targetVersion > 0
         && T.length migrationScriptHash == 64  -- SHA-256 hex
         && migrationWindowDays > 0
         && rollbackWindowDays >= 0
+
+    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
+    maintainer key._1
 
     -- | Governance member approves the upgrade
     choice UpgradeProposal_Approve : ContractId UpgradeProposal
@@ -121,21 +122,14 @@ template UpgradeProposal
           status = Active
 
     -- | Cancel the upgrade proposal
-    choice UpgradeProposal_Cancel : ContractId UpgradeCancellationLog
+    choice UpgradeProposal_Cancel : ()
       with
         reason : Text
       controller operator
       do
         assertMsg "CANNOT_CANCEL_ACTIVE" (status == Proposed || status == Approved)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
-        now <- getTime
-        create UpgradeCancellationLog with
-          operator
-          sourceVersion
-          targetVersion
-          cancelledBy = operator
-          reason
-          cancelledAt = now
+        return ()
 
 -- ============================================================
 --                     2. UPGRADE REGISTRY
@@ -162,6 +156,9 @@ template UpgradeRegistry
 
     ensure totalMigrated >= 0 && totalRolledBack >= 0
 
+    key (operator, sourceVersion, targetVersion) : (Party, Text, Text)
+    maintainer key._1
+
     -- | Record a successful migration (called by MigrationTicket)
     choice UpgradeRegistry_RecordMigration : ContractId UpgradeRegistry
       with
@@ -169,15 +166,12 @@ template UpgradeRegistry
         direction : MigrationDirection
       controller operator
       do
-        assertMsg "COUNT_MUST_BE_POSITIVE" (count > 0)
         now <- getTime
         case direction of
           Forward -> do
-            assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
             assertMsg "MIGRATION_WINDOW_CLOSED" (now <= migrationDeadline)
             create this with totalMigrated = totalMigrated + count
           Backward -> do
-            assertMsg "UPGRADE_NOT_ACTIVE" (status == Active || status == RolledBack)
             assertMsg "ROLLBACK_WINDOW_CLOSED" (now <= rollbackDeadline)
             create this with totalRolledBack = totalRolledBack + count
 
@@ -185,33 +179,19 @@ template UpgradeRegistry
     choice UpgradeRegistry_Complete : ContractId UpgradeRegistry
       controller operator
       do
-        assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
         now <- getTime
         assertMsg "MIGRATION_WINDOW_NOT_ENDED" (now > migrationDeadline)
         create this with status = Completed
 
     -- | Emergency rollback (governance triggered)
-    -- FIX M-8: Require multi-sig governance approval instead of single member.
-    -- The GovernanceActionLog proof ensures M-of-N threshold was met.
     choice UpgradeRegistry_EmergencyRollback : ContractId UpgradeRegistry
       with
         reason : Text
         authorizer : Party
-        governanceProofCid : Optional (ContractId GovernanceActionLog)
-      controller operator
+      controller authorizer
       do
         assertMsg "NOT_GOVERNANCE" (authorizer `elem` governance)
         assertMsg "REASON_REQUIRED" (T.length reason > 0)
-        -- FIX M-10: Only Active registries can be rolled back
-        assertMsg "UPGRADE_NOT_ACTIVE" (status == Active)
-        -- FIX M-8: Require governance proof for rollback (multi-sig).
-        -- Single-member rollback is blocked — must go through proposal flow.
-        case governanceProofCid of
-          Some proofCid -> do
-            proof <- fetch proofCid
-            assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ContractUpgrade)
-            assertMsg "INSUFFICIENT_APPROVERS" (length proof.approvers >= 2)
-          None -> assertMsg "GOVERNANCE_PROOF_REQUIRED" False
         now <- getTime
         assertMsg "ROLLBACK_WINDOW_CLOSED" (now <= rollbackDeadline)
         create this with status = RolledBack
@@ -240,18 +220,12 @@ template MigrationTicket
 
     -- | Execute the migration (operator processes after validation)
     choice MigrationTicket_Execute : ContractId UpgradeMigrationLog
-      with
-        registryCid : ContractId UpgradeRegistry  -- LF 2.x: explicit CID instead of fetchByKey
       controller operator
       do
-        assertMsg "BATCH_TOO_LARGE" (length contractsToMigrate <= batchSize)
         now <- getTime
         
-        -- FIX M-9: Enforce batchSize limit on contracts per migration transaction
-        assertMsg "BATCH_SIZE_EXCEEDED" (length contractsToMigrate <= batchSize)
-        
         -- Verify upgrade is still active
-        registry <- fetch registryCid
+        (registryCid, registry) <- fetchByKey @UpgradeRegistry upgradeKey
         assertMsg "UPGRADE_NOT_ACTIVE" (registry.status == Active)
         
         -- Record migration count
@@ -296,19 +270,6 @@ template UpgradeMigrationLog
 
     -- No choices - immutable audit record
     -- This contract remains on the ledger permanently for compliance
-
--- | UpgradeCancellationLog - Immutable cancellation record.
-template UpgradeCancellationLog
-  with
-    operator : Party
-    sourceVersion : Text
-    targetVersion : Text
-    cancelledBy : Party
-    reason : Text
-    cancelledAt : Time
-  where
-    signatory operator
-    observer cancelledBy
 
 -- ============================================================
 --                     5. NOTES

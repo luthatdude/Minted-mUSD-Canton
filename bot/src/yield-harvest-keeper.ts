@@ -33,6 +33,8 @@
 
 import { ethers, Wallet } from "ethers";
 import * as fs from "fs";
+import { createBotSigner } from "./signer";
+import { TxQueue } from "./tx-queue";
 import http from "http";
 import { createLogger, format, transports } from "winston";
 
@@ -247,7 +249,7 @@ function computeAPY(
 export class YieldHarvestKeeper {
   private config: YieldKeeperConfig;
   private provider: ethers.JsonRpcProvider;
-  private keeperWallet: Wallet;
+  private keeperWallet!: ethers.Signer;
   private treasury: ethers.Contract;
   private smusd: ethers.Contract;
   private yieldDistributor: ethers.Contract | null = null;
@@ -255,6 +257,7 @@ export class YieldHarvestKeeper {
   private metaVaults: Map<string, ethers.Contract> = new Map();
   private running = false;
   private consecutiveErrors = 0;
+  public readonly txQueue = new TxQueue({ maxTxPerMinute: 8, maxRetries: 2 });
 
   /** Rolling snapshots for APY calculation — per vault address */
   private snapshots: Map<string, VaultSnapshot[]> = new Map();
@@ -286,7 +289,8 @@ export class YieldHarvestKeeper {
       );
     }
 
-    this.keeperWallet = new Wallet(config.keeperPrivateKey, this.provider);
+    // TS-H-01 FIX: Defer wallet creation to async initSigner()
+    // this.keeperWallet will be initialized in start() before any use
 
     this.treasury = new ethers.Contract(
       config.treasuryAddress,
@@ -329,9 +333,42 @@ export class YieldHarvestKeeper {
   // ─── Public API ─────────────────────────────────────────────
 
   async start(): Promise<void> {
+    // TS-H-01 FIX: Initialize KMS-backed signer (or raw key in dev)
+    this.keeperWallet = await createBotSigner(
+      this.provider,
+      "keeper_private_key",
+      "KEEPER_PRIVATE_KEY",
+    );
+
+    // Reconnect contracts with the new signer
+    this.treasury = new ethers.Contract(
+      this.config.treasuryAddress,
+      TREASURY_ABI,
+      this.keeperWallet
+    );
+    if (this.config.yieldDistributorAddress) {
+      this.yieldDistributor = new ethers.Contract(
+        this.config.yieldDistributorAddress,
+        YIELD_DISTRIBUTOR_ABI,
+        this.keeperWallet
+      );
+    }
+    if (this.config.ethPoolYieldDistributorAddress) {
+      this.ethPoolYieldDistributor = new ethers.Contract(
+        this.config.ethPoolYieldDistributorAddress,
+        ETH_POOL_YIELD_DISTRIBUTOR_ABI,
+        this.keeperWallet
+      );
+    }
+    for (const [addr, contract] of this.metaVaults) {
+      this.metaVaults.set(addr, new ethers.Contract(addr, META_VAULT_ABI, this.keeperWallet));
+    }
+
+    const walletAddress = await this.keeperWallet.getAddress();
+
     logger.info("═══════════════════════════════════════════════════");
     logger.info("  YIELD HARVEST KEEPER — Starting");
-    logger.info(`  Keeper:    ${this.keeperWallet.address}`);
+    logger.info(`  Keeper:    ${walletAddress}`);
     logger.info(`  Treasury:  ${this.config.treasuryAddress}`);
     logger.info(`  SMUSD:     ${this.config.smusdAddress}`);
     logger.info(`  YieldDist: ${this.config.yieldDistributorAddress || "(not configured)"}`);
