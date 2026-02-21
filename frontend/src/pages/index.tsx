@@ -92,11 +92,15 @@ export default function Home() {
       address={wallet.address}
       onConnect={() => wallet.connectMetaMask()}
       onDisconnect={() => wallet.disconnect()}
+      isEthConnecting={wallet.isConnecting}
       activePage={page}
       onNavigate={handleNavigate}
       chain={chainState.chain}
       onToggleChain={chainState.toggle}
       cantonParty={loopWallet.partyId}
+      onCantonConnect={() => loopWallet.connect()}
+      onCantonDisconnect={() => loopWallet.disconnect()}
+      isCantonConnecting={loopWallet.isConnecting}
     >
       {wallet.error && chainState.chain === "ethereum" && (
         <div className="mb-6 rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400">

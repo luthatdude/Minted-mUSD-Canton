@@ -7,11 +7,15 @@ interface LayoutProps {
   address: string | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  isEthConnecting?: boolean;
   activePage: string;
   onNavigate: (page: string) => void;
   chain: ActiveChain;
   onToggleChain: () => void;
   cantonParty: string | null;
+  onCantonConnect: () => void;
+  onCantonDisconnect: () => void;
+  isCantonConnecting?: boolean;
 }
 
 export function Layout({
@@ -19,11 +23,15 @@ export function Layout({
   address,
   onConnect,
   onDisconnect,
+  isEthConnecting = false,
   activePage,
   onNavigate,
   chain,
   onToggleChain,
   cantonParty,
+  onCantonConnect,
+  onCantonDisconnect,
+  isCantonConnecting = false,
 }: LayoutProps) {
   return (
     <div className="relative min-h-screen overflow-hidden bg-surface-950">
@@ -68,13 +76,17 @@ export function Layout({
       <div className="relative z-10">
         <Navbar
           address={address}
-          onConnect={onConnect}
-          onDisconnect={onDisconnect}
+          onEthConnect={onConnect}
+          onEthDisconnect={onDisconnect}
+          isEthConnecting={isEthConnecting}
           activePage={activePage}
           onNavigate={onNavigate}
           chain={chain}
           onToggleChain={onToggleChain}
           cantonParty={cantonParty}
+          onCantonConnect={onCantonConnect}
+          onCantonDisconnect={onCantonDisconnect}
+          isCantonConnecting={isCantonConnecting}
         />
         <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="animate-fade-in">

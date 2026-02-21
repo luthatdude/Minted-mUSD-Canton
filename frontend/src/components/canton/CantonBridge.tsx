@@ -1,352 +1,472 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { ethers } from "ethers";
+import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
+import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
-import WalletConnector from "@/components/WalletConnector";
+import { useCantonLedger, cantonExercise, fetchFreshBalances } from "@/hooks/useCantonLedger";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { CONTRACTS } from "@/lib/config";
+import { formatTimestamp, formatUSD } from "@/lib/format";
 
-// DAML template IDs
-const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
-const templates = {
-  BridgeService: `${PACKAGE_ID}:MUSD_Protocol:BridgeService`,
-  AttestationRequest: `${PACKAGE_ID}:MintedProtocolV2Fixed:AttestationRequest`,
-  BridgeClaim: `${PACKAGE_ID}:MUSD_Protocol:BridgeClaim`,
-  MUSD: `${PACKAGE_ID}:MintedProtocolV2Fixed:MUSD`,
+type TxStatus = "idle" | "bridging" | "success" | "error";
+type EthereumBridgeData = {
+  attestedAssets: bigint;
+  supplyCap: bigint;
+  remainingMintable: bigint;
+  lastAttestation: bigint;
+  paused: boolean;
 };
+
+function shortenParty(party?: string | null): string {
+  if (!party) return "\u2014";
+  return party.length > 36 ? `${party.slice(0, 24)}\u2026${party.slice(-8)}` : party;
+}
 
 export function CantonBridge() {
   const loopWallet = useLoopWallet();
-  
-  const [tab, setTab] = useState<"lock" | "attest" | "claim" | "usdc">("lock");
+  const activeParty = loopWallet.partyId || null;
+  const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
+
+  const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
+
   const [amount, setAmount] = useState("");
-  const [slippageBps, setSlippageBps] = useState("50"); // H-09: Default 0.5% slippage tolerance
-  const [musdCid, setMusdCid] = useState("");
-  const [targetChain, setTargetChain] = useState("1"); // Ethereum mainnet
-  const [targetAddress, setTargetAddress] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [txStatus, setTxStatus] = useState<TxStatus>("idle");
+  const [txError, setTxError] = useState<string | null>(null);
+  const [ethBridge, setEthBridge] = useState<EthereumBridgeData>({
+    attestedAssets: 0n,
+    supplyCap: 0n,
+    remainingMintable: 0n,
+    lastAttestation: 0n,
+    paused: false,
+  });
 
-  const [bridgeServices, setBridgeServices] = useState<LoopContract[]>([]);
-  const [attestations, setAttestations] = useState<LoopContract[]>([]);
-  const [claims, setClaims] = useState<LoopContract[]>([]);
-  const [musdContracts, setMusdContracts] = useState<LoopContract[]>([]);
+  const totalMusd = hasConnectedUserParty && data ? parseFloat(data.totalBalance) : 0;
 
-  const loadContracts = useCallback(async () => {
-    if (!loopWallet.isConnected) return;
-    try {
-      const [svc, att, cl, musd] = await Promise.all([
-        loopWallet.queryContracts(templates.BridgeService).catch(() => []),
-        loopWallet.queryContracts(templates.AttestationRequest).catch(() => []),
-        loopWallet.queryContracts(templates.BridgeClaim).catch(() => []),
-        loopWallet.queryContracts(templates.MUSD).catch(() => []),
-      ]);
-      setBridgeServices(svc);
-      setAttestations(att);
-      setClaims(cl);
-      setMusdContracts(musd);
-      if (musd.length > 0) setMusdCid(musd[0].contractId);
-    } catch (err) {
-      console.error("Failed to load contracts:", err);
+  const loadEthereumBridgeData = useCallback(async () => {
+    if (!CONTRACTS.BLEBridgeV9 || !ethers.isAddress(CONTRACTS.BLEBridgeV9)) {
+      return;
     }
-  }, [loopWallet.isConnected, loopWallet.queryContracts]);
+
+    try {
+      const rpcUrl =
+        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ||
+        process.env.NEXT_PUBLIC_ETH_RPC_URL ||
+        "https://ethereum-sepolia-rpc.publicnode.com";
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const bridge = new ethers.Contract(CONTRACTS.BLEBridgeV9, BLE_BRIDGE_V9_ABI, provider);
+
+      const [attestedAssets, supplyCap, remainingMintable, lastAttestation, paused] =
+        (await Promise.all([
+          bridge.attestedCantonAssets(),
+          bridge.getCurrentSupplyCap(),
+          bridge.getRemainingMintable(),
+          bridge.lastAttestationTime(),
+          bridge.paused(),
+        ])) as [bigint, bigint, bigint, bigint, boolean];
+
+      setEthBridge({
+        attestedAssets,
+        supplyCap,
+        remainingMintable,
+        lastAttestation,
+        paused,
+      });
+    } catch (err) {
+      console.error("[CantonBridge] Ethereum bridge metrics load failed:", err);
+    }
+  }, []);
 
   useEffect(() => {
-    loadContracts();
-  }, [loadContracts]);
+    void loadEthereumBridgeData();
+    const timer = setInterval(() => {
+      void loadEthereumBridgeData();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [loadEthereumBridgeData]);
 
-  async function handleLock() {
-    if (!bridgeServices.length || !musdCid) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
+  const parsedAmount = (() => {
+    const n = Number(amount);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
+
+  const hasEnoughBalance = parsedAmount > 0 && parsedAmount <= totalMusd;
+  const canRedeem = hasConnectedUserParty && parsedAmount > 0 && hasEnoughBalance && txStatus === "idle";
+  const timeSinceAttestation = ethBridge.lastAttestation > 0n
+    ? Math.round((Date.now() / 1000) - Number(ethBridge.lastAttestation))
+    : 0;
+  const attestationAge = ethBridge.lastAttestation === 0n
+    ? "Never"
+    : timeSinceAttestation < 60
+    ? `${timeSinceAttestation}s ago`
+    : timeSinceAttestation < 3600
+    ? `${Math.round(timeSinceAttestation / 60)}m ago`
+    : `${Math.round(timeSinceAttestation / 3600)}h ago`;
+  const attestationFresh = ethBridge.lastAttestation > 0n && timeSinceAttestation < 3600;
+
+  async function handleRefresh() {
+    refresh();
+    await loadEthereumBridgeData();
+  }
+
+  async function handleRedeem() {
+    if (!hasConnectedUserParty || !activeParty) {
+      setTxError("Connect your Loop wallet first.");
+      setTxStatus("error");
+      return;
+    }
+
+    if (parsedAmount <= 0) {
+      setTxError("Enter a valid amount");
+      setTxStatus("error");
+      return;
+    }
+
+    if (!hasEnoughBalance) {
+      setTxError("Insufficient CantonMUSD balance");
+      setTxStatus("error");
+      return;
+    }
+
+    setTxStatus("bridging");
+    setTxError(null);
+
     try {
-      await loopWallet.exerciseChoice(
-        templates.BridgeService,
-        bridgeServices[0].contractId,
-        "Lock_Musd_For_Bridge",
-        {
-          musdCid,
-          amount,
-          targetChainId: targetChain,
-          targetAddress,
-          slippageToleranceBps: parseInt(slippageBps) || 50, // H-09: Pass slippage tolerance
+      const fresh = await fetchFreshBalances(activeParty);
+      const freshTokens = fresh.tokens || [];
+      const operatorSnapshot = await fetchFreshBalances();
+      const directMintService = fresh.directMintService || operatorSnapshot.directMintService;
+
+      if (freshTokens.length === 0) {
+        throw new Error("No CantonMUSD tokens available");
+      }
+
+      if (!directMintService) {
+        throw new Error("DirectMintService not available \u2014 cannot redeem");
+      }
+
+      let selectedToken = freshTokens.find((t: any) => parseFloat(t.amount) >= parsedAmount);
+      if (!selectedToken) {
+        const largest = Math.max(...freshTokens.map((t: any) => parseFloat(t.amount)));
+        throw new Error(`No single token has ${amount} mUSD. Largest token has ${largest} mUSD.`);
+      }
+
+      let cidToRedeem = selectedToken.contractId;
+      const tokenAmount = parseFloat(selectedToken.amount);
+
+      if (tokenAmount > parsedAmount + 0.001) {
+        const splitResp = await cantonExercise(
+          "CantonMUSD",
+          selectedToken.contractId,
+          "CantonMUSD_Split",
+          { splitAmount: parsedAmount.toString() },
+          activeParty
+        );
+
+        if (!splitResp.success) {
+          throw new Error(splitResp.error || "Failed to split token");
         }
+
+        const afterSplit = await fetchFreshBalances(activeParty);
+        const exactToken = (afterSplit.tokens || []).find(
+          (t: any) => Math.abs(parseFloat(t.amount) - parsedAmount) < 0.01
+        );
+
+        if (exactToken) {
+          cidToRedeem = exactToken.contractId;
+        }
+      }
+
+      const redeemResp = await cantonExercise(
+        "CantonDirectMintService",
+        directMintService.contractId,
+        "DirectMint_Redeem",
+        {
+          user: activeParty,
+          musdCid: cidToRedeem,
+        },
+        activeParty
       );
-      setResult(`Locked ${amount} mUSD for bridge to chain ${targetChain}`);
+
+      if (!redeemResp.success) {
+        throw new Error(redeemResp.error || "Redemption failed");
+      }
+
+      setTxStatus("success");
       setAmount("");
-      await loadContracts();
+      setTimeout(() => {
+        void handleRefresh();
+        setTxStatus("idle");
+      }, 4000);
     } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      console.error("[CantonBridge] Redeem failed:", err);
+      setTxError(err.message || "Redemption failed");
+      setTxStatus("error");
     }
   }
 
-  async function handleFinalizeClaim(claimCid: string) {
-    setLoading(true);
-    setError(null);
-    try {
-      await loopWallet.exerciseChoice(
-        templates.BridgeClaim,
-        claimCid,
-        "Finalize_Bridge_Mint",
-        {}
-      );
-      setResult("Bridge claim finalized - mUSD minted on Canton");
-      await loadContracts();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  function handleReset() {
+    setTxStatus("idle");
+    setTxError(null);
   }
 
-  // USDC Bridge via Loop Wallet extension
-  async function handleUsdcBridge() {
-    if (!loopWallet.provider) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    try {
-      // Access Loop Wallet's USDC bridge extension
-      const { loop } = await import('@fivenorth/loop-sdk');
-      await loop.wallet.extension.usdcBridge.withdrawalUSDCxToEthereum({
-        amount,
-        message: `Bridge ${amount} USDC to Ethereum`,
-      });
-      setResult(`Initiated USDC bridge to Ethereum for ${amount} USDC`);
-      setAmount("");
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  if (!loopWallet.isConnected) {
+  if (loading && !data) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="max-w-md space-y-6">
-          <div className="text-center">
-            <h3 className="mb-2 text-xl font-semibold text-white">Connect to Canton</h3>
-            <p className="text-gray-400 mb-6">Connect your Loop Wallet for bridge operations.</p>
-          </div>
-          <WalletConnector mode="canton" />
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-purple-500/20 border-t-purple-500" />
+          <p className="text-gray-400">Loading Canton bridge data\u2026</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <div className="max-w-md space-y-4 text-center">
+          <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
+          <p className="text-sm text-gray-400">{error}</p>
+          <button onClick={() => void handleRefresh()} className="rounded-xl bg-purple-600 px-6 py-2 font-medium text-white hover:bg-purple-500">
+            Retry
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white">Canton Bridge</h1>
-      <p className="text-emerald-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
-      <p className="text-gray-400">Lock mUSD on Canton for Ethereum bridging, or claim bridged assets</p>
+    <div className="mx-auto max-w-4xl space-y-8">
+      <PageHeader
+        title="Canton Bridge"
+        subtitle="Real-time view of Canton Network attestations governing mUSD supply cap on Ethereum"
+        badge={ethBridge.paused ? "PAUSED" : "Active"}
+        badgeColor={ethBridge.paused ? "warning" : "emerald"}
+        action={
+          <button
+            onClick={() => void handleRefresh()}
+            className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2 text-sm font-medium text-purple-400 hover:bg-purple-500/20"
+          >
+            <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh
+          </button>
+        }
+      />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Bridge Services" value={bridgeServices.length.toString()} />
-        <StatCard label="Pending Attestations" value={attestations.length.toString()} color="yellow" />
-        <StatCard label="Claimable" value={claims.length.toString()} color="green" />
+      {ethBridge.paused && (
+        <div className="alert-error flex items-center gap-3">
+          <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-sm font-medium">Bridge is currently paused. Attestation submissions and minting are disabled.</span>
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Attested Canton Assets"
+          value={formatUSD(ethBridge.attestedAssets)}
+          color="blue"
+          variant="glow"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Current Supply Cap"
+          value={formatUSD(ethBridge.supplyCap)}
+          color="purple"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Remaining Mintable"
+          value={formatUSD(ethBridge.remainingMintable)}
+          color="green"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Last Attestation"
+          value={attestationAge}
+          color={attestationFresh ? "green" : "yellow"}
+          subValue={ethBridge.lastAttestation > 0n ? formatTimestamp(Number(ethBridge.lastAttestation)) : "Never"}
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
       </div>
 
-      <div className="card">
-        <div className="mb-6 flex border-b border-gray-700">
-          <button className={`tab ${tab === "lock" ? "tab-active" : ""}`} onClick={() => setTab("lock")}>
-            Lock for Bridge
-          </button>
-          <button className={`tab ${tab === "usdc" ? "tab-active" : ""}`} onClick={() => setTab("usdc")}>
-            USDC Bridge
-          </button>
-          <button className={`tab ${tab === "attest" ? "tab-active" : ""}`} onClick={() => setTab("attest")}>
-            Attestations
-          </button>
-          <button className={`tab ${tab === "claim" ? "tab-active" : ""}`} onClick={() => setTab("claim")}>
-            Claim
-          </button>
+      <div className="card-gradient-border overflow-hidden">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-500">
+            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-white">Bridge to Ethereum</h2>
+            <p className="text-sm text-gray-400">Burn mUSD on Canton \u2192 Mint on Ethereum</p>
+          </div>
         </div>
 
-        {/* USDC Bridge Tab - Loop Wallet Extension */}
-        {tab === "usdc" && (
-          <div className="space-y-4">
-            <div className="rounded-lg bg-purple-900/20 border border-purple-500/30 p-4">
-              <div className="flex items-center gap-3 mb-2">
-                <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-                <span className="font-semibold text-purple-300">Loop Wallet USDC Bridge</span>
+        <div className="mb-6">
+          {hasConnectedUserParty ? (
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-sm font-medium text-emerald-300">Loop Wallet Connected</span>
+                </div>
+                <span className="text-xs font-mono text-gray-500">{shortenParty(activeParty)}</span>
               </div>
-              <p className="text-sm text-gray-400">
-                Bridge USDC directly to Ethereum using Loop Wallet's native bridge extension.
-                Fast and secure cross-chain transfers.
-              </p>
             </div>
-            <div>
-              <label className="label">USDC Amount</label>
-              <input 
-                type="number" 
-                className="input" 
-                placeholder="0.00" 
-                value={amount} 
-                onChange={(e) => setAmount(e.target.value)} 
-              />
-            </div>
+          ) : (
             <button
-              onClick={handleUsdcBridge}
-              disabled={loading || !amount || parseFloat(amount) <= 0}
-              className="btn-primary w-full flex items-center justify-center gap-2"
+              onClick={loopWallet.connect}
+              disabled={loopWallet.isConnecting}
+              className="w-full rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3 text-sm font-semibold text-white transition-all hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50"
             >
-              {loading ? (
-                <>
-                  <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Bridging...
-                </>
+              {loopWallet.isConnecting ? "Connecting\u2026" : "Connect Loop Wallet"}
+            </button>
+          )}
+
+          {loopWallet.error && (
+            <p className="mt-2 text-xs text-red-300">{loopWallet.error}</p>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium text-gray-300">Amount (mUSD)</label>
+              <button
+                onClick={() => setAmount(totalMusd.toFixed(6))}
+                className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+              >
+                Max: {totalMusd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                value={amount}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "" || /^\d*\.?\d*$/.test(val)) {
+                    setAmount(val);
+                  }
+                }}
+                placeholder="0.00"
+                disabled={!hasConnectedUserParty || txStatus === "bridging"}
+                className="w-full rounded-xl bg-surface-800 border border-white/10 px-4 py-3.5 text-lg font-medium text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50 transition-colors"
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500">mUSD</span>
+            </div>
+
+            {parsedAmount > 0 && !hasEnoughBalance && (
+              <p className="mt-1 text-xs text-red-400">Insufficient mUSD balance</p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-center gap-4 py-2">
+            <div className="flex items-center gap-2 rounded-lg bg-surface-800/50 border border-white/5 px-3 py-2">
+              <div className="h-3 w-3 rounded-full bg-emerald-400" />
+              <span className="text-xs font-medium text-gray-400">Canton</span>
+            </div>
+            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+            <div className="flex items-center gap-2 rounded-lg bg-surface-800/50 border border-white/5 px-3 py-2">
+              <div className="h-3 w-3 rounded-full bg-blue-400" />
+              <span className="text-xs font-medium text-gray-400">Ethereum</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={handleRedeem}
+              disabled={!canRedeem}
+              className="w-full rounded-xl bg-gradient-to-r from-brand-500 to-purple-500 px-6 py-3.5 font-semibold text-white transition-all hover:from-brand-400 hover:to-purple-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {txStatus === "bridging" ? (
+                <span className="flex items-center justify-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Submitting\u2026
+                </span>
+              ) : !hasConnectedUserParty ? (
+                "Connect Loop Wallet First"
+              ) : parsedAmount <= 0 ? (
+                "Enter Amount"
+              ) : !hasEnoughBalance ? (
+                "Insufficient Balance"
               ) : (
-                <>
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                  </svg>
-                  Bridge USDC to Ethereum
-                </>
+                `Bridge ${amount} mUSD to Ethereum`
               )}
             </button>
           </div>
-        )}
 
-        {/* Lock Tab */}
-        {tab === "lock" && (
-          <div className="space-y-4">
-            <div>
-              <label className="label">mUSD Contract</label>
-              <select className="input" value={musdCid} onChange={(e) => setMusdCid(e.target.value)}>
-                {musdContracts.map((c) => (
-                  <option key={c.contractId} value={c.contractId}>
-                    {c.payload?.amount || "?"} mUSD - {c.contractId.slice(0, 16)}...
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Amount to Lock</label>
-              <input type="number" className="input" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </div>
-            {/* H-09: Slippage tolerance input */}
-            <div>
-              <label className="label">Slippage Tolerance (bps)</label>
-              <div className="flex gap-2 items-center">
-                <input
-                  type="number"
-                  className="input w-24"
-                  min="1"
-                  max="500"
-                  value={slippageBps}
-                  onChange={(e) => setSlippageBps(e.target.value)}
-                />
-                <span className="text-gray-400 text-sm">
-                  ({((parseInt(slippageBps) || 0) / 100).toFixed(2)}%)
-                </span>
-                <div className="flex gap-1 ml-2">
-                  {[10, 50, 100].map((v) => (
-                    <button
-                      key={v}
-                      onClick={() => setSlippageBps(v.toString())}
-                      className={`px-2 py-1 text-xs rounded ${
-                        slippageBps === v.toString()
-                          ? "bg-emerald-600 text-white"
-                          : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-                      }`}
-                    >
-                      {(v / 100).toFixed(1)}%
-                    </button>
-                  ))}
+          {txStatus === "success" && (
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4">
+              <div className="flex items-start gap-3">
+                <svg className="h-5 w-5 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-emerald-300">Redemption Submitted</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Your Canton redemption request was created. The relay will settle it by minting mUSD on Ethereum.
+                  </p>
                 </div>
+                <button onClick={handleReset} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label className="label">Target Chain ID</label>
-                <select className="input" value={targetChain} onChange={(e) => setTargetChain(e.target.value)}>
-                  <option value="1">Ethereum Mainnet (1)</option>
-                  <option value="137">Polygon (137)</option>
-                  <option value="42161">Arbitrum (42161)</option>
-                  <option value="10">Optimism (10)</option>
-                </select>
-              </div>
-              <div>
-                <label className="label">Target Address</label>
-                <input type="text" className="input" placeholder="0x..." value={targetAddress} onChange={(e) => setTargetAddress(e.target.value)} />
+          )}
+
+          {txStatus === "error" && txError && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4">
+              <div className="flex items-start gap-3">
+                <svg className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-red-300">Transaction Failed</p>
+                  <p className="text-xs text-gray-400 mt-1 break-all">{txError}</p>
+                </div>
+                <button onClick={handleReset} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
             </div>
-            <button
-              onClick={handleLock}
-              disabled={loading || !amount || parseFloat(amount) <= 0 || !targetAddress}
-              className="btn-primary w-full"
-            >
-              {loading ? "Locking on Canton..." : "Lock mUSD for Bridge"}
-            </button>
-          </div>
-        )}
+          )}
 
-        {/* Attestations Tab */}
-        {tab === "attest" && (
-          <div className="space-y-3">
-            {attestations.length === 0 ? (
-              <p className="text-gray-500">No pending attestations</p>
-            ) : (
-              attestations.map((att) => (
-                <div key={att.contractId} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <p className="font-mono text-xs text-gray-400">{att.contractId}</p>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-gray-500">Aggregator: </span>
-                      <span className="text-gray-300">{att.payload?.aggregator?.slice(0, 20) || "?"}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Validators: </span>
-                      <span className="text-gray-300">{att.payload?.validatorGroup?.length || 0}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Signatures: </span>
-                      <span className="text-gray-300">{att.payload?.signatures?.length || 0}</span>
-                    </div>
-                  </div>
-                  <pre className="mt-2 max-h-24 overflow-auto rounded bg-gray-900 p-2 text-xs text-gray-400">
-                    {JSON.stringify(att.payload?.payload, null, 2)}
-                  </pre>
-                </div>
-              ))
-            )}
+          <div className="rounded-xl bg-surface-800/50 border border-white/5 p-4 space-y-2">
+            <p className="text-xs font-medium text-gray-400">How it works</p>
+            <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+              <li>Your CantonMUSD is consumed by DirectMint_Redeem on Canton</li>
+              <li>A RedemptionRequest is created on the Canton ledger</li>
+              <li>The relay detects the request and mints mUSD on Ethereum</li>
+              <li>Typical completion time: 10\u201390 seconds</li>
+            </ol>
           </div>
-        )}
-
-        {/* Claim Tab */}
-        {tab === "claim" && (
-          <div className="space-y-3">
-            {claims.length === 0 ? (
-              <p className="text-gray-500">No pending claims</p>
-            ) : (
-              claims.map((cl) => (
-                <div key={cl.contractId} className="rounded-lg border border-gray-700 bg-gray-800 p-4">
-                  <p className="font-mono text-xs text-gray-400">{cl.contractId}</p>
-                  <div className="mt-2 text-sm text-gray-300">
-                    Amount: {cl.payload?.amount || "?"}
-                  </div>
-                  <button
-                    onClick={() => handleFinalizeClaim(cl.contractId)}
-                    disabled={loading}
-                    className="btn-primary mt-3 text-sm"
-                  >
-                    {loading ? "Finalizing..." : "Finalize Claim"}
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
-        {result && <p className="mt-4 text-sm text-green-400">{result}</p>}
+        </div>
       </div>
     </div>
   );

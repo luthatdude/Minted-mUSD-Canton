@@ -3,6 +3,7 @@ export const BORROW_MODULE_ABI = [
   "function minDebt() view returns (uint256)",
   "function totalDebt(address user) view returns (uint256)",
   "function healthFactor(address user) view returns (uint256)",
+  "function healthFactorUnsafe(address user) view returns (uint256)",
   "function maxBorrow(address user) view returns (uint256)",
   "function borrow(uint256 amount)",
   "function repay(uint256 amount)",

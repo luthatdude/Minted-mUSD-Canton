@@ -62,6 +62,8 @@ export interface CantonClientConfig {
   readAs?: string[];
   /** Request timeout in milliseconds */
   timeoutMs?: number;
+  /** Default DAML package ID for template resolution */
+  defaultPackageId?: string;
 }
 
 // ============================================================
@@ -75,6 +77,7 @@ export class CantonClient {
   private actAs: string;
   private readAs: string[];
   private timeoutMs: number;
+  private defaultPackageId: string;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -84,6 +87,7 @@ export class CantonClient {
     this.actAs = config.actAs;
     this.readAs = config.readAs || [];
     this.timeoutMs = config.timeoutMs || 30_000;
+    this.defaultPackageId = config.defaultPackageId || "";
   }
 
   // ----------------------------------------------------------
@@ -261,19 +265,26 @@ export class CantonClient {
    * @param payload      Contract payload (create arguments)
    * @returns The contract creation result (transaction events)
    */
+  /**
+   * Format a TemplateId as the string "packageId:moduleName:entityName"
+   * required by the Canton v2 JSON API.
+   */
+  private formatTemplateId(templateId: TemplateId): string {
+    const pkg = templateId.packageId || this.defaultPackageId;
+    if (!pkg) {
+      throw new Error(
+        `No packageId for template ${templateId.moduleName}:${templateId.entityName}. ` +
+        `Set CANTON_PACKAGE_ID env or provide packageId in TemplateId.`
+      );
+    }
+    return `${pkg}:${templateId.moduleName}:${templateId.entityName}`;
+  }
+
   async createContract<T = Record<string, unknown>>(
     templateId: TemplateId,
     payload: T
   ): Promise<unknown> {
     const commandId = `relay-create-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-
-    const tid: Record<string, string> = {
-      moduleName: templateId.moduleName,
-      entityName: templateId.entityName,
-    };
-    if (templateId.packageId) {
-      tid.packageId = templateId.packageId;
-    }
 
     const body = {
       userId: this.userId,
@@ -282,9 +293,9 @@ export class CantonClient {
       commandId,
       commands: [
         {
-          createCommand: {
-            templateId: tid,
-            createArgument: payload,
+          CreateCommand: {
+            templateId: this.formatTemplateId(templateId),
+            createArguments: payload,
           },
         },
       ],
@@ -300,33 +311,32 @@ export class CantonClient {
    * @param contractId   Contract ID to exercise on
    * @param choice       Choice name (e.g., "Attestation_Complete")
    * @param choiceArgument  Choice argument payload
+   * @param extraActAs   Additional parties to include in actAs (e.g., governance party
+   *                     for choices with multi-party controllers like ReceiveYield)
    * @returns The exercise result (transaction events)
    */
   async exerciseChoice(
     templateId: TemplateId,
     contractId: string,
     choice: string,
-    choiceArgument: Record<string, unknown> = {}
+    choiceArgument: Record<string, unknown> = {},
+    extraActAs: string[] = []
   ): Promise<unknown> {
     const commandId = `relay-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
-    const tid: Record<string, string> = {
-      moduleName: templateId.moduleName,
-      entityName: templateId.entityName,
-    };
-    if (templateId.packageId) {
-      tid.packageId = templateId.packageId;
-    }
+    // Build actAs array: always include primary party, plus any extra parties
+    // (e.g., governance party for dual-controller choices like ReceiveYield)
+    const actAs = [this.actAs, ...extraActAs.filter(p => p && p !== this.actAs)];
 
     const body = {
       userId: this.userId,
-      actAs: [this.actAs],
+      actAs,
       readAs: this.readAs,
       commandId,
       commands: [
         {
-          exerciseCommand: {
-            templateId: tid,
+          ExerciseCommand: {
+            templateId: this.formatTemplateId(templateId),
             contractId,
             choice,
             choiceArgument,
@@ -396,10 +406,18 @@ export const TEMPLATES = {
   BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
   BridgeInRequest:    { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" } as TemplateId,
   MUSDSupplyService:  { moduleName: "Minted.Protocol.V3", entityName: "MUSDSupplyService" } as TemplateId,
+  ComplianceRegistry: { moduleName: "Compliance", entityName: "ComplianceRegistry" } as TemplateId,
   // Standalone module bridge-out requests (from CantonDirectMint USDC/USDCx minting)
   StandaloneBridgeOutRequest: { moduleName: "CantonDirectMint", entityName: "BridgeOutRequest" } as TemplateId,
+  // Standalone module redemption requests (mUSD burned; Canton USDC owed)
+  RedemptionRequest: { moduleName: "CantonDirectMint", entityName: "RedemptionRequest" } as TemplateId,
+  // On-ledger marker for Ethereum-side redemption settlement idempotency
+  RedemptionEthereumSettlement: { moduleName: "CantonDirectMint", entityName: "RedemptionEthereumSettlement" } as TemplateId,
+  // Canton-side USDC token used for redemption fulfillment
+  CantonUSDC: { moduleName: "CantonDirectMint", entityName: "CantonUSDC" } as TemplateId,
   // Canton mUSD token (CantonDirectMint module)
   CantonMUSD:             { moduleName: "CantonDirectMint", entityName: "CantonMUSD" } as TemplateId,
+  CantonMUSDTransferProposal: { moduleName: "CantonDirectMint", entityName: "CantonMUSDTransferProposal" } as TemplateId,
   // smUSD staking service (yield → pooledMusd, share price ↑)
   CantonStakingService:   { moduleName: "CantonSMUSD", entityName: "CantonStakingService" } as TemplateId,
   // ETH Pool service (yield → pooledUsdc counter, share price ↑)

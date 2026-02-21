@@ -15,26 +15,46 @@ const NAV_ITEMS = [
 
 interface NavbarProps {
   address: string | null;
-  onConnect: () => void;
-  onDisconnect: () => void;
+  onEthConnect: () => void;
+  onEthDisconnect: () => void;
+  isEthConnecting?: boolean;
   activePage: string;
   onNavigate: (page: string) => void;
   chain: ActiveChain;
   onToggleChain: () => void;
   cantonParty: string | null;
+  onCantonConnect: () => void;
+  onCantonDisconnect: () => void;
+  isCantonConnecting?: boolean;
 }
 
 export function Navbar({
   address,
-  onConnect,
-  onDisconnect,
+  onEthConnect,
+  onEthDisconnect,
+  isEthConnecting = false,
   activePage,
   onNavigate,
   chain,
   onToggleChain,
   cantonParty,
+  onCantonConnect,
+  onCantonDisconnect,
+  isCantonConnecting = false,
 }: NavbarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const loopWalletNumber = React.useMemo(() => {
+    if (!cantonParty) return null;
+    const [partyName] = cantonParty.split("::");
+    if (!partyName) return cantonParty;
+
+    const mintedUserPrefix = "minted-user-";
+    if (partyName.startsWith(mintedUserPrefix)) {
+      return partyName.slice(mintedUserPrefix.length);
+    }
+
+    return partyName;
+  }, [cantonParty]);
 
   return (
     <>
@@ -95,42 +115,69 @@ export function Navbar({
           {/* Right Side */}
           <div className="flex items-center gap-3">
             <ChainToggle chain={chain} onToggle={onToggleChain} />
-            
-            {chain === "ethereum" ? (
+
+            {loopWalletNumber ? (
+              <button
+                onClick={onCantonDisconnect}
+                className="group flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 transition-all duration-300 hover:border-emerald-500/50 hover:bg-emerald-500/20"
+                title={cantonParty ?? "Disconnect Loop wallet"}
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                <span className="max-w-[240px] truncate">Loop #{loopWalletNumber}</span>
+                <svg
+                  className="h-4 w-4 text-emerald-300/80 transition-colors group-hover:text-emerald-200"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
+                </svg>
+              </button>
+            ) : chain === "ethereum" ? (
               address ? (
-                <button 
-                  onClick={onDisconnect} 
-                  className="group flex items-center gap-2 rounded-xl border border-white/10 bg-surface-800/50 px-4 py-2.5 text-sm font-medium text-gray-200 backdrop-blur-sm transition-all duration-300 hover:border-white/20 hover:bg-surface-700/50"
+                <button
+                  onClick={onEthDisconnect}
+                  className="group flex items-center gap-2 rounded-xl border border-white/10 bg-surface-800/50 px-3 py-2 text-xs font-medium text-gray-200 backdrop-blur-sm transition-all duration-300 hover:border-white/20 hover:bg-surface-700/50"
+                  title="Disconnect Ethereum wallet"
                 >
                   <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-                  {shortenAddress(address)}
-                  <svg className="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  ETH {shortenAddress(address)}
+                  <svg
+                    className="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-300"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                    />
                   </svg>
                 </button>
               ) : (
-                <button onClick={onConnect} className="btn-primary text-sm">
-                  <span className="flex items-center gap-2">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                    Connect Wallet
-                  </span>
+                <button
+                  onClick={onEthConnect}
+                  disabled={isEthConnecting}
+                  className="rounded-xl border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-xs font-semibold text-brand-300 transition-all duration-300 hover:border-brand-500/50 hover:bg-brand-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isEthConnecting ? "Connecting ETH..." : "Connect ETH"}
                 </button>
               )
             ) : (
-              cantonParty ? (
-                <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 backdrop-blur-sm">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-                  <span className="text-sm font-medium text-emerald-400">
-                    {cantonParty.length > 16 ? cantonParty.slice(0, 16) + "..." : cantonParty}
-                  </span>
-                </div>
-              ) : (
-                <span className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2.5 text-sm font-medium text-yellow-400">
-                  Canton Disconnected
-                </span>
-              )
+              <button
+                onClick={onCantonConnect}
+                disabled={isCantonConnecting}
+                className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 transition-all duration-300 hover:border-emerald-500/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isCantonConnecting ? "Connecting Loop..." : "Connect Loop"}
+              </button>
             )}
 
             {/* Mobile Menu Button */}
