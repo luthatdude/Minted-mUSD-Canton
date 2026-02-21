@@ -13,11 +13,6 @@
  */
 
 import * as crypto from "crypto";
-import {
-  cantonApiErrorsTotal,
-  cantonApiRetriesTotal,
-  cantonApiDuration,
-} from "./metrics";
 
 // ============================================================
 //                     TYPES
@@ -83,12 +78,6 @@ export class CantonClient {
   private readAs: string[];
   private timeoutMs: number;
   private defaultPackageId: string;
-  private static readonly MAX_RETRIES = 3;
-  private static readonly BASE_RETRY_DELAY_MS = 1000;
-  private static readonly MAX_RETRY_DELAY_MS = 15000;
-  private static readonly ACTIVE_CONTRACTS_LIMIT = 200;
-  private static readonly UPDATES_PAGE_LIMIT = 50;
-  private static readonly MAX_UPDATES_PAGES = 50;
 
   constructor(config: CantonClientConfig) {
     // Strip trailing slash
@@ -105,7 +94,7 @@ export class CantonClient {
   //  Private helpers
   // ----------------------------------------------------------
 
-  private async requestOnce<T>(
+  private async request<T>(
     method: string,
     path: string,
     body?: unknown
@@ -141,143 +130,42 @@ export class CantonClient {
     }
   }
 
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown
-  ): Promise<T> {
-    const pathLabel = path.split("?")[0];
-    const timer = cantonApiDuration.labels(method, pathLabel).startTimer();
-    let lastError: unknown;
-
-    try {
-      const maxRetries = this.getMaxRetriesForPath(path);
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-          return await this.requestOnce<T>(method, path, body);
-        } catch (err: any) {
-          lastError = err;
-
-          if (err instanceof CantonApiError) {
-            cantonApiErrorsTotal.labels(String(err.status), pathLabel).inc();
-            if (!err.isRetryable() || attempt >= maxRetries) {
-              throw err;
-            }
-            cantonApiRetriesTotal.labels(String(err.status), pathLabel).inc();
-            const delay = Math.min(
-              CantonClient.BASE_RETRY_DELAY_MS * Math.pow(2, attempt) * err.backoffMultiplier(),
-              CantonClient.MAX_RETRY_DELAY_MS
-            );
-            // Add bounded jitter to avoid synchronized retry storms.
-            const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4));
-            await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
-            continue;
-          }
-
-          if (this.isNetworkError(err)) {
-            cantonApiErrorsTotal.labels("network", pathLabel).inc();
-            if (attempt >= maxRetries) {
-              throw err;
-            }
-            cantonApiRetriesTotal.labels("network", pathLabel).inc();
-            const delay = Math.min(
-              CantonClient.BASE_RETRY_DELAY_MS * Math.pow(2, attempt),
-              CantonClient.MAX_RETRY_DELAY_MS
-            );
-            const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4));
-            await new Promise((resolve) => setTimeout(resolve, jitteredDelay));
-            continue;
-          }
-
-          throw err;
-        }
-      }
-      throw lastError instanceof Error ? lastError : new Error("Unknown Canton API failure");
-    } finally {
-      timer();
-    }
-  }
-
-  private isNetworkError(err: any): boolean {
-    if (!err) return false;
-    const code = String(err.code || "");
-    if (code === "ECONNREFUSED" || code === "ECONNRESET" || code === "ETIMEDOUT") {
-      return true;
-    }
-    const message = String(err.message || "");
-    return message.includes("timeout") || message.includes("ENOTFOUND");
-  }
-
-  private getMaxRetriesForPath(path: string): number {
-    // Avoid nested retry windows for write commands (create/exercise). The relay
-    // poll loop already retries naturally on the next cycle, and command IDs are
-    // per-operation, so extending this call can silently delay settlement paths.
-    if (path === "/v2/commands/submit-and-wait") {
-      return 0;
-    }
-    return CantonClient.MAX_RETRIES;
-  }
-
   /**
-   * Build the eventFormat object for active-contracts queries.
-   *
-   * NOTE: On Canton 3.4, the legacy `filter` field may silently broaden queries
-   * and return the full ACS. We therefore use `eventFormat` with oneof-encoded
-   * identifier filters and fully qualified template IDs.
+   * Build the filter object for active-contracts queries.
+   * If templateId is provided, filters by that template for the actAs party.
+   * If null, returns all contracts visible to the party.
    */
-  private buildEventFormat(templateId?: TemplateId | null): Record<string, unknown> {
-    const wildcard = {
-      filtersByParty: {
-        [this.actAs]: {
-          cumulative: [
-            {
-              identifierFilter: {
-                WildcardFilter: {
-                  value: { includeCreatedEventBlob: false },
-                },
-              },
-            },
-          ],
-        },
-      },
-      verbose: true,
-    };
-
+  private buildFilter(templateId?: TemplateId | null): Record<string, unknown> {
     if (!templateId) {
-      return wildcard;
+      // Wildcard — all templates visible to this party
+      return {
+        filtersByParty: {
+          [this.actAs]: {
+            identifierFilter: {
+              wildcardFilter: {},
+            },
+          },
+        },
+      };
     }
 
-    const templateIdString = this.formatTemplateId(templateId);
+    const tid: Record<string, string> = {
+      moduleName: templateId.moduleName,
+      entityName: templateId.entityName,
+    };
+    if (templateId.packageId) {
+      tid.packageId = templateId.packageId;
+    }
+
     return {
       filtersByParty: {
         [this.actAs]: {
-          cumulative: [
-            {
-              identifierFilter: {
-                TemplateFilter: {
-                  value: {
-                    templateId: templateIdString,
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
+          identifierFilter: {
+            templateFilter: {
+              value: { templateId: tid },
             },
-          ],
+          },
         },
-      },
-      verbose: true,
-    };
-  }
-
-  /**
-   * Build an updateFormat that streams ACS-delta transaction events.
-   * This is used as a fallback when active-contract snapshots hit element limits.
-   */
-  private buildUpdateFormat(templateId: TemplateId): Record<string, unknown> {
-    return {
-      includeTransactions: {
-        eventFormat: this.buildEventFormat(templateId),
-        transactionShape: "TRANSACTION_SHAPE_ACS_DELTA",
       },
     };
   }
@@ -307,7 +195,7 @@ export class CantonClient {
     const offset = await this.getLedgerEnd();
 
     const body = {
-      eventFormat: this.buildEventFormat(templateId),
+      filter: this.buildFilter(templateId),
       activeAtOffset: offset,
     };
 
@@ -327,54 +215,7 @@ export class CantonClient {
       };
     };
 
-    const activeContractsPath =
-      `/v2/state/active-contracts?limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT}`;
-
-    let entries: RawEntry[];
-    try {
-      entries = await this.request<RawEntry[]>("POST", activeContractsPath, body);
-    } catch (error: any) {
-      if (error instanceof CantonApiError && error.status === 404 && templateId) {
-        const templateIdString = this.formatTemplateId(templateId);
-        console.warn(
-          `[CantonClient] Active-contracts template lookup returned 404: ${templateIdString}`
-        );
-      }
-
-      // Canton returned HTTP 413 directly (payload too large).  For template-
-      // scoped queries we can recover via the /v2/updates replay path instead
-      // of surfacing an unrecoverable error to the caller.
-      if (error instanceof CantonApiError && error.status === 413 && templateId) {
-        const templateLabel = this.formatTemplateId(templateId);
-        console.warn(
-          `[CantonClient] Active-contracts returned HTTP 413 for ${templateLabel}; falling back to /v2/updates replay`
-        );
-        const replayed = await this.queryContractsViaUpdates<T>(templateId, offset);
-        return payloadFilter ? replayed.filter((c) => payloadFilter(c.payload)) : replayed;
-      }
-
-      throw error;
-    }
-
-    // The active-contracts endpoint lacks cursor pagination. If we hit the hard
-    // cap, results may be truncated (typically oldest-first), which is unsafe for
-    // bridge correctness.
-    if (entries.length >= CantonClient.ACTIVE_CONTRACTS_LIMIT) {
-      // For template-scoped queries, fall back to replaying ACS-delta updates.
-      if (templateId) {
-        const templateLabel = this.formatTemplateId(templateId);
-        console.warn(
-          `[CantonClient] Active-contracts returned HTTP 200 with entries capped at ` +
-            `limit=${CantonClient.ACTIVE_CONTRACTS_LIMIT} for ${templateLabel}; falling back to /v2/updates replay`
-        );
-        const replayed = await this.queryContractsViaUpdates<T>(templateId, offset);
-        return payloadFilter ? replayed.filter((c) => payloadFilter(c.payload)) : replayed;
-      }
-
-      // Wildcard scans cannot be recovered via this path without full-ledger replay.
-      const templateLabel = "wildcard";
-      throw new CantonQueryLimitError(CantonClient.ACTIVE_CONTRACTS_LIMIT, templateLabel);
-    }
+    const entries = await this.request<RawEntry[]>("POST", "/v2/state/active-contracts", body);
 
     const contracts: ActiveContract<T>[] = [];
     for (const entry of entries) {
@@ -415,134 +256,6 @@ export class CantonClient {
     }
 
     return contracts;
-  }
-
-  /**
-   * Reconstruct active contracts for a template from ACS-delta updates.
-   * Used only as overflow fallback when /v2/state/active-contracts reaches cap.
-   */
-  private async queryContractsViaUpdates<T = Record<string, unknown>>(
-    templateId: TemplateId,
-    ledgerEndOffset: number
-  ): Promise<ActiveContract<T>[]> {
-    type RawCreatedEvent = {
-      contractId: string;
-      templateId: string;
-      createArgument: T;
-      createdAt?: string;
-      offset?: number;
-      signatories?: string[];
-      observers?: string[];
-    };
-
-    type RawArchivedEvent = {
-      contractId: string;
-      offset?: number;
-    };
-
-    type RawEvent = {
-      CreatedEvent?: RawCreatedEvent;
-      ArchivedEvent?: RawArchivedEvent;
-    };
-
-    type RawTx = {
-      offset?: number;
-      events?: RawEvent[];
-    };
-
-    type RawUpdateWrapper = {
-      update?: {
-        Transaction?: {
-          value?: RawTx;
-        };
-      };
-    };
-
-    const active = new Map<string, ActiveContract<T>>();
-    const templateLabel = this.formatTemplateId(templateId);
-    let beginExclusive = 0;
-    let completed = false;
-
-    for (let page = 0; page < CantonClient.MAX_UPDATES_PAGES; page++) {
-      const body = {
-        beginExclusive,
-        endInclusive: ledgerEndOffset,
-        updateFormat: this.buildUpdateFormat(templateId),
-      };
-
-      const updates = await this.request<RawUpdateWrapper[]>(
-        "POST",
-        `/v2/updates?limit=${CantonClient.UPDATES_PAGE_LIMIT}`,
-        body
-      );
-
-      if (!updates.length) {
-        completed = true;
-        break;
-      }
-
-      let maxSeenOffset = beginExclusive;
-      for (const wrapper of updates) {
-        const tx = wrapper.update?.Transaction?.value;
-        if (!tx) continue;
-
-        const txOffset = Number(tx.offset || 0);
-        if (txOffset > maxSeenOffset) {
-          maxSeenOffset = txOffset;
-        }
-
-        for (const event of tx.events || []) {
-          const created = event.CreatedEvent;
-          if (created) {
-            // Defensive filter in case node broadens responses.
-            const parts = String(created.templateId || "").split(":");
-            const mod = parts.length >= 3 ? parts[parts.length - 2] : "";
-            const ent = parts.length >= 3 ? parts[parts.length - 1] : "";
-            if (mod !== templateId.moduleName || ent !== templateId.entityName) {
-              continue;
-            }
-
-            active.set(created.contractId, {
-              contractId: created.contractId,
-              templateId: created.templateId,
-              payload: created.createArgument,
-              createdAt: created.createdAt || "",
-              offset: Number(created.offset || txOffset || 0),
-              signatories: created.signatories || [],
-              observers: created.observers || [],
-            });
-            continue;
-          }
-
-          const archived = event.ArchivedEvent;
-          if (archived) {
-            active.delete(archived.contractId);
-          }
-        }
-      }
-
-      if (maxSeenOffset <= beginExclusive) {
-        throw new CantonUpdatesReplayError(
-          templateLabel,
-          `No offset progress while replaying updates at beginExclusive=${beginExclusive}`
-        );
-      }
-      beginExclusive = maxSeenOffset;
-
-      if (updates.length < CantonClient.UPDATES_PAGE_LIMIT || beginExclusive >= ledgerEndOffset) {
-        completed = true;
-        break;
-      }
-    }
-
-    if (!completed) {
-      throw new CantonUpdatesReplayError(
-        templateLabel,
-        `Exceeded max update pages (${CantonClient.MAX_UPDATES_PAGES}) while replaying updates up to ledgerEnd=${ledgerEndOffset}`
-      );
-    }
-
-    return Array.from(active.values()).sort((a, b) => a.offset - b.offset);
   }
 
   /**
@@ -664,39 +377,6 @@ export class CantonApiError extends Error {
   ) {
     super(`Canton API error ${status} on ${path}: ${body.slice(0, 200)}`);
     this.name = "CantonApiError";
-  }
-
-  isRetryable(): boolean {
-    // 413 is intentionally excluded: payload size will not shrink on retry.
-    return [429, 500, 502, 503, 504].includes(this.status);
-  }
-
-  backoffMultiplier(): number {
-    // Give rate-limit responses extra breathing room.
-    return this.status === 429 ? 3 : 1;
-  }
-}
-
-export class CantonQueryLimitError extends CantonApiError {
-  constructor(limit: number, templateLabel: string) {
-    super(
-      413,
-      "/v2/state/active-contracts",
-      `Potentially truncated response at limit=${limit} for ${templateLabel}. ` +
-        `Use archival hygiene or migrate this flow to /v2/updates-based consumption.`
-    );
-    this.name = "CantonQueryLimitError";
-  }
-}
-
-export class CantonUpdatesReplayError extends CantonApiError {
-  constructor(templateLabel: string, reason: string) {
-    super(
-      500,
-      "/v2/updates",
-      `Failed replaying updates for ${templateLabel}: ${reason}`
-    );
-    this.name = "CantonUpdatesReplayError";
   }
 }
 

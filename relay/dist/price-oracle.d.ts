@@ -78,7 +78,7 @@ export declare function fetchTradecraftQuote(config: PriceOracleConfig, givingAm
 }>;
 export declare class PriceOracleService {
     private config;
-    private ledger;
+    private canton;
     private running;
     private health;
     private lastCtnPrice;
@@ -100,8 +100,8 @@ export declare class PriceOracleService {
      */
     pushPriceUpdate(symbol: string, price: number, source: string): Promise<void>;
     /**
-     * Initialize stable feeds (USDC, USDCx) — called once on startup.
-     * These don't change, but we refresh the timestamp to prevent staleness.
+     * Initialize stable feeds — no longer needed for lending collateral.
+     * USDC/USDCx removed as lending collateral types (economically redundant with DirectMint).
      */
     refreshStableFeeds(): Promise<void>;
     /**

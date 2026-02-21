@@ -1,248 +1,380 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { TxButton } from "@/components/TxButton";
+import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
 import {
   useCantonLedger,
   cantonExercise,
   fetchFreshBalances,
   refreshPriceFeeds,
+  type CantonBalancesData,
+  type EscrowInfo,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 
-type LendingTab = "deposit" | "borrow" | "repay" | "withdraw";
-type CollateralAsset = "CTN" | "smUSD" | "smUSD-E";
+type ActionTab = "deposit" | "borrow" | "repay" | "withdraw";
+type CollateralAsset = "CTN" | "SMUSD" | "SMUSDE";
 
-const COLLATERAL_ASSETS: { key: CollateralAsset; label: string; color: string; damlChoice: string; ltvDefault: number }[] = [
-  { key: "CTN",     label: "Canton Coin",  color: "from-yellow-400 to-orange-500", damlChoice: "Lending_DepositCTN",   ltvDefault: 6500 },
-  { key: "smUSD",   label: "smUSD",        color: "from-emerald-500 to-teal-500",  damlChoice: "Lending_DepositSMUSD", ltvDefault: 9000 },
-  { key: "smUSD-E", label: "smUSD-E",      color: "from-blue-500 to-indigo-500",   damlChoice: "Lending_DepositSMUSD", ltvDefault: 8500 },
-];
+interface CantonCollateralInfo {
+  key: CollateralAsset;
+  collateralType: string;
+  symbol: string;
+  deposited: number;
+  priceUsd: number;
+  valueUsd: number;
+  factorBps: number;
+  liqThreshold: number;
+  liqPenalty: number;
+}
 
-function fmtAmount(v: string | number, decimals = 2): string {
-  const n = typeof v === "string" ? parseFloat(v) : v;
-  if (isNaN(n)) return "0.00";
-  return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+const COLLATERAL_META: Record<CollateralAsset, { symbol: string; collateralType: string; priceAliases: string[] }> = {
+  CTN: { symbol: "Canton Coin", collateralType: "CTN_Coin", priceAliases: ["CTN", "CANTON", "CANTONCOIN", "CANTON COIN"] },
+  SMUSD: { symbol: "smUSD", collateralType: "CTN_SMUSD", priceAliases: ["SMUSD", "CTN_SMUSD"] },
+  SMUSDE: { symbol: "smUSD-E", collateralType: "CTN_SMUSDE", priceAliases: ["SMUSDE", "SMUSD-E", "CTN_SMUSDE"] },
+};
+
+function fmtAmount(value: number, digits = 2): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+function fmtUSD(value: number): string {
+  return `$${fmtAmount(value, 2)}`;
+}
+
+function fmtBps(bps: number): string {
+  return `${(bps / 100).toFixed(2)}%`;
+}
+
+function normalizeKey(value: string): string {
+  return (value || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+function getAssetContracts(asset: CollateralAsset, data: CantonBalancesData | null): SimpleToken[] {
+  if (!data) return [];
+  if (asset === "CTN") return data.cantonCoinTokens || [];
+  if (asset === "SMUSD") return data.smusdTokens || [];
+  return data.smusdETokens || [];
+}
+
+function pickContractForAmount(tokens: SimpleToken[], requested: number): SimpleToken | null {
+  if (tokens.length === 0) return null;
+  const sorted = [...tokens].sort((a, b) => parseFloat(a.amount || "0") - parseFloat(b.amount || "0"));
+  if (requested <= 0) return sorted[0];
+  const exact = sorted.find((token) => Math.abs(parseFloat(token.amount || "0") - requested) < 0.000001);
+  if (exact) return exact;
+  const covering = sorted.find((token) => parseFloat(token.amount || "0") >= requested);
+  return covering || null;
+}
+
+function pickEscrowForWithdraw(escrows: EscrowInfo[], collateralType: string, requested: number): EscrowInfo | null {
+  const candidates = escrows
+    .filter((escrow) => escrow.collateralType === collateralType)
+    .sort((a, b) => parseFloat(a.amount || "0") - parseFloat(b.amount || "0"));
+  if (candidates.length === 0) return null;
+  const covering = candidates.find((escrow) => parseFloat(escrow.amount || "0") >= requested);
+  return covering || null;
 }
 
 export function CantonBorrow() {
-  const { data, loading, error, refresh } = useCantonLedger(15_000);
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
 
-  const [tab, setTab] = useState<LendingTab>("deposit");
+  const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
+  const { data: operatorData } = useCantonLedger(15_000);
+
+  const [action, setAction] = useState<ActionTab>("deposit");
+  const [amount, setAmount] = useState("");
   const [collateralAsset, setCollateralAsset] = useState<CollateralAsset>("CTN");
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const [borrowAmount, setBorrowAmount] = useState("");
-  const [repayIdx, setRepayIdx] = useState(0);
-  const [txLoading, setTxLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [txError, setTxError] = useState<string | null>(null);
-  const [txSuccess, setTxSuccess] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [slippageBps, setSlippageBps] = useState(50);
 
-  const lendingService = data?.lendingService || null;
-  const escrowPositions = data?.escrowPositions || [];
-  const debtPositions = data?.debtPositions || [];
-  const coinTokens = data?.cantonCoinTokens || [];
-  const smusdTokens = data?.smusdTokens || [];
-  const smusdETokens = data?.smusdETokens || [];
-  const tokens = data?.tokens || [];
-  const totalMusd = data ? parseFloat(data.totalBalance) : 0;
-  const totalCoin = data?.totalCoin ? parseFloat(data.totalCoin) : 0;
-  const totalSmusd = data?.totalSmusd ? parseFloat(data.totalSmusd) : 0;
-  const totalSmusdE = data?.totalSmusdE ? parseFloat(data.totalSmusdE) : 0;
+  const lendingService = data?.lendingService || operatorData?.lendingService || null;
 
-  const totalBorrows = lendingService ? parseFloat(lendingService.totalBorrows) : 0;
-  const interestRate = lendingService ? (lendingService.interestRateBps / 100) : 5.0;
-  const totalDebt = debtPositions.reduce((s, d) => s + parseFloat(d.debtMusd), 0);
-  const totalCollateralValue = escrowPositions.reduce((s, e) => s + parseFloat(e.amount), 0);
+  const userEscrows = useMemo(() => {
+    const rows = data?.escrowPositions || [];
+    if (!activeParty) return rows;
+    return rows.filter((row) => row.owner === activeParty);
+  }, [data?.escrowPositions, activeParty]);
 
-  function getCollateralTokens(): SimpleToken[] {
-    if (collateralAsset === "CTN") return coinTokens;
-    if (collateralAsset === "smUSD") return smusdTokens;
-    return smusdETokens;
-  }
-  function getCollateralBalance(): number {
-    if (collateralAsset === "CTN") return totalCoin;
-    if (collateralAsset === "smUSD") return totalSmusd;
-    return totalSmusdE;
-  }
+  const userDebts = useMemo(() => {
+    const rows = data?.debtPositions || [];
+    if (!activeParty) return rows;
+    return rows.filter((row) => row.owner === activeParty);
+  }, [data?.debtPositions, activeParty]);
 
-  async function handleDeposit() {
-    if (!lendingService) return;
-    setTxLoading(true); setTxError(null); setTxSuccess(null);
-    try {
-      const toks = getCollateralTokens();
-      const token = toks[selectedIdx];
-      if (!token) throw new Error(`No ${collateralAsset} token selected`);
-      let choice = "";
-      const args: Record<string, unknown> = { user: data!.party };
-      if (collateralAsset === "CTN") {
-        choice = "Lending_DepositCTN"; args.coinCid = token.contractId;
-      } else if (collateralAsset === "smUSD") {
-        choice = "Lending_DepositSMUSD"; args.smusdCid = token.contractId;
-      } else {
-        // smUSD-E uses its own choice with different arg name
-        choice = "Lending_DepositSMUSDE"; args.smusdeCid = token.contractId;
-      }
-      const resp = await cantonExercise("CantonLendingService", lendingService.contractId, choice, args);
-      if (!resp.success) throw new Error(resp.error || "Deposit failed");
-      setTxSuccess(`Deposited ${fmtAmount(token.amount)} ${collateralAsset} as collateral`);
-      await refresh();
-    } catch (err: any) { setTxError(err.message); }
-    finally { setTxLoading(false); }
-  }
+  const userMusdTokens = useMemo(() => data?.tokens || [], [data?.tokens]);
+  const userMusdBalance = userMusdTokens.reduce((sum, token) => sum + parseFloat(token.amount || "0"), 0);
 
-  async function handleBorrow() {
-    if (!lendingService || escrowPositions.length === 0) return;
-    setTxLoading(true); setTxError(null); setTxSuccess(null);
-    try {
-      const amt = parseFloat(borrowAmount);
-      if (isNaN(amt) || amt <= 0) throw new Error("Enter a valid borrow amount");
+  const collateralInfos = useMemo<CantonCollateralInfo[]>(() => {
+    const feeds = data?.priceFeeds || [];
+    const feedMap = new Map<string, number>();
+    for (const feed of feeds) {
+      const price = parseFloat(feed.priceMusd || "0");
+      feedMap.set(normalizeKey(feed.asset), Number.isFinite(price) ? price : 0);
+    }
 
-      // 1. Refresh price feeds to prevent PRICE_STALE
-      const priceResult = await refreshPriceFeeds();
-      if (!priceResult.success) {
-        console.warn("Price feed refresh warning:", priceResult.error);
-      }
+    return (Object.keys(COLLATERAL_META) as CollateralAsset[]).map((asset) => {
+      const meta = COLLATERAL_META[asset];
+      const deposited = userEscrows
+        .filter((escrow) => escrow.collateralType === meta.collateralType)
+        .reduce((sum, escrow) => sum + parseFloat(escrow.amount || "0"), 0);
 
-      // 2. Fetch fresh data after price refresh (price feeds get new CIDs)
-      const fresh = await fetchFreshBalances();
-      const freshService = fresh.lendingService;
-      if (!freshService) throw new Error("Lending service not found");
-      const freshEscrows = fresh.escrowPositions || [];
-      const freshPF = fresh.priceFeeds || [];
-      if (freshEscrows.length === 0) throw new Error("No collateral deposited");
+      const priceUsd = meta.priceAliases
+        .map((alias) => feedMap.get(normalizeKey(alias)))
+        .find((price) => Number.isFinite(price) && (price as number) > 0) || 0;
 
-      // Lending_Borrow needs ALL escrow positions + matching price feeds (1:1)
-      const allEscrowCids = freshEscrows.map(e => e.contractId);
-      const allPriceFeedCids = freshEscrows.map(e => {
-        const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
-        return freshPF.find(p => p.asset === sym)?.contractId || "";
-      });
-      if (allPriceFeedCids.some(c => !c)) throw new Error("Missing price feed for one or more collateral types");
-      const resp = await cantonExercise("CantonLendingService", freshService.contractId, "Lending_Borrow", {
-        user: fresh.party, borrowAmount: String(amt), escrowCids: allEscrowCids, priceFeedCids: allPriceFeedCids,
-      });
-      if (!resp.success) throw new Error(resp.error || "Borrow failed");
-      setTxSuccess(`Borrowed ${fmtAmount(amt)} mUSD against collateral`);
-      setBorrowAmount(""); await refresh();
-    } catch (err: any) { setTxError(err.message); }
-    finally { setTxLoading(false); }
-  }
+      const valueUsd = deposited * priceUsd;
+      const cfg = lendingService?.configs?.[meta.collateralType];
 
-  async function handleRepay() {
-    if (!lendingService || debtPositions.length === 0 || tokens.length === 0) return;
-    setTxLoading(true); setTxError(null); setTxSuccess(null);
-    try {
-      // Fetch fresh data (Lending_Repay is consuming)
-      const fresh = await fetchFreshBalances();
-      const freshService = fresh.lendingService;
-      if (!freshService) throw new Error("Lending service not found");
-      const freshDebts = fresh.debtPositions || [];
-      const freshTokens = fresh.tokens || [];
-      const debt = freshDebts[selectedIdx] || freshDebts[0];
-      if (!debt) throw new Error("No debt position found");
-      let musd = freshTokens[repayIdx] || freshTokens[0];
-      if (!musd) throw new Error("No mUSD token available for repayment");
-
-      const debtTotal = parseFloat(debt.debtMusd) + parseFloat(debt.interestAccrued || "0");
-      const musdAmount = parseFloat(musd.amount);
-
-      // If mUSD token amount > debt, split first to create exact-amount token
-      let musdCidForRepay = musd.contractId;
-      if (musdAmount > debtTotal && debtTotal > 0) {
-        const splitResp = await cantonExercise("CantonMUSD", musd.contractId, "CantonMUSD_Split", {
-          splitAmount: String(debtTotal),
-        });
-        if (!splitResp.success) throw new Error(splitResp.error || "Failed to split mUSD token");
-        // After split, we need to refresh to get the new CID of the split portion
-        const afterSplit = await fetchFreshBalances();
-        const splitTokens = afterSplit.tokens || [];
-        // Find the token with amount closest to debtTotal
-        const exactToken = splitTokens.find(t => {
-          const diff = Math.abs(parseFloat(t.amount) - debtTotal);
-          return diff < 0.000001;
-        });
-        if (exactToken) {
-          musdCidForRepay = exactToken.contractId;
-        } else {
-          // Fall back to smallest token that covers the debt
-          const sorted = [...splitTokens].sort((a, b) => parseFloat(a.amount) - parseFloat(b.amount));
-          const viable = sorted.find(t => parseFloat(t.amount) >= debtTotal);
-          if (viable) musdCidForRepay = viable.contractId;
-        }
-        // Re-fetch service CID (might have changed if concurrent ops)
-        const fresh2 = afterSplit;
-        const freshService2 = fresh2.lendingService;
-        if (freshService2) {
-          const resp = await cantonExercise("CantonLendingService", freshService2.contractId, "Lending_Repay", {
-            user: fresh2.party, debtCid: debt.contractId, musdCid: musdCidForRepay,
-          });
-          if (!resp.success) throw new Error(resp.error || "Repay failed");
-          setTxSuccess(`Repaid ${fmtAmount(debtTotal)} mUSD debt`);
-          await refresh();
-          return;
-        }
-      }
-
-      const resp = await cantonExercise("CantonLendingService", freshService.contractId, "Lending_Repay", {
-        user: fresh.party, debtCid: debt.contractId, musdCid: musdCidForRepay,
-      });
-      if (!resp.success) throw new Error(resp.error || "Repay failed");
-      setTxSuccess(`Repaid debt position`);
-      await refresh();
-    } catch (err: any) { setTxError(err.message); }
-    finally { setTxLoading(false); }
-  }
-
-  async function handleWithdraw() {
-    if (!lendingService || escrowPositions.length === 0) return;
-    setTxLoading(true); setTxError(null); setTxSuccess(null);
-    try {
-      // 1. Refresh price feeds (withdraw checks health factor which needs fresh prices)
-      const priceResult = await refreshPriceFeeds();
-      if (!priceResult.success) {
-        console.warn("Price feed refresh warning:", priceResult.error);
-      }
-
-      // 2. Fetch fresh data after price refresh
-      const fresh = await fetchFreshBalances();
-      const freshService = fresh.lendingService;
-      if (!freshService) throw new Error("Lending service not found");
-      const freshEscrows = fresh.escrowPositions || [];
-      const freshPF = fresh.priceFeeds || [];
-      const escrow = freshEscrows[selectedIdx] || freshEscrows[0];
-      if (!escrow) throw new Error("No collateral position found");
-
-      // Pick correct withdraw choice per collateral type
-      const choiceMap: Record<string, string> = {
-        "CTN_Coin": "Lending_WithdrawCTN",
-        "CTN_SMUSD": "Lending_WithdrawSMUSD",
-        "CTN_SMUSDE": "Lending_WithdrawSMUSDE",
+      return {
+        key: asset,
+        collateralType: meta.collateralType,
+        symbol: meta.symbol,
+        deposited,
+        priceUsd,
+        valueUsd,
+        factorBps: cfg?.ltvBps || 0,
+        liqThreshold: cfg?.liqThresholdBps || 0,
+        liqPenalty: cfg?.liqPenaltyBps || 0,
       };
-      const choice = choiceMap[escrow.collateralType] || "Lending_WithdrawCTN";
-      // Collect other escrow positions + price feeds for health check
-      const otherEscrows = freshEscrows.filter((_, i) => i !== selectedIdx);
-      const otherEscrowCids = otherEscrows.map(e => e.contractId);
-      const priceFeedCids = otherEscrows.map(e => {
-        const sym = e.collateralType === "CTN_Coin" ? "CTN" : e.collateralType === "CTN_SMUSD" ? "sMUSD" : "sMUSD-E";
-        return freshPF.find(p => p.asset === sym)?.contractId || "";
-      });
-      const resp = await cantonExercise("CantonLendingService", freshService.contractId, choice, {
-        user: fresh.party, escrowCid: escrow.contractId, withdrawAmount: escrow.amount,
-        otherEscrowCids, priceFeedCids,
-      });
-      if (!resp.success) throw new Error(resp.error || "Withdraw failed");
-      setTxSuccess(`Withdrew ${fmtAmount(escrow.amount)} ${escrow.collateralType} collateral`);
-      await refresh();
-    } catch (err: any) { setTxError(err.message); }
-    finally { setTxLoading(false); }
+    });
+  }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
+
+  const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
+
+  const outstandingDebt = userDebts.reduce(
+    (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
+    0
+  );
+  const totalCollateralUsd = collateralInfos.reduce((sum, row) => sum + row.valueUsd, 0);
+  const borrowCapacityUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps) / 10000, 0);
+  const maxBorrowableUsd = Math.max(borrowCapacityUsd - outstandingDebt, 0);
+  const liquidationValueUsd = collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold) / 10000, 0);
+  const healthFactor = outstandingDebt > 0 ? liquidationValueUsd / outstandingDebt : 99;
+  const weightedMaxLtvBps = totalCollateralUsd > 0
+    ? collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.factorBps), 0) / totalCollateralUsd
+    : 0;
+  const weightedLiqThresholdBps = totalCollateralUsd > 0
+    ? collateralInfos.reduce((sum, row) => sum + (row.valueUsd * row.liqThreshold), 0) / totalCollateralUsd
+    : 0;
+  const currentLtvPct = totalCollateralUsd > 0 ? (outstandingDebt / totalCollateralUsd) * 100 : 0;
+  const weightedMaxLtvPct = weightedMaxLtvBps / 100;
+  const weightedLiqThresholdPct = weightedLiqThresholdBps / 100;
+  const ltvGaugePct = weightedLiqThresholdPct > 0
+    ? Math.min(100, Math.max(0, (currentLtvPct / weightedLiqThresholdPct) * 100))
+    : 0;
+  const ltvColorClass =
+    currentLtvPct >= weightedLiqThresholdPct && weightedLiqThresholdPct > 0
+      ? "text-red-400"
+      : currentLtvPct >= weightedMaxLtvPct && weightedMaxLtvPct > 0
+      ? "text-yellow-400"
+      : "text-emerald-400";
+  const ltvGaugeGradient =
+    currentLtvPct >= weightedLiqThresholdPct && weightedLiqThresholdPct > 0
+      ? "from-red-500 to-red-400"
+      : currentLtvPct >= weightedMaxLtvPct && weightedMaxLtvPct > 0
+      ? "from-yellow-500 to-yellow-400"
+      : "from-emerald-500 to-teal-400";
+  const interestRateBps = lendingService?.interestRateBps || 0;
+  const isLiquidatable = outstandingDebt > 0 && healthFactor < 1.0;
+  const isCritical = outstandingDebt > 0 && healthFactor < 1.2;
+  const utilizationPct = borrowCapacityUsd > 0 ? Math.min(100, (outstandingDebt / borrowCapacityUsd) * 100) : 0;
+  const hfGaugePct = outstandingDebt > 0 ? Math.min(100, Math.max(0, ((Math.min(healthFactor, 3) - 1) / 2) * 100)) : 100;
+  const hfGaugeColor =
+    healthFactor < 1.2 ? "from-red-500 to-red-400" : healthFactor < 1.5 ? "from-yellow-500 to-yellow-400" : "from-emerald-500 to-teal-400";
+
+  const parsedAmount = (() => {
+    const n = Number(amount);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
+
+  function resetStatus() {
+    setTxError(null);
+    setResult(null);
+  }
+
+  async function handleAction() {
+    if (!activeParty || !hasConnectedUserParty) {
+      setTxError("Connect your Loop wallet first.");
+      return;
+    }
+    if (!lendingService?.contractId) {
+      setTxError("Canton lending service is unavailable.");
+      return;
+    }
+
+    setSubmitting(true);
+    setTxError(null);
+    setResult(null);
+
+    try {
+      const fresh = await fetchFreshBalances(activeParty);
+      const operatorFresh = await fetchFreshBalances().catch(() => null);
+      const serviceCid =
+        fresh.lendingService?.contractId ||
+        operatorFresh?.lendingService?.contractId ||
+        lendingService.contractId;
+
+      const freshEscrows = (fresh.escrowPositions || []).filter((row) => row.owner === activeParty);
+      const freshEscrowCids = freshEscrows.map((row) => row.contractId);
+      const priceFeedCids = ((fresh.priceFeeds || []).length > 0 ? fresh.priceFeeds : operatorFresh?.priceFeeds || []).map(
+        (row) => row.contractId
+      );
+
+      let choice = "";
+      let argument: Record<string, unknown> = {};
+
+      if (action === "deposit") {
+        const available = getAssetContracts(collateralAsset, fresh);
+        const selected = pickContractForAmount(available, parsedAmount);
+        if (!selected) {
+          const maxAvailable = available.reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          throw new Error(
+            maxAvailable > 0
+              ? `No ${COLLATERAL_META[collateralAsset].symbol} contract large enough. Largest available is ${fmtAmount(maxAvailable)}.`
+              : `No ${COLLATERAL_META[collateralAsset].symbol} contracts available to deposit.`
+          );
+        }
+
+        if (collateralAsset === "CTN") {
+          choice = "Lending_DepositCTN";
+          argument = { user: activeParty, coinCid: selected.contractId };
+        } else if (collateralAsset === "SMUSD") {
+          choice = "Lending_DepositSMUSD";
+          argument = { user: activeParty, smusdCid: selected.contractId };
+        } else {
+          choice = "Lending_DepositSMUSDE";
+          argument = { user: activeParty, smusdeCid: selected.contractId };
+        }
+      } else if (action === "borrow") {
+        if (parsedAmount <= 0) {
+          throw new Error("Enter a valid borrow amount.");
+        }
+        if (freshEscrowCids.length === 0) {
+          throw new Error("Deposit collateral first.");
+        }
+        if (priceFeedCids.length === 0) {
+          throw new Error("No price feeds available on Canton.");
+        }
+
+        await refreshPriceFeeds();
+        choice = "Lending_Borrow";
+        argument = {
+          user: activeParty,
+          borrowAmount: parsedAmount.toString(),
+          escrowCids: freshEscrowCids,
+          priceFeedCids,
+        };
+      } else if (action === "repay") {
+        if (parsedAmount <= 0) {
+          throw new Error("Enter a valid repay amount.");
+        }
+        const debtRows = (fresh.debtPositions || []).filter((row) => row.owner === activeParty);
+        if (debtRows.length === 0) {
+          throw new Error("No debt position found.");
+        }
+
+        const selectedDebt = [...debtRows].sort((a, b) => {
+          const aTotal = parseFloat(a.debtMusd || "0") + parseFloat(a.interestAccrued || "0");
+          const bTotal = parseFloat(b.debtMusd || "0") + parseFloat(b.interestAccrued || "0");
+          return bTotal - aTotal;
+        })[0];
+
+        const selectedMusd = pickContractForAmount(fresh.tokens || [], parsedAmount);
+        if (!selectedMusd) {
+          const maxAvailable = (fresh.tokens || []).reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
+          throw new Error(
+            maxAvailable > 0
+              ? `No mUSD contract large enough. Largest available is ${fmtAmount(maxAvailable)} mUSD.`
+              : "No mUSD token available for repayment."
+          );
+        }
+
+        choice = "Lending_Repay";
+        argument = {
+          user: activeParty,
+          musdCid: selectedMusd.contractId,
+          debtCid: selectedDebt.contractId,
+        };
+      } else {
+        if (parsedAmount <= 0) {
+          throw new Error("Enter a valid withdraw amount.");
+        }
+        if (priceFeedCids.length === 0) {
+          throw new Error("No price feeds available on Canton.");
+        }
+
+        await refreshPriceFeeds();
+
+        const collateralType = COLLATERAL_META[collateralAsset].collateralType;
+        const escrow = pickEscrowForWithdraw(freshEscrows, collateralType, parsedAmount);
+        if (!escrow) {
+          const sameTypeRows = freshEscrows.filter((row) => row.collateralType === collateralType);
+          const maxAvailable = sameTypeRows.reduce((max, row) => Math.max(max, parseFloat(row.amount || "0")), 0);
+          throw new Error(
+            maxAvailable > 0
+              ? `No ${COLLATERAL_META[collateralAsset].symbol} escrow can cover ${fmtAmount(parsedAmount)}. Largest is ${fmtAmount(maxAvailable)}.`
+              : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
+          );
+        }
+
+        if (collateralType === "CTN_Coin") {
+          choice = "Lending_WithdrawCTN";
+        } else if (collateralType === "CTN_SMUSD") {
+          choice = "Lending_WithdrawSMUSD";
+        } else {
+          choice = "Lending_WithdrawSMUSDE";
+        }
+
+        argument = {
+          user: activeParty,
+          escrowCid: escrow.contractId,
+          withdrawAmount: parsedAmount.toString(),
+          otherEscrowCids: freshEscrowCids.filter((cid) => cid !== escrow.contractId),
+          priceFeedCids,
+        };
+      }
+
+      const resp = await cantonExercise("CantonLendingService", serviceCid, choice, argument, activeParty);
+      if (!resp.success) {
+        throw new Error(resp.error || "Canton lending action failed");
+      }
+
+      setResult(`${action.charAt(0).toUpperCase() + action.slice(1)} submitted on Canton.`);
+      setAmount("");
+      refresh();
+    } catch (err: any) {
+      console.error("[CantonBorrow] action failed:", err);
+      setTxError(err.message || "Action failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!loopWallet.isConnected) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Borrow & Lend" subtitle="Deposit collateral to borrow mUSD with overcollateralization" badge="Borrow" badgeColor="warning" />
+        <WalletConnector mode="canton" />
+      </div>
+    );
   }
 
   if (loading && !data) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="text-center">
-          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-emerald-500/20 border-t-emerald-500" />
-          <p className="text-gray-400">Loading Canton ledger\u2026</p>
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-amber-500/20 border-t-amber-500" />
+          <p className="text-gray-400">Loading Canton lending data...</p>
         </div>
       </div>
     );
@@ -251,10 +383,15 @@ export function CantonBorrow() {
   if (error && !data) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
-        <div className="max-w-md space-y-4 text-center">
-          <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
-          <p className="text-sm text-gray-400">{error}</p>
-          <button onClick={refresh} className="rounded-xl bg-emerald-600 px-6 py-2 font-medium text-white hover:bg-emerald-500">Retry</button>
+        <div className="card-gradient-border max-w-md p-8 text-center">
+          <h3 className="mb-2 text-xl font-semibold text-white">Canton Lending Unavailable</h3>
+          <p className="mb-4 text-gray-400">{error}</p>
+          <button
+            onClick={refresh}
+            className="rounded-xl border border-amber-500/40 bg-amber-500/15 px-5 py-2 text-sm font-medium text-amber-300 hover:bg-amber-500/25"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -264,307 +401,538 @@ export function CantonBorrow() {
     <div className="mx-auto max-w-6xl space-y-8">
       <PageHeader
         title="Borrow & Lend"
-        subtitle="Deposit collateral and borrow mUSD at competitive rates on Canton"
-        badge="Canton"
-        badgeColor="warning"
-        action={
-          <button onClick={refresh} className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-400 hover:bg-emerald-500/20">
-            <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refresh
-          </button>
-        }
+        subtitle="Deposit collateral to borrow mUSD with overcollateralization"
+        badge={outstandingDebt > 0 ? "Active Position" : "No Position"}
+        badgeColor={outstandingDebt > 0 ? "warning" : "brand"}
       />
 
-      {!lendingService ? (
-        <div className="card-gradient-border p-8 text-center space-y-4">
-          <div className="mx-auto h-16 w-16 rounded-2xl bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center">
-            <svg className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-            </svg>
-          </div>
-          <h3 className="text-2xl font-bold text-white">Canton Lending Service</h3>
-          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-5 max-w-lg mx-auto">
-            <p className="text-sm text-gray-400">The lending service is not yet deployed on this Canton participant.</p>
+      {!lendingService && (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          Canton lending service is not deployed or not visible to this party.
+        </div>
+      )}
+
+      {lendingService?.paused && (
+        <div className="rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-4 text-sm text-yellow-200">
+          Lending service is currently paused.
+        </div>
+      )}
+
+      {isLiquidatable && (
+        <div className="rounded-2xl border-2 border-red-500/60 bg-red-900/20 p-6 backdrop-blur-sm">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/20 ring-4 ring-red-500/10">
+              <svg className="h-6 w-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-red-300">⚠ Position At Risk of Liquidation</h3>
+              <p className="mt-1 text-sm text-red-200/80">
+                Your health factor has dropped below the liquidation threshold. Add collateral or repay debt immediately.
+              </p>
+            </div>
           </div>
         </div>
-      ) : (
-        <>
-          <div className="grid gap-4 sm:grid-cols-4">
-            <StatCard label="Total Borrows" value={fmtAmount(totalBorrows) + " mUSD"} color="yellow" variant="glow" />
-            <StatCard label="Interest Rate" value={`${interestRate.toFixed(2)}%`} subValue="annualized" color="blue" />
-            <StatCard label="Your Debt" value={fmtAmount(totalDebt) + " mUSD"} subValue={`${debtPositions.length} positions`} color="red" />
-            <StatCard label="Your Collateral" value={fmtAmount(totalCollateralValue)} subValue={`${escrowPositions.length} escrows`} color="green" />
-          </div>
+      )}
 
-          <div className="grid gap-8 lg:grid-cols-2">
-            <div>
-              <div className="card-gradient-border overflow-hidden">
-                <div className="flex border-b border-white/10">
-                  {([
-                    { key: "deposit" as LendingTab, label: "Deposit" },
-                    { key: "borrow" as LendingTab, label: "Borrow" },
-                    { key: "repay" as LendingTab, label: "Repay" },
-                    { key: "withdraw" as LendingTab, label: "Withdraw" },
-                  ]).map(({ key, label }) => (
-                    <button key={key}
-                      className={`relative flex-1 px-4 py-3 text-center text-sm font-semibold transition-all ${tab === key ? "text-white" : "text-gray-400 hover:text-white"}`}
-                      onClick={() => { setTab(key); setSelectedIdx(0); setTxError(null); setTxSuccess(null); }}>
-                      {label}
-                      {tab === key && <span className="absolute bottom-0 left-1/2 h-0.5 w-12 -translate-x-1/2 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500" />}
-                    </button>
-                  ))}
-                </div>
+      {isCritical && !isLiquidatable && (
+        <div className="alert-warning flex items-center gap-3">
+          <svg className="h-5 w-5 flex-shrink-0 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="text-sm">
+            <span className="font-semibold">Caution:</span> Health factor is low ({healthFactor.toFixed(2)}). Add collateral or repay debt to avoid liquidation.
+          </span>
+        </div>
+      )}
 
-                <div className="space-y-6 p-6">
-                  {tab === "deposit" && (
-                    <>
-                      <div className="space-y-3">
-                        <label className="text-sm font-medium text-gray-400">Collateral Type</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {COLLATERAL_ASSETS.map(({ key, label }) => (
-                            <button key={key} onClick={() => { setCollateralAsset(key); setSelectedIdx(0); }}
-                              className={`rounded-xl border px-3 py-3 text-sm font-semibold transition-all ${collateralAsset === key ? "border-yellow-500 bg-yellow-500/20 text-white" : "border-white/10 bg-surface-800/50 text-gray-400 hover:border-white/30 hover:text-white"}`}>
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      {getCollateralTokens().length > 0 ? (
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <label className="text-sm font-medium text-gray-400">Select {collateralAsset}</label>
-                            <span className="text-xs text-gray-500">Balance: {fmtAmount(getCollateralBalance())} {collateralAsset}</span>
-                          </div>
-                          <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-yellow-500/50 focus:outline-none"
-                            value={selectedIdx} onChange={(e) => setSelectedIdx(Number(e.target.value))}>
-                            {getCollateralTokens().map((t, i) => (
-                              <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {collateralAsset} \u2014 {t.contractId.slice(0, 12)}\u2026</option>
-                            ))}
-                          </select>
-                          <div className="rounded-xl bg-surface-800/30 p-4 space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-400">Max LTV</span>
-                              <span className="text-white font-medium">{((COLLATERAL_ASSETS.find(c => c.key === collateralAsset)?.ltvDefault || 6500) / 100).toFixed(0)}%</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-400">Interest Rate</span>
-                              <span className="text-white font-medium">{interestRate.toFixed(2)}%</span>
-                            </div>
-                          </div>
-                          <TxButton onClick={handleDeposit} loading={txLoading} disabled={getCollateralTokens().length === 0} className="w-full">
-                            Deposit {collateralAsset} as Collateral
-                          </TxButton>
-                        </div>
-                      ) : (
-                        <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
-                          <p className="text-sm text-gray-400">No {collateralAsset} tokens available</p>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {tab === "borrow" && (
-                    escrowPositions.length === 0 ? (
-                      <div className="text-center py-12">
-                        <p className="text-gray-400 font-medium">No collateral deposited</p>
-                        <p className="text-sm text-gray-500 mt-1">Deposit collateral first to borrow mUSD</p>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Select Collateral Position</label>
-                          {escrowPositions.map((esc, idx) => (
-                            <button key={esc.contractId} onClick={() => setSelectedIdx(idx)}
-                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedIdx === idx ? "border-yellow-500 bg-yellow-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <span className="font-semibold text-white">{fmtAmount(esc.amount, 4)} {esc.collateralType}</span>
-                                  <p className="text-xs text-gray-500 mt-1">{esc.contractId.slice(0, 16)}\u2026</p>
-                                </div>
-                                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Escrowed</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Borrow Amount (mUSD)</label>
-                          <input type="number" value={borrowAmount} onChange={(e) => setBorrowAmount(e.target.value)}
-                            placeholder="0.00" min="0" step="0.01"
-                            className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-yellow-500/50 focus:outline-none" />
-                          <p className="text-xs text-gray-500">Min borrow: {fmtAmount(lendingService.minBorrow)} mUSD</p>
-                        </div>
-                        <TxButton onClick={handleBorrow} loading={txLoading} disabled={!borrowAmount || parseFloat(borrowAmount) <= 0} className="w-full">
-                          Borrow mUSD
-                        </TxButton>
-                      </>
-                    )
-                  )}
-
-                  {tab === "repay" && (
-                    debtPositions.length === 0 ? (
-                      <div className="text-center py-12">
-                        <p className="text-gray-400 font-medium">No outstanding debt</p>
-                        <p className="text-sm text-gray-500 mt-1">Nothing to repay</p>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="space-y-3">
-                          <label className="text-sm font-medium text-gray-400">Select Debt Position</label>
-                          {debtPositions.map((debt, idx) => (
-                            <button key={debt.contractId} onClick={() => setSelectedIdx(idx)}
-                              className={`w-full rounded-xl border p-4 text-left transition-all ${selectedIdx === idx ? "border-red-500 bg-red-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <span className="font-semibold text-white">{fmtAmount(debt.debtMusd)} mUSD debt</span>
-                                  <p className="text-xs text-gray-500 mt-1">{debt.collateralType} \u2022 Interest: {fmtAmount(debt.interestAccrued)} mUSD</p>
-                                </div>
-                                <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-xs text-red-400">Active</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                        {tokens.length > 0 ? (
-                          <div className="space-y-3">
-                            <label className="text-sm font-medium text-gray-400">Select mUSD for Repayment</label>
-                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-red-500/50 focus:outline-none"
-                              value={repayIdx} onChange={(e) => setRepayIdx(Number(e.target.value))}>
-                              {tokens.map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} mUSD \u2014 nonce {t.nonce}</option>
-                              ))}
-                            </select>
-                            <TxButton onClick={handleRepay} loading={txLoading} disabled={debtPositions.length === 0} className="w-full">
-                              Repay Debt
-                            </TxButton>
-                          </div>
-                        ) : (
-                          <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
-                            <p className="text-sm text-gray-400">No mUSD available for repayment</p>
-                          </div>
-                        )}
-                      </>
-                    )
-                  )}
-
-                  {tab === "withdraw" && (
-                    escrowPositions.length === 0 ? (
-                      <div className="text-center py-12">
-                        <p className="text-gray-400 font-medium">No collateral positions</p>
-                        <p className="text-sm text-gray-500 mt-1">Deposit collateral first</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <label className="text-sm font-medium text-gray-400">Select Collateral to Withdraw</label>
-                        {escrowPositions.map((esc, idx) => (
-                          <button key={esc.contractId} onClick={() => setSelectedIdx(idx)}
-                            className={`w-full rounded-xl border p-4 text-left transition-all ${selectedIdx === idx ? "border-emerald-500 bg-emerald-500/10" : "border-white/10 bg-surface-800/50 hover:border-white/30"}`}>
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <span className="font-semibold text-white">{fmtAmount(esc.amount, 4)} {esc.collateralType}</span>
-                                <p className="text-xs text-gray-500 mt-1">{esc.contractId.slice(0, 16)}\u2026</p>
-                              </div>
-                              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400">Escrowed</span>
-                            </div>
-                          </button>
-                        ))}
-                        <TxButton onClick={handleWithdraw} loading={txLoading} disabled={escrowPositions.length === 0} className="w-full">
-                          Withdraw Collateral
-                        </TxButton>
-                      </div>
-                    )
-                  )}
-
-                  {txError && <div className="alert-error flex items-center gap-3"><span className="text-sm">{txError}</span></div>}
-                  {txSuccess && <div className="alert-success flex items-center gap-3"><span className="text-sm">{txSuccess}</span></div>}
-                </div>
-              </div>
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div>
+          <div className="card-gradient-border overflow-hidden">
+            <div className="flex border-b border-white/10">
+              {(["deposit", "borrow", "repay", "withdraw"] as const).map((tab) => {
+                const tabIcons: Record<ActionTab, JSX.Element> = {
+                  deposit: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                    </svg>
+                  ),
+                  borrow: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
+                    </svg>
+                  ),
+                  repay: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  ),
+                  withdraw: (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                  ),
+                };
+                return (
+                  <button
+                    key={tab}
+                    className={`relative flex-1 px-4 py-4 text-center text-sm font-semibold transition-all duration-300 ${
+                      action === tab ? "text-white" : "text-gray-400 hover:text-white"
+                    }`}
+                    onClick={() => {
+                      setAction(tab);
+                      setAmount("");
+                      resetStatus();
+                    }}
+                  >
+                    <span className="relative z-10 flex items-center justify-center gap-2 capitalize">
+                      {tabIcons[tab]}
+                      {tab}
+                    </span>
+                    {action === tab && (
+                      <span className="absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r from-brand-500 to-purple-500" />
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="space-y-4">
-              <div className="grid gap-3">
-                {COLLATERAL_ASSETS.map(({ key, label, color, ltvDefault }) => {
-                  const cfgKey = key === "CTN" ? "CTN_Coin" : key === "smUSD" ? "CTN_SMUSD" : "CTN_SMUSDE";
-                  const cfg = lendingService.configs?.[cfgKey];
-                  const ltv = cfg ? (cfg.ltvBps / 100) : (ltvDefault / 100);
-                  const liqThreshold = cfg ? (cfg.liqThresholdBps / 100) : ltv + 10;
-                  const liqPenalty = cfg ? (cfg.liqPenaltyBps / 100) : (key === "CTN" ? 10 : 5);
-                  return (
-                    <div key={key} className="card group transition-all duration-300 hover:border-white/20">
-                      <div className="flex items-center gap-4">
-                        <div className={`h-10 w-10 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center flex-shrink-0`}>
-                          <span className="text-white font-bold text-sm">{label[0]}</span>
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="text-sm font-bold text-white">{label}</h4>
-                          <div className="flex gap-4 mt-1">
-                            <span className="text-xs text-gray-400">LTV <span className="text-white font-medium">{ltv.toFixed(0)}%</span></span>
-                            <span className="text-xs text-gray-400">Liq <span className="text-yellow-400 font-medium">{liqThreshold.toFixed(0)}%</span></span>
-                            <span className="text-xs text-gray-400">Penalty <span className="text-red-400 font-medium">{liqPenalty.toFixed(0)}%</span></span>
-                          </div>
-                        </div>
-                        <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">Live</span>
+            <div className="space-y-6 p-6">
+              {(action === "deposit" || action === "withdraw") && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-400">Collateral Token</label>
+                  <div className="relative">
+                    <select
+                      className="input appearance-none pr-10"
+                      value={collateralAsset}
+                      onChange={(e) => setCollateralAsset(e.target.value as CollateralAsset)}
+                    >
+                      {(Object.keys(COLLATERAL_META) as CollateralAsset[]).map((asset) => {
+                        const info = collateralInfos.find((row) => row.key === asset);
+                        const contractCount = getAssetContracts(asset, data).length;
+                        return (
+                          <option key={asset} value={asset}>
+                            {COLLATERAL_META[asset].symbol}
+                            {action === "deposit"
+                              ? ` (${contractCount} contract${contractCount === 1 ? "" : "s"} available)`
+                              : ` (${fmtAmount(info?.deposited || 0)} deposited)`}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <svg className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-400">
+                    {action === "deposit"
+                      ? "Deposit Amount"
+                      : action === "borrow"
+                      ? "Borrow Amount (mUSD)"
+                      : action === "repay"
+                      ? "Repay Amount (mUSD)"
+                      : "Withdraw Amount"}
+                  </label>
+                  {action === "borrow" && (
+                    <span className="text-xs text-gray-500">Max: {fmtUSD(maxBorrowableUsd)}</span>
+                  )}
+                  {action === "repay" && (
+                    <span className="text-xs text-gray-500">Debt: {fmtUSD(outstandingDebt)}</span>
+                  )}
+                </div>
+                <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
+                  <div className="flex items-center gap-4">
+                    <input
+                      type="number"
+                      className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                      placeholder="0.00"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                    <div className="flex items-center gap-2">
+                      {action === "borrow" && maxBorrowableUsd > 0 && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(maxBorrowableUsd.toFixed(4))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "repay" && outstandingDebt > 0 && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(Math.min(userMusdBalance, outstandingDebt).toFixed(4))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                        <div className={`h-6 w-6 rounded-full ${
+                          action === "borrow" || action === "repay"
+                            ? "bg-gradient-to-br from-brand-500 to-purple-500"
+                            : "bg-gradient-to-br from-blue-500 to-cyan-500"
+                        }`} />
+                        <span className="font-semibold text-white">
+                          {action === "borrow" || action === "repay" ? "mUSD" : selectedCollateralInfo?.symbol || "Token"}
+                        </span>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-
-              <div className="card overflow-hidden">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Protocol Stats</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Total Borrows</span><span className="text-white font-medium">{fmtAmount(totalBorrows)} mUSD</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Interest Rate</span><span className="text-white font-medium">{interestRate.toFixed(2)}%</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Reserve Factor</span><span className="text-white font-medium">{lendingService.reserveFactorBps / 100}%</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Min Borrow</span><span className="text-white font-medium">{fmtAmount(lendingService.minBorrow)} mUSD</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">Close Factor</span><span className="text-white font-medium">{lendingService.closeFactorBps / 100}%</span></div>
-                </div>
-              </div>
-
-              <div className="card overflow-hidden">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Your Assets</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">mUSD</span><span className="text-white font-medium">{fmtAmount(totalMusd)} ({tokens.length})</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">CTN</span><span className="text-white font-medium">{fmtAmount(totalCoin)} ({coinTokens.length})</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">smUSD</span><span className="text-white font-medium">{fmtAmount(totalSmusd, 4)} ({smusdTokens.length})</span></div>
-                  <div className="flex items-center justify-between text-sm"><span className="text-gray-400">smUSD-E</span><span className="text-white font-medium">{fmtAmount(totalSmusdE, 4)} ({smusdETokens.length})</span></div>
-                </div>
-              </div>
-
-              <div className="card overflow-hidden border-l-4 border-yellow-500">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-yellow-500/20 flex-shrink-0">
-                    <svg className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5" /></svg>
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-white mb-1">Canton Lending \u2014 Live</h3>
-                    <p className="text-sm text-gray-400">Over-collateralized lending on Canton. Deposit CTN, smUSD, or smUSD-E as collateral and borrow mUSD at {interestRate.toFixed(2)}% APR.</p>
-                    <p className="text-xs text-gray-500 mt-2 font-mono">Service: {lendingService.contractId.slice(0, 24)}\u2026</p>
                   </div>
                 </div>
+              </div>
+
+              {action === "deposit" && (
+                <p className="text-xs text-gray-500">
+                  Contract-based routing is automatic. Enter an amount and the closest matching token contract is selected.
+                </p>
+              )}
+
+              {action === "withdraw" && (
+                <>
+                  <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
+                  <p className="text-xs text-gray-500">
+                    Escrow routing is automatic. Withdrawals use an active escrow for the selected collateral type.
+                  </p>
+                </>
+              )}
+
+              <TxButton
+                onClick={handleAction}
+                loading={submitting}
+                disabled={!amount || parseFloat(amount) <= 0 || !lendingService || lendingService.paused || !hasConnectedUserParty}
+                variant={action === "repay" ? "secondary" : "primary"}
+                className="w-full"
+              >
+                <span className="flex items-center justify-center gap-2">
+                  {action === "deposit" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Deposit Collateral
+                    </>
+                  )}
+                  {action === "borrow" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1" />
+                      </svg>
+                      Borrow mUSD
+                    </>
+                  )}
+                  {action === "repay" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Repay Debt
+                    </>
+                  )}
+                  {action === "withdraw" && (
+                    <>
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                      </svg>
+                      Withdraw Collateral
+                    </>
+                  )}
+                </span>
+              </TxButton>
+
+              {txError && (
+                <div className="alert-error flex items-center gap-3">
+                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm">{txError}</span>
+                </div>
+              )}
+              {result && (
+                <div className="alert-success flex items-center gap-3">
+                  <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm">{result}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <StatCard
+              label="Total Collateral"
+              value={fmtUSD(totalCollateralUsd)}
+              color="blue"
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Outstanding Debt"
+              value={fmtUSD(outstandingDebt)}
+              color={outstandingDebt > 0 ? "red" : "default"}
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Available to Borrow"
+              value={fmtUSD(maxBorrowableUsd)}
+              color="green"
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              }
+            />
+            <StatCard
+              label="Interest Rate"
+              value={`${fmtBps(interestRateBps)} APR`}
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              }
+            />
+          </div>
+
+          <div className="card-gradient-border overflow-hidden p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">LTV Health Gauge</p>
+                <p className={`text-3xl font-bold ${ltvColorClass}`}>{currentLtvPct.toFixed(2)}%</p>
+              </div>
+              <div className="text-right text-xs text-gray-400">
+                <p>Max Borrow: {weightedMaxLtvPct.toFixed(2)}%</p>
+                <p>Liq. Threshold: {weightedLiqThresholdPct.toFixed(2)}%</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="progress">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r ${ltvGaugeGradient} transition-all duration-1000`}
+                  style={{ width: `${ltvGaugePct}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500">
+                <span className="text-emerald-400">Safe</span>
+                <span className="text-yellow-400">Borrow Limit</span>
+                <span className="text-red-400">Liquidation</span>
               </div>
             </div>
           </div>
 
-          <div className="card">
-            <h2 className="text-lg font-semibold text-white mb-5">How Canton Lending Works</h2>
-            <div className="grid gap-4 sm:grid-cols-4">
-              {[
-                { step: "1", title: "Deposit Collateral", desc: "Deposit CTN, smUSD, or smUSD-E into a collateral escrow.", color: "emerald" },
-                { step: "2", title: "Borrow mUSD", desc: "Borrow mUSD up to the LTV ratio of your collateral.", color: "blue" },
-                { step: "3", title: "Repay Debt", desc: "Repay your mUSD debt plus accrued interest.", color: "purple" },
-                { step: "4", title: "Withdraw", desc: "Reclaim your collateral once debt is cleared.", color: "yellow" },
-              ].map(({ step, title, desc, color }) => (
-                <div key={step} className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
-                  <div className={`flex h-8 w-8 items-center justify-center rounded-full bg-${color}-500/20 text-${color}-400 font-bold text-sm mb-3`}>{step}</div>
-                  <h3 className="font-medium text-white mb-1">{title}</h3>
-                  <p className="text-sm text-gray-400">{desc}</p>
+          {outstandingDebt > 0 && (
+            <div className="card-gradient-border overflow-hidden">
+              <div className="grid gap-6 sm:grid-cols-2">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                      healthFactor < 1.2 ? "bg-red-500/20" : healthFactor < 1.5 ? "bg-yellow-500/20" : "bg-emerald-500/20"
+                    }`}>
+                      <svg className={`h-5 w-5 ${
+                        healthFactor < 1.2 ? "text-red-400" : healthFactor < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                      }`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-400">Health Factor</p>
+                      <p className={`text-3xl font-bold ${
+                        healthFactor < 1.2 ? "text-red-400" : healthFactor < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                      }`}>
+                        {healthFactor > 99 ? "∞" : healthFactor.toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="progress">
+                      <div
+                        className={`h-full rounded-full bg-gradient-to-r ${hfGaugeColor} transition-all duration-1000`}
+                        style={{ width: `${hfGaugePct}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-xs text-gray-500">
+                      <span className="text-red-400">Liquidation (1.0)</span>
+                      <span>Caution (1.5)</span>
+                      <span className="text-emerald-400">Safe (3.0+)</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg bg-surface-800/50 px-3 py-2 text-sm">
+                    <span className="text-gray-400">Status: </span>
+                    <span className={`font-semibold ${
+                      healthFactor < 1.2 ? "text-red-400" : healthFactor < 1.5 ? "text-yellow-400" : "text-emerald-400"
+                    }`}>
+                      {healthFactor < 1.0 ? "Liquidatable" : healthFactor < 1.2 ? "Critical" : healthFactor < 1.5 ? "Caution" : "Healthy"}
+                    </span>
+                  </div>
                 </div>
-              ))}
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-500/20">
+                      <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm text-gray-400">Position Summary</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Collateral Value</span>
+                      <span className="font-medium text-white">{fmtUSD(totalCollateralUsd)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Outstanding Debt</span>
+                      <span className="font-medium text-red-400">{fmtUSD(outstandingDebt)}</span>
+                    </div>
+                    <div className="divider" />
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Net Position</span>
+                      <span className="font-medium text-white">{fmtUSD(Math.max(totalCollateralUsd - outstandingDebt, 0))}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-400">Utilization</span>
+                      <span className={`font-medium ${utilizationPct > 80 ? "text-red-400" : utilizationPct > 60 ? "text-yellow-400" : "text-emerald-400"}`}>
+                        {utilizationPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg bg-surface-800/50 px-4 py-3">
+                    <div>
+                      <p className="text-xs text-gray-400">Your mUSD</p>
+                      <p className="font-semibold text-white">{fmtUSD(userMusdBalance)}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setAction("repay");
+                        setAmount(Math.min(userMusdBalance, outstandingDebt).toFixed(4));
+                        resetStatus();
+                      }}
+                      disabled={userMusdBalance === 0 || outstandingDebt === 0}
+                      className="btn-secondary !py-2 !px-4 text-sm disabled:opacity-50"
+                    >
+                      Close Position
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="card overflow-hidden">
+            <div className="mb-5 flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
+                <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Collateral Positions</h2>
+                <p className="text-sm text-gray-400">{collateralInfos.length} supported tokens</p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 text-gray-400">
+                    <th className="pb-3 text-left font-medium">Token</th>
+                    <th className="pb-3 text-right font-medium">Deposited</th>
+                    <th className="pb-3 text-right font-medium">USD Value</th>
+                    <th className="pb-3 text-right font-medium">LTV</th>
+                    <th className="pb-3 text-right font-medium">Liq. Threshold</th>
+                    <th className="pb-3 text-right font-medium">Penalty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {collateralInfos.map((collateral) => (
+                    <tr key={collateral.key} className="border-b border-white/5 transition-colors hover:bg-white/[0.02]">
+                      <td className="py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-purple-500 text-xs font-bold text-white">
+                            {collateral.symbol[0]}
+                          </div>
+                          <span className="font-medium text-white">{collateral.symbol}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 text-right text-gray-300">{fmtAmount(collateral.deposited, 4)}</td>
+                      <td className="py-3 text-right font-medium text-white">{fmtUSD(collateral.valueUsd)}</td>
+                      <td className="py-3 text-right">
+                        <span className="rounded-full bg-brand-500/10 px-2 py-0.5 text-xs font-medium text-brand-400">
+                          {fmtBps(collateral.factorBps)}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right">
+                        <span className="rounded-full bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-400">
+                          {fmtBps(collateral.liqThreshold)}
+                        </span>
+                      </td>
+                      <td className="py-3 text-right">
+                        <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-medium text-red-400">
+                          {fmtBps(collateral.liqPenalty)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-        </>
-      )}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-500/20">
+            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-white">How Borrowing Works</h2>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-4">
+          <div className="rounded-xl border border-white/5 bg-surface-800/50 p-4">
+            <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-blue-500/20 text-sm font-bold text-blue-400">1</div>
+            <h3 className="mb-1 font-medium text-white">Deposit</h3>
+            <p className="text-sm text-gray-400">Lock collateral tokens in the lending escrow.</p>
+          </div>
+          <div className="rounded-xl border border-white/5 bg-surface-800/50 p-4">
+            <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-brand-500/20 text-sm font-bold text-brand-400">2</div>
+            <h3 className="mb-1 font-medium text-white">Borrow</h3>
+            <p className="text-sm text-gray-400">Borrow mUSD up to your collateral&apos;s LTV ratio.</p>
+          </div>
+          <div className="rounded-xl border border-white/5 bg-surface-800/50 p-4">
+            <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-sm font-bold text-emerald-400">3</div>
+            <h3 className="mb-1 font-medium text-white">Repay</h3>
+            <p className="text-sm text-gray-400">Return mUSD to reduce debt and improve health.</p>
+          </div>
+          <div className="rounded-xl border border-white/5 bg-surface-800/50 p-4">
+            <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-full bg-purple-500/20 text-sm font-bold text-purple-400">4</div>
+            <h3 className="mb-1 font-medium text-white">Withdraw</h3>
+            <p className="text-sm text-gray-400">Withdraw collateral while keeping the position healthy.</p>
+          </div>
+        </div>
+      </div>
+
     </div>
   );
 }
+
+export default CantonBorrow;
