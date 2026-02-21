@@ -5,19 +5,20 @@
  *   1. DirectMint: deposit USDC → mint mUSD
  *   2. Bridge ETH→Canton: burn mUSD → BridgeToCantonRequested event
  *   3. Supply cap enforcement: attempt mint beyond cap
- *   4. Canton→ETH: processAttestation (2-of-2 validator signatures)
+ *   4. (Optional) Canton→ETH: processAttestation (2-of-2 validator signatures)
  *
  * Usage:
  *   npx hardhat run scripts/e2e-bridge-test.ts --network sepolia
+ *   ENABLE_CAP_MUTATING_ATTESTATION_E2E=true npx hardhat run scripts/e2e-bridge-test.ts --network sepolia
  */
 import { ethers } from "hardhat";
 
 const ADDR = {
   musd:       "0xEAf4EFECA6d312b02A168A8ffde696bc61bf870B",
   usdc:       "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
-  bridge:     "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",   // fresh bridge with correct MUSD
-  directMint: "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
-  treasury:   "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
+  bridge:     "0xF0D3CC638a3aB76683F0aFF675329E96d17bf8a7",   // fresh bridge with correct MUSD
+  directMint: "0xd9D4A044c7032d8e5DA65C508F1d51ccCF557c8a",
+  treasury:   "0x6218782d1699C9DCA2EB16495c6307C3729cC546",
 };
 
 // Testnet-only: second validator for 2-of-2 signing
@@ -25,6 +26,8 @@ const VALIDATOR2_KEY = "0x6b061339d3eec548b88e639fe85561ed6b18c2e2cda41f8b809e5a
 
 const CANTON_PARTY = "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
 const CHAIN_ID = 11155111n; // Sepolia
+const ENABLE_CAP_MUTATING_ATTESTATION_E2E =
+  /^(1|true|yes)$/i.test(process.env.ENABLE_CAP_MUTATING_ATTESTATION_E2E || "");
 
 async function main() {
   const [signer] = await ethers.getSigners();
@@ -221,6 +224,13 @@ async function main() {
   // TEST 4: Canton→ETH (processAttestation) — 2-of-N validator sigs
   // ═════════════════════════════════════════════════════════════════════
   console.log("── TEST 4: Canton→ETH (processAttestation) ──");
+  if (!ENABLE_CAP_MUTATING_ATTESTATION_E2E) {
+    console.log(
+      "  ⏭️  TEST 4 SKIPPED — cap-mutating attestation test is disabled by default. " +
+      "Set ENABLE_CAP_MUTATING_ATTESTATION_E2E=true to run."
+    );
+    console.log();
+  } else {
   try {
     const RELAYER_ROLE = await bridge.RELAYER_ROLE();
     const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
@@ -316,6 +326,7 @@ async function main() {
     else { console.log(`  ❌ TEST 4 FAILED: ${e.message?.slice(0, 300)}`); failed++; }
   }
   console.log();
+  }
 
   // ═════════════════════════════════════════════════════════════════════
   // SUMMARY
