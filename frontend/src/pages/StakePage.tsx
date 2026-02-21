@@ -10,6 +10,7 @@ import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
 import { SlippageInput } from "@/components/SlippageInput";
+import { ClearTestnetBalances } from "@/components/ClearTestnetBalances";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 // smUSD has _decimalsOffset(3) in its ERC-4626 vault, so ERC20 decimals = 18 + 3 = 21
@@ -264,6 +265,9 @@ export function StakePage() {
         badgeColor="emerald"
       />
 
+      {/* Testnet Reset */}
+      <ClearTestnetBalances address={address ?? null} musd={musd} smusd={smusd} />
+
       {/* Pool Selector */}
       <div className="flex gap-2 rounded-xl bg-surface-800/50 p-1.5 border border-white/10">
         {POOL_TAB_CONFIG.map(({ key, label, badge, color }) => (
@@ -472,15 +476,16 @@ export function StakePage() {
                   icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
                 />
                 <StatCard
-                  label="Total Vault TVL"
-                  value={formatToken(smusdStats.totalAssets) + " mUSD"}
+                  label="Your mUSD Balance"
+                  value={formatToken(smusdStats.musdBal)}
                   color="blue"
-                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
                 />
                 <StatCard
-                  label="Total smUSD"
-                  value={formatToken(smusdStats.totalSupply, SMUSD_DECIMALS)}
+                  label="Your smUSD Balance"
+                  value={formatToken(smusdStats.smusdBal, SMUSD_DECIMALS)}
                   color="purple"
+                  subValue={smusdStats.smusdBal > 0n ? `≈ ${formatToken(smusdPositionValue)} mUSD` : undefined}
                   icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
                 />
               </div>
@@ -517,7 +522,7 @@ export function StakePage() {
               )}
 
               {/* Cooldown Timer */}
-              {!smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
+              {smusdStats.smusdBal > 0n && !smusdStats.canWithdraw && smusdStats.cooldownRemaining > 0n && (
                 <div className="card overflow-hidden">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -543,22 +548,23 @@ export function StakePage() {
                 </div>
               )}
 
-              {/* Balance Cards */}
-              <div className="grid gap-4 grid-cols-2">
-                <StatCard
-                  label="Your mUSD Balance"
-                  value={formatToken(smusdStats.musdBal)}
-                  color="blue"
-                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
-                />
-                <StatCard
-                  label="Your smUSD Balance"
-                  value={formatToken(smusdStats.smusdBal, SMUSD_DECIMALS)}
-                  color="purple"
-                  subValue={smusdStats.smusdBal > 0n ? `≈ ${formatToken(smusdPositionValue)} mUSD` : undefined}
-                  icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
-                />
-              </div>
+              {/* Protocol Stats (collapsed) */}
+              {smusdStats.smusdBal > 0n && (
+                <div className="grid gap-4 grid-cols-2">
+                  <StatCard
+                    label="Protocol TVL"
+                    value={formatToken(smusdStats.totalAssets) + " mUSD"}
+                    color="blue"
+                    icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+                  />
+                  <StatCard
+                    label="Protocol smUSD Supply"
+                    value={formatToken(smusdStats.totalSupply, SMUSD_DECIMALS)}
+                    color="purple"
+                    icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" /></svg>}
+                  />
+                </div>
+              )}
             </div>
           </div>
 

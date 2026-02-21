@@ -17,6 +17,7 @@ import { ethers, Wallet } from "ethers";
 // NODE_TLS_REJECT_UNAUTHORIZED=0 or private keys. Use Docker secrets or env vars.
 import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
+import { createBotSigner } from "./signer";
 
 // INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
 if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
@@ -184,8 +185,8 @@ function readAndValidatePrivateKey(secretName: string, envVar: string): string {
 export class OracleKeeper {
   private config: OracleKeeperConfig;
   private provider: ethers.JsonRpcProvider;
-  private wallet: Wallet;
-  private oracle: ethers.Contract;
+  private wallet!: ethers.Signer;
+  private oracle!: ethers.Contract;
   private running = false;
 
   constructor(config: OracleKeeperConfig) {
@@ -206,22 +207,22 @@ export class OracleKeeper {
         "See relay/kms-ethereum-signer.ts for KMS signer implementation."
       );
     }
-    if (!process.env.KMS_KEY_ID) {
-      console.warn(
-        "⚠️  DEPRECATED: KEEPER_PRIVATE_KEY is deprecated. " +
-        "Migrate to KMS_KEY_ID for HSM-backed signing. " +
-        "Raw private keys will be rejected in a future release."
-      );
-    }
-    this.wallet = new Wallet(config.privateKey, this.provider);
-    this.oracle = new ethers.Contract(
-      config.priceOracleAddress,
-      PRICE_ORACLE_ABI,
-      this.wallet
-    );
+    // TS-H-01 FIX: Wallet creation deferred to async initSigner() in start()
   }
 
   async start(): Promise<void> {
+    // TS-H-01 FIX: Initialize KMS-backed signer before starting
+    this.wallet = await createBotSigner(
+      this.provider,
+      "keeper_private_key",
+      "KEEPER_PRIVATE_KEY",
+    );
+    this.oracle = new ethers.Contract(
+      this.config.priceOracleAddress,
+      PRICE_ORACLE_ABI,
+      this.wallet,
+    );
+
     logger.info("═══════════════════════════════════════════════════");
     logger.info("  ORACLE KEEPER — Starting");
     logger.info(`  Oracle: ${this.config.priceOracleAddress}`);

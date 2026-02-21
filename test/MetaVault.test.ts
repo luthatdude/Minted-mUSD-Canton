@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { ethers, upgrades } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import type { MetaVault } from "../typechain-types/contracts/MetaVault";
 
 describe("MetaVault", function () {
   async function deployFixture() {
@@ -21,11 +22,11 @@ describe("MetaVault", function () {
 
     // Deploy MetaVault
     const MetaVault = await ethers.getContractFactory("contracts/MetaVault.sol:MetaVault");
-    const vault = await upgrades.deployProxy(
+    const vault = (await upgrades.deployProxy(
       MetaVault,
       [usdcAddr, treasury.address, admin.address, timelockSigner.address],
       { kind: "uups", initializer: "initialize" }
-    );
+    )) as unknown as MetaVault;
     const vaultAddr = await vault.getAddress();
 
     // Grant roles

@@ -15,21 +15,11 @@ contract MockWormholeTokenBridge {
     uint256 public transferAmount;
     address public transferRecipient;
     uint64 private _sequence;
-    address public wormholeCore;
     
     constructor() {
         // Default constructor for flexible testing
     }
     
-    /// @notice SOL-M-1: Return wormhole core contract for messageFee queries
-    function wormhole() external view returns (address) {
-        return wormholeCore;
-    }
-
-    function setWormholeCore(address _wormholeCore) external {
-        wormholeCore = _wormholeCore;
-    }
-
     function setUsdc(address _usdc) external {
         usdc = IERC20(_usdc);
     }

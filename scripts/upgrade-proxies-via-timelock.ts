@@ -19,8 +19,8 @@ import * as path from "path";
 
 // ── Addresses ──────────────────────────────────────────────────────────
 const TIMELOCK = "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410";
-const TREASURY_PROXY = "0xf2051bDfc738f638668DF2f8c00d01ba6338C513";
-const BRIDGE_PROXY = "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125";
+const TREASURY_PROXY = "0x11Cc7750F2033d21FC3762b94D1355eD15F7913d";
+const BRIDGE_PROXY = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
 
 // Pre-deployed implementations (set these if resuming after partial deploy)
 // Leave empty to deploy fresh.

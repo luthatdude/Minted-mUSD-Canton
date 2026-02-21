@@ -5,7 +5,7 @@
 -- with multi-collateral support, real token escrowing, and compliance gating.
 --
 -- Architecture:
---   Users deposit Canton-native assets (CantonCoin, CantonSMUSD, CantonSMUSD_E)
+--   Users deposit Canton-native assets (CantonCoin, CantonUSDC, USDCx, CantonSMUSD)
 --   as collateral into escrowed positions. They borrow CantonMUSD against this collateral.
 --
 --   Price feeds from Tradecraft DEX API (primary, no auth) and Temple DEX API (fallback).
@@ -16,8 +16,9 @@
 --
 -- Supported Collateral:
 --   - CantonCoin (CTN)   — volatile, Temple DEX price feed, ~65% LTV
+--   - CantonUSDC         — stable 1:1, hardcoded price, ~95% LTV
+--   - USDCx              — stable 1:1 (xReserve bridged), ~95% LTV
 --   - CantonSMUSD        — yield-bearing, globalSharePrice feed, ~90% LTV
---   - CantonSMUSD_E      — ETH pool receipt, ~85% LTV
 --
 -- Revenue Model:
 --   Interest on borrows → routed to sMUSD stakers (mirroring Ethereum BorrowModule)
@@ -30,11 +31,11 @@ import DA.Time
 import DA.Text qualified as DA.Text
 import DA.Optional (fromOptional)
 import DA.List (dedup)
-import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), Money, Bps, CantonDirectMintService(..))
+import CantonDirectMint (CantonMUSD(..), CantonMUSD_Burn(..), CantonMUSD_Split(..), CantonUSDC(..), USDCx(..), Money, Bps, CantonDirectMintService(..))
 import CantonSMUSD (CantonSMUSD(..))
 import CantonETHPool (CantonSMUSD_E(..), TimeLockTier(..))
 import CantonCoinToken (CantonCoin(..))
-import Compliance (ComplianceRegistry(..), IsCompliant(..))
+import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
 import UserPrivacySettings (lookupUserObservers)
 
@@ -45,6 +46,8 @@ import UserPrivacySettings (lookupUserObservers)
 -- | Collateral asset type tag
 data CollateralType
   = CTN_Coin       -- CantonCoin (volatile)
+  | CTN_USDC       -- CantonUSDC (stable)
+  | CTN_USDCx      -- USDCx / xReserve bridged (stable)
   | CTN_SMUSD      -- CantonSMUSD (yield-bearing stable)
   | CTN_SMUSDE     -- CantonSMUSD_E (ETH Pool variant — lending/borrowing enabled)
   deriving (Eq, Show, Ord)
@@ -53,7 +56,7 @@ data CollateralType
 data CollateralConfig = CollateralConfig with
     collateralType         : CollateralType
     enabled                : Bool
-    collateralFactorBps    : Bps    -- Max LTV. e.g. 6500 = 65% for CTN, 9000 = 90% for sMUSD
+    collateralFactorBps    : Bps    -- Max LTV. e.g. 6500 = 65% for CTN, 9500 = 95% for USDC
     liquidationThresholdBps : Bps   -- Liquidation triggers here. e.g. 7500 = 75%
     liquidationPenaltyBps  : Bps    -- Penalty on seized collateral. e.g. 500 = 5%
     liquidationBonusBps    : Bps    -- Keeper bonus from penalty. e.g. 250 = 2.5%
@@ -70,6 +73,26 @@ defaultCTNConfig = CollateralConfig with
     liquidationPenaltyBps = 1000     -- 10% penalty
     liquidationBonusBps = 500        -- 5% keeper bonus
     maxStalenessSecs = 300           -- DAML-M-03: 5 min — volatile asset needs fresh prices
+
+defaultUSDCConfig : CollateralConfig
+defaultUSDCConfig = CollateralConfig with
+    collateralType = CTN_USDC
+    enabled = True
+    collateralFactorBps = 9500       -- 95% LTV — stable
+    liquidationThresholdBps = 9700   -- 97% — tight spread
+    liquidationPenaltyBps = 300      -- 3% penalty
+    liquidationBonusBps = 150        -- 1.5% keeper bonus
+    maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
+
+defaultUSDCxConfig : CollateralConfig
+defaultUSDCxConfig = CollateralConfig with
+    collateralType = CTN_USDCx
+    enabled = True
+    collateralFactorBps = 9500
+    liquidationThresholdBps = 9700
+    liquidationPenaltyBps = 300
+    liquidationBonusBps = 150
+    maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
 
 defaultSMUSDConfig : CollateralConfig
 defaultSMUSDConfig = CollateralConfig with
@@ -106,7 +129,7 @@ defaultSMUSDEConfig = CollateralConfig with
 template CantonPriceFeed
   with
     operator    : Party
-    symbol      : Text           -- e.g. "CTN", "sMUSD", "sMUSD-E"
+    symbol      : Text           -- e.g. "CTN", "USDC", "USDCx", "sMUSD"
     priceUsd    : Money          -- USD price (18 decimals)
     lastUpdated : Time
     source      : Text           -- e.g. "temple-dex-twap", "hardcoded", "smusd-share-price"
@@ -114,6 +137,9 @@ template CantonPriceFeed
   where
     signatory operator
     observer observers
+
+    key (operator, symbol) : (Party, Text)
+    maintainer key._1
 
     ensure priceUsd > 0.0
 
@@ -215,12 +241,15 @@ template EscrowedCollateral
 
     ensure amount > 0.0
 
+    key (operator, owner, collateralType) : (Party, Party, CollateralType)
+    maintainer key._1
+
     -- | Update observers from user's privacy settings
     choice Escrow_UpdateObservers : ContractId EscrowedCollateral
+      with
+        newObservers : [Party]
       controller owner
-      do
-        newObservers <- lookupUserObservers operator owner
-        create this with privacyObservers = newObservers
+      do create this with privacyObservers = newObservers
 
     -- | Add more collateral to this position (consuming choice — recreates with new total)
     -- DAML-CRIT-01: Added caller validation for on-ledger audit trail
@@ -303,12 +332,15 @@ template CantonDebtPosition
 
     ensure principalDebt >= 0.0 && accruedInterest >= 0.0
 
+    key (operator, borrower) : (Party, Party)
+    maintainer key._1
+
     -- | Update observers from user's privacy settings
     choice Debt_UpdateObservers : ContractId CantonDebtPosition
+      with
+        newObservers : [Party]
       controller borrower
-      do
-        newObservers <- lookupUserObservers operator borrower
-        create this with privacyObservers = newObservers
+      do create this with privacyObservers = newObservers
 
     -- | Calculate total debt (principal + accrued + new interest)
     nonconsuming choice Debt_GetTotalDebt : Money
@@ -418,6 +450,9 @@ template LendingCollateralAggregate
   where
     signatory operator
 
+    key (operator, collateralType) : (Party, CollateralType)
+    maintainer key._1
+
     ensure totalDeposited >= 0.0 && depositCount >= 0
 
     -- | Increment on deposit
@@ -467,6 +502,8 @@ template LendingAggregate
     lastUpdateTime     : Time
   where
     signatory operator
+    key (operator, serviceName <> "-aggregate") : (Party, Text)
+    maintainer key._1
     ensure totalBorrows >= 0.0
 
     -- | Atomically update aggregate state (called by service choices)
@@ -518,6 +555,9 @@ template CantonLendingService
     signatory operator
     observer observers
 
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
+
     ensure totalBorrows >= 0.0
         && reserveFactorBps >= 0 && reserveFactorBps <= 5000
         && closeFactorBps > 0 && closeFactorBps <= 10000
@@ -539,7 +579,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         coin <- fetch coinCid
         assertMsg "NOT_OWNER" (coin.owner == user)
         let cfg = getConfig CTN_Coin configs
@@ -554,7 +593,7 @@ template CantonLendingService
 
         now <- getTime
         userObs <- lookupUserObservers operator user
-        let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed, caller should pass CID
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_Coin)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = coin.amount
@@ -570,7 +609,7 @@ template CantonLendingService
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_Coin)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_AddDeposit with
@@ -588,6 +627,116 @@ template CantonLendingService
 
         return (self, escrowCid)
 
+    -- | Deposit CantonUSDC as collateral
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositUSDC : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user    : Party
+        usdcCid : ContractId CantonUSDC
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        usdc <- fetch usdcCid
+        assertMsg "NOT_OWNER" (usdc.owner == user)
+        let cfg = getConfig CTN_USDC configs
+        assertMsg "USDC_NOT_ENABLED" cfg.enabled
+
+        -- DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "USDC_ISSUER_MUST_BE_OPERATOR" (usdc.issuer == operator)
+
+        archive usdcCid
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDC)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = usdc.amount
+            caller = user
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_USDC
+            amount = usdc.amount
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = observers <> userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDC)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = usdc.amount
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_USDC
+              totalDeposited = usdc.amount
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, escrowCid)
+
+    -- | Deposit USDCx as collateral
+    -- DAML-H-03: Nonconsuming — no service state changes on deposit
+    nonconsuming choice Lending_DepositUSDCx : (ContractId CantonLendingService, ContractId EscrowedCollateral)
+      with
+        user     : Party
+        usdcxCid : ContractId USDCx
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        usdcx <- fetch usdcxCid
+        assertMsg "NOT_OWNER" (usdcx.owner == user)
+        let cfg = getConfig CTN_USDCx configs
+        assertMsg "USDCx_NOT_ENABLED" cfg.enabled
+
+        -- DAML-C-03: Validate issuer matches operator before archiving
+        assertMsg "USDCx_ISSUER_MUST_BE_OPERATOR" (usdcx.issuer == operator)
+
+        archive usdcxCid
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDCx)
+        escrowCid <- case existingEscrowOpt of
+          Some existCid -> exercise existCid Escrow_AddCollateral with
+            addAmount = usdcx.amount
+            caller = user
+          None -> create EscrowedCollateral with
+            operator
+            owner = user
+            collateralType = CTN_USDCx
+            amount = usdcx.amount
+            depositedAt = now
+            lastUpdatedAt = now
+            privacyObservers = observers <> userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDCx)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_AddDeposit with
+              amount = usdcx.amount
+              isNewPosition = isNewPos
+            pure ()
+          None -> do
+            _ <- create LendingCollateralAggregate with
+              operator
+              collateralType = CTN_USDCx
+              totalDeposited = usdcx.amount
+              depositCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, escrowCid)
+
     -- | Deposit CantonSMUSD as collateral
     -- DAML-H-03: Nonconsuming — no service state changes on deposit
     nonconsuming choice Lending_DepositSMUSD : (ContractId CantonLendingService, ContractId EscrowedCollateral)
@@ -597,7 +746,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         smusd <- fetch smusdCid
         assertMsg "NOT_OWNER" (smusd.owner == user)
         let cfg = getConfig CTN_SMUSD configs
@@ -611,7 +759,7 @@ template CantonLendingService
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
         userObs <- lookupUserObservers operator user
-        let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = smusd.shares
@@ -627,7 +775,7 @@ template CantonLendingService
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSD)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_AddDeposit with
@@ -654,7 +802,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         smusde <- fetch smusdeCid
         assertMsg "NOT_OWNER" (smusde.owner == user)
         let cfg = getConfig CTN_SMUSDE configs
@@ -668,7 +815,7 @@ template CantonLendingService
         now <- getTime
         -- smUSD-E amount = shares (valued at smUSD-E share price via price feed)
         userObs <- lookupUserObservers operator user
-        let existingEscrowOpt : Optional (ContractId EscrowedCollateral) = None  -- LF 2.x: keys removed
+        existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSDE)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
             addAmount = smusde.shares
@@ -684,7 +831,7 @@ template CantonLendingService
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isNewPos = case existingEscrowOpt of { None -> True; Some _ -> False }
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSDE)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_AddDeposit with
@@ -717,7 +864,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         assertMsg "BORROW_POSITIVE" (borrowAmount > 0.0)
         assertMsg "BELOW_MIN_BORROW" (borrowAmount >= minBorrow)
         assertMsg "ESCROW_PRICE_MISMATCH" (length escrowCids == length priceFeedCids)
@@ -726,8 +872,7 @@ template CantonLendingService
 
         -- DAML-H-02: Cross-module supply coordination
         -- Verify combined minting across DirectMint + Lending doesn't exceed global cap
-        -- LF 2.x: Contract keys removed. DirectMint CID should be passed explicitly.
-        let directMintOpt : Optional (ContractId CantonDirectMintService) = None
+        directMintOpt <- lookupByKey @CantonDirectMintService (operator, directMintServiceName)
         case directMintOpt of
           Some dmCid -> do
             dm <- fetch dmCid
@@ -738,6 +883,9 @@ template CantonLendingService
           -- skipping the global cap entirely and relying only on the module-level cap.
           None -> assertMsg "EXCEEDS_GLOBAL_MINT_CAP" (cantonCurrentSupply + borrowAmount <= globalMintCap)
 
+        -- DAML-H-04: Mandatory compliance check — borrower must not be blacklisted
+        exercise complianceRegistryCid ValidateMint with minter = user
+
         -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
         assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
 
@@ -745,7 +893,7 @@ template CantonLendingService
         totalWeightedValue <- computeWeightedCollateralValue operator user configs escrowCids priceFeedCids True
 
         -- Look up existing debt, accrue interest, then increase principal
-        let existingDebtOpt : Optional (ContractId CantonDebtPosition) = None  -- LF 2.x: keys removed
+        existingDebtOpt <- lookupByKey @CantonDebtPosition (operator, user)
         (existingDebt, accruedDebtCid) <- case existingDebtOpt of
           None -> return (0.0, None)
           Some debtCid -> do
@@ -801,7 +949,6 @@ template CantonLendingService
         debtCid   : ContractId CantonDebtPosition
       controller user
       do
-        assertPartyCompliant complianceRegistryCid operator user
         -- Verify ownership
         musd <- fetch musdCid
         assertMsg "NOT_MUSD_OWNER" (musd.owner == user)
@@ -848,7 +995,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_Coin)
@@ -892,7 +1038,7 @@ template CantonLendingService
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isFullW = withdrawAmount >= escrow.amount
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_Coin)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_RemoveDeposit with
@@ -906,6 +1052,132 @@ template CantonLendingService
     -- ──────────────────────────────────────────────────────
     -- ──────────────────────────────────────────────────────
 
+    -- | Withdraw USDC collateral. Must pass health check after withdrawal.
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawUSDC : (ContractId CantonLendingService, ContractId CantonUSDC)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDC)
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
+
+        existingDebt <- getExistingDebtAndAccrue operator user
+        if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_USDC configs
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            usdcPrice <- getCtxPrice operator "USDC" priceFeedCids True (seconds cfg.maxStalenessSecs)
+            return (remainingThisEscrow * usdcPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          pure ()
+
+        userObs <- lookupUserObservers operator user
+        usdcCid <- create CantonUSDC with
+          issuer = operator
+          owner = user
+          amount = withdrawAmount
+          privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDC)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, usdcCid)
+
+    -- | Withdraw USDCx collateral.
+    -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
+    nonconsuming choice Lending_WithdrawUSDCx : (ContractId CantonLendingService, ContractId USDCx)
+      with
+        user           : Party
+        escrowCid      : ContractId EscrowedCollateral
+        withdrawAmount : Money
+        otherEscrowCids   : [ContractId EscrowedCollateral]
+        priceFeedCids     : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        escrow <- fetch escrowCid
+        assertMsg "NOT_OWNER" (escrow.owner == user)
+        assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_USDCx)
+        assertMsg "WITHDRAW_EXCEEDS_BALANCE" (withdrawAmount > 0.0 && withdrawAmount <= escrow.amount)
+
+        existingDebt <- getExistingDebtAndAccrue operator user
+        if existingDebt > 0.0 then do
+          -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
+          assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup otherEscrowCids) == length otherEscrowCids)
+          let filteredOtherEscrows = filter (/= escrowCid) otherEscrowCids
+          remainingValue <- computeWeightedCollateralValue operator user configs filteredOtherEscrows priceFeedCids True
+          let remainingThisEscrow = escrow.amount - withdrawAmount
+          remainingThisValue <- if remainingThisEscrow > 0.0 then do
+            let cfg = getConfig CTN_USDCx configs
+            -- DAML-M-03: Per-asset staleness instead of hardcoded 1h
+            usdcxPrice <- getCtxPrice operator "USDCx" priceFeedCids True (seconds cfg.maxStalenessSecs)
+            return (remainingThisEscrow * usdcxPrice * intToNumeric cfg.collateralFactorBps / 10000.0)
+          else return 0.0
+          assertMsg "UNHEALTHY_AFTER_WITHDRAW" (remainingValue + remainingThisValue >= existingDebt)
+        else pure ()
+
+        if withdrawAmount >= escrow.amount then do
+          _ <- exercise escrowCid Escrow_WithdrawAll with caller = user
+          pure ()
+        else do
+          _ <- exercise escrowCid Escrow_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          pure ()
+
+        userObs <- lookupUserObservers operator user
+        usdcxCid <- create USDCx with
+          issuer = operator
+          owner = user
+          amount = withdrawAmount
+          sourceChain = "canton-lending-withdrawal"
+          cctpNonce = 0
+          privacyObservers = userObs
+
+        -- DAML-H-03: Update collateral aggregate tracking
+        let isFullW = withdrawAmount >= escrow.amount
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_USDCx)
+        case aggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid Aggregate_RemoveDeposit with
+              amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, usdcxCid)
+
     -- | Withdraw CantonSMUSD collateral.
     -- DAML-H-03: Nonconsuming — withdrawals don't modify service state
     nonconsuming choice Lending_WithdrawSMUSD : (ContractId CantonLendingService, ContractId CantonSMUSD)
@@ -918,7 +1190,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSD)
@@ -959,12 +1230,11 @@ template CantonLendingService
           shares = withdrawAmount
           entrySharePrice = currentSharePrice  -- DAML-M-03: Use live share price from price feed
           stakedAt = escrow.depositedAt
-          complianceRegistryCid = complianceRegistryCid
           privacyObservers = userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isFullW = withdrawAmount >= escrow.amount
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSD)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_RemoveDeposit with
@@ -987,7 +1257,6 @@ template CantonLendingService
       controller user
       do
         assertMsg "SERVICE_PAUSED" (not paused)
-        assertPartyCompliant complianceRegistryCid operator user
         escrow <- fetch escrowCid
         assertMsg "NOT_OWNER" (escrow.owner == user)
         assertMsg "WRONG_TYPE" (escrow.collateralType == CTN_SMUSDE)
@@ -1034,7 +1303,7 @@ template CantonLendingService
 
         -- DAML-H-03: Update collateral aggregate tracking
         let isFullW = withdrawAmount >= escrow.amount
-        let aggOpt : Optional (ContractId LendingCollateralAggregate) = None  -- LF 2.x: keys removed
+        aggOpt <- lookupByKey @LendingCollateralAggregate (operator, CTN_SMUSDE)
         case aggOpt of
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_RemoveDeposit with
@@ -1066,15 +1335,15 @@ template CantonLendingService
       controller liquidator
       do
         assertMsg "CANNOT_SELF_LIQUIDATE" (liquidator /= borrower)
-        assertPartyCompliant complianceRegistryCid operator liquidator
 
         -- DAML-M-01: Prevent duplicate escrow CIDs from inflating collateral value
         assertMsg "DUPLICATE_ESCROW_CIDS" (length (dedup escrowCids) == length escrowCids)
 
-        -- DAML-M-06: Canonical debt CID verification
-        -- LF 2.x: Contract keys removed. The debtCid param is the canonical reference.
-        -- Caller is responsible for providing the correct debtCid.
-        pure ()
+        -- DAML-M-06: Verify canonical debt CID via lookupByKey
+        canonicalDebtOpt <- lookupByKey @CantonDebtPosition (operator, borrower)
+        case canonicalDebtOpt of
+          None -> abort "NO_DEBT_POSITION_FOUND"
+          Some canonicalCid -> assertMsg "DEBT_CID_NOT_CANONICAL" (canonicalCid == debtCid)
 
         -- Verify liquidator owns the repayment mUSD
         musd <- fetch musdCid
@@ -1102,12 +1371,6 @@ template CantonLendingService
 
         -- Seize collateral with penalty
         targetEscrow <- fetch targetEscrowCid
-        -- FIX H-3: Validate targetEscrowCid belongs to the borrower being liquidated.
-        -- Without this, a liquidator could seize a third party's collateral.
-        assertMsg "TARGET_ESCROW_NOT_OWNED_BY_BORROWER" (targetEscrow.owner == borrower)
-        -- FIX H-2: Verify targetEscrowCid is included in the health-check escrowCids list.
-        -- This ensures the target is accounted for in the collateral valuation.
-        assertMsg "TARGET_ESCROW_NOT_IN_LIST" (targetEscrowCid `elem` escrowCids)
         let cfg = getConfig targetEscrow.collateralType configs
         colPrice <- getCtxPriceByType operator targetEscrow.collateralType configs priceFeedCids False
 
@@ -1142,6 +1405,22 @@ template CantonLendingService
               amount = actualSeize
               privacyObservers = userObs
             pure ()
+          CTN_USDC -> do
+            create CantonUSDC with
+              issuer = operator
+              owner = liquidator
+              amount = actualSeize
+              privacyObservers = userObs
+            pure ()
+          CTN_USDCx -> do
+            create USDCx with
+              issuer = operator
+              owner = liquidator
+              amount = actualSeize
+              sourceChain = "canton-lending-seizure"
+              cctpNonce = 0
+              privacyObservers = userObs
+            pure ()
           CTN_SMUSD -> do
             now2 <- getTime
             create CantonSMUSD with
@@ -1150,7 +1429,6 @@ template CantonLendingService
               shares = actualSeize
               entrySharePrice = colPrice
               stakedAt = now2
-              complianceRegistryCid = complianceRegistryCid
               privacyObservers = userObs
             pure ()
           CTN_SMUSDE -> do
@@ -1341,16 +1619,6 @@ template CantonLiquidationReceipt
 --                     HELPER FUNCTIONS
 -- ============================================================
 
--- | Ensure a party passes blacklist/freeze checks in the configured registry.
-assertPartyCompliant : ContractId ComplianceRegistry -> Party -> Party -> Update ()
-assertPartyCompliant complianceRegistryCid expectedOperator party = do
-  registry <- fetch complianceRegistryCid
-  assertMsg "COMPLIANCE_OPERATOR_MISMATCH" (registry.operator == expectedOperator)
-  ok <- exercise complianceRegistryCid IsCompliant with
-    party = party
-    caller = expectedOperator
-  assertMsg "USER_NOT_COMPLIANT" ok
-
 -- | Look up config for a given collateral type
 getConfig : CollateralType -> [CollateralConfig] -> CollateralConfig
 getConfig ct [] = error ("CONFIG_NOT_FOUND: " <> show ct)
@@ -1359,7 +1627,7 @@ getConfig ct (c :: cs) = if c.collateralType == ct then c else getConfig ct cs
 -- | Get existing debt for a user (returns 0 if no position)
 getExistingDebt : Party -> Party -> Update Money
 getExistingDebt operator user = do
-  let debtOpt : Optional (ContractId CantonDebtPosition) = None  -- LF 2.x: keys removed
+  debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
   case debtOpt of
     None -> return 0.0
     Some debtCid -> do
@@ -1374,7 +1642,7 @@ getExistingDebt operator user = do
 -- Used by withdrawal paths to keep on-ledger state consistent.
 getExistingDebtAndAccrue : Party -> Party -> Update Money
 getExistingDebtAndAccrue operator user = do
-  let debtOpt : Optional (ContractId CantonDebtPosition) = None  -- LF 2.x: keys removed
+  debtOpt <- lookupByKey @CantonDebtPosition (operator, user)
   case debtOpt of
     None -> return 0.0
     Some debtCid -> do
@@ -1405,6 +1673,8 @@ getCtxPriceByType operator ct cfgs feeds safe =
       staleness = seconds cfg.maxStalenessSecs
   in case ct of
     CTN_Coin   -> getCtxPrice operator "CTN" feeds safe staleness
+    CTN_USDC   -> getCtxPrice operator "USDC" feeds safe staleness
+    CTN_USDCx  -> getCtxPrice operator "USDCx" feeds safe staleness
     CTN_SMUSD  -> getCtxPrice operator "sMUSD" feeds safe staleness
     CTN_SMUSDE -> getCtxPrice operator "sMUSD-E" feeds safe staleness
 

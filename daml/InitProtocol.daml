@@ -124,26 +124,23 @@ initProtocol = do
           complianceRegistryCid = complianceCid
           observers = [governance, validator1]
 
-  -- 5. BridgeService (skip if exists)
-  existingBridge <- query @BridgeService operator
-  bridgeServiceCid <- case existingBridge of
-    ((cid, _) :: _) -> do
-      debug "BridgeService already exists, skipping."
-      pure cid
-    [] -> do
-      debug "Creating BridgeService..."
-      submitMulti [operator, governance] [] do
-        createCmd BridgeService with
-          operator
-          governance
-          validators = [validator1]
-          requiredSignatures = 1         -- Devnet: single validator
-          minValidators = Some 1          -- AUDIT-H-03: Devnet allows single validator
-          totalBridgedIn = 0.0
-          totalBridgedOut = 0.0
-          lastNonce = 0
-          paused = False
-          observers = [validator1]
+  -- 5. BridgeService (always create fresh — v2.4.0 broke upgrade compat with
+  --    field rename lastNonce → lastBridgeOutNonce + lastBridgeInNonce, so we
+  --    cannot query old contracts without deserialization errors)
+  debug "Creating BridgeService (fresh)..."
+  bridgeServiceCid <- submitMulti [operator, governance] [] do
+    createCmd BridgeService with
+      operator
+      governance
+      validators = [validator1]
+      requiredSignatures = 1         -- Devnet: single validator
+      minValidators = Some 1          -- AUDIT-H-03: Devnet allows single validator
+      totalBridgedIn = 0.0
+      totalBridgedOut = 0.0
+      lastBridgeOutNonce = 0
+      lastBridgeInNonce = 0
+      paused = False
+      observers = [validator1]
 
   -- 6. LiquidityPool (skip if exists) — AUDIT-C-01: Oracle-anchored pricing
   existingPool <- query @LiquidityPool operator

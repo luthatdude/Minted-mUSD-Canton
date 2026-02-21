@@ -16,7 +16,7 @@ import { ethers, upgrades } from "hardhat";
  *   - __gap reduced 35 → 33 (total slots unchanged)
  */
 
-const BRIDGE_PROXY = "0xB466be5F516F7Aa45E61bA2C7d2Db639c7B3D125";
+const BRIDGE_PROXY = "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
 const TIMELOCK     = "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410";
 const SALT         = ethers.id("upgrade-bridge-v9-bidirectional-2026-02-16");
 

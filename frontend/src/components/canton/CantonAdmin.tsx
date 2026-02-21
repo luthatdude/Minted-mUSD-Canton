@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { TxButton } from "@/components/TxButton";
+import { PageHeader } from "@/components/PageHeader";
+import { Section } from "@/components/Section";
 import { StatCard } from "@/components/StatCard";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
@@ -6,10 +9,10 @@ import WalletConnector from "@/components/WalletConnector";
 // DAML template IDs
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
 const templates = {
-  IssuerRole: `${PACKAGE_ID}:MintedProtocolV2Fixed:IssuerRole`,
-  PriceOracle: `${PACKAGE_ID}:MintedProtocolV2Fixed:PriceOracle`,
-  DirectMintService: `${PACKAGE_ID}:MintedProtocolV2Fixed:DirectMintService`,
-  LiquidityPool: `${PACKAGE_ID}:MintedProtocolV2Fixed:LiquidityPool`,
+  IssuerRole: `${PACKAGE_ID}:Minted.Protocol.V3:MUSDSupplyService`,
+  PriceOracle: `${PACKAGE_ID}:Minted.Protocol.V3:PriceOracle`,
+  DirectMintService: `${PACKAGE_ID}:Minted.Protocol.V3:CantonDirectMint`,
+  LiquidityPool: `${PACKAGE_ID}:Minted.Protocol.V3:LiquidityPool`,
 };
 
 export function CantonAdmin() {
@@ -98,26 +101,35 @@ export function CantonAdmin() {
   ];
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white">Admin Panel</h1>
-      <p className="text-emerald-400 text-sm font-medium">Canton Network (Daml Ledger)</p>
+    <div className="mx-auto max-w-6xl space-y-8">
+      <PageHeader
+        title="Admin Panel"
+        subtitle="Manage Canton DAML protocol contracts and services"
+        badge="Admin"
+        badgeColor="warning"
+      />
 
-      <div className="flex flex-wrap gap-2 border-b border-gray-700 pb-4">
+      <div className="flex gap-2 rounded-xl bg-surface-800/50 p-1.5 border border-white/10">
         {sections.map((s) => (
           <button
             key={s.key}
             onClick={() => { setSection(s.key); setError(null); setResult(null); }}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-              section === s.key ? "bg-emerald-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
+            className={`relative flex-1 rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-300 ${
+              section === s.key
+                ? "bg-surface-700 text-white shadow-lg"
+                : "text-gray-400 hover:text-white hover:bg-surface-700/50"
             }`}
           >
             {s.label}
+            {section === s.key && (
+              <span className="absolute bottom-0 left-1/2 h-0.5 w-16 -translate-x-1/2 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500" />
+            )}
           </button>
         ))}
       </div>
 
-      {error && <div className="rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400">{error}</div>}
-      {result && <div className="rounded-lg border border-green-800 bg-green-900/20 p-4 text-sm text-green-400">{result}</div>}
+      {error && <div className="alert-error text-sm">{error}</div>}
+      {result && <div className="alert-success text-sm">{result}</div>}
 
       {/* Issuer Role */}
       {section === "issuer" && (
@@ -137,18 +149,20 @@ export function CantonAdmin() {
                     <input className="input" type="number" placeholder="1000.0" value={mintAmount} onChange={(e) => setMintAmount(e.target.value)} />
                   </div>
                 </div>
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.IssuerRole,
                     issuerRoles[0].contractId,
                     "DirectMint",
                     { owner: mintOwner, amount: mintAmount }
                   )}
-                  disabled={loading || !mintOwner || !mintAmount}
-                  className="btn-primary mt-3 w-full"
+                  loading={loading}
+                  disabled={!mintOwner || !mintAmount}
+                  variant="primary"
+                  className="mt-3 w-full"
                 >
-                  {loading ? "Minting..." : "Direct Mint"}
-                </button>
+                  Direct Mint
+                </TxButton>
               </div>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Mint From Attestation</h3>
@@ -174,18 +188,19 @@ export function CantonAdmin() {
                   <label className="label">Symbol</label>
                   <input className="input" type="text" placeholder="ETH" value={priceSymbol} onChange={(e) => setPriceSymbol(e.target.value)} />
                 </div>
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.PriceOracle,
                     oracleContracts[0].contractId,
                     "GetPrice",
                     { symbol: priceSymbol }
                   )}
-                  disabled={loading}
-                  className="btn-secondary mt-3 w-full"
+                  loading={loading}
+                  variant="secondary"
+                  className="mt-3 w-full"
                 >
                   Query Price
-                </button>
+                </TxButton>
               </div>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Update Prices</h3>
@@ -199,18 +214,20 @@ export function CantonAdmin() {
                     <input className="input" type="number" placeholder="3500.00" value={priceValue} onChange={(e) => setPriceValue(e.target.value)} />
                   </div>
                 </div>
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.PriceOracle,
                     oracleContracts[0].contractId,
                     "UpdatePrices",
                     { updates: [{ symbol: priceSymbol, price: priceValue }] }
                   )}
-                  disabled={loading || !priceValue}
-                  className="btn-primary mt-3 w-full"
+                  loading={loading}
+                  disabled={!priceValue}
+                  variant="primary"
+                  className="mt-3 w-full"
                 >
                   Update Prices
-                </button>
+                </TxButton>
               </div>
             </>
           )}
@@ -225,51 +242,60 @@ export function CantonAdmin() {
             <>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Current Config</h3>
-                <pre className="max-h-40 overflow-auto rounded bg-gray-800 p-3 text-xs text-gray-300">
-                  {JSON.stringify(mintServices[0].payload, null, 2)}
-                </pre>
+                <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+                  {mintServices[0].payload && Object.entries(mintServices[0].payload).slice(0, 8).map(([key, val]) => (
+                    <div key={key} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-400">{key}</span>
+                      <span className="font-mono text-xs text-gray-300">{String(val).slice(0, 40)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Update Supply Cap</h3>
                 <input className="input" type="number" placeholder="10000000" value={newCap} onChange={(e) => setNewCap(e.target.value)} />
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_UpdateSupplyCap",
                     { newSupplyCap: newCap }
                   )}
-                  disabled={loading || !newCap}
-                  className="btn-primary mt-3 w-full"
+                  loading={loading}
+                  disabled={!newCap}
+                  variant="primary"
+                  className="mt-3 w-full"
                 >
                   Update Cap
-                </button>
+                </TxButton>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_SetPaused",
                     { paused: true }
                   )}
-                  disabled={loading}
-                  className="btn-danger"
+                  loading={loading}
+                  variant="danger"
+                  className="w-full"
                 >
                   Pause Service
-                </button>
-                <button
+                </TxButton>
+                <TxButton
                   onClick={() => handleExercise(
                     templates.DirectMintService,
                     mintServices[0].contractId,
                     "DirectMint_SetPaused",
                     { paused: false }
                   )}
-                  disabled={loading}
-                  className="btn-secondary"
+                  loading={loading}
+                  variant="secondary"
+                  className="w-full"
                 >
                   Unpause Service
-                </button>
+                </TxButton>
               </div>
             </>
           )}
@@ -284,25 +310,32 @@ export function CantonAdmin() {
             <>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Pool State</h3>
-                <pre className="max-h-40 overflow-auto rounded bg-gray-800 p-3 text-xs text-gray-300">
-                  {JSON.stringify(pools[0].payload, null, 2)}
-                </pre>
+                <div className="space-y-2 rounded-xl bg-surface-800/30 p-4">
+                  {pools[0].payload && Object.entries(pools[0].payload).slice(0, 8).map(([key, val]) => (
+                    <div key={key} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-400">{key}</span>
+                      <span className="font-mono text-xs text-gray-300">{String(val).slice(0, 40)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
               <div className="card">
                 <h3 className="mb-3 font-semibold text-gray-300">Swap mUSD for Collateral</h3>
                 <input className="input" type="number" placeholder="Amount" value={swapAmount} onChange={(e) => setSwapAmount(e.target.value)} />
-                <button
+                <TxButton
                   onClick={() => handleExercise(
                     templates.LiquidityPool,
                     pools[0].contractId,
                     "Pool_SwapMUSDForCollateral",
                     { musdAmount: swapAmount }
                   )}
-                  disabled={loading || !swapAmount}
-                  className="btn-primary mt-3 w-full"
+                  loading={loading}
+                  disabled={!swapAmount}
+                  variant="primary"
+                  className="mt-3 w-full"
                 >
                   Swap
-                </button>
+                </TxButton>
               </div>
             </>
           )}

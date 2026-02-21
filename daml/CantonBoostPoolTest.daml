@@ -13,7 +13,7 @@ import CantonDirectMint (Money, Bps)
 import CantonSMUSD (CantonSMUSD(..), CantonSMUSDTransferProposal(..), CantonSMUSDTransferProposal_Accept(..), CantonSMUSDTransferProposal_Reject(..), CantonSMUSDTransferProposal_Cancel(..), SMUSD_Transfer(..))
 import CantonLending (EscrowedCollateral, CollateralType(..))
 import CantonCoinToken (CantonCoin(..), CantonCoin_Burn(..), CantonCoinTransferProposal(..), CantonCoin_Transfer(..), CantonCoin_Split(..), CantonCoinTransferProposal_Accept(..), CantonCoinTransferProposal_Reject(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 
 import Compliance (ComplianceRegistry(..), ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
@@ -1190,8 +1190,10 @@ test_LPTransfer = script do
       cantonCid
       smusdCid
 
-  -- Alice transfers LP to Bob (readAs operator needed to see ComplianceRegistry)
-  proposalCid <- submitMulti [alice] [operator] do
+  -- Alice transfers LP to Bob
+  -- Canton 3.x / LF 2.x: operator must be actAs for inner exercise visibility
+  -- on ComplianceRegistry within BPLP_Transfer choice body.
+  proposalCid <- submitMulti [alice, operator] [] do
     exerciseCmd lpCid BPLP_Transfer with newOwner = bob
 
   -- Bob accepts

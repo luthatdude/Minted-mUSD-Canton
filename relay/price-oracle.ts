@@ -60,7 +60,7 @@ interface PriceOracleConfig {
 
 const DEFAULT_CONFIG: PriceOracleConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+  cantonPort: parseInt(process.env.CANTON_PORT || "7575", 10),
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
 

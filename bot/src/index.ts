@@ -5,6 +5,10 @@ import { ethers } from "ethers";
 import * as fs from "fs";
 import { createLogger, format, transports } from "winston";
 import MEVProtectedExecutor from "./flashbots";
+import { createBotSigner, readAndValidatePrivateKey as signerReadKey } from "./signer";
+import { validateDistinctRoleKeys, BOT_ROLE_KEYS } from "./config";
+import { startHealthServer } from "./server";
+import { TxQueue } from "./tx-queue";
 
 // INFRA-H-02 / INFRA-H-06: Enforce TLS certificate validation at process level
 // Prevents NODE_TLS_REJECT_UNAUTHORIZED=0 from disabling cert validation in production
@@ -198,12 +202,12 @@ interface LiquidationOpportunity {
 
 class LiquidationBot {
   private provider: ethers.JsonRpcProvider;
-  private wallet: ethers.Wallet;
-  private borrowModule: ethers.Contract;
-  private liquidationEngine: ethers.Contract;
-  private collateralVault: ethers.Contract;
-  private priceOracle: ethers.Contract;
-  private musd: ethers.Contract;
+  private wallet!: ethers.Signer;
+  private borrowModule!: ethers.Contract;
+  private liquidationEngine!: ethers.Contract;
+  private collateralVault!: ethers.Contract;
+  private priceOracle!: ethers.Contract;
+  private musd!: ethers.Contract;
   private mevExecutor: MEVProtectedExecutor | null = null;
   
   private borrowers: Set<string> = new Set();
@@ -212,48 +216,53 @@ class LiquidationBot {
   private tokenDecimals: Map<string, number> = new Map();
   private tokenSymbols: Map<string, string> = new Map();
   
-  private isRunning = false;
+  public isRunning = false;
   private liquidationCount = 0;
   private totalProfitUsd = 0;
   private nonceMutex: Promise<void> = Promise.resolve();
+  private walletAddress: string = "";
+  public readonly txQueue = new TxQueue({ maxTxPerMinute: 10, maxRetries: 3 });
 
   constructor() {
     this.provider = new ethers.JsonRpcProvider(config.rpcUrl);
-    // Guard against raw private key usage in production
-    if (process.env.NODE_ENV === "production" && !process.env.KMS_KEY_ID) {
-      throw new Error(
-        "SECURITY: Raw private key usage is forbidden in production. " +
-        "Configure KMS_KEY_ID, KMS_PROVIDER, and KMS_REGION environment variables. " +
-        "See relay/kms-ethereum-signer.ts for KMS signer implementation."
-      );
-    }
-    this.wallet = new ethers.Wallet(config.privateKey, this.provider);
-    
+  }
+
+  /**
+   * TS-H-01 FIX: Async signer initialization — uses AWS KMS in production,
+   * falls back to raw private key in dev/test only.
+   */
+  private async initSigner(): Promise<void> {
+    this.wallet = await createBotSigner(
+      this.provider,
+      "bot_private_key",
+      "PRIVATE_KEY",
+    );
+    this.walletAddress = await this.wallet.getAddress();
+
     this.borrowModule = new ethers.Contract(config.borrowModule, BORROW_MODULE_ABI, this.wallet);
     this.liquidationEngine = new ethers.Contract(config.liquidationEngine, LIQUIDATION_ENGINE_ABI, this.wallet);
     this.collateralVault = new ethers.Contract(config.collateralVault, COLLATERAL_VAULT_ABI, this.wallet);
     this.priceOracle = new ethers.Contract(config.priceOracle, PRICE_ORACLE_ABI, this.provider);
     this.musd = new ethers.Contract(config.musd, ERC20_ABI, this.wallet);
-    
+
     // Initialize MEV protection if enabled
     if (config.useFlashbots) {
-      this.mevExecutor = new MEVProtectedExecutor(this.provider, this.wallet, config.chainId);
+      this.mevExecutor = new MEVProtectedExecutor(this.provider, this.wallet as ethers.Wallet, config.chainId);
       logger.info("Flashbots MEV protection enabled");
     }
   }
 
   async initialize(): Promise<void> {
     logger.info("Initializing liquidation bot...");
-    
-    // Validate configuration
-    if (!config.privateKey || config.privateKey === "0x...") {
-      throw new Error("Invalid private key");
-    }
-    
+
+    // TS-H-01: Initialize KMS-backed signer (or raw key in dev)
+    await this.initSigner();
+
     // Get wallet info
-    const balance = await this.provider.getBalance(this.wallet.address);
-    const musdBalance = await this.musd.balanceOf(this.wallet.address);
-    logger.info(`Bot wallet: ${this.wallet.address}`);
+    const walletAddress = await this.wallet.getAddress();
+    const balance = await this.provider.getBalance(walletAddress);
+    const musdBalance = await this.musd.balanceOf(walletAddress);
+    logger.info(`Bot wallet: ${walletAddress}`);
     logger.info(`ETH balance: ${ethers.formatEther(balance)} ETH`);
     logger.info(`mUSD balance: ${ethers.formatEther(musdBalance)} mUSD`);
     
@@ -297,7 +306,7 @@ class LiquidationBot {
     // Listen for our own liquidations
     this.liquidationEngine.on("Liquidation", 
       (liquidator: string, borrower: string, collateralToken: string, debtRepaid: bigint, collateralSeized: bigint) => {
-        if (liquidator.toLowerCase() === this.wallet.address.toLowerCase()) {
+        if (liquidator.toLowerCase() === this.walletAddress.toLowerCase()) {
           logger.info(`✅ LIQUIDATION SUCCESS: ${borrower}`);
           logger.info(`   Debt repaid: ${ethers.formatEther(debtRepaid)} mUSD`);
           logger.info(`   Collateral seized: ${ethers.formatUnits(collateralSeized, this.tokenDecimals.get(collateralToken) || 18)} ${this.tokenSymbols.get(collateralToken)}`);
@@ -310,7 +319,7 @@ class LiquidationBot {
   // Approve only the amount needed for the current liquidation + buffer.
   // This limits exposure if the liquidation engine contract has a vulnerability.
   private async ensureApproval(requiredAmount?: bigint): Promise<void> {
-    const allowance = await this.musd.allowance(this.wallet.address, config.liquidationEngine);
+    const allowance = await this.musd.allowance(this.walletAddress, config.liquidationEngine);
     
     if (requiredAmount) {
       // Per-liquidation approval: approve exactly what's needed + 1% buffer
@@ -479,7 +488,7 @@ class LiquidationBot {
     
     try {
       // Check mUSD balance
-      const musdBalance = await this.musd.balanceOf(this.wallet.address);
+      const musdBalance = await this.musd.balanceOf(this.walletAddress);
       if (musdBalance < opp.debtToRepay) {
         logger.error(`Insufficient mUSD balance: have ${ethers.formatEther(musdBalance)}, need ${ethers.formatEther(opp.debtToRepay)}`);
         return;
@@ -677,16 +686,28 @@ class LiquidationBot {
 // ============================================================
 
 async function main() {
+  // TS-H-02 FIX: Validate that role keys are distinct at startup
+  validateDistinctRoleKeys(BOT_ROLE_KEYS);
+
   const bot = new LiquidationBot();
+
+  // Priority 5: Wire K8s health server — K8s deployment expects /health on port 8080
+  const healthServer = startHealthServer(
+    { port: Number(process.env.BOT_PORT) || 8080, healthPath: "/health" },
+    () => bot.isRunning,
+  );
   
   // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    logger.info("Received SIGINT, shutting down...");
+  const shutdown = () => {
+    logger.info("Received shutdown signal, shutting down...");
     bot.stop();
+    healthServer.stop();
     const stats = bot.getStats();
     logger.info(`Final stats: ${stats.liquidations} liquidations, $${stats.profitUsd.toFixed(2)} profit`);
     process.exit(0);
-  });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   
   await bot.initialize();
   

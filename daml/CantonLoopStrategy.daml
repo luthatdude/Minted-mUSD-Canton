@@ -31,7 +31,7 @@ import CantonLending (CantonLendingService(..), EscrowedCollateral(..), Collater
 import CantonCoinToken (CantonCoin(..))
 import Compliance (ComplianceRegistry(..), IsCompliant(..), ValidateMint(..), ValidateRedemption(..))
 import Governance (GovernanceActionLog(..), ActionType(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 
 -- ============================================================
 --                     DATA TYPES
@@ -102,10 +102,13 @@ template CantonLoopPosition
     ensure totalDeposited > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice LoopPosition_UpdateObservers : ContractId CantonLoopPosition
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller user
       do
-        newObservers <- lookupUserObservers operator user
+        newObservers <- lookupUserObservers operator user settingsCid
         create this with privacyObservers = newObservers
 
     -- | Record a completed loop iteration (operator only).

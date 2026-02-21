@@ -56,8 +56,8 @@ metadata:
   annotations:
     # INFRA-M-09: HA placeholder — configure streaming replication before scaling.
     # See: https://www.postgresql.org/docs/16/warm-standby.html
-    musd.io/ha-status: "placeholder-requires-patroni-or-operator"
-    musd.io/ha-controller: "none — deploy Patroni, CrunchyPGO, or CloudNativePG"
+    musd.io/ha-status: "patroni-managed"
+    musd.io/ha-controller: "patroni-sidecar"
     musd.io/replication-mode: "streaming-async"
 spec:
   serviceName: postgres
@@ -74,6 +74,8 @@ spec:
         app.kubernetes.io/name: postgres
         app.kubernetes.io/component: database
     spec:
+      # INFRA-M-09: Patroni needs RBAC to manage endpoints/configmaps for DCS
+      serviceAccountName: patroni
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
@@ -316,6 +318,110 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+        # INFRA-M-09: Patroni sidecar — HA controller for automatic failover.
+        # Patroni manages leader election via Kubernetes endpoints, monitors PostgreSQL health,
+        # promotes standby to primary on failure, and manages streaming replication configuration.
+        # Requires: RBAC for endpoints/configmaps, etcd or Kubernetes API for DCS.
+        - name: patroni
+          image: patroni/patroni:4.0.4
+          ports:
+            - name: patroni-api
+              containerPort: 8008
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PATRONI_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: PATRONI_SCOPE
+              value: "musd-canton-pg"
+            - name: PATRONI_KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: PATRONI_KUBERNETES_USE_ENDPOINTS
+              value: "true"
+            - name: PATRONI_KUBERNETES_LABELS
+              value: "{app.kubernetes.io/name: postgres}"
+            - name: PATRONI_POSTGRESQL_CONNECT_ADDRESS
+              value: "$(POD_NAME).postgres.$(POD_NAMESPACE).svc.cluster.local:5432"
+            - name: PATRONI_RESTAPI_CONNECT_ADDRESS
+              value: "$(POD_NAME).postgres.$(POD_NAMESPACE).svc.cluster.local:8008"
+            - name: PATRONI_POSTGRESQL_DATA_DIR
+              value: /var/lib/postgresql/data/pgdata
+            - name: PATRONI_REPLICATION_USERNAME
+              value: replicator
+            # Replication password read from file-mounted secret
+            - name: PATRONI_SUPERUSER_USERNAME_FILE
+              value: /run/secrets/db-username
+            - name: PATRONI_SUPERUSER_PASSWORD_FILE
+              value: /run/secrets/db-password
+            # Streaming replication configuration
+            - name: PATRONI_POSTGRESQL_PARAMETERS
+              value: >-
+                {
+                  "wal_level": "replica",
+                  "hot_standby": "on",
+                  "max_wal_senders": "5",
+                  "max_replication_slots": "5",
+                  "wal_keep_size": "1GB",
+                  "ssl": "on",
+                  "ssl_cert_file": "/etc/postgresql/tls/tls.crt",
+                  "ssl_key_file": "/etc/postgresql/tls/tls.key",
+                  "ssl_ca_file": "/etc/postgresql/tls/ca.crt"
+                }
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: patroni-tmp
+              mountPath: /tmp
+            - name: postgres-tls
+              mountPath: /etc/postgresql/tls
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-username
+              subPath: username
+              readOnly: true
+            - name: db-credentials
+              mountPath: /run/secrets/db-password
+              subPath: password
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: 8008
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: 8008
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
       volumes:
         # INFRA-M-02: PostgreSQL server TLS certificates.
         # Secret must contain: tls.crt (server cert), tls.key (private key), ca.crt (CA cert).
@@ -336,6 +442,10 @@ spec:
             sizeLimit: 10Mi
         # INFRA-M-04: Temp dir for PgBouncer sidecar
         - name: pgbouncer-tmp
+          emptyDir:
+            sizeLimit: 10Mi
+        # INFRA-M-09: Temp dir for Patroni sidecar
+        - name: patroni-tmp
           emptyDir:
             sizeLimit: 10Mi
   volumeClaimTemplates:

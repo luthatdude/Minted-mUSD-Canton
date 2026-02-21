@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useEthWallet } from "@/hooks/useEthWallet";
 import { CONTRACTS } from "@/lib/config";
 import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { MUSD_ABI } from "@/abis/MUSD";
 import OnboardingFlow from "./OnboardingFlow";
-import WalletConnector from "./WalletConnector";
 
 // ── Types ──────────────────────────────────────────────────────
 type TxStatus = "idle" | "approving" | "bridging" | "confirming" | "success" | "error";
@@ -25,7 +24,7 @@ interface BridgeOutPanelProps {
  *   4. Relay picks up BridgeToCantonRequested event and mints on Canton
  */
 export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
-  const { address, signer, provider, isConnected } = useUnifiedWallet();
+  const wallet = useEthWallet();
 
   // Form state
   const [amount, setAmount] = useState("");
@@ -50,17 +49,29 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
 
   // ── Load balances and contract state ──────────────────────
   const refreshData = useCallback(async () => {
-    if (!isConnected || !address || !provider || !bridgeAddress || !musdAddress) return;
+    if (!wallet.isConnected || !wallet.address || !bridgeAddress || !musdAddress) return;
 
     try {
-      const musdContract = new ethers.Contract(musdAddress, MUSD_ABI, provider);
-      const bridgeContract = new ethers.Contract(bridgeAddress, BLE_BRIDGE_V9_ABI, provider);
-
       const [bal, allow, minAmt, paused] = await Promise.all([
-        musdContract.balanceOf(address),
-        musdContract.allowance(address, bridgeAddress),
-        bridgeContract.bridgeOutMinAmount().catch(() => 0n),
-        bridgeContract.paused().catch(() => false),
+        wallet.readContract<bigint>(musdAddress, [...MUSD_ABI], "balanceOf", [
+          wallet.address,
+        ]),
+        wallet.readContract<bigint>(musdAddress, [...MUSD_ABI], "allowance", [
+          wallet.address,
+          bridgeAddress,
+        ]),
+        wallet.readContract<bigint>(
+          bridgeAddress,
+          [...BLE_BRIDGE_V9_ABI],
+          "bridgeOutMinAmount",
+          []
+        ),
+        wallet.readContract<boolean>(
+          bridgeAddress,
+          [...BLE_BRIDGE_V9_ABI],
+          "paused",
+          []
+        ),
       ]);
 
       setMusdBalance(bal);
@@ -70,7 +81,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
     } catch (err) {
       console.error("[BridgeOut] Failed to load contract data:", err);
     }
-  }, [isConnected, address, provider, bridgeAddress, musdAddress]);
+  }, [wallet.isConnected, wallet.address, bridgeAddress, musdAddress]);
 
   useEffect(() => {
     refreshData();
@@ -93,7 +104,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   const isValidAmount = parsedAmount > 0n && hasEnoughBalance && meetsMinimum;
 
   const canBridge =
-    isConnected &&
+    wallet.isConnected &&
     cantonParty &&
     isValidAmount &&
     !bridgePaused &&
@@ -102,14 +113,18 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
 
   // ── Approve mUSD spending ─────────────────────────────────
   const handleApprove = async () => {
-    if (!isConnected || !signer || !musdAddress || !bridgeAddress) return;
+    if (!wallet.isConnected || !musdAddress || !bridgeAddress) return;
 
     setTxStatus("approving");
     setTxError(null);
 
     try {
-      const musdContract = new ethers.Contract(musdAddress, MUSD_ABI, signer);
-      const tx = await musdContract.approve(bridgeAddress, parsedAmount);
+      const tx = await wallet.writeContract(
+        musdAddress,
+        [...MUSD_ABI],
+        "approve",
+        [bridgeAddress, parsedAmount]
+      );
       await tx.wait();
       setAllowance(parsedAmount);
       setTxStatus("idle");
@@ -131,8 +146,12 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
     setTxHash(null);
 
     try {
-      const bridgeContract = new ethers.Contract(bridgeAddress, BLE_BRIDGE_V9_ABI, signer);
-      const tx = await bridgeContract.bridgeToCanton(parsedAmount, cantonParty);
+      const tx = await wallet.writeContract(
+        bridgeAddress,
+        [...BLE_BRIDGE_V9_ABI],
+        "bridgeToCanton",
+        [parsedAmount, cantonParty]
+      );
 
       setTxHash(tx.hash);
       setTxStatus("confirming");
@@ -159,7 +178,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   };
 
   // ── Not connected ─────────────────────────────────────────
-  if (!isConnected) {
+  if (!wallet.isConnected) {
     return (
       <div className="card-gradient-border overflow-hidden">
         <div className="flex items-center gap-3 mb-5">
@@ -187,7 +206,34 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
             </p>
           </div>
         </div>
-        <WalletConnector mode="ethereum" />
+
+        <div className="text-center py-12">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-surface-800 mb-4">
+            <svg
+              className="h-8 w-8 text-gray-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3"
+              />
+            </svg>
+          </div>
+          <p className="text-gray-400 font-medium">
+            Connect your Ethereum wallet to bridge mUSD
+          </p>
+          <button
+            onClick={wallet.connect}
+            disabled={wallet.isConnecting}
+            className="mt-4 rounded-xl bg-gradient-to-r from-brand-500 to-purple-500 px-6 py-3 font-semibold text-white transition-all hover:from-brand-400 hover:to-purple-400 disabled:opacity-50"
+          >
+            {wallet.isConnecting ? "Connecting…" : "Connect Wallet"}
+          </button>
+        </div>
       </div>
     );
   }
@@ -196,7 +242,7 @@ export function BridgeOutPanel({ existingCantonParty }: BridgeOutPanelProps) {
   if (showOnboarding && !cantonParty) {
     return (
       <OnboardingFlow
-        ethAddress={address!}
+        ethAddress={wallet.address!}
         onComplete={(party) => {
           setCantonParty(party);
           setShowOnboarding(false);

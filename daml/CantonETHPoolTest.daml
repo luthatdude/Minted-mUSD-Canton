@@ -65,23 +65,21 @@ setupMintService operator regCid = do
       serviceName = "test-mint-service"
 
 setupPoolService : Party -> Party -> ContractId ComplianceRegistry
+                 -> ContractId CantonDirectMintService
                  -> Script (ContractId CantonETHPoolService)
-setupPoolService operator governance regCid = do
+setupPoolService operator governance regCid mintServiceCid = do
   submit operator do
     createCmd CantonETHPoolService with
       operator; governance
-      totalShares = 0.0; totalUsdcStaked = 0.0
+      totalShares = 0.0; totalMusdStaked = 0.0
       sharePrice = 1.0; poolCap = 10_000_000.0
       lastSyncEpoch = 0; paused = False
-      usdcIssuer = operator
-      targetChainId = 1
-      targetTreasury = "0x1234567890abcdef1234567890abcdef12345678"
-      validators = [operator]
-      nextNonce = 1
+      directMintServiceCid = mintServiceCid
       cantonCoinPrice = 2.0
       complianceRegistryCid = regCid
       mpaHash = dummyHash; mpaUri = dummyUri
-      pooledUsdc = 0.0
+      musdMintCap = 10_000_000.0
+      currentUnstakeMinted = 0.0
       observers = []
 
 -- ============================================================
@@ -297,7 +295,8 @@ test_SetPoolCap = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   pool2 <- submitMulti [op, gov] [] do
     exerciseCmd pool ETHPool_SetPoolCap with newCap = 50_000_000.0
@@ -317,7 +316,8 @@ test_SetPaused = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   pool2 <- submit op do
     exerciseCmd pool ETHPool_SetPaused with newPaused = True
@@ -337,7 +337,8 @@ test_SetCantonCoinPrice = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   -- 10% increase (within 25% cap)
   pool2 <- submitMulti [op, gov] [] do
@@ -358,7 +359,8 @@ test_CantonCoinPriceChangeTooBig = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   -- 50% increase exceeds 25% cap
   submitMustFail op do
@@ -374,7 +376,8 @@ test_SyncSharePrice = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   pool2 <- submitMulti [op, gov] [] do
     exerciseCmd pool ETHPool_SyncSharePrice with
@@ -398,7 +401,8 @@ test_SyncSharePriceTooLarge = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
-  pool <- setupPoolService op gov reg
+  mintSvc <- setupMintService op reg
+  pool <- setupPoolService op gov reg mintSvc
 
   -- 15% increase exceeds ±10% cap
   submitMustFail op do
@@ -418,22 +422,20 @@ test_SyncSharePriceNonSequentialFails = script do
   op <- allocateParty "Operator"
   gov <- allocateParty "Governance"
   reg <- setupCompliance op
+  mintSvc <- setupMintService op reg
 
   pool <- submit op do
     createCmd CantonETHPoolService with
       operator = op; governance = gov
-      totalShares = 0.0; totalUsdcStaked = 0.0
+      totalShares = 0.0; totalMusdStaked = 0.0
       sharePrice = 1.0; poolCap = 10_000_000.0
       lastSyncEpoch = 5; paused = False  -- epoch already at 5
-      usdcIssuer = op
-      targetChainId = 1
-      targetTreasury = "0x1234567890abcdef1234567890abcdef12345678"
-      validators = [op]
-      nextNonce = 1
+      directMintServiceCid = mintSvc
       cantonCoinPrice = 2.0
       complianceRegistryCid = reg
       mpaHash = dummyHash; mpaUri = dummyUri
-      pooledUsdc = 0.0
+      musdMintCap = 10_000_000.0
+      currentUnstakeMinted = 0.0
       observers = []
 
   -- epoch 3 is behind current 5
@@ -456,22 +458,20 @@ test_UnstakeExpiredLock = script do
   alice <- allocateParty "Alice"
   now <- getTime
   reg <- setupCompliance op
+  mintSvc <- setupMintService op reg
 
   pool <- submit op do
     createCmd CantonETHPoolService with
       operator = op; governance = gov
-      totalShares = 1000.0; totalUsdcStaked = 1000.0
+      totalShares = 1000.0; totalMusdStaked = 1000.0
       sharePrice = 1.05; poolCap = 10_000_000.0
       lastSyncEpoch = 1; paused = False
-      usdcIssuer = op
-      targetChainId = 1
-      targetTreasury = "0x1234567890abcdef1234567890abcdef12345678"
-      validators = [op]
-      nextNonce = 1
+      directMintServiceCid = mintSvc
       cantonCoinPrice = 2.0
       complianceRegistryCid = reg
       mpaHash = dummyHash; mpaUri = dummyUri
-      pooledUsdc = 1050.0
+      musdMintCap = 10_000_000.0
+      currentUnstakeMinted = 0.0
       observers = [alice]
 
   -- smUSD-E with lock already expired
@@ -507,22 +507,20 @@ test_UnstakeLockedFails = script do
   alice <- allocateParty "Alice"
   now <- getTime
   reg <- setupCompliance op
+  mintSvc <- setupMintService op reg
 
   pool <- submit op do
     createCmd CantonETHPoolService with
       operator = op; governance = gov
-      totalShares = 1000.0; totalUsdcStaked = 1000.0
+      totalShares = 1000.0; totalMusdStaked = 1000.0
       sharePrice = 1.0; poolCap = 10_000_000.0
       lastSyncEpoch = 1; paused = False
-      usdcIssuer = op
-      targetChainId = 1
-      targetTreasury = "0x1234567890abcdef1234567890abcdef12345678"
-      validators = [op]
-      nextNonce = 1
+      directMintServiceCid = mintSvc
       cantonCoinPrice = 2.0
       complianceRegistryCid = reg
       mpaHash = dummyHash; mpaUri = dummyUri
-      pooledUsdc = 1000.0
+      musdMintCap = 10_000_000.0
+      currentUnstakeMinted = 0.0
       observers = [alice]
 
   -- smUSD-E with lock in the future
@@ -550,22 +548,20 @@ test_UnstakePausedFails = script do
   alice <- allocateParty "Alice"
   now <- getTime
   reg <- setupCompliance op
+  mintSvc <- setupMintService op reg
 
   pool <- submit op do
     createCmd CantonETHPoolService with
       operator = op; governance = gov
-      totalShares = 1000.0; totalUsdcStaked = 1000.0
+      totalShares = 1000.0; totalMusdStaked = 1000.0
       sharePrice = 1.0; poolCap = 10_000_000.0
       lastSyncEpoch = 1; paused = True  -- PAUSED
-      usdcIssuer = op
-      targetChainId = 1
-      targetTreasury = "0x1234567890abcdef1234567890abcdef12345678"
-      validators = [op]
-      nextNonce = 1
+      directMintServiceCid = mintSvc
       cantonCoinPrice = 2.0
       complianceRegistryCid = reg
       mpaHash = dummyHash; mpaUri = dummyUri
-      pooledUsdc = 1000.0
+      musdMintCap = 10_000_000.0
+      currentUnstakeMinted = 0.0
       observers = [alice]
 
   smusde <- submitMulti [op, alice] [] do
