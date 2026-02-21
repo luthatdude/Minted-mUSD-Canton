@@ -408,20 +408,6 @@ class RelayService {
     activeProviderIndex = 0;
     consecutiveFailures = 0;
     MAX_CONSECUTIVE_FAILURES = 3;
-    static DIRECTION_NAMES = [
-        "attestation",
-        "ethBridgeOut",
-        "redemptions",
-        "cantonBridgeOut",
-        "yieldBridgeIn",
-        "ethPoolYield",
-    ];
-    static MAX_DIRECTION_FAILURES = 5;
-    static DEGRADED_POLL_INTERVAL = 3;
-    static FAILED_POLL_INTERVAL = 10;
-    static ORPHAN_RECOVERY_INTERVAL = 6;
-    directionHealth = {};
-    pollCycleCount = 0;
     // ── H-1: Rate limiting ──────────────────────────────────────────────
     // Per-block and per-minute caps to prevent relay DoS / spam
     rateLimiter = {
@@ -489,11 +475,6 @@ class RelayService {
             }
             console.log(`[Relay] ${this.fallbackProviders.length} fallback RPC providers configured`);
         }
-        for (const direction of RelayService.DIRECTION_NAMES) {
-            this.directionHealth[direction] = { status: 0, consecutiveFailures: 0 };
-            metrics_1.directionStatus.labels(direction).set(0);
-            metrics_1.directionConsecutiveFailures.labels(direction).set(0);
-        }
         // Wallet initialized asynchronously via initSigner()
         // to support KMS-based signing (key never enters Node.js memory)
         console.log(`[Relay] Initialized`);
@@ -524,9 +505,6 @@ class RelayService {
         this.bridgeContract = new ethers_1.ethers.Contract(this.config.bridgeContractAddress, BRIDGE_ABI, this.wallet);
         this.musdTokenContract = new ethers_1.ethers.Contract(this.config.musdTokenAddress, [
             "function mint(address to, uint256 amount) external",
-            "function totalSupply() external view returns (uint256)",
-            "function supplyCap() external view returns (uint256)",
-            "function localCapBps() external view returns (uint256)",
             "function hasRole(bytes32 role, address account) external view returns (bool)",
             "function grantRole(bytes32 role, address account) external",
         ], this.wallet);
@@ -552,7 +530,7 @@ class RelayService {
     // ============================================================
     /**
      * Shape of the persisted relay state file.
-     * Stores processed IDs and last scanned block numbers
+     * Stores processed epoch/attestation IDs and last scanned block numbers
      * so the relay can survive restarts without re-processing events.
      */
     static STATE_VERSION = 1;
@@ -605,12 +583,6 @@ class RelayService {
                     this.processedRedemptionRequests.add(cid);
                 }
             }
-            // Restore processed Ethereum bridge-out request IDs
-            if (Array.isArray(state.processedBridgeOuts)) {
-                for (const requestId of state.processedBridgeOuts) {
-                    this.processedBridgeOuts.add(requestId);
-                }
-            }
             // Restore last scanned blocks (use persisted value if ahead of default 0)
             if (typeof state.lastScannedBlock === "number" && state.lastScannedBlock > this.lastScannedBlock) {
                 this.lastScannedBlock = state.lastScannedBlock;
@@ -623,7 +595,6 @@ class RelayService {
             }
             console.log(`[Relay] Loaded persisted state: ` +
                 `${state.processedAttestations?.length || 0} attestations, ` +
-                `${state.processedBridgeOuts?.length || 0} bridge-outs, ` +
                 `${state.processedYieldEpochs?.length || 0} yield epochs, ` +
                 `${state.processedETHPoolYieldEpochs?.length || 0} ETH Pool yield epochs, ` +
                 `${state.processedRedemptionRequests?.length || 0} redemptions, ` +
@@ -649,7 +620,6 @@ class RelayService {
                 version: RelayService.STATE_VERSION,
                 timestamp: new Date().toISOString(),
                 processedAttestations: Array.from(this.processedAttestations),
-                processedBridgeOuts: Array.from(this.processedBridgeOuts),
                 processedYieldEpochs: Array.from(this.processedYieldEpochs),
                 processedETHPoolYieldEpochs: Array.from(this.processedETHPoolYieldEpochs),
                 processedRedemptionRequests: Array.from(this.processedRedemptionRequests),
@@ -694,90 +664,35 @@ class RelayService {
         await this.processPendingBridgeInRequests();
         // Load on-ledger redemption settlement markers (if available) for durable idempotency.
         await this.loadProcessedRedemptionsFromLedgerMarkers();
-        // Main loop — bidirectional with per-direction isolation.
+        // Main loop — bidirectional
         while (this.isRunning) {
-            this.pollCycleCount++;
-            if (this.shouldPollDirection("attestation")) {
-                try {
-                    await this.pollForAttestations();
-                    this.recordDirectionSuccess("attestation");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 1 (attestation) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("attestation", error);
-                }
+            try {
+                // Direction 1: Canton → Ethereum (attestation relay)
+                await this.pollForAttestations();
+                // Direction 2: Ethereum → Canton (bridge-out watcher)
+                await this.watchEthereumBridgeOut();
+                // Direction 2b: Canton redemption requests (settle to Ethereum mUSD)
+                await this.processPendingRedemptions();
+                // Direction 3: Canton → Ethereum (auto-process bridge-out backing)
+                await this.processCantonBridgeOuts();
+                // Direction 4: Ethereum → Canton (yield bridge-in — credit Canton pools)
+                await this.processYieldBridgeIn();
+                // Direction 4b: Ethereum → Canton (ETH Pool yield — credit Canton ETH Pool)
+                await this.processETHPoolYieldBridgeIn();
+                // Reset failure counter on success
+                this.consecutiveFailures = 0;
+                this.updateMetricsSnapshot();
             }
-            if (this.shouldPollDirection("ethBridgeOut")) {
-                try {
-                    await this.watchEthereumBridgeOut();
-                    this.recordDirectionSuccess("ethBridgeOut");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 2 (ethBridgeOut) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("ethBridgeOut", error);
-                }
-            }
-            if (this.shouldPollDirection("redemptions")) {
-                try {
-                    await this.processPendingRedemptions();
-                    this.recordDirectionSuccess("redemptions");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 2b (redemptions) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("redemptions", error);
-                }
-            }
-            if (this.shouldPollDirection("cantonBridgeOut")) {
-                try {
-                    await this.processCantonBridgeOuts();
-                    this.recordDirectionSuccess("cantonBridgeOut");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 3 (cantonBridgeOut) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("cantonBridgeOut", error);
-                }
-            }
-            if (this.shouldPollDirection("yieldBridgeIn")) {
-                try {
-                    await this.processYieldBridgeIn();
-                    this.recordDirectionSuccess("yieldBridgeIn");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 4 (yieldBridgeIn) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("yieldBridgeIn", error);
-                }
-            }
-            if (this.shouldPollDirection("ethPoolYield")) {
-                try {
-                    await this.processETHPoolYieldBridgeIn();
-                    this.recordDirectionSuccess("ethPoolYield");
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 4b (ethPoolYield) error:", error?.message?.slice(0, 150));
-                    this.recordDirectionFailure("ethPoolYield", error);
-                }
-            }
-            if (this.pollCycleCount % RelayService.ORPHAN_RECOVERY_INTERVAL === 0) {
-                try {
-                    await this.recoverOrphanedMusd();
-                }
-                catch (error) {
-                    console.error("[Relay] Direction 5 (orphanRecovery) error:", error?.message?.slice(0, 150));
-                    metrics_1.orphanRecoveryTotal.labels("error").inc();
-                }
-            }
-            const failedDirections = Object.values(this.directionHealth).filter((h) => h.status === 2).length;
-            if (failedDirections >= 3) {
+            catch (error) {
+                console.error("[Relay] Poll error:", error);
+                // Failover to backup RPC on consecutive failures
                 this.consecutiveFailures++;
+                this.updateMetricsSnapshot();
                 if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-                    console.warn(`[Relay] ${failedDirections} directions failed — attempting provider failover`);
+                    console.warn(`[Relay] ${this.consecutiveFailures} consecutive failures — attempting provider failover`);
                     await this.switchToFallbackProvider();
                 }
             }
-            else {
-                this.consecutiveFailures = 0;
-            }
-            this.updateMetricsSnapshot();
             await this.sleep(this.config.pollIntervalMs);
         }
     }
@@ -862,66 +777,6 @@ class RelayService {
         metrics_1.rateLimiterTxPerHour.set(this.rateLimiter.txThisHour);
         metrics_1.anomalyPauseTriggered.set(this.anomalyDetector.pauseTriggered ? 1 : 0);
         metrics_1.anomalyConsecutiveReverts.set(this.anomalyDetector.consecutiveReverts);
-    }
-    shouldPollDirection(direction) {
-        const health = this.directionHealth[direction];
-        if (!health)
-            return true;
-        if (health.status === 0)
-            return true;
-        if (health.status === 1)
-            return this.pollCycleCount % RelayService.DEGRADED_POLL_INTERVAL === 0;
-        if (health.status === 2)
-            return this.pollCycleCount % RelayService.FAILED_POLL_INTERVAL === 0;
-        return true;
-    }
-    isPermanentDirectionError(error) {
-        if (!error)
-            return false;
-        if (error instanceof canton_client_1.CantonApiError) {
-            return !error.isRetryable();
-        }
-        const message = String(error?.message || error);
-        return (message.includes("Canton API error 413") ||
-            message.includes("Payload Too Large") ||
-            message.includes("status code 413"));
-    }
-    recordDirectionFailure(direction, error) {
-        const health = this.directionHealth[direction];
-        if (!health)
-            return;
-        if (this.isPermanentDirectionError(error)) {
-            if (health.status !== 2) {
-                console.warn(`[Relay] Direction "${direction}" marked failed due to permanent error`);
-            }
-            health.status = 2;
-            health.consecutiveFailures = RelayService.MAX_DIRECTION_FAILURES;
-        }
-        else {
-            health.consecutiveFailures++;
-            if (health.consecutiveFailures >= RelayService.MAX_DIRECTION_FAILURES) {
-                const previous = health.status;
-                health.status = Math.min(health.status + 1, 2);
-                health.consecutiveFailures = 0;
-                if (health.status !== previous) {
-                    console.warn(`[Relay] Direction "${direction}" degraded: ${previous} -> ${health.status}`);
-                }
-            }
-        }
-        metrics_1.directionStatus.labels(direction).set(health.status);
-        metrics_1.directionConsecutiveFailures.labels(direction).set(health.consecutiveFailures);
-    }
-    recordDirectionSuccess(direction) {
-        const health = this.directionHealth[direction];
-        if (!health)
-            return;
-        if (health.status !== 0 || health.consecutiveFailures !== 0) {
-            health.status = 0;
-            health.consecutiveFailures = 0;
-            metrics_1.directionStatus.labels(direction).set(0);
-            metrics_1.directionConsecutiveFailures.labels(direction).set(0);
-            console.log(`[Relay] Direction "${direction}" recovered`);
-        }
     }
     // ============================================================
     //  H-1: RATE LIMITING
@@ -1207,7 +1062,7 @@ class RelayService {
         }
         catch (error) {
             console.error(`[Relay] Failed to query attestations: ${error}`);
-            throw error;
+            return;
         }
         // Limit batch size to prevent memory issues
         if (attestations.length > RelayService.MAX_BATCH_SIZE) {
@@ -1282,56 +1137,12 @@ class RelayService {
     /**
      * Load bridge-out request IDs that have already been relayed to Canton
      */
-    buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, userParty) {
-        return `${nonce}|${amountWei.toString()}|${eventTimestampSec}|${userParty}`;
-    }
-    parseBridgeInRequestDedupKeyFromPayload(payload) {
-        const nonce = Number(payload.nonce);
-        if (!Number.isFinite(nonce))
-            return null;
-        const createdAtMs = Date.parse(String(payload.createdAt || ""));
-        if (!Number.isFinite(createdAtMs))
-            return null;
-        const eventTimestampSec = Math.floor(createdAtMs / 1000);
-        const userParty = String(payload.user || "");
-        if (!userParty)
-            return null;
-        let amountWei;
-        try {
-            amountWei = ethers_1.ethers.parseUnits(String(payload.amount || "0"), 18);
-        }
-        catch {
-            return null;
-        }
-        return this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, userParty);
-    }
-    buildBridgeInRequestDedupIndex(requests) {
-        const dedupIndex = new Set();
-        for (const req of requests) {
-            const key = this.parseBridgeInRequestDedupKeyFromPayload(req.payload || {});
-            if (key)
-                dedupIndex.add(key);
-        }
-        return dedupIndex;
-    }
-    buildBridgeInRequestCandidateKeys(nonce, amountWei, eventTimestampSec, resolvedRecipient) {
-        const keys = new Set();
-        keys.add(this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, resolvedRecipient));
-        // If relay previously fell back to operator-as-user, treat that as already relayed too.
-        keys.add(this.buildBridgeInRequestDedupKey(nonce, amountWei, eventTimestampSec, this.config.cantonParty));
-        return Array.from(keys);
-    }
     async loadProcessedBridgeOuts() {
         console.log("[Relay] Loading processed bridge-out requests from chain...");
         const filter = this.bridgeContract.filters.BridgeToCantonRequested();
         const currentBlock = await this.provider.getBlockNumber();
-        const hasPersistedCursor = Number.isFinite(this.lastScannedBlock) &&
-            this.lastScannedBlock > 0 &&
-            this.lastScannedBlock <= currentBlock;
         const maxRange = this.config.replayLookbackBlocks;
-        const fromBlock = hasPersistedCursor
-            ? Math.max(0, this.lastScannedBlock - this.config.confirmations)
-            : Math.max(0, currentBlock - maxRange);
+        const fromBlock = Math.max(0, currentBlock - maxRange);
         const chunkSize = 10000;
         let events = [];
         for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
@@ -1339,34 +1150,27 @@ class RelayService {
             const chunk = await this.bridgeContract.queryFilter(filter, start, end);
             events = events.concat(chunk);
         }
-        // Cross-check against Canton — only mark events as processed if a
-        // matching BridgeInRequest already exists (nonce + amount + timestamp + user).
-        // Nonce-only checks are unsafe across bridge redeploys where nonces restart.
-        let cantonBridgeInDedupKeys;
+        // FIX: Cross-check against Canton — only mark events as processed if a
+        // BridgeInRequest already exists on the ledger for that nonce.
+        // Previously this blindly added ALL on-chain events, causing missed relays
+        // when the relay was down during a bridge-out.
+        let cantonBridgeInNonces;
         try {
             const existingRequests = await this.canton.queryContracts(canton_client_1.TEMPLATES.BridgeInRequest);
-            cantonBridgeInDedupKeys = this.buildBridgeInRequestDedupIndex(existingRequests);
-            console.log(`[Relay] Indexed ${cantonBridgeInDedupKeys.size} existing BridgeInRequest fingerprints on Canton`);
+            cantonBridgeInNonces = new Set(existingRequests.map(c => Number(c.payload.nonce)));
+            console.log(`[Relay] Found ${cantonBridgeInNonces.size} existing BridgeInRequest contracts on Canton`);
         }
-        catch (error) {
-            // If Canton query fails (for example JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED),
-            // do NOT mark all events as processed. That can permanently skip valid bridge-ins.
-            const msg = error?.message || String(error || "");
-            console.warn(`[Relay] Could not query Canton for existing BridgeInRequests (${msg.slice(0, 180)}). ` +
-                "Proceeding without pre-marking historical bridge-outs.");
-            cantonBridgeInDedupKeys = new Set();
+        catch {
+            // If Canton query fails, fall back to marking all as processed (safe default)
+            console.warn("[Relay] Could not query Canton for existing BridgeInRequests — marking all as processed");
+            cantonBridgeInNonces = new Set(events.map(e => Number(e.args?.nonce)));
         }
         let unrelayed = 0;
         for (const event of events) {
             const args = event.args;
             if (args) {
                 const nonce = Number(args.nonce);
-                const amountWei = BigInt(args.amount.toString());
-                const eventTimestampSec = Number(args.timestamp);
-                const cantonRecipient = String(args.cantonRecipient || "");
-                const resolvedRecipient = (0, recipient_routing_1.resolveRecipientParty)(cantonRecipient, this.config.recipientPartyAliases);
-                const candidateKeys = this.buildBridgeInRequestCandidateKeys(nonce, amountWei, eventTimestampSec, resolvedRecipient);
-                if (candidateKeys.some((key) => cantonBridgeInDedupKeys.has(key))) {
+                if (cantonBridgeInNonces.has(nonce)) {
                     this.processedBridgeOuts.add(args.requestId);
                 }
                 else {
@@ -1375,11 +1179,9 @@ class RelayService {
                 }
             }
         }
-        // Preserve persisted cursor when available to avoid replay storms on restart.
-        this.lastScannedBlock = hasPersistedCursor ? this.lastScannedBlock : fromBlock;
+        this.lastScannedBlock = fromBlock; // Start scanning from fromBlock so unrelayed events are picked up
         metrics_1.lastScannedBlock.set(this.lastScannedBlock);
-        console.log(`[Relay] Found ${this.processedBridgeOuts.size} already-relayed bridge-outs, ${unrelayed} pending relay ` +
-            `(cursor=${this.lastScannedBlock}, replayFrom=${fromBlock})`);
+        console.log(`[Relay] Found ${this.processedBridgeOuts.size} already-relayed bridge-outs, ${unrelayed} pending relay (scanning from block ${fromBlock})`);
     }
     /**
      * Watch Ethereum for BridgeToCantonRequested events and relay to Canton.
@@ -1406,33 +1208,15 @@ class RelayService {
             const chunk = await this.bridgeContract.queryFilter(filter, start, end);
             events = events.concat(chunk);
         }
-        let stateDirty = false;
-        let encounteredProcessingError = false;
-        let highestHandledBlock = this.lastScannedBlock;
-        if (events.length > 0) {
-            console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
-        }
-        let existingBridgeInDedupKeys = new Set();
-        if (events.length > 0) {
-            try {
-                const existingRequests = await this.canton.queryContracts(canton_client_1.TEMPLATES.BridgeInRequest);
-                existingBridgeInDedupKeys = this.buildBridgeInRequestDedupIndex(existingRequests);
-            }
-            catch (error) {
-                const msg = error?.message || String(error || "");
-                console.warn(`[Relay] Could not pre-index BridgeInRequest fingerprints (${msg.slice(0, 180)}). ` +
-                    "Proceeding without pre-create dedupe.");
-            }
-        }
+        this.lastScannedBlock = confirmedBlock;
+        metrics_1.lastScannedBlock.set(this.lastScannedBlock);
+        if (events.length === 0)
+            return;
+        console.log(`[Relay] Found ${events.length} new BridgeToCantonRequested events`);
         for (const event of events) {
-            const eventLog = event;
-            const eventBlock = Number(eventLog.blockNumber || 0);
-            const args = eventLog.args;
-            if (!args) {
-                // Defensive: malformed logs should not block cursor progression forever.
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
+            const args = event.args;
+            if (!args)
                 continue;
-            }
             const requestId = args.requestId;
             const sender = args.sender;
             const amount = args.amount;
@@ -1441,7 +1225,6 @@ class RelayService {
             const timestamp = args.timestamp;
             // Skip if already processed
             if (this.processedBridgeOuts.has(requestId)) {
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
                 continue;
             }
             // Skip yield bridge events — handled by Direction 4 (processYieldBridgeIn)
@@ -1449,8 +1232,6 @@ class RelayService {
                 sender.toLowerCase() === this.config.yieldDistributorAddress.toLowerCase()) {
                 console.log(`[Relay] Skipping yield bridge-out #${nonce} from YieldDistributor (handled by Direction 4)`);
                 this.processedBridgeOuts.add(requestId); // Mark processed to avoid re-checking
-                stateDirty = true;
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
                 continue;
             }
             // Skip ETH Pool yield bridge events — handled by Direction 4b (processETHPoolYieldBridgeIn)
@@ -1458,8 +1239,6 @@ class RelayService {
                 sender.toLowerCase() === this.config.ethPoolYieldDistributorAddress.toLowerCase()) {
                 console.log(`[Relay] Skipping ETH Pool yield bridge-out #${nonce} from ETHPoolYieldDistributor (handled by Direction 4b)`);
                 this.processedBridgeOuts.add(requestId);
-                stateDirty = true;
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
                 continue;
             }
             console.log(`[Relay] Bridge-out #${nonce}: ${ethers_1.ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
@@ -1473,8 +1252,6 @@ class RelayService {
                 metrics_1.bridgeOutsTotal.labels("validation_error").inc();
                 metrics_1.bridgeValidationFailuresTotal.inc();
                 this.processedBridgeOuts.add(requestId); // Mark processed to avoid retrying invalid data
-                stateDirty = true;
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
                 continue;
             }
             try {
@@ -1500,21 +1277,12 @@ class RelayService {
                     // validators: Object.keys(this.config.validatorAddresses),
                     // requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
                 };
-                const candidateKeys = this.buildBridgeInRequestCandidateKeys(Number(nonce), amount, Number(timestamp), resolvedRecipient);
-                if (candidateKeys.some((key) => existingBridgeInDedupKeys.has(key))) {
-                    console.log(`[Relay] BridgeInRequest already exists for bridge-out #${nonce} (fingerprint match); skipping create`);
-                    this.processedBridgeOuts.add(requestId);
-                    stateDirty = true;
-                    highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
-                    continue;
-                }
                 try {
                     // Validate payload against DAML ensure constraints before submission
                     (0, daml_schema_validator_1.validateCreatePayload)("BridgeInRequest", payload);
                     // Create BridgeInRequest on Canton with the original user party
                     await this.canton.createContract(canton_client_1.TEMPLATES.BridgeInRequest, payload);
                     console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
-                    existingBridgeInDedupKeys.add(this.buildBridgeInRequestDedupKey(Number(nonce), amount, Number(timestamp), String(payload.user)));
                 }
                 catch (innerError) {
                     const errMsg = innerError?.message || "";
@@ -1525,7 +1293,6 @@ class RelayService {
                         (0, daml_schema_validator_1.validateCreatePayload)("BridgeInRequest", payload);
                         await this.canton.createContract(canton_client_1.TEMPLATES.BridgeInRequest, payload);
                         console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
-                        existingBridgeInDedupKeys.add(this.buildBridgeInRequestDedupKey(Number(nonce), amount, Number(timestamp), String(payload.user)));
                     }
                     else {
                         throw innerError; // Re-throw non-party errors
@@ -1537,8 +1304,6 @@ class RelayService {
                 // Mark as processed
                 this.processedBridgeOuts.add(requestId);
                 metrics_1.bridgeOutsTotal.labels("success").inc();
-                stateDirty = true;
-                highestHandledBlock = Math.max(highestHandledBlock, eventBlock);
                 // Evict oldest entries if cache exceeds limit
                 if (this.processedBridgeOuts.size > this.MAX_PROCESSED_CACHE) {
                     const toEvict = Math.floor(this.MAX_PROCESSED_CACHE * 0.1);
@@ -1554,22 +1319,8 @@ class RelayService {
             catch (error) {
                 console.error(`[Relay] Failed to relay bridge-out #${nonce} to Canton:`, error.message);
                 metrics_1.bridgeOutsTotal.labels("error").inc();
-                // Stop here so failed event is retried next cycle. Cursor will only
-                // advance up to the last successfully handled block.
-                encounteredProcessingError = true;
-                break;
+                // Don't mark as processed — will retry next cycle
             }
-        }
-        // Advance cursor only after processing. If any event failed, preserve
-        // retryability by advancing only to the last handled block.
-        const nextScannedBlock = encounteredProcessingError ? highestHandledBlock : confirmedBlock;
-        if (nextScannedBlock > this.lastScannedBlock) {
-            this.lastScannedBlock = nextScannedBlock;
-            metrics_1.lastScannedBlock.set(this.lastScannedBlock);
-            stateDirty = true;
-        }
-        if (stateDirty) {
-            this.persistState();
         }
     }
     // ============================================================
@@ -1596,137 +1347,96 @@ class RelayService {
             const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
             const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
             // Check for existing CantonMUSD with this agreement hash (idempotency)
-            // Primary idempotency key is agreementUri (bridge-address scoped).
-            // agreementHash is nonce-based and can collide across bridge redeploys
-            // when the on-chain nonce restarts from 1.
-            //
             // Also check the old hash format for backwards compatibility, but ONLY
-            // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10).
+            // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10)
             const oldAgreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
-            let existingMusd = [];
-            let hashCollisionCandidates = 0;
-            try {
-                const matchedCandidates = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (payload) => {
-                    return (payload.agreementUri === agreementUri ||
-                        payload.agreementHash === agreementHash ||
-                        payload.agreementHash === oldAgreementHash);
-                });
-                existingMusd = matchedCandidates.filter((c) => {
-                    const payload = c.payload || {};
-                    if (payload.agreementUri === agreementUri)
-                        return true;
-                    // Legacy records may not have agreementUri; keep idempotency safe with amount match.
-                    if (!payload.agreementUri && payload.agreementHash === agreementHash && payload.amount === amountStr) {
-                        return true;
-                    }
-                    if (payload.agreementHash === oldAgreementHash && payload.agreementUri === agreementUri) {
-                        return true;
-                    }
-                    return false;
-                });
-                hashCollisionCandidates = matchedCandidates.filter((c) => {
-                    const payload = c.payload || {};
-                    return (payload.agreementHash === agreementHash &&
-                        payload.agreementUri &&
-                        payload.agreementUri !== agreementUri);
-                }).length;
-            }
-            catch (queryErr) {
-                const msg = queryErr?.message || String(queryErr || "");
-                // Canton node can cap active-contract queries at 200. Continue create-path and
-                // rely on nonce/requestId idempotency instead of hard failing the bridge-in.
-                if (msg.includes("JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED")) {
-                    console.warn(`[Relay] CantonMUSD duplicate pre-check skipped for bridge #${nonce} ` +
-                        `(active-contract limit reached)`);
-                }
-                else {
-                    throw queryErr;
-                }
-            }
-            const musdAlreadyExists = existingMusd.length > 0;
-            if (musdAlreadyExists) {
+            const existingMusd = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (payload) => {
+                if (payload.agreementHash === agreementHash)
+                    return true;
+                // For old format, also verify agreementUri to avoid hash collisions
+                if (payload.agreementHash === oldAgreementHash &&
+                    payload.agreementUri === agreementUri)
+                    return true;
+                return false;
+            });
+            if (existingMusd.length > 0) {
                 console.log(`[Relay] CantonMUSD for bridge #${nonce} already exists ` +
-                    `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`);
+                    `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate`);
+                return;
             }
-            else {
-                if (hashCollisionCandidates > 0) {
-                    console.warn(`[Relay] Detected ${hashCollisionCandidates} CantonMUSD hash-collision candidate(s) for bridge #${nonce}; ` +
-                        `continuing create because agreementUri differs`);
-                }
-                // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
-                // CantonMUSD template requires `signatory issuer, owner` — if the user party
-                // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
-                // Instead: operator mints (both signatory slots satisfied), then transfers to user.
-                const cantonMusdPayload = {
-                    issuer: this.config.cantonParty,
-                    owner: this.config.cantonParty, // Operator-owned initially
-                    amount: amountStr,
-                    agreementHash,
-                    agreementUri,
-                    privacyObservers: [],
-                };
-                (0, daml_schema_validator_1.validateCreatePayload)("CantonMUSD", cantonMusdPayload);
-                const createResult = await this.canton.createContract(canton_client_1.TEMPLATES.CantonMUSD, cantonMusdPayload);
-                console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
-                // Transfer to user if different from operator
-                if (userParty !== this.config.cantonParty) {
-                    try {
-                        // Extract the contractId of the just-created CantonMUSD
-                        let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
-                        if (!musdCid) {
-                            // Fallback: query by agreementHash
-                            const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty);
-                            if (created.length > 0)
-                                musdCid = created[0].contractId;
-                        }
-                        if (musdCid) {
-                            // CantonMUSD_Transfer requires complianceRegistryCid — query for it
-                            const complianceContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty).catch(() => []);
-                            if (complianceContracts.length > 0) {
-                                const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
-                                (0, daml_schema_validator_1.validateExerciseArgs)("CantonMUSD_Transfer", transferArgs);
-                                const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, musdCid, "CantonMUSD_Transfer", transferArgs);
-                                console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
-                                if (this.config.autoAcceptMusdTransferProposals) {
-                                    try {
-                                        let proposalCid = this.extractCreatedContractId(transferResult, "CantonMUSDTransferProposal");
-                                        if (!proposalCid) {
-                                            const proposals = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, (p) => p?.newOwner === userParty &&
-                                                p?.musd?.agreementUri === agreementUri &&
-                                                p?.musd?.owner === this.config.cantonParty).catch(() => []);
-                                            if (proposals.length > 0) {
-                                                proposalCid = proposals[0].contractId;
-                                            }
-                                        }
-                                        if (proposalCid) {
-                                            await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, proposalCid, "CantonMUSDTransferProposal_Accept", {}, [userParty]);
-                                            console.log(`[Relay] ✅ Auto-accepted transfer proposal for bridge #${nonce}; mUSD delivered to user`);
-                                        }
-                                        else {
-                                            console.warn(`[Relay] Could not resolve transfer proposal CID for bridge #${nonce}; user must accept manually`);
+            // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
+            // CantonMUSD template requires `signatory issuer, owner` — if the user party
+            // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
+            // Instead: operator mints (both signatory slots satisfied), then transfers to user.
+            const cantonMusdPayload = {
+                issuer: this.config.cantonParty,
+                owner: this.config.cantonParty, // Operator-owned initially
+                amount: amountStr,
+                agreementHash,
+                agreementUri,
+                privacyObservers: [],
+            };
+            (0, daml_schema_validator_1.validateCreatePayload)("CantonMUSD", cantonMusdPayload);
+            const createResult = await this.canton.createContract(canton_client_1.TEMPLATES.CantonMUSD, cantonMusdPayload);
+            console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+            // Transfer to user if different from operator
+            if (userParty !== this.config.cantonParty) {
+                try {
+                    // Extract the contractId of the just-created CantonMUSD
+                    let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
+                    if (!musdCid) {
+                        // Fallback: query by agreementHash
+                        const created = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty);
+                        if (created.length > 0)
+                            musdCid = created[0].contractId;
+                    }
+                    if (musdCid) {
+                        // CantonMUSD_Transfer requires complianceRegistryCid — query for it
+                        const complianceContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty).catch(() => []);
+                        if (complianceContracts.length > 0) {
+                            const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
+                            (0, daml_schema_validator_1.validateExerciseArgs)("CantonMUSD_Transfer", transferArgs);
+                            const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, musdCid, "CantonMUSD_Transfer", transferArgs);
+                            console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+                            if (this.config.autoAcceptMusdTransferProposals) {
+                                try {
+                                    let proposalCid = this.extractCreatedContractId(transferResult, "CantonMUSDTransferProposal");
+                                    if (!proposalCid) {
+                                        const proposals = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, (p) => p?.newOwner === userParty &&
+                                            p?.musd?.agreementUri === agreementUri &&
+                                            p?.musd?.owner === this.config.cantonParty).catch(() => []);
+                                        if (proposals.length > 0) {
+                                            proposalCid = proposals[0].contractId;
                                         }
                                     }
-                                    catch (autoAcceptErr) {
-                                        console.warn(`[Relay] Auto-accept failed for bridge #${nonce}; proposal remains pending: ${autoAcceptErr.message?.slice(0, 120)}`);
+                                    if (proposalCid) {
+                                        await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, proposalCid, "CantonMUSDTransferProposal_Accept", {}, [userParty]);
+                                        console.log(`[Relay] ✅ Auto-accepted transfer proposal for bridge #${nonce}; mUSD delivered to user`);
+                                    }
+                                    else {
+                                        console.warn(`[Relay] Could not resolve transfer proposal CID for bridge #${nonce}; user must accept manually`);
                                     }
                                 }
-                            }
-                            else {
-                                console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
+                                catch (autoAcceptErr) {
+                                    console.warn(`[Relay] Auto-accept failed for bridge #${nonce}; proposal remains pending: ${autoAcceptErr.message?.slice(0, 120)}`);
+                                }
                             }
                         }
                         else {
-                            console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
+                            console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
                         }
                     }
-                    catch (transferErr) {
-                        // Non-fatal: mUSD exists operator-owned; user can claim later
-                        console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
+                    else {
+                        console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
                     }
                 }
-                else {
-                    console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+                catch (transferErr) {
+                    // Non-fatal: mUSD exists operator-owned; user can claim later
+                    console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
                 }
+            }
+            else {
+                console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
             }
             // Exercise BridgeIn_Complete properly: create an AttestationRequest on Canton,
             // then exercise BridgeIn_Complete with the attestation CID.
@@ -1832,98 +1542,6 @@ class RelayService {
         }
         catch (error) {
             console.error(`[Relay] Failed to process pending BridgeInRequests: ${error.message}`);
-        }
-    }
-    async recoverOrphanedMusd() {
-        let operatorMusd = [];
-        try {
-            operatorMusd = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSD, (p) => p.owner === this.config.cantonParty && p.issuer === this.config.cantonParty);
-        }
-        catch (error) {
-            const msg = error?.message || String(error || "");
-            if (msg.includes("JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED")) {
-                console.warn("[Relay] Orphan recovery skipped: Canton active-contract query limit reached");
-                metrics_1.orphanRecoveryTotal.labels("skipped").inc();
-                return;
-            }
-            throw error;
-        }
-        if (operatorMusd.length === 0) {
-            metrics_1.orphanRecoveryTotal.labels("skipped").inc();
-            return;
-        }
-        const bridgeInOrphans = operatorMusd.filter((c) => {
-            const uri = c.payload?.agreementUri;
-            return typeof uri === "string" && uri.startsWith("ethereum:bridge-in:");
-        });
-        if (bridgeInOrphans.length === 0) {
-            metrics_1.orphanRecoveryTotal.labels("skipped").inc();
-            return;
-        }
-        let requests = [];
-        try {
-            requests = await this.canton.queryContracts(canton_client_1.TEMPLATES.BridgeInRequest, (p) => p.status === "pending" || p.status === "completed");
-        }
-        catch (error) {
-            console.warn(`[Relay] Orphan recovery could not query BridgeInRequests: ${error?.message || error}`);
-            metrics_1.orphanRecoveryTotal.labels("error").inc();
-            return;
-        }
-        const nonceToUser = new Map();
-        for (const req of requests) {
-            const nonce = Number(req.payload?.nonce);
-            const user = req.payload?.user || req.payload?.operator;
-            if (nonce > 0 && typeof user === "string" && user.length > 0) {
-                nonceToUser.set(nonce, (0, recipient_routing_1.resolveRecipientParty)(user, this.config.recipientPartyAliases));
-            }
-        }
-        const complianceContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ComplianceRegistry, (p) => p.operator === this.config.cantonParty).catch(() => []);
-        if (complianceContracts.length === 0) {
-            console.warn("[Relay] Orphan recovery skipped: ComplianceRegistry not found");
-            metrics_1.orphanRecoveryTotal.labels("skipped").inc();
-            return;
-        }
-        const complianceRegistryCid = complianceContracts[0].contractId;
-        let recoveredCount = 0;
-        for (const orphan of bridgeInOrphans) {
-            const agreementUri = String(orphan.payload?.agreementUri || "");
-            const nonceMatch = agreementUri.match(/:nonce:(\d+)$/);
-            if (!nonceMatch)
-                continue;
-            const nonce = Number(nonceMatch[1]);
-            const userParty = nonceToUser.get(nonce);
-            if (!userParty || userParty === this.config.cantonParty)
-                continue;
-            try {
-                const transferResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSD, orphan.contractId, "CantonMUSD_Transfer", { newOwner: userParty, complianceRegistryCid });
-                if (this.config.autoAcceptMusdTransferProposals) {
-                    let proposalCid = this.extractCreatedContractId(transferResult, "CantonMUSDTransferProposal");
-                    if (!proposalCid) {
-                        const proposals = await this.canton.queryContracts(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, (p) => p?.newOwner === userParty &&
-                            p?.musd?.agreementUri === agreementUri &&
-                            p?.musd?.owner === this.config.cantonParty).catch(() => []);
-                        if (proposals.length > 0) {
-                            proposalCid = proposals[0].contractId;
-                        }
-                    }
-                    if (proposalCid) {
-                        await this.canton.exerciseChoice(canton_client_1.TEMPLATES.CantonMUSDTransferProposal, proposalCid, "CantonMUSDTransferProposal_Accept", {}, [userParty]);
-                    }
-                }
-                recoveredCount++;
-                metrics_1.orphanRecoveryTotal.labels("success").inc();
-                console.log(`[Relay] Recovered orphan bridge-in #${nonce} to ${userParty.slice(0, 36)}...`);
-            }
-            catch (error) {
-                metrics_1.orphanRecoveryTotal.labels("error").inc();
-                console.warn(`[Relay] Orphan recovery failed for nonce #${nonce}: ${error?.message || error}`);
-            }
-        }
-        if (recoveredCount === 0) {
-            metrics_1.orphanRecoveryTotal.labels("skipped").inc();
-        }
-        else {
-            console.log(`[Relay] Orphan recovery transferred ${recoveredCount} contract(s) this cycle`);
         }
     }
     // ============================================================
@@ -2470,57 +2088,12 @@ class RelayService {
             return false;
         }
     }
-    async getMusdCapState() {
-        try {
-            const [rawTotalSupply, rawSupplyCap, rawLocalCapBps] = await Promise.all([
-                this.musdTokenContract.totalSupply(),
-                this.musdTokenContract.supplyCap(),
-                this.musdTokenContract.localCapBps(),
-            ]);
-            const totalSupply = BigInt(rawTotalSupply.toString());
-            const supplyCap = BigInt(rawSupplyCap.toString());
-            const localCapBps = BigInt(rawLocalCapBps.toString());
-            const effectiveLocalCap = (supplyCap * localCapBps) / 10000n;
-            return { totalSupply, supplyCap, localCapBps, effectiveLocalCap };
-        }
-        catch (error) {
-            console.warn(`[Relay] Could not query mUSD cap state for redemption preflight: ${error?.message || error}`);
-            return null;
-        }
-    }
-    decodeMusdMintError(error) {
-        const candidates = [
-            error?.data,
-            error?.error?.data,
-            error?.info?.error?.data,
-        ];
-        for (const candidate of candidates) {
-            if (typeof candidate !== "string" || !candidate.startsWith("0x") || candidate.length < 10) {
-                continue;
-            }
-            const selector = candidate.slice(0, 10).toLowerCase();
-            if (selector === "0x5d24ffe1")
-                return "ExceedsLocalCap";
-        }
-        return null;
-    }
     /**
      * Settle pending RedemptionRequests by minting mUSD on Ethereum.
      * Requests remain pending on Canton; idempotency is enforced by local persistence.
      */
     async processPendingRedemptions() {
-        let pendingRedemptions = [];
-        try {
-            pendingRedemptions = await this.canton.queryContracts(canton_client_1.TEMPLATES.RedemptionRequest, (p) => p.operator === this.config.cantonParty && !p.fulfilled);
-        }
-        catch (error) {
-            const msg = error?.message || String(error || "");
-            if (msg.includes("JSON_API_MAXIMUM_LIST_ELEMENTS_NUMBER_REACHED")) {
-                console.warn("[Relay] Skipping redemption settlement this cycle: active-contract query limit reached");
-                return;
-            }
-            throw error;
-        }
+        const pendingRedemptions = await this.canton.queryContracts(canton_client_1.TEMPLATES.RedemptionRequest, (p) => p.operator === this.config.cantonParty && !p.fulfilled);
         const actionableRedemptions = pendingRedemptions.filter((r) => !this.processedRedemptionRequests.has(r.contractId));
         await this.logPendingRedemptionBacklog(pendingRedemptions, actionableRedemptions.length);
         if (actionableRedemptions.length === 0)
@@ -2528,13 +2101,10 @@ class RelayService {
         const canMintPayouts = await this.ensureBridgeRoleForRedemptionPayouts();
         if (!canMintPayouts)
             return;
-        const capState = await this.getMusdCapState();
-        let projectedSupply = capState ? capState.totalSupply : null;
         const orderedRedemptions = [...actionableRedemptions].sort((a, b) => new Date(a.payload.createdAt).getTime() - new Date(b.payload.createdAt).getTime());
         let settledThisCycle = 0;
         let skippedMissingRecipient = 0;
         let skippedOverLimit = 0;
-        let skippedLocalCap = 0;
         for (const redemption of orderedRedemptions) {
             let owedAmount;
             try {
@@ -2552,19 +2122,6 @@ class RelayService {
                 skippedOverLimit++;
                 continue;
             }
-            if (capState && projectedSupply !== null) {
-                const projectedAfter = projectedSupply + owedAmount;
-                if (projectedAfter > capState.effectiveLocalCap) {
-                    skippedLocalCap++;
-                    console.warn(`[Relay] Skipping RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
-                        `ExceedsLocalCap preflight (projected=${ethers_1.ethers.formatUnits(projectedAfter, 18)}, ` +
-                        `effectiveCap=${ethers_1.ethers.formatUnits(capState.effectiveLocalCap, 18)}, ` +
-                        `supply=${ethers_1.ethers.formatUnits(projectedSupply, 18)}, ` +
-                        `supplyCap=${ethers_1.ethers.formatUnits(capState.supplyCap, 18)}, ` +
-                        `localCapBps=${capState.localCapBps.toString()})`);
-                    continue;
-                }
-            }
             const recipientEth = this.resolveRedemptionRecipientEthAddress(redemption.payload.user);
             if (!recipientEth) {
                 skippedMissingRecipient++;
@@ -2577,9 +2134,6 @@ class RelayService {
                 await mintTx.wait(this.config.confirmations);
                 await this.writeRedemptionSettlementMarker(redemption, recipientEth, owedAmount, mintTx.hash);
                 this.processedRedemptionRequests.add(redemption.contractId);
-                if (projectedSupply !== null) {
-                    projectedSupply += owedAmount;
-                }
                 this.persistState();
                 settledThisCycle++;
                 console.log(`[Relay] ✅ Settled RedemptionRequest ${redemption.contractId.slice(0, 16)}... ` +
@@ -2587,17 +2141,6 @@ class RelayService {
                     `(tx: ${mintTx.hash})`);
             }
             catch (error) {
-                const decoded = this.decodeMusdMintError(error);
-                if (decoded === "ExceedsLocalCap") {
-                    const capSuffix = capState
-                        ? ` (effectiveCap=${ethers_1.ethers.formatUnits(capState.effectiveLocalCap, 18)}, ` +
-                            `supplyCap=${ethers_1.ethers.formatUnits(capState.supplyCap, 18)}, ` +
-                            `localCapBps=${capState.localCapBps.toString()})`
-                        : "";
-                    console.error(`[Relay] Failed Ethereum payout for RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
-                        `ExceedsLocalCap${capSuffix}`);
-                    continue;
-                }
                 console.error(`[Relay] Failed Ethereum payout for RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
                     `${error?.shortMessage || error?.message || error}`);
             }
@@ -2606,7 +2149,7 @@ class RelayService {
             console.log(`[Relay] Redemption settlement: ${settledThisCycle} request(s) paid on Ethereum this cycle`);
         }
         const now = Date.now();
-        if ((skippedMissingRecipient > 0 || skippedOverLimit > 0 || skippedLocalCap > 0) &&
+        if ((skippedMissingRecipient > 0 || skippedOverLimit > 0) &&
             now - this.lastRedemptionFulfillmentWarningAt >= RelayService.DIAGNOSTIC_LOG_INTERVAL_MS) {
             if (skippedMissingRecipient > 0) {
                 console.warn(`[Relay] Redemption settlement waiting on recipient mapping: ${skippedMissingRecipient} request(s).`);
@@ -2614,9 +2157,6 @@ class RelayService {
             if (skippedOverLimit > 0) {
                 console.warn(`[Relay] Redemption settlement over per-request limit (${ethers_1.ethers.formatUnits(this.config.maxRedemptionEthPayoutWei, 18)} mUSD): ` +
                     `${skippedOverLimit} request(s).`);
-            }
-            if (skippedLocalCap > 0) {
-                console.warn(`[Relay] Redemption settlement blocked by mUSD local cap headroom: ${skippedLocalCap} request(s).`);
             }
             this.lastRedemptionFulfillmentWarningAt = now;
         }
@@ -3248,15 +2788,13 @@ async function main() {
     // Start relay
     await relay.start();
 }
-if (require.main === module) {
-    // Handle unhandled promise rejections to prevent silent failures
-    process.on("unhandledRejection", (reason, promise) => {
-        console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
-        process.exit(1);
-    });
-    main().catch((error) => {
-        console.error("[Main] Fatal error:", error);
-        process.exit(1);
-    });
-}
+// Handle unhandled promise rejections to prevent silent failures
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("[Main] Unhandled rejection at:", promise, "reason:", reason);
+    process.exit(1);
+});
+main().catch((error) => {
+    console.error("[Main] Fatal error:", error);
+    process.exit(1);
+});
 //# sourceMappingURL=relay-service.js.map

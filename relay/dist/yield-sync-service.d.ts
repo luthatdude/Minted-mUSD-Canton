@@ -22,7 +22,9 @@ interface YieldSyncConfig {
     ethereumRpcUrl: string;
     treasuryAddress: string;
     smusdAddress: string;
+    metaVault3Address: string;
     bridgePrivateKey: string;
+    kmsKeyId: string;
     cantonHost: string;
     cantonPort: number;
     cantonToken: string;
@@ -38,10 +40,12 @@ declare class YieldSyncService {
     private wallet;
     private treasury;
     private smusd;
-    private ledger;
+    private metaVault3;
+    private canton;
     private isRunning;
     private lastSyncedTotalValue;
     private lastGlobalSharePrice;
+    private lastETHPoolSharePrice;
     private currentEpoch;
     private nonce;
     constructor(config: YieldSyncConfig);
@@ -61,6 +65,20 @@ declare class YieldSyncService {
      * UNIFIED sync logic - bidirectional share price synchronization
      */
     private syncUnifiedYield;
+    /**
+     * Sync ETH Pool share price from Ethereum MetaVault #3 to Canton.
+     *
+     * Share price derivation:
+     *   Canton ETH Pool tracks `pooledUsdc` (deposits + received yield counter)
+     *   and `totalShares` (boosted shares issued to stakers).
+     *   The real value sits in MetaVault #3 on Ethereum.
+     *
+     *   sharePrice = MetaVault3.totalValue() / cantonTotalShares
+     *
+     * This sync updates the informational `sharePrice` field on Canton
+     * so frontends can display accurate yield without querying Ethereum.
+     */
+    private syncETHPoolSharePrice;
     private toNumeric18;
     private parseNumeric18;
     private formatUsdc;
