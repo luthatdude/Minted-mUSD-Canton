@@ -2011,21 +2011,47 @@ class RelayService {
       const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
 
       // Check for existing CantonMUSD with this agreement hash (idempotency)
+      // Primary idempotency key is agreementUri (bridge-address scoped).
+      // agreementHash is nonce-based and can collide across bridge redeploys
+      // when the on-chain nonce restarts from 1.
+      //
       // Also check the old hash format for backwards compatibility, but ONLY
-      // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10)
+      // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10).
       const oldAgreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
       let existingMusd: ActiveContract[] = [];
+      let hashCollisionCandidates = 0;
       try {
-        existingMusd = await this.canton.queryContracts(
+        const matchedCandidates = await this.canton.queryContracts(
           TEMPLATES.CantonMUSD,
           (payload: any) => {
-            if (payload.agreementHash === agreementHash) return true;
-            // For old format, also verify agreementUri to avoid hash collisions
-            if (payload.agreementHash === oldAgreementHash &&
-                payload.agreementUri === agreementUri) return true;
-            return false;
+            return (
+              payload.agreementUri === agreementUri ||
+              payload.agreementHash === agreementHash ||
+              payload.agreementHash === oldAgreementHash
+            );
           }
         );
+        existingMusd = matchedCandidates.filter((c: any) => {
+          const payload = c.payload || {};
+          if (payload.agreementUri === agreementUri) return true;
+          // Legacy records may not have agreementUri; keep idempotency safe with amount match.
+          if (!payload.agreementUri && payload.agreementHash === agreementHash && payload.amount === amountStr) {
+            return true;
+          }
+          if (payload.agreementHash === oldAgreementHash && payload.agreementUri === agreementUri) {
+            return true;
+          }
+          return false;
+        });
+
+        hashCollisionCandidates = matchedCandidates.filter((c: any) => {
+          const payload = c.payload || {};
+          return (
+            payload.agreementHash === agreementHash &&
+            payload.agreementUri &&
+            payload.agreementUri !== agreementUri
+          );
+        }).length;
       } catch (queryErr: any) {
         const msg = queryErr?.message || String(queryErr || "");
         // Canton node can cap active-contract queries at 200. Continue create-path and
@@ -2045,6 +2071,11 @@ class RelayService {
         console.log(
           `[Relay] CantonMUSD for bridge #${nonce} already exists ` +
           `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`
+        );
+      } else if (hashCollisionCandidates > 0) {
+        console.warn(
+          `[Relay] Detected ${hashCollisionCandidates} CantonMUSD hash-collision candidate(s) for bridge #${nonce}; ` +
+          `continuing create because agreementUri differs`
         );
       } else {
         // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
