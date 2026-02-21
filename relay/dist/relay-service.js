@@ -1648,11 +1648,11 @@ class RelayService {
                 console.log(`[Relay] CantonMUSD for bridge #${nonce} already exists ` +
                     `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`);
             }
-            else if (hashCollisionCandidates > 0) {
-                console.warn(`[Relay] Detected ${hashCollisionCandidates} CantonMUSD hash-collision candidate(s) for bridge #${nonce}; ` +
-                    `continuing create because agreementUri differs`);
-            }
             else {
+                if (hashCollisionCandidates > 0) {
+                    console.warn(`[Relay] Detected ${hashCollisionCandidates} CantonMUSD hash-collision candidate(s) for bridge #${nonce}; ` +
+                        `continuing create because agreementUri differs`);
+                }
                 // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
                 // CantonMUSD template requires `signatory issuer, owner` — if the user party
                 // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
