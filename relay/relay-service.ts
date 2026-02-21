@@ -712,6 +712,9 @@ class RelayService {
       this.config.musdTokenAddress,
       [
         "function mint(address to, uint256 amount) external",
+        "function totalSupply() external view returns (uint256)",
+        "function supplyCap() external view returns (uint256)",
+        "function localCapBps() external view returns (uint256)",
         "function hasRole(bytes32 role, address account) external view returns (bool)",
         "function grantRole(bytes32 role, address account) external",
       ],
@@ -3116,6 +3119,47 @@ class RelayService {
     }
   }
 
+  private async getMusdCapState(): Promise<{
+    totalSupply: bigint;
+    supplyCap: bigint;
+    localCapBps: bigint;
+    effectiveLocalCap: bigint;
+  } | null> {
+    try {
+      const [rawTotalSupply, rawSupplyCap, rawLocalCapBps] = await Promise.all([
+        this.musdTokenContract.totalSupply(),
+        this.musdTokenContract.supplyCap(),
+        this.musdTokenContract.localCapBps(),
+      ]);
+      const totalSupply = BigInt(rawTotalSupply.toString());
+      const supplyCap = BigInt(rawSupplyCap.toString());
+      const localCapBps = BigInt(rawLocalCapBps.toString());
+      const effectiveLocalCap = (supplyCap * localCapBps) / 10_000n;
+      return { totalSupply, supplyCap, localCapBps, effectiveLocalCap };
+    } catch (error: any) {
+      console.warn(
+        `[Relay] Could not query mUSD cap state for redemption preflight: ${error?.message || error}`
+      );
+      return null;
+    }
+  }
+
+  private decodeMusdMintError(error: any): string | null {
+    const candidates = [
+      error?.data,
+      error?.error?.data,
+      error?.info?.error?.data,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string" || !candidate.startsWith("0x") || candidate.length < 10) {
+        continue;
+      }
+      const selector = candidate.slice(0, 10).toLowerCase();
+      if (selector === "0x5d24ffe1") return "ExceedsLocalCap";
+    }
+    return null;
+  }
+
   /**
    * Settle pending RedemptionRequests by minting mUSD on Ethereum.
    * Requests remain pending on Canton; idempotency is enforced by local persistence.
@@ -3147,6 +3191,8 @@ class RelayService {
 
     const canMintPayouts = await this.ensureBridgeRoleForRedemptionPayouts();
     if (!canMintPayouts) return;
+    const capState = await this.getMusdCapState();
+    let projectedSupply = capState ? capState.totalSupply : null;
 
     const orderedRedemptions = [...actionableRedemptions].sort(
       (a, b) => new Date(a.payload.createdAt).getTime() - new Date(b.payload.createdAt).getTime()
@@ -3155,6 +3201,7 @@ class RelayService {
     let settledThisCycle = 0;
     let skippedMissingRecipient = 0;
     let skippedOverLimit = 0;
+    let skippedLocalCap = 0;
 
     for (const redemption of orderedRedemptions) {
       let owedAmount: bigint;
@@ -3179,6 +3226,22 @@ class RelayService {
         continue;
       }
 
+      if (capState && projectedSupply !== null) {
+        const projectedAfter = projectedSupply + owedAmount;
+        if (projectedAfter > capState.effectiveLocalCap) {
+          skippedLocalCap++;
+          console.warn(
+            `[Relay] Skipping RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
+            `ExceedsLocalCap preflight (projected=${ethers.formatUnits(projectedAfter, 18)}, ` +
+            `effectiveCap=${ethers.formatUnits(capState.effectiveLocalCap, 18)}, ` +
+            `supply=${ethers.formatUnits(projectedSupply, 18)}, ` +
+            `supplyCap=${ethers.formatUnits(capState.supplyCap, 18)}, ` +
+            `localCapBps=${capState.localCapBps.toString()})`
+          );
+          continue;
+        }
+      }
+
       const recipientEth = this.resolveRedemptionRecipientEthAddress(redemption.payload.user);
       if (!recipientEth) {
         skippedMissingRecipient++;
@@ -3200,6 +3263,9 @@ class RelayService {
           mintTx.hash
         );
         this.processedRedemptionRequests.add(redemption.contractId);
+        if (projectedSupply !== null) {
+          projectedSupply += owedAmount;
+        }
         this.persistState();
         settledThisCycle++;
 
@@ -3209,6 +3275,19 @@ class RelayService {
           `(tx: ${mintTx.hash})`
         );
       } catch (error: any) {
+        const decoded = this.decodeMusdMintError(error);
+        if (decoded === "ExceedsLocalCap") {
+          const capSuffix = capState
+            ? ` (effectiveCap=${ethers.formatUnits(capState.effectiveLocalCap, 18)}, ` +
+              `supplyCap=${ethers.formatUnits(capState.supplyCap, 18)}, ` +
+              `localCapBps=${capState.localCapBps.toString()})`
+            : "";
+          console.error(
+            `[Relay] Failed Ethereum payout for RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
+            `ExceedsLocalCap${capSuffix}`
+          );
+          continue;
+        }
         console.error(
           `[Relay] Failed Ethereum payout for RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
           `${error?.shortMessage || error?.message || error}`
@@ -3222,7 +3301,7 @@ class RelayService {
 
     const now = Date.now();
     if (
-      (skippedMissingRecipient > 0 || skippedOverLimit > 0) &&
+      (skippedMissingRecipient > 0 || skippedOverLimit > 0 || skippedLocalCap > 0) &&
       now - this.lastRedemptionFulfillmentWarningAt >= RelayService.DIAGNOSTIC_LOG_INTERVAL_MS
     ) {
       if (skippedMissingRecipient > 0) {
@@ -3234,6 +3313,11 @@ class RelayService {
         console.warn(
           `[Relay] Redemption settlement over per-request limit (${ethers.formatUnits(this.config.maxRedemptionEthPayoutWei, 18)} mUSD): ` +
           `${skippedOverLimit} request(s).`
+        );
+      }
+      if (skippedLocalCap > 0) {
+        console.warn(
+          `[Relay] Redemption settlement blocked by mUSD local cap headroom: ${skippedLocalCap} request(s).`
         );
       }
       this.lastRedemptionFulfillmentWarningAt = now;
