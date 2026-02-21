@@ -67,7 +67,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'mint' | 'portfolio' | 'protocol'>('mint');
+  const [activeTab, setActiveTab] = useState<'mint' | 'portfolio' | 'protocol'>('protocol');
 
   // Load protocol data
   useEffect(() => {
@@ -278,14 +278,14 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
         />
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setActiveTab('mint')}
+            onClick={() => setActiveTab('protocol')}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === 'mint' 
+              activeTab === 'protocol'
                 ? 'bg-brand-500 text-white' 
                 : 'bg-slate-800 text-gray-400 hover:text-white'
             }`}
           >
-            Mint & Redeem
+            Protocol Stats
           </button>
           <button
             onClick={() => setActiveTab('portfolio')}
@@ -295,17 +295,17 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
                 : 'bg-slate-800 text-gray-400 hover:text-white'
             }`}
           >
-            My Portfolio
+            Portfolio Stats
           </button>
           <button
-            onClick={() => setActiveTab('protocol')}
+            onClick={() => setActiveTab('mint')}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === 'protocol' 
+              activeTab === 'mint'
                 ? 'bg-brand-500 text-white' 
                 : 'bg-slate-800 text-gray-400 hover:text-white'
             }`}
           >
-            Protocol Stats
+            Mint & Redeem
           </button>
         </div>
       </div>

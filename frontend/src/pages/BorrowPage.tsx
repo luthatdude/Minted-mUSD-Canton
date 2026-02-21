@@ -22,6 +22,7 @@ interface CollateralInfo {
   factorBps: bigint;
   liqThreshold: bigint;
   liqPenalty: bigint;
+  usedFallbackPrice: boolean;
 }
 
 type TabType = "deposit" | "borrow" | "repay" | "withdraw";
@@ -39,6 +40,7 @@ export function BorrowPage() {
   const [interestRate, setInterestRate] = useState(0n);
   const [isLiquidatable, setIsLiquidatable] = useState(false);
   const [musdBalance, setMusdBalance] = useState(0n);
+  const [oracleDegraded, setOracleDegraded] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const tx = useTx();
   const [slippageBps, setSlippageBps] = useState(50);
@@ -74,6 +76,7 @@ export function BorrowPage() {
             deposited,
             price,
             valueUsd,
+            usedFallbackPrice: false,
             // getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
             // Previously mapped [0]→factor, [1]→threshold, [2]→penalty (off-by-one, skipping enabled)
             factorBps: config[1],
@@ -184,6 +187,35 @@ export function BorrowPage() {
   const utilizationPct = totalCollateralUsd > 0n && debt > 0n
     ? Math.min(100, Number((debt * 10000n) / totalCollateralUsd) / 100)
     : 0;
+
+  // Weighted LTV thresholds across deposited collateral
+  const weightedMaxLtvBps = totalCollateralUsd > 0n
+    ? collaterals.reduce((sum, c) => sum + (c.valueUsd * c.factorBps), 0n) / totalCollateralUsd
+    : 0n;
+  const weightedLiqThresholdBps = totalCollateralUsd > 0n
+    ? collaterals.reduce((sum, c) => sum + (c.valueUsd * c.liqThreshold), 0n) / totalCollateralUsd
+    : 0n;
+  const currentLtvBps = totalCollateralUsd > 0n && debt > 0n
+    ? (debt * 10000n) / totalCollateralUsd
+    : 0n;
+  const currentLtvPct = Number(currentLtvBps) / 100;
+  const weightedMaxLtvPct = Number(weightedMaxLtvBps) / 100;
+  const weightedLiqThresholdPct = Number(weightedLiqThresholdBps) / 100;
+  const ltvGaugePct = weightedLiqThresholdBps > 0n
+    ? Math.min(100, Math.max(0, Number((currentLtvBps * 10000n) / weightedLiqThresholdBps) / 100))
+    : 0;
+  const ltvColorClass =
+    currentLtvBps >= weightedLiqThresholdBps && weightedLiqThresholdBps > 0n
+      ? "text-red-400"
+      : currentLtvBps >= weightedMaxLtvBps && weightedMaxLtvBps > 0n
+      ? "text-yellow-400"
+      : "text-emerald-400";
+  const ltvGaugeGradient =
+    currentLtvBps >= weightedLiqThresholdBps && weightedLiqThresholdBps > 0n
+      ? "from-red-500 to-red-400"
+      : currentLtvBps >= weightedMaxLtvBps && weightedMaxLtvBps > 0n
+      ? "from-yellow-500 to-yellow-400"
+      : "from-emerald-500 to-teal-400";
 
   // Testnet faucet: mint test collateral tokens (MockERC20 has public mint)
   const [faucetLoading, setFaucetLoading] = useState(false);
@@ -543,6 +575,34 @@ export function BorrowPage() {
                 </svg>
               }
             />
+          </div>
+
+          {/* LTV Health Gauge */}
+          <div className="card-gradient-border overflow-hidden p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">LTV Health Gauge</p>
+                <p className={`text-3xl font-bold ${ltvColorClass}`}>{currentLtvPct.toFixed(2)}%</p>
+              </div>
+              <div className="text-right text-xs text-gray-400">
+                <p>Max Borrow: {weightedMaxLtvPct.toFixed(2)}%</p>
+                <p>Liq. Threshold: {weightedLiqThresholdPct.toFixed(2)}%</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="progress">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r ${ltvGaugeGradient} transition-all duration-1000`}
+                  style={{ width: `${ltvGaugePct}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500">
+                <span className="text-emerald-400">Safe</span>
+                <span className="text-yellow-400">Borrow Limit</span>
+                <span className="text-red-400">Liquidation</span>
+              </div>
+            </div>
           </div>
 
           {/* Health Factor & Position Overview */}

@@ -178,36 +178,14 @@ export async function createSigner(
   const kmsKeyId = process.env.KMS_KEY_ID;
 
   if (kmsKeyId) {
-    // Dynamic import so @aws-sdk/client-kms is only required when KMS is used
+    // TS-H-01 FIX: Delegate to the fully functional KMSEthereumSigner
+    // instead of the broken stub that threw "not yet implemented".
     try {
-      const { KMSClient, SignCommand, GetPublicKeyCommand } = await import("@aws-sdk/client-kms");
-      const kmsClient = new KMSClient({ region: process.env.AWS_REGION || "us-east-1" });
-
-      // Retrieve the public key to derive the Ethereum address
-      const pubKeyResp = await kmsClient.send(
-        new GetPublicKeyCommand({ KeyId: kmsKeyId }),
-      );
-      if (!pubKeyResp.PublicKey) throw new Error("KMS returned empty public key");
-
-      // The raw public key is a DER-encoded SubjectPublicKeyInfo.
-      // ethers.computeAddress expects an uncompressed 65-byte key (04 || x || y).
-      const derBytes = Buffer.from(pubKeyResp.PublicKey);
-      // The last 64 bytes of the DER structure are the x,y coordinates
-      const uncompressedKey = Buffer.concat([Buffer.from([0x04]), derBytes.subarray(-64)]);
-      const address = ethers.computeAddress("0x" + uncompressedKey.toString("hex"));
-
-      console.log(`[KMS] Signer initialised — address ${address}`);
-
-      // TS-H-02: Do NOT return a VoidSigner. VoidSigner cannot sign transactions,
-      // making all write operations silently fail at runtime. Instead, throw a clear
-      // error requiring the KMS AbstractSigner implementation to be completed.
-      // Previously this returned new ethers.VoidSigner(address, provider) which
-      // created a non-functional signer that appeared to work until tx submission.
-      throw new Error(
-        `KMS signer address ${address} derived successfully, but full KMS AbstractSigner ` +
-        `integration is not yet implemented. The relay CANNOT use VoidSigner for write ` +
-        `operations — implement kms-ethereum-signer.ts with AWS KMS sign() calls, ` +
-        `or use a raw private key in non-production environments.`
+      const { createEthereumSigner } = await import("./kms-ethereum-signer");
+      console.log(`[KMS] Initialising KMS signer via kms-ethereum-signer.ts...`);
+      return await createEthereumSigner(
+        { kmsKeyId, awsRegion: process.env.AWS_REGION || "us-east-1" },
+        provider,
       );
     } catch (err) {
       console.error(`[KMS] Failed to initialise KMS signer: ${(err as Error).message}`);
@@ -238,4 +216,118 @@ export async function createSigner(
   );
 
   return new ethers.Wallet(key, provider);
+}
+
+// ============================================================
+//  TS-C-01 FIX: Production .env File Guard
+// ============================================================
+
+const PRIVATE_KEY_PATTERNS = [
+  /PRIVATE_KEY\s*=\s*[0-9a-fA-F]{64}/,      // Raw hex private key
+  /PRIVATE_KEY\s*=\s*0x[0-9a-fA-F]{64}/,     // 0x-prefixed private key
+  /SECRET_KEY\s*=\s*[0-9a-fA-F]{32,}/,       // Any secret key
+];
+
+/**
+ * TS-C-01 FIX: Defense-in-depth guard for production deployments.
+ *
+ * Scans for .env files in the application directory that contain
+ * plaintext private keys. In production, secrets MUST be mounted
+ * via Docker secrets (/run/secrets/) or injected by K8s ExternalSecrets.
+ *
+ * This guard:
+ *   - FATAL in production: refuses to start if .env files with keys exist
+ *   - WARNING in staging: logs a security warning
+ *   - No-op in development: .env files are expected for local dev
+ */
+export function rejectDotenvPrivateKeys(appDir: string): void {
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") {
+    return; // .env files are expected in development
+  }
+
+  const envFiles = [".env", ".env.production", ".env.local"];
+  for (const envFile of envFiles) {
+    const envPath = `${appDir}/${envFile}`;
+    try {
+      if (!fs.existsSync(envPath)) continue;
+      const content = fs.readFileSync(envPath, "utf-8");
+      for (const pattern of PRIVATE_KEY_PATTERNS) {
+        if (pattern.test(content)) {
+          const msg =
+            `[SECURITY] TS-C-01: Found plaintext private key in ${envFile}. ` +
+            `This is FORBIDDEN in production. Secrets must be provided via ` +
+            `Docker secrets (/run/secrets/) or AWS KMS. ` +
+            `Remove the .env file or strip all secret values from it.`;
+          if (process.env.NODE_ENV === "production") {
+            throw new Error(msg);
+          }
+          // Staging: warn but don't block
+          console.error(`⚠️  ${msg}`);
+        }
+      }
+    } catch (err) {
+      if ((err as Error).message?.includes("TS-C-01")) throw err;
+      // Can't read file — skip (e.g., permission denied on read-only rootfs)
+    }
+  }
+}
+
+// ============================================================
+//  TS-M-01 FIX: Canton Party ID Validation
+// ============================================================
+
+/**
+ * Canton party ID format:
+ *   - Legacy:  "partyName::fingerprint"  where fingerprint is a hex string
+ *   - Modern (Canton 3.x):  "partyName::1220<hex>"  (multihash prefix)
+ *   - Simple (dev/test):  "alice", "bob" (no :: separator, alphanumeric)
+ *
+ * Valid characters:
+ *   - Display name: alphanumeric, hyphens, underscores, dots (1-255 chars)
+ *   - Fingerprint: hex digits (after :: separator)
+ *
+ * Max length: 512 characters (Canton Network limit)
+ */
+const CANTON_PARTY_ID_REGEX = /^[a-zA-Z0-9._-]{1,255}(::[0-9a-fA-F]{8,128})?$/;
+const MAX_CANTON_PARTY_ID_LENGTH = 512;
+
+/**
+ * Validate that a string is a well-formed Canton party identifier.
+ *
+ * Rejects:
+ *   - Empty strings
+ *   - Strings exceeding 512 characters
+ *   - Strings with control characters, spaces, or special chars
+ *   - Strings that don't match the Canton party ID format
+ *
+ * @param partyId - The Canton party ID string to validate
+ * @returns true if valid
+ */
+export function isValidCantonPartyId(partyId: string): boolean {
+  if (!partyId || typeof partyId !== "string") return false;
+  if (partyId.length > MAX_CANTON_PARTY_ID_LENGTH) return false;
+  // Reject control characters, whitespace, and null bytes
+  if (/[\x00-\x1f\x7f\s]/.test(partyId)) return false;
+  return CANTON_PARTY_ID_REGEX.test(partyId);
+}
+
+/**
+ * Validate and sanitize a Canton party ID string from an untrusted source
+ * (e.g., Ethereum event args). Throws a descriptive error on invalid input.
+ *
+ * @param partyId - The raw party ID string
+ * @param context - Description of where this came from (for error messages)
+ * @returns The validated party ID (unchanged if valid)
+ * @throws Error if the party ID is malformed
+ */
+export function validateCantonPartyId(partyId: string, context: string): string {
+  if (!isValidCantonPartyId(partyId)) {
+    throw new Error(
+      `TS-M-01: Invalid Canton party ID in ${context}: ` +
+      `"${partyId.slice(0, 80)}${partyId.length > 80 ? "..." : ""}". ` +
+      `Expected format: "displayName" or "displayName::hexFingerprint" ` +
+      `(max ${MAX_CANTON_PARTY_ID_LENGTH} chars, alphanumeric/.-_ only).`
+    );
+  }
+  return partyId;
 }

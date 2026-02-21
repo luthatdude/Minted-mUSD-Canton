@@ -14,17 +14,39 @@
 
 // Load environment variables BEFORE any config initialization
 import * as path from "path";
-import * as dotenv from "dotenv";
-const envFile = process.env.NODE_ENV === "production" ? ".env" : ".env.development";
-dotenv.config({ path: path.resolve(__dirname, envFile) });
+
+// TS-C-01 FIX: NEVER load dotenv in production.
+// Production secrets are mounted at /run/secrets/ by Docker/K8s and read via readSecret().
+// Loading .env files in production risks exposing plaintext private keys on disk,
+// in container image layers, CI logs, and backup archives.
+if (process.env.NODE_ENV !== "production") {
+  try {
+    // Dynamic require so dotenv is not imported at all in production bundles
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const dotenv = require("dotenv");
+    dotenv.config({ path: path.resolve(__dirname, ".env.development") });
+    console.log("[Config] Loaded .env.development (non-production mode)");
+  } catch {
+    // dotenv not installed — env vars must be set externally
+  }
+}
 
 import { ethers } from "ethers";
 import { CantonClient, ActiveContract, TEMPLATES } from "./canton-client";
 import { formatKMSSignature, sortSignaturesBySignerAddress } from "./signer";
+import { validateCreatePayload, validateExerciseArgs, DamlValidationError } from "./daml-schema-validator";
 // Use shared readSecret utility
 // Use readAndValidatePrivateKey for secp256k1 range validation
 // INFRA-H-06: Import enforceTLSSecurity for explicit TLS cert validation
-import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl } from "./utils";
+import { readSecret, readAndValidatePrivateKey, enforceTLSSecurity, sanitizeUrl, validateCantonPartyId, rejectDotenvPrivateKeys } from "./utils";
+import {
+  parseRecipientEthAddresses,
+  parseRecipientPartyAliases,
+  RecipientEthAddressMap,
+  RecipientPartyAliasMap,
+  resolveRecipientEthAddress,
+  resolveRecipientParty,
+} from "./recipient-routing";
 // Import yield keeper for auto-deploy integration
 import { getKeeperStatus } from "./yield-keeper";
 // KMS-based Ethereum transaction signer (key never enters Node.js memory)
@@ -54,6 +76,9 @@ import {
 // INFRA-H-06: Ensure TLS certificate validation is enforced at process level
 enforceTLSSecurity();
 
+// TS-C-01: Block startup if .env files on disk contain plaintext private keys in production
+rejectDotenvPrivateKeys(__dirname);
+
 // ============================================================
 //                     CONFIGURATION
 // ============================================================
@@ -70,6 +95,7 @@ interface RelayConfig {
   bridgeContractAddress: string;
   treasuryAddress: string;     // Treasury for auto-deploy trigger
   metaVault3Address: string;   // MetaVault #3 (Fluid) strategy for ETH Pool deposits
+  musdTokenAddress: string;    // mUSD token for Canton redemption payouts
   /** @deprecated SEC-GATE-01: Use relayerKmsKeyId instead. Raw keys forbidden on mainnet. */
   relayerPrivateKey: string;
   /** AWS KMS key ARN for Ethereum transaction signing (key never in memory) */
@@ -81,12 +107,19 @@ interface RelayConfig {
   // Without this, signature validation ALWAYS fails because we compared
   // Party strings like "validator1::122abc" to addresses like "0x71C7..."
   validatorAddresses: Record<string, string>;
+  // Optional mapping for migrating legacy/non-local Canton recipient parties
+  // to locally hosted parties on this participant.
+  recipientPartyAliases: RecipientPartyAliasMap;
+  // Mapping from Canton user party -> Ethereum recipient for RedemptionRequest payouts
+  redemptionRecipientAddresses: RecipientEthAddressMap;
 
   // Operational
   pollIntervalMs: number;
   maxRetries: number;
   confirmations: number;
   triggerAutoDeploy: boolean;  // Whether to trigger auto-deploy after bridge
+  // Auto-accept CantonMUSD transfer proposals after bridge-in (dev convenience).
+  autoAcceptMusdTransferProposals: boolean;
   // Fallback RPC URLs for relay redundancy
   fallbackRpcUrls: string[];
   // YieldDistributor contract address (Direction 4: yield bridge-in to Canton)
@@ -99,12 +132,16 @@ interface RelayConfig {
   stateFilePath: string;
   // MEDIUM-02: Configurable lookback window for on-chain replay scan (default: 200,000 blocks)
   replayLookbackBlocks: number;
+  // Safety cap for a single Canton redemption payout on Ethereum
+  maxRedemptionEthPayoutWei: bigint;
+  // Allow relay to self-grant BRIDGE_ROLE if it has DEFAULT_ADMIN_ROLE on mUSD
+  autoGrantBridgeRoleForRedemptions: boolean;
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
   cantonHost: process.env.CANTON_HOST || "localhost",
   // Added explicit radix 10 to all parseInt calls
-  cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
+  cantonPort: parseInt(process.env.CANTON_PORT || "7575", 10),
   // Read sensitive values from Docker secrets, fallback to env vars
   cantonToken: readSecret("canton_token", "CANTON_TOKEN"),
   cantonParty: process.env.CANTON_PARTY || "",
@@ -122,6 +159,12 @@ const DEFAULT_CONFIG: RelayConfig = {
   bridgeContractAddress: process.env.BRIDGE_CONTRACT_ADDRESS || "",
   treasuryAddress: process.env.TREASURY_ADDRESS || "",
   metaVault3Address: process.env.META_VAULT3_ADDRESS || "",  // Fluid T2/T4 strategy
+  musdTokenAddress: (() => {
+    const raw = process.env.MUSD_TOKEN_ADDRESS || readSecret("musd_token_address", "") || "";
+    if (!raw) throw new Error("MUSD_TOKEN_ADDRESS is required");
+    if (!ethers.isAddress(raw)) throw new Error(`Invalid MUSD_TOKEN_ADDRESS: ${raw}`);
+    return ethers.getAddress(raw);
+  })(),
   // SEC-GATE-01: Validate private key is in valid secp256k1 range
   // @deprecated — migrate to RELAYER_KMS_KEY_ID for production
   relayerPrivateKey: (() => {
@@ -152,11 +195,32 @@ const DEFAULT_CONFIG: RelayConfig = {
     }
     return JSON.parse(raw);
   })(),
+  recipientPartyAliases: (() => {
+    const raw =
+      process.env.CANTON_RECIPIENT_PARTY_ALIASES ||
+      readSecret("canton_recipient_party_aliases", "") ||
+      "";
+    return parseRecipientPartyAliases(raw, "CANTON_RECIPIENT_PARTY_ALIASES");
+  })(),
+  redemptionRecipientAddresses: (() => {
+    const raw =
+      process.env.CANTON_REDEMPTION_ETH_RECIPIENTS ||
+      readSecret("canton_redemption_eth_recipients", "") ||
+      "";
+    return parseRecipientEthAddresses(raw, "CANTON_REDEMPTION_ETH_RECIPIENTS");
+  })(),
 
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "5000", 10),
   maxRetries: parseInt(process.env.MAX_RETRIES || "3", 10),
   confirmations: parseInt(process.env.CONFIRMATIONS || "2", 10),
   triggerAutoDeploy: process.env.TRIGGER_AUTO_DEPLOY !== "false",  // Default enabled
+  autoAcceptMusdTransferProposals: (() => {
+    if (process.env.AUTO_ACCEPT_MUSD_TRANSFER_PROPOSALS) {
+      return process.env.AUTO_ACCEPT_MUSD_TRANSFER_PROPOSALS === "true";
+    }
+    // Safe default: enabled in development for local testing UX, disabled in production.
+    return process.env.NODE_ENV !== "production";
+  })(),
   // Fallback RPC URLs for relay redundancy
   fallbackRpcUrls: (process.env.FALLBACK_RPC_URLS || "")
     .split(",")
@@ -175,6 +239,20 @@ const DEFAULT_CONFIG: RelayConfig = {
   stateFilePath: process.env.RELAY_STATE_FILE || path.resolve(__dirname, "relay-state.json"),
   // MEDIUM-02: Lookback window for on-chain replay scan (default 200,000 blocks ≈ 28 days on Ethereum)
   replayLookbackBlocks: parseInt(process.env.RELAY_LOOKBACK_BLOCKS || "200000", 10),
+  maxRedemptionEthPayoutWei: (() => {
+    const raw = process.env.MAX_REDEMPTION_ETH_PAYOUT_MUSD || "50000";
+    try {
+      return ethers.parseUnits(raw, 18);
+    } catch {
+      throw new Error(`Invalid MAX_REDEMPTION_ETH_PAYOUT_MUSD: ${raw}`);
+    }
+  })(),
+  autoGrantBridgeRoleForRedemptions: (() => {
+    if (process.env.AUTO_GRANT_BRIDGE_ROLE_FOR_REDEMPTIONS) {
+      return process.env.AUTO_GRANT_BRIDGE_ROLE_FOR_REDEMPTIONS === "true";
+    }
+    return process.env.NODE_ENV !== "production";
+  })(),
 };
 
 // ============================================================
@@ -223,6 +301,41 @@ interface ValidatorSignature {
   ecdsaSignature: string;
   nonce: string;
   cantonStateHash: string;  // Canton state hash from validator verification
+}
+
+interface RedemptionRequestPayload {
+  operator: string;
+  user: string;
+  musdBurned: string;
+  usdcOwed: string;
+  feeAmount: string;
+  createdAt: string;
+  fulfilled: boolean;
+}
+
+interface RedemptionEthereumSettlementPayload {
+  operator: string;
+  user: string;
+  redemptionCid: string;
+  recipientEth: string;
+  amountPaid: string;
+  ethTxHash: string;
+  settledAt: string;
+}
+
+interface CantonUSDCPayload {
+  issuer: string;
+  owner: string;
+  amount: string;
+  privacyObservers: string[];
+}
+
+interface ComplianceRegistryPayload {
+  regulator: string;
+  operator: string;
+  blacklisted: unknown;
+  frozen: unknown;
+  lastUpdated: string;
 }
 
 // ============================================================
@@ -418,6 +531,7 @@ class RelayService {
   private provider: ethers.JsonRpcProvider;
   private wallet!: ethers.Signer;  // Abstract signer (KMS or raw)
   private bridgeContract!: ethers.Contract;
+  private musdTokenContract!: ethers.Contract;
   // Bounded cache with eviction
   private processedAttestations: Set<string> = new Set();
   private readonly MAX_PROCESSED_CACHE = 10000;
@@ -437,6 +551,9 @@ class RelayService {
   private ethPoolYieldDistributorContract: ethers.Contract | null = null;
   private processedETHPoolYieldEpochs: Set<string> = new Set();
   private lastETHPoolYieldScannedBlock: number = 0;
+
+  // Canton redemption -> Ethereum payout tracking (idempotency across restarts)
+  private processedRedemptionRequests: Set<string> = new Set();
 
   // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
   // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
@@ -488,6 +605,14 @@ class RelayService {
   private submittedNonces: Set<number> = new Set();
   // Track attestation IDs submitted (distinct from on-chain check — catches in-flight dupes)
   private inFlightAttestations: Set<string> = new Set();
+  // Direction 3 diagnostics throttling
+  private lastVaultRoleWarningAt = 0;
+  private lastRedemptionBacklogLogAt = 0;
+  private lastRedemptionBacklogSize = -1;
+  private lastRedemptionFulfillmentWarningAt = 0;
+  private redemptionSettlementMarkerSupported: boolean | null = null;
+  private warnedRedemptionMarkerUnavailable = false;
+  private static readonly DIAGNOSTIC_LOG_INTERVAL_MS = 60_000;
 
   constructor(config: RelayConfig) {
     this.config = config;
@@ -507,6 +632,7 @@ class RelayService {
       userId: process.env.CANTON_USER_ID || "administrator",
       actAs: config.cantonParty,
       timeoutMs: 30_000,
+      defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
     });
 
     // Initialize Ethereum connection
@@ -526,6 +652,19 @@ class RelayService {
     // Sanitize RPC URL in logs to prevent API key leakage
     console.log(`[Relay] Ethereum: ${sanitizeUrl(config.ethereumRpcUrl)}`);
     console.log(`[Relay] Bridge: ${config.bridgeContractAddress}`);
+    if (Object.keys(config.recipientPartyAliases).length > 0) {
+      console.log(
+        `[Relay] Recipient alias mappings loaded: ${Object.keys(config.recipientPartyAliases).length}`
+      );
+    }
+    if (Object.keys(config.redemptionRecipientAddresses).length > 0) {
+      console.log(
+        `[Relay] Redemption recipient mappings loaded: ${Object.keys(config.redemptionRecipientAddresses).length}`
+      );
+    }
+    if (config.autoAcceptMusdTransferProposals) {
+      console.log("[Relay] Auto-accept of CantonMUSD transfer proposals is ENABLED");
+    }
   }
 
   /**
@@ -546,6 +685,15 @@ class RelayService {
       BRIDGE_ABI,
       this.wallet
     );
+    this.musdTokenContract = new ethers.Contract(
+      this.config.musdTokenAddress,
+      [
+        "function mint(address to, uint256 amount) external",
+        "function hasRole(bytes32 role, address account) external view returns (bool)",
+        "function grantRole(bytes32 role, address account) external",
+      ],
+      this.wallet
+    );
     // Direction 4: YieldDistributor contract (read-only, for event scanning)
     if (this.config.yieldDistributorAddress) {
       this.yieldDistributorContract = new ethers.Contract(
@@ -556,6 +704,7 @@ class RelayService {
     }
     const address = await this.wallet.getAddress();
     console.log(`[Relay] Relayer: ${address}`);
+    console.log(`[Relay] Redemption payout token (mUSD): ${this.config.musdTokenAddress}`);
     if (this.config.yieldDistributorAddress) {
       console.log(`[Relay] YieldDistributor: ${this.config.yieldDistributorAddress}`);
     }
@@ -631,6 +780,13 @@ class RelayService {
         }
       }
 
+      // Restore locally-settled redemption request IDs
+      if (Array.isArray(state.processedRedemptionRequests)) {
+        for (const cid of state.processedRedemptionRequests) {
+          this.processedRedemptionRequests.add(cid);
+        }
+      }
+
       // Restore last scanned blocks (use persisted value if ahead of default 0)
       if (typeof state.lastScannedBlock === "number" && state.lastScannedBlock > this.lastScannedBlock) {
         this.lastScannedBlock = state.lastScannedBlock;
@@ -647,6 +803,7 @@ class RelayService {
         `${state.processedAttestations?.length || 0} attestations, ` +
         `${state.processedYieldEpochs?.length || 0} yield epochs, ` +
         `${state.processedETHPoolYieldEpochs?.length || 0} ETH Pool yield epochs, ` +
+        `${state.processedRedemptionRequests?.length || 0} redemptions, ` +
         `lastScanned=${state.lastScannedBlock || 0}, ` +
         `lastYieldScanned=${state.lastYieldScannedBlock || 0}, ` +
         `lastETHPoolYieldScanned=${state.lastETHPoolYieldScannedBlock || 0}`
@@ -672,6 +829,7 @@ class RelayService {
         processedAttestations: Array.from(this.processedAttestations),
         processedYieldEpochs: Array.from(this.processedYieldEpochs),
         processedETHPoolYieldEpochs: Array.from(this.processedETHPoolYieldEpochs),
+        processedRedemptionRequests: Array.from(this.processedRedemptionRequests),
         lastScannedBlock: this.lastScannedBlock,
         lastYieldScannedBlock: this.lastYieldScannedBlock,
         lastETHPoolYieldScannedBlock: this.lastETHPoolYieldScannedBlock,
@@ -720,6 +878,11 @@ class RelayService {
     // Load already-processed ETH Pool yield bridge-in epochs from chain
     await this.loadProcessedETHPoolYieldBridgeIns();
 
+    // Process any pending BridgeInRequests from previous runs (complete + mint mUSD)
+    await this.processPendingBridgeInRequests();
+    // Load on-ledger redemption settlement markers (if available) for durable idempotency.
+    await this.loadProcessedRedemptionsFromLedgerMarkers();
+
     // Main loop — bidirectional
     while (this.isRunning) {
       try {
@@ -727,6 +890,8 @@ class RelayService {
         await this.pollForAttestations();
         // Direction 2: Ethereum → Canton (bridge-out watcher)
         await this.watchEthereumBridgeOut();
+        // Direction 2b: Canton redemption requests (settle to Ethereum mUSD)
+        await this.processPendingRedemptions();
         // Direction 3: Canton → Ethereum (auto-process bridge-out backing)
         await this.processCantonBridgeOuts();
         // Direction 4: Ethereum → Canton (yield bridge-in — credit Canton pools)
@@ -1282,17 +1447,38 @@ class RelayService {
       events = events.concat(chunk as ethers.EventLog[]);
     }
 
-    // Check which ones already have BridgeInRequest on Canton
+    // FIX: Cross-check against Canton — only mark events as processed if a
+    // BridgeInRequest already exists on the ledger for that nonce.
+    // Previously this blindly added ALL on-chain events, causing missed relays
+    // when the relay was down during a bridge-out.
+    let cantonBridgeInNonces: Set<number>;
+    try {
+      const existingRequests = await this.canton.queryContracts<{ nonce: number }>(TEMPLATES.BridgeInRequest);
+      cantonBridgeInNonces = new Set(existingRequests.map(c => Number(c.payload.nonce)));
+      console.log(`[Relay] Found ${cantonBridgeInNonces.size} existing BridgeInRequest contracts on Canton`);
+    } catch {
+      // If Canton query fails, fall back to marking all as processed (safe default)
+      console.warn("[Relay] Could not query Canton for existing BridgeInRequests — marking all as processed");
+      cantonBridgeInNonces = new Set(events.map(e => Number((e as ethers.EventLog).args?.nonce)));
+    }
+
+    let unrelayed = 0;
     for (const event of events) {
       const args = (event as ethers.EventLog).args;
       if (args) {
-        this.processedBridgeOuts.add(args.requestId);
+        const nonce = Number(args.nonce);
+        if (cantonBridgeInNonces.has(nonce)) {
+          this.processedBridgeOuts.add(args.requestId);
+        } else {
+          unrelayed++;
+          // Leave unprocessed — watchEthereumBridgeOut will pick these up
+        }
       }
     }
 
-    this.lastScannedBlock = currentBlock;
+    this.lastScannedBlock = fromBlock; // Start scanning from fromBlock so unrelayed events are picked up
     metricLastScannedBlock.set(this.lastScannedBlock);
-    console.log(`[Relay] Found ${this.processedBridgeOuts.size} bridge-out requests (scanning from block ${fromBlock})`);
+    console.log(`[Relay] Found ${this.processedBridgeOuts.size} already-relayed bridge-outs, ${unrelayed} pending relay (scanning from block ${fromBlock})`);
   }
 
   /**
@@ -1314,11 +1500,15 @@ class RelayService {
     }
 
     const filter = this.bridgeContract.filters.BridgeToCantonRequested();
-    const events = await this.bridgeContract.queryFilter(
-      filter,
-      this.lastScannedBlock + 1,
-      confirmedBlock
-    );
+
+    // Chunk the query to stay within RPC block range limits (public RPCs cap at 50k)
+    const chunkSize = 10000;
+    let events: (ethers.EventLog | ethers.Log)[] = [];
+    for (let start = this.lastScannedBlock + 1; start <= confirmedBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, confirmedBlock);
+      const chunk = await this.bridgeContract.queryFilter(filter, start, end);
+      events = events.concat(chunk);
+    }
 
     this.lastScannedBlock = confirmedBlock;
     metricLastScannedBlock.set(this.lastScannedBlock);
@@ -1365,23 +1555,75 @@ class RelayService {
 
       console.log(`[Relay] Bridge-out #${nonce}: ${ethers.formatEther(amount)} mUSD → Canton (${cantonRecipient})`);
 
+      // TS-M-01 FIX: Validate Canton party ID format before passing to Canton ledger.
+      // cantonRecipient comes from user-supplied Ethereum event args and must be sanitized.
       try {
-        // Create BridgeInRequest on Canton
-        await this.canton.createContract(
-          TEMPLATES.BridgeInRequest,
-          {
-            operator: this.config.cantonParty,
-            user: cantonRecipient,
-            amount: ethers.formatEther(amount),
-            feeAmount: "0.0",
-            sourceChainId: Number((await this.provider.getNetwork()).chainId),
-            nonce: Number(nonce),
-            createdAt: new Date(Number(timestamp) * 1000).toISOString(),
-            status: "pending",
-          }
+        validateCantonPartyId(cantonRecipient, `BridgeToCantonRequested event #${nonce}`);
+      } catch (validationError) {
+        console.error(`[Relay] ${(validationError as Error).message}`);
+        bridgeOutsTotal.labels("validation_error").inc();
+        bridgeValidationFailuresTotal.inc();
+        this.processedBridgeOuts.add(requestId); // Mark processed to avoid retrying invalid data
+        continue;
+      }
+
+      try {
+        const chainId = Number((await this.provider.getNetwork()).chainId);
+        const resolvedRecipient = resolveRecipientParty(
+          cantonRecipient,
+          this.config.recipientPartyAliases
         );
 
-        console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+        if (resolvedRecipient !== cantonRecipient) {
+          console.log(
+            `[Relay] Remapped bridge-out #${nonce} recipient ${cantonRecipient} -> ${resolvedRecipient}`
+          );
+          // Validate mapped value from config before use.
+          validateCantonPartyId(
+            resolvedRecipient,
+            `CANTON_RECIPIENT_PARTY_ALIASES mapped recipient for bridge-out #${nonce}`
+          );
+        }
+
+        const payload: Record<string, unknown> = {
+          operator: this.config.cantonParty,
+          user: resolvedRecipient,
+          amount: ethers.formatEther(amount),
+          feeAmount: "0.0",
+          sourceChainId: chainId,
+          nonce: Number(nonce),
+          createdAt: new Date(Number(timestamp) * 1000).toISOString(),
+          status: "pending",
+          // NOTE: The deployed DAML package does not include validators/requiredSignatures.
+          // These fields exist in the local V3.daml source but have not been redeployed.
+          // When the DAML package is recompiled and uploaded, re-enable these:
+          // validators: Object.keys(this.config.validatorAddresses),
+          // requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
+        };
+
+        try {
+          // Validate payload against DAML ensure constraints before submission
+          validateCreatePayload("BridgeInRequest", payload);
+          // Create BridgeInRequest on Canton with the original user party
+          await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
+          console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
+        } catch (innerError: any) {
+          const errMsg = innerError?.message || "";
+          // If user party is unknown on this participant, fallback to operator as user
+          if (errMsg.includes("UNKNOWN_INFORMEES") || errMsg.includes("NO_SYNCHRONIZER") || errMsg.includes("PARTY_NOT_KNOWN")) {
+            console.warn(`[Relay] User party not on this participant for bridge-out #${nonce}, using operator as user fallback`);
+            payload.user = this.config.cantonParty;
+            validateCreatePayload("BridgeInRequest", payload);
+            await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
+            console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
+          } else {
+            throw innerError; // Re-throw non-party errors
+          }
+        }
+
+        // Step 2: Exercise BridgeIn_Complete to mark as completed
+        // Then create CantonMUSD token for the user
+        await this.completeBridgeInAndMintMusd(Number(nonce), ethers.formatEther(amount), String(payload.user));
 
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
@@ -1403,6 +1645,297 @@ class RelayService {
         bridgeOutsTotal.labels("error").inc();
         // Don't mark as processed — will retry next cycle
       }
+    }
+  }
+
+  // ============================================================
+  //  Bridge-In Completion: BridgeInRequest → CantonMUSD
+  // ============================================================
+
+  /**
+   * Complete a pending BridgeInRequest and mint CantonMUSD for the user.
+   *
+   * Steps:
+   *   1. Find the pending BridgeInRequest contract by nonce
+   *   2. Exercise BridgeIn_Complete to mark it as "completed"
+   *   3. Create a CantonMUSD token owned by the user (or operator if fallback)
+   *
+   * @param nonce       Bridge nonce to complete
+   * @param amountStr   mUSD amount as a string (e.g., "50.0")
+   * @param userParty   Canton party to own the minted CantonMUSD
+   */
+  private async completeBridgeInAndMintMusd(
+    nonce: number,
+    amountStr: string,
+    userParty: string
+  ): Promise<void> {
+    try {
+      // Create CantonMUSD token for the user
+      // Use a deterministic agreementHash for idempotency checking
+      // IMPORTANT: Use a delimiter AFTER the nonce to prevent hash collisions.
+      // Previously `bridge-in-nonce-1` padded === `bridge-in-nonce-10` padded (same string!)
+      const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
+      const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
+
+      // Check for existing CantonMUSD with this agreement hash (idempotency)
+      // Also check the old hash format for backwards compatibility, but ONLY
+      // when the agreementUri also matches (old hash has collisions: nonce 1 == nonce 10)
+      const oldAgreementHash = `bridge-in-nonce-${nonce}`.padEnd(64, "0");
+      const existingMusd = await this.canton.queryContracts(
+        TEMPLATES.CantonMUSD,
+        (payload: any) => {
+          if (payload.agreementHash === agreementHash) return true;
+          // For old format, also verify agreementUri to avoid hash collisions
+          if (payload.agreementHash === oldAgreementHash &&
+              payload.agreementUri === agreementUri) return true;
+          return false;
+        }
+      );
+
+      if (existingMusd.length > 0) {
+        console.log(
+          `[Relay] CantonMUSD for bridge #${nonce} already exists ` +
+          `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate`
+        );
+        return;
+      }
+
+      // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
+      // CantonMUSD template requires `signatory issuer, owner` — if the user party
+      // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
+      // Instead: operator mints (both signatory slots satisfied), then transfers to user.
+      const cantonMusdPayload = {
+        issuer: this.config.cantonParty,
+        owner: this.config.cantonParty,  // Operator-owned initially
+        amount: amountStr,
+        agreementHash,
+        agreementUri,
+        privacyObservers: [] as string[],
+      };
+      validateCreatePayload("CantonMUSD", cantonMusdPayload);
+      const createResult = await this.canton.createContract(TEMPLATES.CantonMUSD, cantonMusdPayload);
+      console.log(`[Relay] Created CantonMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+
+      // Transfer to user if different from operator
+      if (userParty !== this.config.cantonParty) {
+        try {
+          // Extract the contractId of the just-created CantonMUSD
+          let musdCid = this.extractCreatedContractId(createResult, "CantonMUSD");
+          if (!musdCid) {
+            // Fallback: query by agreementHash
+            const created = await this.canton.queryContracts(
+              TEMPLATES.CantonMUSD,
+              (p: any) => p.agreementHash === agreementHash && p.owner === this.config.cantonParty
+            );
+            if (created.length > 0) musdCid = created[0].contractId;
+          }
+
+          if (musdCid) {
+            // CantonMUSD_Transfer requires complianceRegistryCid — query for it
+            const complianceContracts = await this.canton.queryContracts(
+              TEMPLATES.ComplianceRegistry,
+              (p: any) => p.operator === this.config.cantonParty
+            ).catch(() => []);
+
+            if (complianceContracts.length > 0) {
+              const transferArgs = { newOwner: userParty, complianceRegistryCid: complianceContracts[0].contractId };
+              validateExerciseArgs("CantonMUSD_Transfer", transferArgs);
+              const transferResult = await this.canton.exerciseChoice(
+                TEMPLATES.CantonMUSD,
+                musdCid,
+                "CantonMUSD_Transfer",
+                transferArgs
+              );
+              console.log(`[Relay] ✅ Transfer proposal created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+
+              if (this.config.autoAcceptMusdTransferProposals) {
+                try {
+                  let proposalCid = this.extractCreatedContractId(
+                    transferResult,
+                    "CantonMUSDTransferProposal"
+                  );
+                  if (!proposalCid) {
+                    const proposals = await this.canton.queryContracts(
+                      TEMPLATES.CantonMUSDTransferProposal,
+                      (p: any) =>
+                        p?.newOwner === userParty &&
+                        p?.musd?.agreementUri === agreementUri &&
+                        p?.musd?.owner === this.config.cantonParty
+                    ).catch(() => []);
+                    if (proposals.length > 0) {
+                      proposalCid = proposals[0].contractId;
+                    }
+                  }
+
+                  if (proposalCid) {
+                    await this.canton.exerciseChoice(
+                      TEMPLATES.CantonMUSDTransferProposal,
+                      proposalCid,
+                      "CantonMUSDTransferProposal_Accept",
+                      {},
+                      [userParty]
+                    );
+                    console.log(`[Relay] ✅ Auto-accepted transfer proposal for bridge #${nonce}; mUSD delivered to user`);
+                  } else {
+                    console.warn(
+                      `[Relay] Could not resolve transfer proposal CID for bridge #${nonce}; user must accept manually`
+                    );
+                  }
+                } catch (autoAcceptErr: any) {
+                  console.warn(
+                    `[Relay] Auto-accept failed for bridge #${nonce}; proposal remains pending: ${autoAcceptErr.message?.slice(0, 120)}`
+                  );
+                }
+              }
+            } else {
+              console.warn(`[Relay] No ComplianceRegistry found — operator retains CantonMUSD #${nonce} (user can claim later)`);
+            }
+          } else {
+            console.warn(`[Relay] Could not find CantonMUSD CID for transfer to user (bridge #${nonce})`);
+          }
+        } catch (transferErr: any) {
+          // Non-fatal: mUSD exists operator-owned; user can claim later
+          console.warn(`[Relay] Transfer to user failed for bridge #${nonce} (operator retains): ${transferErr.message?.slice(0, 120)}`);
+        }
+      } else {
+        console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+      }
+
+      // Exercise BridgeIn_Complete properly: create an AttestationRequest on Canton,
+      // then exercise BridgeIn_Complete with the attestation CID.
+      try {
+        const pendingRequests = await this.canton.queryContracts<{
+          nonce: number;
+          status: string;
+          validators: string[];
+          requiredSignatures: number;
+        }>(TEMPLATES.BridgeInRequest, (p) => Number(p.nonce) === nonce && p.status === "pending");
+
+        if (pendingRequests.length > 0) {
+          const req = pendingRequests[0];
+          const hasAttestationFields = req.payload.validators && req.payload.requiredSignatures > 0;
+
+          if (hasAttestationFields) {
+            // New template: create AttestationRequest, collect sigs, exercise BridgeIn_Complete
+            try {
+              const chainId = Number((await this.provider.getNetwork()).chainId);
+              const attestationPayload = {
+                attestationId: `bridge-in-attest-${nonce}`,
+                globalCantonAssets: "0.0",
+                targetAddress: ethers.ZeroAddress,
+                amount: amountStr,
+                isMint: false,
+                nonce: String(nonce),
+                chainId: String(chainId),
+                expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+                entropy: ethers.hexlify(crypto.randomBytes(32)),
+                cantonStateHash: ethers.ZeroHash,
+              };
+
+              // Create AttestationRequest on Canton for the bridge-in direction
+              const attestPayload = {
+                  aggregator: this.config.cantonParty,
+                  validatorGroup: req.payload.validators,
+                  payload: attestationPayload,
+                  positionCids: [],
+                  collectedSignatures: req.payload.validators,  // All validators attest (operator-controlled)
+                  ecdsaSignatures: [],
+                  requiredSignatures: req.payload.requiredSignatures,
+                  direction: "EthereumToCanton",
+              };
+              validateCreatePayload("AttestationRequest", attestPayload);
+              const attestResult = await this.canton.createContract(
+                TEMPLATES.AttestationRequest,
+                attestPayload
+              );
+
+              // Extract attestation CID
+              let attestCid = this.extractCreatedContractId(attestResult, "AttestationRequest");
+              if (!attestCid) {
+                const attestContracts = await this.canton.queryContracts(
+                  TEMPLATES.AttestationRequest,
+                  (p: any) => p.payload?.attestationId === `bridge-in-attest-${nonce}` &&
+                              p.direction === "EthereumToCanton"
+                );
+                if (attestContracts.length > 0) attestCid = attestContracts[0].contractId;
+              }
+
+              if (attestCid) {
+                const completeArgs = { attestationCid: attestCid };
+                validateExerciseArgs("BridgeIn_Complete", completeArgs);
+                await this.canton.exerciseChoice(
+                  TEMPLATES.BridgeInRequest,
+                  req.contractId,
+                  "BridgeIn_Complete",
+                  completeArgs
+                );
+                console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with attestation ${attestCid.slice(0, 16)}...`);
+              } else {
+                console.warn(`[Relay] Could not find AttestationRequest CID for BridgeIn_Complete #${nonce}`);
+              }
+            } catch (attestErr: any) {
+              console.warn(`[Relay] BridgeIn_Complete with attestation failed for #${nonce}: ${attestErr.message?.slice(0, 120)}`);
+              // Fallback: cancel to archive
+              try {
+                await this.canton.exerciseChoice(
+                  TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Cancel", {}
+                );
+                console.log(`[Relay] Archived BridgeInRequest #${nonce} via cancel (attestation flow failed)`);
+              } catch { /* best-effort */ }
+            }
+          } else {
+            // Old template without attestation fields — cancel to archive
+            try {
+              await this.canton.exerciseChoice(
+                TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Cancel", {}
+              );
+              console.log(`[Relay] Archived old BridgeInRequest #${nonce} (no attestation fields)`);
+            } catch (cancelErr: any) {
+              console.warn(`[Relay] Could not archive BridgeInRequest #${nonce}: ${cancelErr.message?.slice(0, 100)}`);
+            }
+          }
+        }
+      } catch (queryErr: any) {
+        console.warn(`[Relay] Could not query BridgeInRequest #${nonce}: ${queryErr.message?.slice(0, 100)}`);
+      }
+
+    } catch (error: any) {
+      console.error(`[Relay] Failed to complete bridge-in #${nonce}: ${error.message}`);
+      // Don't re-throw — we can retry later
+    }
+  }
+
+  /**
+   * Process any pending BridgeInRequests that haven't been completed yet.
+   * Called on startup to catch up on any missed completions.
+   */
+  private async processPendingBridgeInRequests(): Promise<void> {
+    try {
+      const pendingRequests = await this.canton.queryContracts<{
+        nonce: number;
+        status: string;
+        amount: string;
+        user: string;
+        operator: string;
+      }>(TEMPLATES.BridgeInRequest, (p) => p.status === "pending");
+
+      if (pendingRequests.length === 0) {
+        console.log("[Relay] No pending BridgeInRequests to process");
+        return;
+      }
+
+      console.log(`[Relay] Found ${pendingRequests.length} pending BridgeInRequests — completing...`);
+
+      for (const req of pendingRequests) {
+        const nonce = Number(req.payload.nonce);
+        await this.completeBridgeInAndMintMusd(
+          nonce,
+          req.payload.amount,
+          req.payload.user || req.payload.operator
+        );
+      }
+    } catch (error: any) {
+      console.error(`[Relay] Failed to process pending BridgeInRequests: ${error.message}`);
     }
   }
 
@@ -1492,12 +2025,14 @@ class RelayService {
 
       try {
         // MEDIUM-02: Canton-side duplicate check before creating CantonMUSD
-        const agreementHash = `yield-epoch-${epoch}`;
+        // FIX: Pad agreementHash to 64 characters for consistency with bridge-in flow
+        const agreementHash = `yield-epoch:${epoch}:`.padEnd(64, "0");
         const existingMusd = await this.canton.queryContracts(
           TEMPLATES.CantonMUSD,
           (payload: any) =>
             payload.owner === this.config.cantonParty &&
-            payload.agreementHash === agreementHash
+            (payload.agreementHash === agreementHash ||
+             payload.agreementHash === `yield-epoch-${epoch}`)  // backwards compat
         );
         if (existingMusd.length > 0) {
           console.log(
@@ -1510,16 +2045,18 @@ class RelayService {
         }
 
         // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
-        const createResult = await this.canton.createContract(
-          TEMPLATES.CantonMUSD,
-          {
+        const yieldMusdPayload = {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
-            agreementHash: `yield-epoch-${epoch}`,
+            agreementHash,
             agreementUri: `ethereum:yield-distributor:${this.config.yieldDistributorAddress}`,
             privacyObservers: [] as string[],
-          }
+        };
+        validateCreatePayload("CantonMUSD", yieldMusdPayload);
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          yieldMusdPayload
         );
 
         // Extract contractId from create response
@@ -1531,7 +2068,8 @@ class RelayService {
             TEMPLATES.CantonMUSD,
             (payload: any) =>
               payload.owner === this.config.cantonParty &&
-              payload.agreementHash === `yield-epoch-${epoch}`
+              (payload.agreementHash === agreementHash ||
+               payload.agreementHash === `yield-epoch-${epoch}`)  // backwards compat
           );
           if (musdContracts.length === 0) {
             throw new Error("Created CantonMUSD not found on Canton after create");
@@ -1589,11 +2127,15 @@ class RelayService {
     const stakingService = stakingServices[0];
 
     // Step 3: Exercise ReceiveYield — merges mUSD into vault, pooledMusd ↑
+    // ReceiveYield requires `controller operator, governance` — include governance in actAs
+    const receiveYieldArgs = { yieldMusdCid: musdContractId };
+    validateExerciseArgs("ReceiveYield", receiveYieldArgs as unknown as Record<string, unknown>);
     await this.canton.exerciseChoice(
       TEMPLATES.CantonStakingService,
       stakingService.contractId,
       "ReceiveYield",
-      { yieldMusdCid: musdContractId }
+      receiveYieldArgs,
+      this.config.cantonGovernanceParty ? [this.config.cantonGovernanceParty] : []
     );
 
     console.log(
@@ -1691,12 +2233,14 @@ class RelayService {
         // with matching agreementHash before creating a new one. This prevents
         // orphaned CantonMUSD contracts if the relay restarts and re-encounters
         // an event that was processed but not persisted.
-        const agreementHash = `ethpool-yield-epoch-${epoch}`;
+        // FIX: Pad agreementHash to 64 characters for consistency with bridge-in flow
+        const agreementHash = `ethpool-yield-epoch:${epoch}:`.padEnd(64, "0");
         const existingMusd = await this.canton.queryContracts(
           TEMPLATES.CantonMUSD,
           (payload: any) =>
             payload.owner === this.config.cantonParty &&
-            payload.agreementHash === agreementHash
+            (payload.agreementHash === agreementHash ||
+             payload.agreementHash === `ethpool-yield-epoch-${epoch}`)  // backwards compat
         );
         if (existingMusd.length > 0) {
           console.log(
@@ -1709,16 +2253,18 @@ class RelayService {
         }
 
         // Step 1: Create CantonMUSD on Canton (operator-owned yield mUSD)
-        const createResult = await this.canton.createContract(
-          TEMPLATES.CantonMUSD,
-          {
+        const ethPoolMusdPayload = {
             issuer: this.config.cantonParty,
             owner: this.config.cantonParty,
             amount: amountStr,
-            agreementHash: `ethpool-yield-epoch-${epoch}`,
+            agreementHash,
             agreementUri: `ethereum:ethpool-yield-distributor:${this.config.ethPoolYieldDistributorAddress}`,
             privacyObservers: [] as string[],
-          }
+        };
+        validateCreatePayload("CantonMUSD", ethPoolMusdPayload);
+        const createResult = await this.canton.createContract(
+          TEMPLATES.CantonMUSD,
+          ethPoolMusdPayload
         );
 
         // Extract contractId from create response
@@ -1729,7 +2275,8 @@ class RelayService {
             TEMPLATES.CantonMUSD,
             (payload: any) =>
               payload.owner === this.config.cantonParty &&
-              payload.agreementHash === `ethpool-yield-epoch-${epoch}`
+              (payload.agreementHash === agreementHash ||
+               payload.agreementHash === `ethpool-yield-epoch-${epoch}`)  // backwards compat
           );
           if (musdContracts.length === 0) {
             throw new Error("Created CantonMUSD not found on Canton after create (ETH Pool)");
@@ -1788,11 +2335,13 @@ class RelayService {
     const ethPoolService = ethPoolServices[0];
 
     // Exercise ETHPool_ReceiveYield — archives mUSD, increments pooledUsdc
+    // ETHPool_ReceiveYield may require `controller operator, governance` — include governance in actAs
     await this.canton.exerciseChoice(
       TEMPLATES.CantonETHPoolService,
       ethPoolService.contractId,
       "ETHPool_ReceiveYield",
-      { yieldMusdCid: musdContractId }
+      { yieldMusdCid: musdContractId },
+      this.config.cantonGovernanceParty ? [this.config.cantonGovernanceParty] : []
     );
 
     console.log(
@@ -1829,6 +2378,385 @@ class RelayService {
     return null;
   }
 
+  /**
+   * Resolve Treasury asset address across contract versions.
+   * TreasuryV2 exposes `asset()`; older deployments may still expose `usdc()`.
+   */
+  private async resolveTreasuryAssetAddress(treasury: ethers.Contract): Promise<string | null> {
+    try {
+      const assetAddress = await treasury.asset();
+      return ethers.getAddress(assetAddress);
+    } catch (assetErr: any) {
+      try {
+        const usdcAddress = await treasury.usdc();
+        const normalized = ethers.getAddress(usdcAddress);
+        console.warn(
+          `[Relay] Treasury does not expose asset(); falling back to usdc() at ${normalized}`
+        );
+        return normalized;
+      } catch (usdcErr: any) {
+        console.error(
+          `[Relay] Failed to resolve Treasury asset via asset()/usdc(): ` +
+          `assetErr=${assetErr?.message || assetErr} usdcErr=${usdcErr?.message || usdcErr}`
+        );
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Log pending RedemptionRequest backlog to make settlement progress explicit.
+   */
+  private async logPendingRedemptionBacklog(
+    pendingRedemptionsInput?: ActiveContract<RedemptionRequestPayload>[],
+    actionableCountInput?: number
+  ): Promise<void> {
+    const pendingRedemptions = pendingRedemptionsInput ?? await this.canton.queryContracts<RedemptionRequestPayload>(
+      TEMPLATES.RedemptionRequest,
+      (p) => p.operator === this.config.cantonParty && !p.fulfilled
+    );
+    const actionableCount =
+      actionableCountInput ??
+      pendingRedemptions.filter((r) => !this.processedRedemptionRequests.has(r.contractId)).length;
+
+    if (pendingRedemptions.length === 0) {
+      if (this.lastRedemptionBacklogSize > 0) {
+        console.log("[Relay] RedemptionRequest backlog cleared");
+      }
+      this.lastRedemptionBacklogSize = 0;
+      return;
+    }
+
+    const now = Date.now();
+    const shouldLog =
+      pendingRedemptions.length !== this.lastRedemptionBacklogSize ||
+      now - this.lastRedemptionBacklogLogAt >= RelayService.DIAGNOSTIC_LOG_INTERVAL_MS;
+    if (!shouldLog) return;
+
+    let totalUsdcOwed = 0;
+    for (const request of pendingRedemptions) {
+      const owed = Number(request.payload.usdcOwed);
+      if (!Number.isNaN(owed)) totalUsdcOwed += owed;
+    }
+
+    const alreadySettled = pendingRedemptions.length - actionableCount;
+    console.warn(
+      `[Relay] Found ${pendingRedemptions.length} pending RedemptionRequests ` +
+      `(total owed: ${totalUsdcOwed.toFixed(6)} mUSD-equivalent). ` +
+      `${actionableCount} actionable for Ethereum payout, ${alreadySettled} already settled locally.`
+    );
+
+    this.lastRedemptionBacklogSize = pendingRedemptions.length;
+    this.lastRedemptionBacklogLogAt = now;
+  }
+
+  /**
+   * Parse DAML Numeric 18 values into wei-like bigint units.
+   */
+  private parseDamlNumeric18(value: string, field: string): bigint {
+    try {
+      return ethers.parseUnits(value, 18);
+    } catch {
+      throw new Error(`Invalid DAML Numeric(18) for ${field}: "${value}"`);
+    }
+  }
+
+  /**
+   * Load previously settled redemption IDs from on-ledger settlement markers.
+   * This protects against replay after relay state-file loss.
+   */
+  private async loadProcessedRedemptionsFromLedgerMarkers(): Promise<void> {
+    if (this.redemptionSettlementMarkerSupported === false) return;
+    try {
+      const markers = await this.canton.queryContracts<RedemptionEthereumSettlementPayload>(
+        TEMPLATES.RedemptionEthereumSettlement,
+        (p) => p.operator === this.config.cantonParty
+      );
+      let loaded = 0;
+      for (const marker of markers) {
+        const cid = marker.payload.redemptionCid;
+        if (!cid) continue;
+        if (!this.processedRedemptionRequests.has(cid)) {
+          this.processedRedemptionRequests.add(cid);
+          loaded++;
+        }
+      }
+      if (loaded > 0) {
+        console.log(`[Relay] Loaded ${loaded} settled redemptions from on-ledger markers`);
+      }
+      this.redemptionSettlementMarkerSupported = true;
+    } catch (error: any) {
+      const msg = String(error?.message || error);
+      // If template is not yet deployed/vetted, keep relay operational with local-state fallback.
+      if (
+        msg.includes("Unknown template") ||
+        msg.includes("TEMPLATES_OR_INTERFACES_NOT_FOUND") ||
+        msg.includes("entity") ||
+        msg.includes("template")
+      ) {
+        if (!this.warnedRedemptionMarkerUnavailable) {
+          console.warn(
+            "[Relay] RedemptionEthereumSettlement template unavailable; using local-state idempotency fallback"
+          );
+          this.warnedRedemptionMarkerUnavailable = true;
+        }
+        this.redemptionSettlementMarkerSupported = false;
+        return;
+      }
+      console.warn(`[Relay] Failed to load redemption settlement markers: ${msg}`);
+    }
+  }
+
+  /**
+   * Persist Ethereum payout as an on-ledger marker for durable idempotency.
+   * Returns true when marker is written, false when unavailable/failing.
+   */
+  private async writeRedemptionSettlementMarker(
+    redemption: ActiveContract<RedemptionRequestPayload>,
+    recipientEth: string,
+    amountWei: bigint,
+    ethTxHash: string
+  ): Promise<boolean> {
+    if (this.redemptionSettlementMarkerSupported === false) return false;
+    const payload: RedemptionEthereumSettlementPayload = {
+      operator: this.config.cantonParty,
+      user: redemption.payload.user,
+      redemptionCid: redemption.contractId,
+      recipientEth,
+      amountPaid: ethers.formatUnits(amountWei, 18),
+      ethTxHash,
+      settledAt: new Date().toISOString(),
+    };
+    try {
+      await this.canton.createContract(
+        TEMPLATES.RedemptionEthereumSettlement,
+        payload
+      );
+      this.redemptionSettlementMarkerSupported = true;
+      return true;
+    } catch (error: any) {
+      const msg = String(error?.message || error);
+      if (
+        msg.includes("Unknown template") ||
+        msg.includes("TEMPLATES_OR_INTERFACES_NOT_FOUND") ||
+        msg.includes("entity") ||
+        msg.includes("template")
+      ) {
+        if (!this.warnedRedemptionMarkerUnavailable) {
+          console.warn(
+            "[Relay] RedemptionEthereumSettlement template unavailable; using local-state idempotency fallback"
+          );
+          this.warnedRedemptionMarkerUnavailable = true;
+        }
+        this.redemptionSettlementMarkerSupported = false;
+        return false;
+      }
+      console.warn(
+        `[Relay] Failed to write settlement marker for redemption ${redemption.contractId.slice(0, 16)}...: ${msg}`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Resolve Ethereum recipient for a Canton user party.
+   * Supports exact party ID and party-hint mappings.
+   */
+  private resolveRedemptionRecipientEthAddress(userParty: string): string | null {
+    const canonicalParty = resolveRecipientParty(userParty, this.config.recipientPartyAliases);
+
+    const candidates = Array.from(
+      new Set([
+        userParty,
+        canonicalParty,
+        userParty.split("::")[0],
+        canonicalParty.split("::")[0],
+      ])
+    );
+
+    for (const candidate of candidates) {
+      const mapped = resolveRecipientEthAddress(candidate, this.config.redemptionRecipientAddresses);
+      if (mapped) return mapped;
+
+      const validatorMapped = this.config.validatorAddresses[candidate];
+      if (validatorMapped && ethers.isAddress(validatorMapped)) {
+        return ethers.getAddress(validatorMapped);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Ensure relay wallet can mint mUSD for redemption payouts.
+   * If configured and possible, self-grants BRIDGE_ROLE.
+   */
+  private async ensureBridgeRoleForRedemptionPayouts(): Promise<boolean> {
+    const BRIDGE_ROLE = ethers.keccak256(ethers.toUtf8Bytes("BRIDGE_ROLE"));
+    const DEFAULT_ADMIN_ROLE = ethers.ZeroHash;
+    const walletAddress = await this.wallet.getAddress();
+
+    let hasBridgeRole = false;
+    try {
+      hasBridgeRole = await this.musdTokenContract.hasRole(BRIDGE_ROLE, walletAddress);
+    } catch (error: any) {
+      console.error(`[Relay] Cannot verify BRIDGE_ROLE on mUSD token: ${error?.message || error}`);
+      return false;
+    }
+
+    if (hasBridgeRole) return true;
+
+    let hasAdminRole = false;
+    try {
+      hasAdminRole = await this.musdTokenContract.hasRole(DEFAULT_ADMIN_ROLE, walletAddress);
+    } catch (error: any) {
+      console.error(`[Relay] Cannot verify DEFAULT_ADMIN_ROLE on mUSD token: ${error?.message || error}`);
+      return false;
+    }
+
+    if (!hasAdminRole) {
+      console.error(
+        `[Relay] Relayer ${walletAddress} is missing BRIDGE_ROLE on mUSD ${this.config.musdTokenAddress}. ` +
+        `Grant BRIDGE_ROLE or provide an authorized payout signer.`
+      );
+      return false;
+    }
+
+    if (!this.config.autoGrantBridgeRoleForRedemptions) {
+      console.error(
+        `[Relay] Relayer ${walletAddress} has DEFAULT_ADMIN_ROLE but auto-grant is disabled. ` +
+        `Set AUTO_GRANT_BRIDGE_ROLE_FOR_REDEMPTIONS=true or grant BRIDGE_ROLE manually.`
+      );
+      return false;
+    }
+
+    try {
+      console.warn(
+        `[Relay] Relayer ${walletAddress} missing BRIDGE_ROLE on ${this.config.musdTokenAddress}; granting role automatically.`
+      );
+      const grantTx = await this.musdTokenContract.grantRole(BRIDGE_ROLE, walletAddress);
+      await grantTx.wait(this.config.confirmations);
+      return true;
+    } catch (error: any) {
+      console.error(
+        `[Relay] Failed to auto-grant BRIDGE_ROLE on mUSD token: ${error?.shortMessage || error?.message || error}`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Settle pending RedemptionRequests by minting mUSD on Ethereum.
+   * Requests remain pending on Canton; idempotency is enforced by local persistence.
+   */
+  private async processPendingRedemptions(): Promise<void> {
+    const pendingRedemptions = await this.canton.queryContracts<RedemptionRequestPayload>(
+      TEMPLATES.RedemptionRequest,
+      (p) => p.operator === this.config.cantonParty && !p.fulfilled
+    );
+
+    const actionableRedemptions = pendingRedemptions.filter(
+      (r) => !this.processedRedemptionRequests.has(r.contractId)
+    );
+
+    await this.logPendingRedemptionBacklog(pendingRedemptions, actionableRedemptions.length);
+    if (actionableRedemptions.length === 0) return;
+
+    const canMintPayouts = await this.ensureBridgeRoleForRedemptionPayouts();
+    if (!canMintPayouts) return;
+
+    const orderedRedemptions = [...actionableRedemptions].sort(
+      (a, b) => new Date(a.payload.createdAt).getTime() - new Date(b.payload.createdAt).getTime()
+    );
+
+    let settledThisCycle = 0;
+    let skippedMissingRecipient = 0;
+    let skippedOverLimit = 0;
+
+    for (const redemption of orderedRedemptions) {
+      let owedAmount: bigint;
+      try {
+        owedAmount = this.parseDamlNumeric18(redemption.payload.usdcOwed, "RedemptionRequest.usdcOwed");
+      } catch (error: any) {
+        console.error(
+          `[Relay] Skipping RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ${error.message}`
+        );
+        continue;
+      }
+
+      if (owedAmount <= 0n) {
+        console.warn(
+          `[Relay] Skipping RedemptionRequest ${redemption.contractId.slice(0, 16)}...: non-positive payout ${redemption.payload.usdcOwed}`
+        );
+        continue;
+      }
+
+      if (owedAmount > this.config.maxRedemptionEthPayoutWei) {
+        skippedOverLimit++;
+        continue;
+      }
+
+      const recipientEth = this.resolveRedemptionRecipientEthAddress(redemption.payload.user);
+      if (!recipientEth) {
+        skippedMissingRecipient++;
+        console.warn(
+          `[Relay] No ETH recipient mapping for redemption user ${redemption.payload.user}. ` +
+          `Add mapping to CANTON_REDEMPTION_ETH_RECIPIENTS.`
+        );
+        continue;
+      }
+
+      try {
+        const mintTx = await this.musdTokenContract.mint(recipientEth, owedAmount);
+        await mintTx.wait(this.config.confirmations);
+
+        await this.writeRedemptionSettlementMarker(
+          redemption,
+          recipientEth,
+          owedAmount,
+          mintTx.hash
+        );
+        this.processedRedemptionRequests.add(redemption.contractId);
+        this.persistState();
+        settledThisCycle++;
+
+        console.log(
+          `[Relay] ✅ Settled RedemptionRequest ${redemption.contractId.slice(0, 16)}... ` +
+          `→ minted ${ethers.formatUnits(owedAmount, 18)} mUSD to ${recipientEth} ` +
+          `(tx: ${mintTx.hash})`
+        );
+      } catch (error: any) {
+        console.error(
+          `[Relay] Failed Ethereum payout for RedemptionRequest ${redemption.contractId.slice(0, 16)}...: ` +
+          `${error?.shortMessage || error?.message || error}`
+        );
+      }
+    }
+
+    if (settledThisCycle > 0) {
+      console.log(`[Relay] Redemption settlement: ${settledThisCycle} request(s) paid on Ethereum this cycle`);
+    }
+
+    const now = Date.now();
+    if (
+      (skippedMissingRecipient > 0 || skippedOverLimit > 0) &&
+      now - this.lastRedemptionFulfillmentWarningAt >= RelayService.DIAGNOSTIC_LOG_INTERVAL_MS
+    ) {
+      if (skippedMissingRecipient > 0) {
+        console.warn(
+          `[Relay] Redemption settlement waiting on recipient mapping: ${skippedMissingRecipient} request(s).`
+        );
+      }
+      if (skippedOverLimit > 0) {
+        console.warn(
+          `[Relay] Redemption settlement over per-request limit (${ethers.formatUnits(this.config.maxRedemptionEthPayoutWei, 18)} mUSD): ` +
+          `${skippedOverLimit} request(s).`
+        );
+      }
+      this.lastRedemptionFulfillmentWarningAt = now;
+    }
+  }
+
   // ============================================================
   //  DIRECTION 3: Canton → Ethereum (Auto Bridge-Out Processing)
   // ============================================================
@@ -1837,7 +2765,9 @@ class RelayService {
    * Auto-process Canton BridgeOutRequests.
    *
    * When a user mints mUSD on Canton (via USDC/USDCx), a BridgeOutRequest is created.
-   * This method polls Canton for pending requests and processes them:
+   * This is a treasury-backing flow (Canton deposit backing moved to Ethereum treasury),
+   * not a direct end-user withdrawal payout.
+   * The method polls Canton for pending requests and processes them:
    *
    *   1. Check if USDC backing is available in relayer wallet
    *      (from xReserve/Circle CCTP redemption — operator redeems USDCx off-chain)
@@ -1868,11 +2798,14 @@ class RelayService {
 
     console.log(`[Relay] Found ${pendingRequests.length} pending BridgeOutRequests on Canton`);
 
-    // Treasury ABI — includes both general deposit and targeted depositToStrategy
+    // Treasury ABI — includes both general deposit and targeted depositToStrategy.
+    // `asset()` is used by TreasuryV2; `usdc()` retained for backward compatibility.
     const treasuryAbi = [
       "function deposit(address from, uint256 amount) external",
       "function depositToStrategy(address strategy, uint256 amount) external returns (uint256)",
+      "function asset() external view returns (address)",
       "function usdc() external view returns (address)",
+      "function hasRole(bytes32 role, address account) external view returns (bool)",
     ];
     const treasury = new ethers.Contract(
       this.config.treasuryAddress,
@@ -1885,16 +2818,42 @@ class RelayService {
       "function balanceOf(address account) external view returns (uint256)",
     ];
 
-    let usdcAddress: string;
+    const walletAddress = await this.wallet.getAddress();
+    const VAULT_ROLE = ethers.keccak256(ethers.toUtf8Bytes("VAULT_ROLE"));
+
     try {
-      usdcAddress = await treasury.usdc();
-    } catch (err: any) {
-      console.error(`[Relay] Failed to read USDC address from Treasury:`, err.message);
+      const hasVaultRole = await treasury.hasRole(VAULT_ROLE, walletAddress);
+      if (!hasVaultRole) {
+        const now = Date.now();
+        if (now - this.lastVaultRoleWarningAt >= RelayService.DIAGNOSTIC_LOG_INTERVAL_MS) {
+          console.error(
+            `[Relay] Relayer ${walletAddress} is missing VAULT_ROLE on Treasury ${this.config.treasuryAddress}. ` +
+            `Bridge-out deposits will be skipped until role is granted.`
+          );
+          this.lastVaultRoleWarningAt = now;
+        }
+        return;
+      }
+    } catch {
+      // Older treasury variants may not expose AccessControl introspection.
+    }
+
+    const usdcAddress = await this.resolveTreasuryAssetAddress(treasury);
+    if (!usdcAddress) {
+      return;
+    }
+    if (!ethers.isAddress(usdcAddress) || usdcAddress === ethers.ZeroAddress) {
+      console.error(`[Relay] Invalid USDC address returned by Treasury: ${String(usdcAddress)}`);
       return;
     }
 
-    const usdc = new ethers.Contract(usdcAddress, erc20Abi, this.wallet);
-    const walletAddress = await this.wallet.getAddress();
+    let usdc: ethers.Contract;
+    try {
+      usdc = new ethers.Contract(usdcAddress, erc20Abi, this.wallet);
+    } catch (err: any) {
+      console.error(`[Relay] Failed to initialize USDC contract at ${usdcAddress}:`, err.message);
+      return;
+    }
 
     for (const req of pendingRequests) {
       const { payload, contractId } = req;
@@ -1949,7 +2908,16 @@ class RelayService {
         console.log(`[Relay] ✅ BridgeOutRequest #${payload.nonce} marked as bridged on Canton`);
 
       } catch (error: any) {
-        console.error(`[Relay] Failed to process BridgeOut #${payload.nonce}:`, error.message);
+        const details = `${error?.shortMessage || error?.message || error}`;
+        if (details.includes("0xe2517d3f") || details.includes("AccessControlUnauthorizedAccount")) {
+          console.error(
+            `[Relay] BridgeOut #${payload.nonce} failed: Treasury rejected caller authorization. ` +
+            `Relayer must have VAULT_ROLE on ${this.config.treasuryAddress}.`
+          );
+          this.lastVaultRoleWarningAt = Date.now();
+        } else {
+          console.error(`[Relay] Failed to process BridgeOut #${payload.nonce}:`, details);
+        }
         // Don't mark as failed — will retry next cycle
       }
     }
@@ -2262,7 +3230,12 @@ class RelayService {
     messageHash: string
   ): Promise<string[]> {
     const formatted: string[] = [];
-    // Use Ethereum-signed message hash for ecrecover validation
+    // EIP-191 prefixed hash for ecrecover validation.
+    // Validators sign via eth_sign / KMS signMessage, which applies the
+    // "\x19Ethereum Signed Message:\n32" prefix before ECDSA signing.
+    // We must use the SAME prefixed hash for recovery.
+    // IMPORTANT: Use recoverAddress (not verifyMessage) downstream to avoid
+    // double-prefixing — recoverAddress takes the already-prefixed digest.
     const ethSignedHash = ethers.hashMessage(ethers.getBytes(messageHash));
 
     for (const sig of validatorSigs) {

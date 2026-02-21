@@ -27,7 +27,7 @@ import DA.Text qualified as DA.Text
 import DA.Optional (whenSome, fromSome, isSome)
 import Compliance (ComplianceRegistry, ValidateMint(..), ValidateRedemption(..), ValidateTransfer(..))
 import Governance (GovernanceActionLog(..), ActionType(..), ConsumeProof(..))
-import UserPrivacySettings (lookupUserObservers)
+import UserPrivacySettings (lookupUserObservers, UserPrivacySettings)
 import AuditReceipts (MintAuditReceipt(..), BurnAuditReceipt(..), TransferAuditReceipt(..), AuditAction(..))
 
 -- 18-decimal precision for 1:1 mapping with Ethereum Wei
@@ -53,10 +53,13 @@ template CantonUSDC
     ensure amount > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice CantonUSDC_UpdateObservers : ContractId CantonUSDC
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     -- DAML-M-05: Compliance check on transfer recipient (matches MUSD behavior)
@@ -124,10 +127,13 @@ template USDCx
     ensure amount > 0.0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice USDCx_UpdateObservers : ContractId USDCx
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     -- DAML-H-01: Mandatory compliance check on USDCx transfers
@@ -209,10 +215,13 @@ template CantonMUSD
       && DA.Text.length agreementUri > 0
 
     -- | Update observers from user's privacy settings
+    -- DAML-H-02 FIX: User provides their settings CID explicitly (LF 2.x compatible)
     choice CantonMUSD_UpdateObservers : ContractId CantonMUSD
+      with
+        settingsCid : Optional (ContractId UserPrivacySettings)
       controller owner
       do
-        newObservers <- lookupUserObservers issuer owner
+        newObservers <- lookupUserObservers issuer owner settingsCid
         create this with privacyObservers = newObservers
 
     choice CantonMUSD_Transfer : ContractId CantonMUSDTransferProposal
@@ -482,6 +491,9 @@ template CantonDirectMintService
     signatory operator
     observer usdcIssuer, authorizedMinters
 
+    key (operator, serviceName) : (Party, Text)
+    maintainer key._1
+
     -- | Mint: User deposits USDC on Canton → gets Canton mUSD
     -- → BridgeOutRequest emitted to pipe USDC to Ethereum Treasury
     nonconsuming choice DirectMint_Mint : (ContractId CantonDirectMintService, ContractId CantonMUSD, ContractId BridgeOutRequest)
@@ -523,7 +535,8 @@ template CantonDirectMintService
         exercise usdcProposal CantonUSDCTransferProposal_Accept
 
         -- Mint Canton mUSD to user (1:1 minus fee)
-        userObs <- lookupUserObservers operator user
+        -- DAML-H-02: Service choices default to fully private; user can UpdateObservers after
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -613,7 +626,8 @@ template CantonDirectMintService
         exercise usdcxProposal USDCxTransferProposal_Accept with complianceRegistryCid
 
         -- Mint Canton mUSD to user (1:1 minus fee)
-        userObs <- lookupUserObservers operator user
+        -- DAML-H-02: Service choices default to fully private; user can UpdateObservers after
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -687,7 +701,8 @@ template CantonDirectMintService
         assertMsg "DAILY_MINT_LIMIT" (netMinted + netAmount <= dailyMintLimit)
 
         -- Mint Canton mUSD to user (no bridge-out — operator backs via coin)
-        userObs <- lookupUserObservers operator user
+        -- DAML-H-02: Service choices default to fully private; user can UpdateObservers after
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -879,6 +894,29 @@ template RedemptionRequest
 
         fulfilledReq <- create this with fulfilled = True
         return (fulfilledReq, payoutCid)
+
+-- | Immutable marker proving a RedemptionRequest was settled on Ethereum.
+-- This does NOT replace Redemption_Fulfill (Canton USDC payout path). It provides
+-- on-ledger idempotency for Ethereum-side payouts performed by the relay.
+template RedemptionEthereumSettlement
+  with
+    operator : Party
+    user : Party
+    redemptionCid : ContractId RedemptionRequest
+    recipientEth : Text
+    amountPaid : Money
+    ethTxHash : Text
+    settledAt : Time
+  where
+    signatory operator
+    observer user
+
+    key (operator, redemptionCid) : (Party, ContractId RedemptionRequest)
+    maintainer key._1
+
+    ensure amountPaid > 0.0
+      && DA.Text.length recipientEth > 0
+      && DA.Text.length ethTxHash > 0
 -- ============================================================
 --                     SECTION 7: BURN RATE LIMITER
 -- ============================================================
