@@ -28,7 +28,7 @@ export function CantonDashboard() {
   const activeParty = loopWallet.partyId || null;
   const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
   const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
-  const { data: operatorData } = useCantonLedger(15_000);
+  const { data: operatorData } = useCantonLedger(15_000, null);
 
   if (loading && !data) {
     return (
@@ -80,8 +80,8 @@ export function CantonDashboard() {
   const displayParty = data?.party || activeParty || "—";
   const displayPartyShort = displayParty === "—" ? displayParty : truncateMiddle(displayParty);
 
-  const lendingService = data?.lendingService;
-  const poolService = data?.ethPoolService;
+  const lendingService = data?.lendingService || operatorData?.lendingService;
+  const poolService = data?.ethPoolService || operatorData?.ethPoolService;
   const borrowRateBps = lendingService?.interestRateBps ?? 0;
   const totalBorrows = Number(lendingService?.totalBorrows ?? 0);
   const protocolReserves = Number(lendingService?.protocolReserves ?? 0);

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { normalizeCantonParty } from "@/lib/canton-party";
 
 /**
@@ -127,21 +128,52 @@ export interface CantonBalancesData {
   timestamp: string;
 }
 
-function partyQueryParam(party?: string | null): string {
-  const normalized = normalizeCantonParty(party);
-  if (!normalized || !normalized.trim()) return "";
-  return `?party=${encodeURIComponent(normalized.trim())}`;
+const PARTY_STORAGE_KEY = "minted.canton.party";
+
+function resolvePartyOverride(explicitParty?: string | null): string | undefined {
+  // Explicit null means "use server default/operator party" and bypass
+  // local wallet/storage overrides.
+  if (explicitParty === null) {
+    return undefined;
+  }
+
+  const normalizedExplicit = normalizeCantonParty(explicitParty);
+  if (normalizedExplicit && normalizedExplicit.trim()) {
+    return normalizedExplicit.trim();
+  }
+
+  // Only fall back to local storage when no explicit party argument was provided.
+  if (explicitParty !== undefined || typeof window === "undefined") {
+    return undefined;
+  }
+
+  const stored = window.localStorage.getItem(PARTY_STORAGE_KEY);
+  const normalizedStored = normalizeCantonParty(stored);
+  if (normalizedStored && normalizedStored.trim()) {
+    return normalizedStored.trim();
+  }
+  return undefined;
+}
+
+function buildBalancesUrl(explicitParty?: string | null): string {
+  const party = resolvePartyOverride(explicitParty);
+  if (!party) return "/api/canton-balances";
+  return `/api/canton-balances?party=${encodeURIComponent(party)}`;
 }
 
 export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
-  const effectiveParty = normalizeCantonParty(party);
+  const loopWallet = useLoopWallet();
   const [data, setData] = useState<CantonBalancesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const resp = await fetch(`/api/canton-balances${partyQueryParam(effectiveParty)}`);
+      // If caller passes `party` (including null), honor it exactly.
+      // If caller omits `party`, default to connected wallet party.
+      const selectedParty =
+        party !== undefined ? party : (loopWallet.partyId ?? undefined);
+      const resp = await fetch(buildBalancesUrl(selectedParty));
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: "Unknown error" }));
         throw new Error(err.error || `HTTP ${resp.status}`);
@@ -154,7 +186,17 @@ export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [effectiveParty]);
+  }, [loopWallet.partyId, party]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const normalized = normalizeCantonParty(loopWallet.partyId);
+    if (normalized && normalized.includes("::")) {
+      window.localStorage.setItem(PARTY_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(PARTY_STORAGE_KEY);
+    }
+  }, [loopWallet.partyId]);
 
   useEffect(() => {
     refresh();
@@ -178,13 +220,13 @@ export async function cantonExercise(
   contractId: string,
   choice: string,
   argument: Record<string, unknown>,
-  party?: string | null
+  options?: { party?: string | null }
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const effectiveParty = normalizeCantonParty(party);
+  const party = resolvePartyOverride(options?.party);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ templateId, contractId, choice, argument, party: effectiveParty || undefined }),
+    body: JSON.stringify({ templateId, contractId, choice, argument, party }),
   });
   // Handle non-JSON responses (e.g. Next.js error pages returning HTML)
   const contentType = resp.headers.get("content-type") || "";
@@ -200,8 +242,7 @@ export async function cantonExercise(
  * Use this before exercising consuming choices to ensure the CID is current.
  */
 export async function fetchFreshBalances(party?: string | null): Promise<CantonBalancesData> {
-  const effectiveParty = normalizeCantonParty(party);
-  const resp = await fetch(`/api/canton-balances${partyQueryParam(effectiveParty)}`);
+  const resp = await fetch(buildBalancesUrl(party));
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: "Unknown error" }));
     throw new Error(err.error || `HTTP ${resp.status}`);
@@ -232,13 +273,13 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
 export async function cantonCreate(
   templateId: string,
   payload: Record<string, unknown>,
-  party?: string | null
+  options?: { party?: string | null }
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const effectiveParty = normalizeCantonParty(party);
+  const party = resolvePartyOverride(options?.party);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "create", templateId, payload, party: effectiveParty || undefined }),
+    body: JSON.stringify({ action: "create", templateId, payload, party }),
   });
   // Handle non-JSON responses (e.g. Next.js error pages returning HTML)
   const contentType = resp.headers.get("content-type") || "";

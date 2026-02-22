@@ -15,12 +15,15 @@ contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @dev LiquidationEngine needs burn permission
     bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
 
     uint256 public supplyCap;
     mapping(address => bool) public isBlacklisted;
+    /// @notice Optional global pause registry wiring (constructor compatibility for tests/scripts)
+    address public globalPauseRegistry;
 
     /// @notice Cooldown between supply cap increases to prevent rapid chaining
     /// 100M → 120M → 144M → 172.8M could happen in minutes without this
@@ -42,9 +45,11 @@ contract MUSD is ERC20, AccessControl, Pausable {
     /// @dev Event for when cap drops below current supply (undercollateralization response)
     event SupplyCapBelowSupply(uint256 newCap, uint256 currentSupply);
 
-    constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
+    constructor(uint256 _initialSupplyCap, address _globalPauseRegistry) ERC20("Minted USD", "mUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
         if (_initialSupplyCap == 0) revert InvalidSupplyCap();
+        globalPauseRegistry = _globalPauseRegistry;
         supplyCap = _initialSupplyCap;
         emit SupplyCapUpdated(0, _initialSupplyCap);
     }

@@ -14,7 +14,7 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
@@ -61,18 +61,38 @@ async function getActivePriceFeeds(): Promise<PriceFeedContract[]> {
     };
   };
 
-  const entries = await cantonRequest<RawEntry[]>("POST", "/v2/state/active-contracts", {
-    filter: {
+  const raw = await cantonRequest<unknown>("POST", "/v2/state/active-contracts?limit=200", {
+    eventFormat: {
       filtersByParty: {
         [CANTON_PARTY]: {
-          identifierFilter: {
-            wildcardFilter: {},
-          },
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: {
+                  value: {
+                    templateId: PRICE_FEED_TEMPLATE,
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
+          ],
         },
       },
+      verbose: true,
     },
     activeAtOffset: offset,
   });
+
+  // Normalize: response may be array or { result: [...] }
+  let entries: RawEntry[];
+  if (Array.isArray(raw)) {
+    entries = raw;
+  } else if (raw && typeof raw === "object" && Array.isArray((raw as any).result)) {
+    entries = (raw as any).result;
+  } else {
+    entries = [];
+  }
 
   const feeds: PriceFeedContract[] = [];
   for (const entry of entries) {

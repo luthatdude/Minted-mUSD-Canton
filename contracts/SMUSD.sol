@@ -12,6 +12,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./Errors.sol";
+import "./interfaces/IGlobalPauseRegistry.sol";
 
 /// @dev Typed interface for Treasury calls
 interface ITreasury {
@@ -25,6 +26,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant INTEREST_ROUTER_ROLE = keccak256("INTEREST_ROUTER_ROLE");
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
 
     mapping(address => uint256) public lastDeposit;
     uint256 public constant WITHDRAW_COOLDOWN = 24 hours;
@@ -68,6 +70,9 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     /// @notice Last interest receipt timestamp
     uint256 public lastInterestReceiptTime;
 
+    /// @notice Optional global pause registry
+    IGlobalPauseRegistry public globalPauseRegistry;
+
     // Events
     event YieldDistributed(address indexed from, uint256 amount);
     event CooldownUpdated(address indexed account, uint256 timestamp);
@@ -75,9 +80,11 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
 
-    constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+    constructor(IERC20 _musd, address _globalPauseRegistry) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        globalPauseRegistry = IGlobalPauseRegistry(_globalPauseRegistry);
     }
 
     // Always set cooldown for receiver to prevent bypass via third-party deposit.
@@ -274,30 +281,6 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         return totalSupply();
     }
 
-    /// @notice ERC-4626 conversion uses local vault accounting.
-    /// @dev Safety: redemptions are paid from local vault liquidity, so preview
-    ///      and execution must be based on local totalAssets/totalSupply.
-    function convertToShares(uint256 assets) public view override returns (uint256) {
-        return super.convertToShares(assets);
-    }
-
-    /// @notice ERC-4626 conversion uses local vault accounting.
-    /// @dev Safety: previewed asset value must be redeemable from this vault.
-    function convertToAssets(uint256 shares) public view override returns (uint256) {
-        return super.convertToAssets(shares);
-    }
-
-    /// @notice Internal ERC-4626 conversion is intentionally local.
-    /// @dev Do not use global Treasury TVL for execution-path conversions.
-    function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
-        return super._convertToShares(assets, rounding);
-    }
-
-    /// @notice Internal ERC-4626 conversion is intentionally local.
-    function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
-        return super._convertToAssets(shares, rounding);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     // ERC-4626 compliance — max* functions must return 0 when the
     // corresponding deposit/mint/withdraw/redeem would revert.
@@ -361,7 +344,7 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
-}
+
     /// @dev CX-C-01: This intentionally uses LOCAL totalAssets() (which subtracts
     ///      unvested yield per SOL-M-9). Integrators needing the global share price
     ///      should use globalSharePrice() or the previewDepositGlobal/previewRedeemGlobal
@@ -423,61 +406,6 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     //   accounting. These are VIEW-ONLY and do NOT affect on-chain execution.
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Preview deposit using global share price (for off-chain integrators)
-    /// @dev CX-C-01: Returns the shares a depositor WOULD receive if the vault
-    ///      used globalTotalAssets() instead of local totalAssets(). Actual on-chain
-    ///      deposit uses local accounting and may return more shares during vesting.
-    /// @param assets Amount of mUSD to deposit
-    /// @return shares Estimated shares at global price
-    function previewDepositGlobal(uint256 assets) external view returns (uint256 shares) {
-        uint256 gShares = globalTotalShares();
-        uint256 gAssets = globalTotalAssets();
-        if (gShares == 0) {
-            return assets * (10 ** _decimalsOffset());
-        }
-        return (assets * gShares) / gAssets;
-    }
-
-    /// @notice Preview redeem using global share price (for off-chain integrators)
-    /// @dev CX-C-01: Returns the assets a redeemer WOULD receive if the vault
-    ///      used globalTotalAssets(). Actual on-chain redeem uses local accounting
-    ///      and may return fewer assets during vesting.
-    /// @param shares    /// @dev CX-C-01: This intentionally uses LOCAL totalAssets() (which subtracts
-    ///      unvested yield per SOL-M-9). Integrators needing the global share price
-    ///      should use globalSharePrice() or the previewDepositGlobal/previewRedeemGlobal
-    ///      helper functions instead.
-    function convertToShares(uint256 assets) public view override returns (uint256) {
-        return super.convertToShares(assets);
-    }
-
-    /// @notice ERC-4626 conversion uses local vault accounting.
-    /// @dev Safety: previewed asset value must be redeemable from this vault.
-    /// @dev CX-C-01: Uses LOCAL totalAssets() which excludes unvested yield.
-    ///      During vesting, this slightly understates asset value per share.
-    ///      Use globalSharePrice() for the canonical cross-chain price.
-    function convertToAssets(uint256 shares) public view override returns (uint256) {
-        return super.convertToAssets(shares);
-    }
-
-    /// @notice Internal ERC-4626 conversion is intentionally local.
-    /// @dev Do not use global Treasury TVL for execution-path conversions.
-    /// @dev CX-C-01: Vesting deliberately depresses totalAssets() to prevent
-    ///      sandwich attacks around yield injection. This means convertToShares()
-    ///      returns MORE shares than a "fair" global price during active vesting,
-    ///      which is the desired anti-MEV behavior.
-    function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
-        return super._convertToShares(assets, rounding);
-    }
-
-    /// @notice Internal ERC-4626 conversion is intentionally local.
-    /// @dev CX-C-01: During active vesting, convertToAssets() returns fewer assets
-    ///      per share than globalSharePrice() would suggest. This is intentional:
-    ///      it prevents MEV extractors from depositing just before yield injection
-    ///      and redeeming after the share price jumps.
-    function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
-        return super._convertToAssets(shares, rounding);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     // CX-C-01 FIX: Global preview functions for off-chain integrators
     // ═══════════════════════════════════════════════════════════════════════
@@ -532,4 +460,4 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
         }
         return (shares * gAssets) / gShares;
     }
-
+}

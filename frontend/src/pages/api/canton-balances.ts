@@ -15,12 +15,34 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   process.env.CANTON_PACKAGE_ID ||
   "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
+
+function parseRecipientAliasMap(): Record<string, string> {
+  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
+  try {
+    const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([from, to]) =>
+          typeof from === "string" &&
+          from.trim().length > 0 &&
+          typeof to === "string" &&
+          to.trim().length > 0
+      )
+    ) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 
 function resolveRequestedParty(rawParty: string | string[] | undefined): string {
   const candidate = Array.isArray(rawParty) ? rawParty[0] : rawParty;
@@ -29,7 +51,7 @@ function resolveRequestedParty(rawParty: string | string[] | undefined): string 
   if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
     throw new Error("Invalid Canton party");
   }
-  return party;
+  return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
 interface CantonMUSDToken {
@@ -260,6 +282,7 @@ export default async function handler(
   }
 
   try {
+    const effectiveParty = actAsParty;
     // 1. Get current ledger offset
     const { offset } = await cantonRequest<{ offset: number }>("GET", "/v2/state/ledger-end");
 
@@ -524,6 +547,72 @@ export default async function handler(
           amount: (p.amount as string) || "0",
           template: "USDCx",
         });
+      }
+    }
+
+    // Some service contracts (for example CantonDirectMintService) may not be
+    // directly visible to end-user parties even though they are operational.
+    // In that case, fall back to the operator party view for service discovery.
+    if (
+      effectiveParty !== CANTON_PARTY &&
+      (!directMintService || !bridgeService || !supplyService)
+    ) {
+      try {
+        const operatorTemplates = [
+          templateId("Minted.Protocol.V3", "BridgeService"),
+          templateId("Minted.Protocol.V3", "MUSDSupplyService"),
+          templateId("CantonDirectMint", "CantonDirectMintService"),
+        ] as const;
+
+        const operatorGroups = await Promise.all(
+          operatorTemplates.map((tpl) => queryTemplateEntries(CANTON_PARTY, offset, tpl))
+        );
+        const operatorEntries = operatorGroups.flat();
+
+        for (const entry of operatorEntries) {
+          const ac = entry.contractEntry?.JsActiveContract;
+          if (!ac) continue;
+          const evt = ac.createdEvent;
+          const tplId = evt.templateId;
+          const parts = tplId.split(":");
+          const entityName = parts[parts.length - 1] || "";
+
+          if (!bridgeService && entityName === "BridgeService") {
+            const p = evt.createArgument;
+            bridgeService = {
+              contractId: evt.contractId,
+              operator: (p.operator as string) || "",
+              lastNonce: parseInt(String(p.lastNonce || "0"), 10),
+            };
+          } else if (!supplyService && entityName === "MUSDSupplyService") {
+            supplyService = true;
+          } else if (entityName === "CantonDirectMintService") {
+            const p = evt.createArgument;
+            const isPaused = p.paused === true || p.paused === "True";
+            const compCid = (p.complianceRegistryCid as string) || "";
+            const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+            const candidate = {
+              contractId: evt.contractId,
+              paused: isPaused,
+              serviceName: (p.serviceName as string) || "",
+              hasValidCompliance,
+            };
+            if (
+              !directMintService ||
+              (hasValidCompliance && !directMintService.hasValidCompliance) ||
+              (hasValidCompliance === directMintService.hasValidCompliance &&
+                !isPaused &&
+                directMintService.paused)
+            ) {
+              directMintService = candidate;
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.warn(
+          "Canton balances service fallback failed:",
+          (fallbackErr as Error)?.message || fallbackErr
+        );
       }
     }
 
