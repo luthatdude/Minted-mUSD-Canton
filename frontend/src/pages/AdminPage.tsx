@@ -4,14 +4,22 @@ import { TxButton } from "@/components/TxButton";
 import { StatCard } from "@/components/StatCard";
 import { useTx } from "@/hooks/useTx";
 import { formatUSD, formatBps, formatToken } from "@/lib/format";
-import { USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
+import { CONTRACTS, USDC_DECIMALS, MUSD_DECIMALS } from "@/lib/config";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 import { useVaultAPY } from "@/hooks/useVaultAPY";
+import { cantonCreate, useCantonLedger } from "@/hooks/useCantonLedger";
 
-type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle";
+type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle" | "faucet";
+
+const CANTON_PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const CANTON_FAUCET_TEMPLATES = {
+  CantonUSDC: `${CANTON_PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
+  USDCx: `${CANTON_PACKAGE_ID}:CantonDirectMint:USDCx`,
+  CantonCoin: `${CANTON_PACKAGE_ID}:CantonCoinToken:CantonCoin`,
+} as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STRATEGY CATALOG — all deployable yield strategies
@@ -197,12 +205,13 @@ function isValidBps(v: string): boolean {
 }
 
 export function AdminPage() {
-  const { address, isConnected } = useUnifiedWallet();
+  const { address, isConnected, signer } = useUnifiedWallet();
   const contracts = useWCContracts();
   const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
   const [section, setSection] = useState<AdminSection>("treasury");
   const tx = useTx();
   const { vaultAPYs, treasuryAPY, pendingYield, loading: apyLoading } = useVaultAPY();
+  const { data: cantonData, refresh: refreshCantonData } = useCantonLedger(0);
 
   // ── All state hooks (must precede conditional returns — Rules of Hooks) ──
 
@@ -259,6 +268,17 @@ export function AdminPage() {
   // Current values + data-loading state (H-04)
   const [currentValues, setCurrentValues] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [faucetStatus, setFaucetStatus] = useState<{ success?: string; error?: string }>({});
+  const [faucetLoadingKey, setFaucetLoadingKey] = useState<string | null>(null);
+  const [cantonUsdcAmount, setCantonUsdcAmount] = useState("10000");
+  const [cantonUsdcxAmount, setCantonUsdcxAmount] = useState("10000");
+  const [cantonCoinAmount, setCantonCoinAmount] = useState("1000");
+  const [ethUsdcAmount, setEthUsdcAmount] = useState("10000");
+  const [ethUsdtAmount, setEthUsdtAmount] = useState("10000");
+  const [ethMusdAmount, setEthMusdAmount] = useState("1000");
+  const [evmUsdcBal, setEvmUsdcBal] = useState<bigint | null>(null);
+  const [evmUsdtBal, setEvmUsdtBal] = useState<bigint | null>(null);
+  const [evmMusdBal, setEvmMusdBal] = useState<bigint | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -271,7 +291,13 @@ export function AdminPage() {
         if (directMint) {
           vals.mintFee = formatBps(await directMint.mintFeeBps());
           vals.redeemFee = formatBps(await directMint.redeemFeeBps());
-          vals.accFees = formatToken(await directMint.totalAccumulatedFees(), 6);
+          const accumulatedFeesRaw =
+            typeof directMint.accumulatedFees === "function"
+              ? await directMint.accumulatedFees()
+              : typeof directMint.totalAccumulatedFees === "function"
+                ? await directMint.totalAccumulatedFees()
+                : 0n;
+          vals.accFees = formatToken(accumulatedFeesRaw, 6);
           vals.paused = (await directMint.paused()).toString();
         }
         if (treasury) {
@@ -375,6 +401,164 @@ export function AdminPage() {
     return () => { cancelled = true; };
   }, [metaVault1, metaVault2, metaVault3, tx.success]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadEvmFaucetBalances() {
+      try {
+        if (!address) {
+          if (!cancelled) {
+            setEvmUsdcBal(null);
+            setEvmUsdtBal(null);
+            setEvmMusdBal(null);
+          }
+          return;
+        }
+        const [usdcBal, usdtBal, musdBal] = await Promise.all([
+          contracts.usdc ? contracts.usdc.balanceOf(address) : Promise.resolve(null),
+          contracts.usdt ? contracts.usdt.balanceOf(address) : Promise.resolve(null),
+          contracts.musd ? contracts.musd.balanceOf(address) : Promise.resolve(null),
+        ]);
+        if (!cancelled) {
+          setEvmUsdcBal(usdcBal);
+          setEvmUsdtBal(usdtBal);
+          setEvmMusdBal(musdBal);
+        }
+      } catch (err) {
+        console.error("[AdminPage] Failed to load EVM faucet balances:", err);
+      }
+    }
+    loadEvmFaucetBalances();
+    return () => { cancelled = true; };
+  }, [contracts.usdc, contracts.usdt, contracts.musd, address, tx.success, faucetStatus.success]);
+
+  async function mintCantonFaucetToken(
+    token: keyof typeof CANTON_FAUCET_TEMPLATES,
+    amount: string
+  ) {
+    const trimmedAmount = amount.trim();
+    const numericAmount = Number(trimmedAmount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      setFaucetStatus({ error: "Enter a valid Canton faucet amount." });
+      return;
+    }
+    if (!CANTON_PACKAGE_ID) {
+      setFaucetStatus({ error: "NEXT_PUBLIC_DAML_PACKAGE_ID is missing." });
+      return;
+    }
+    const party = cantonData?.party;
+    if (!party) {
+      setFaucetStatus({ error: "Canton party is not connected yet." });
+      return;
+    }
+
+    setFaucetLoadingKey(`canton-${token}`);
+    setFaucetStatus({});
+    try {
+      const payload: Record<string, unknown> = token === "USDCx"
+        ? {
+            issuer: party,
+            owner: party,
+            amount: trimmedAmount,
+            sourceChain: "admin-faucet",
+            cctpNonce: Date.now(),
+            privacyObservers: [] as string[],
+          }
+        : {
+            issuer: party,
+            owner: party,
+            amount: trimmedAmount,
+            privacyObservers: [] as string[],
+          };
+
+      const response = await cantonCreate(CANTON_FAUCET_TEMPLATES[token], payload, { party });
+      if (!response.success) {
+        throw new Error(response.error || "Canton faucet command failed");
+      }
+      await refreshCantonData();
+      setFaucetStatus({ success: `Minted ${trimmedAmount} ${token} on Canton.` });
+    } catch (err: any) {
+      setFaucetStatus({ error: err.message || "Canton faucet mint failed." });
+    } finally {
+      setFaucetLoadingKey(null);
+    }
+  }
+
+  async function mintEvmFaucetToken(token: "USDC" | "USDT" | "MUSD", amount: string) {
+    const trimmedAmount = amount.trim();
+    const numericAmount = Number(trimmedAmount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      setFaucetStatus({ error: "Enter a valid Ethereum faucet amount." });
+      return;
+    }
+    if (!signer || !address) {
+      setFaucetStatus({ error: "Connect your Ethereum wallet to mint test tokens." });
+      return;
+    }
+
+    setFaucetLoadingKey(`eth-${token}`);
+    setFaucetStatus({});
+    try {
+      if (token === "MUSD") {
+        if (!CONTRACTS.USDC || !contracts.directMint || !contracts.musd) {
+          throw new Error("USDC, DirectMint, or mUSD contract is not configured.");
+        }
+
+        const usdcMintable = new ethers.Contract(
+          CONTRACTS.USDC,
+          [
+            "function mint(address to, uint256 amount)",
+            "function approve(address spender, uint256 amount) returns (bool)",
+            "function balanceOf(address account) view returns (uint256)",
+          ],
+          signer
+        );
+
+        const usdcAmount = ethers.parseUnits(trimmedAmount, USDC_DECIMALS);
+        const mintUsdcTx = await usdcMintable.mint(address, usdcAmount);
+        await mintUsdcTx.wait(1);
+
+        const approveTx = await usdcMintable.approve(CONTRACTS.DirectMint, usdcAmount);
+        await approveTx.wait(1);
+
+        const mintMusdTx = await contracts.directMint.mint(usdcAmount);
+        await mintMusdTx.wait(1);
+
+        const [newUsdcBalance, newMusdBalance] = await Promise.all([
+          usdcMintable.balanceOf(address),
+          contracts.musd.balanceOf(address),
+        ]);
+        setEvmUsdcBal(newUsdcBalance);
+        setEvmMusdBal(newMusdBalance);
+        setFaucetStatus({ success: `Minted ${trimmedAmount} mUSD on Sepolia (via USDC + DirectMint).` });
+      } else {
+        const tokenAddress = token === "USDC" ? CONTRACTS.USDC : CONTRACTS.USDT;
+        if (!tokenAddress) {
+          throw new Error(`${token} address is not configured.`);
+        }
+
+        const mintableToken = new ethers.Contract(
+          tokenAddress,
+          [
+            "function mint(address to, uint256 amount)",
+            "function balanceOf(address account) view returns (uint256)",
+          ],
+          signer
+        );
+
+        const txResp = await mintableToken.mint(address, ethers.parseUnits(trimmedAmount, USDC_DECIMALS));
+        await txResp.wait(1);
+        const newBalance = await mintableToken.balanceOf(address);
+        if (token === "USDC") setEvmUsdcBal(newBalance);
+        if (token === "USDT") setEvmUsdtBal(newBalance);
+        setFaucetStatus({ success: `Minted ${trimmedAmount} ${token} on Sepolia.` });
+      }
+    } catch (err: any) {
+      setFaucetStatus({ error: err.message || `${token} mint failed.` });
+    } finally {
+      setFaucetLoadingKey(null);
+    }
+  }
+
   // ── Conditional returns (after all hooks — C-01 fix) ──
   if (!isConnected) {
     return (
@@ -418,6 +602,7 @@ export function AdminPage() {
     { key: "bridge", label: "Bridge" },
     { key: "borrow", label: "Borrow" },
     { key: "oracle", label: "Oracle" },
+    { key: "faucet", label: "🚰 Faucet" },
   ];
 
   const setVaultAmount = (
@@ -1290,6 +1475,119 @@ export function AdminPage() {
             >
               Set Feed
             </TxButton>
+          </div>
+        </div>
+      )}
+
+      {/* ===== Faucet Section ===== */}
+      {section === "faucet" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-yellow-700/40 bg-yellow-900/20 p-4 text-sm text-yellow-200">
+            Devnet-only faucet controls. Keep these disabled for production.
+          </div>
+
+          {faucetStatus.error && (
+            <div className="rounded-lg border border-red-700/40 bg-red-900/20 p-4 text-sm text-red-300">
+              {faucetStatus.error}
+            </div>
+          )}
+          {faucetStatus.success && (
+            <div className="rounded-lg border border-green-700/40 bg-green-900/20 p-4 text-sm text-green-300">
+              {faucetStatus.success}
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard label="Canton USDC + USDCx" value={cantonData ? Number(cantonData.totalUsdc || "0").toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "..."} />
+            <StatCard label="Canton Coin" value={cantonData ? Number(cantonData.totalCoin || "0").toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "..."} />
+            <StatCard label="Canton Party" value={cantonData?.party ? `${cantonData.party.slice(0, 18)}…` : "Not connected"} />
+          </div>
+
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Canton Faucet</h3>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">Canton USDC Amount</label>
+                <input className="input" type="number" value={cantonUsdcAmount} onChange={(e) => setCantonUsdcAmount(e.target.value)} />
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintCantonFaucetToken("CantonUSDC", cantonUsdcAmount)}
+                  loading={faucetLoadingKey === "canton-CantonUSDC"}
+                  disabled={faucetLoadingKey !== null}
+                >
+                  Mint Canton USDC
+                </TxButton>
+              </div>
+              <div>
+                <label className="label">USDCx Amount</label>
+                <input className="input" type="number" value={cantonUsdcxAmount} onChange={(e) => setCantonUsdcxAmount(e.target.value)} />
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintCantonFaucetToken("USDCx", cantonUsdcxAmount)}
+                  loading={faucetLoadingKey === "canton-USDCx"}
+                  disabled={faucetLoadingKey !== null}
+                >
+                  Mint USDCx
+                </TxButton>
+              </div>
+              <div>
+                <label className="label">Canton Coin Amount</label>
+                <input className="input" type="number" value={cantonCoinAmount} onChange={(e) => setCantonCoinAmount(e.target.value)} />
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintCantonFaucetToken("CantonCoin", cantonCoinAmount)}
+                  loading={faucetLoadingKey === "canton-CantonCoin"}
+                  disabled={faucetLoadingKey !== null}
+                >
+                  Mint Canton Coin
+                </TxButton>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h3 className="mb-3 font-semibold text-gray-300">Ethereum Faucet (Sepolia)</h3>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label">USDC Amount</label>
+                <input className="input" type="number" value={ethUsdcAmount} onChange={(e) => setEthUsdcAmount(e.target.value)} />
+                <p className="mt-1 text-xs text-gray-500">Wallet Balance: {evmUsdcBal !== null ? formatToken(evmUsdcBal, USDC_DECIMALS) : "..."}</p>
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintEvmFaucetToken("USDC", ethUsdcAmount)}
+                  loading={faucetLoadingKey === "eth-USDC"}
+                  disabled={faucetLoadingKey !== null || !signer || !address}
+                >
+                  Mint USDC
+                </TxButton>
+              </div>
+              <div>
+                <label className="label">USDT Amount</label>
+                <input className="input" type="number" value={ethUsdtAmount} onChange={(e) => setEthUsdtAmount(e.target.value)} />
+                <p className="mt-1 text-xs text-gray-500">Wallet Balance: {evmUsdtBal !== null ? formatToken(evmUsdtBal, USDC_DECIMALS) : "..."}</p>
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintEvmFaucetToken("USDT", ethUsdtAmount)}
+                  loading={faucetLoadingKey === "eth-USDT"}
+                  disabled={faucetLoadingKey !== null || !signer || !address}
+                >
+                  Mint USDT
+                </TxButton>
+              </div>
+              <div>
+                <label className="label">mUSD Amount</label>
+                <input className="input" type="number" value={ethMusdAmount} onChange={(e) => setEthMusdAmount(e.target.value)} />
+                <p className="mt-1 text-xs text-gray-500">Wallet Balance: {evmMusdBal !== null ? formatToken(evmMusdBal, MUSD_DECIMALS) : "..."}</p>
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintEvmFaucetToken("MUSD", ethMusdAmount)}
+                  loading={faucetLoadingKey === "eth-MUSD"}
+                  disabled={faucetLoadingKey !== null || !signer || !address || !contracts.directMint || !contracts.musd}
+                >
+                  Mint mUSD
+                </TxButton>
+              </div>
+            </div>
           </div>
         </div>
       )}
