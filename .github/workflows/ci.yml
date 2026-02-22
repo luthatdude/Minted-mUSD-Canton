@@ -259,8 +259,8 @@ jobs:
           pip3 install mythril
 
       - name: Run Mythril on core contracts
-      DAML_SDK_VERSION: "3.4.10"
-TRACTS=(
+        run: |
+          CORE_CONTRACTS=(
             "contracts/BorrowModule.sol"
             "contracts/CollateralVault.sol"
             "contracts/DirectMintV2.sol"
