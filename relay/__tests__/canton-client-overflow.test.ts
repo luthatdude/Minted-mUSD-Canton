@@ -1,6 +1,6 @@
 import {
   CantonClient,
-  CantonUpdatesReplayError,
+  CantonApiError,
   TEMPLATES,
 } from "../canton-client";
 
@@ -245,7 +245,7 @@ describe("CantonClient queryContracts overflow fallback", () => {
     expect((global.fetch as jest.Mock).mock.calls.some((args) => String(args[0]).includes("/v2/updates"))).toBe(true);
   });
 
-  it("throws CantonUpdatesReplayError when updates replay makes no offset progress", async () => {
+  it("throws CantonApiError when updates replay makes no offset progress", async () => {
     const client = makeClient();
     const targetTemplate = "pkg-test:Minted.Protocol.V3:AttestationRequest";
 
@@ -278,12 +278,12 @@ describe("CantonClient queryContracts overflow fallback", () => {
       await client.queryContracts(TEMPLATES.AttestationRequest);
       throw new Error("expected queryContracts to throw");
     } catch (error: any) {
-      expect(error).toBeInstanceOf(CantonUpdatesReplayError);
+      expect(error).toBeInstanceOf(CantonApiError);
       expect(String(error.message)).toMatch(/No offset progress/);
     }
   });
 
-  it("throws CantonUpdatesReplayError when updates replay exceeds max pages", async () => {
+  it("throws CantonApiError when updates replay exceeds max pages", async () => {
     const client = makeClient();
     const targetTemplate = "pkg-test:Minted.Protocol.V3:AttestationRequest";
     let updatesCalls = 0;
@@ -322,7 +322,7 @@ describe("CantonClient queryContracts overflow fallback", () => {
       await client.queryContracts(TEMPLATES.AttestationRequest);
       throw new Error("expected queryContracts to throw");
     } catch (error: any) {
-      expect(error).toBeInstanceOf(CantonUpdatesReplayError);
+      expect(error).toBeInstanceOf(CantonApiError);
       expect(String(error.message)).toMatch(/Exceeded max update pages/);
     }
     expect(updatesCalls).toBe(50);
