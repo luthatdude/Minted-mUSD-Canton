@@ -911,7 +911,7 @@ template RedemptionEthereumSettlement
     signatory operator
     observer user
 
-    key (operator, redemptionCid) : (Party, ContractId RedemptionRequest)
+    key (operator, ethTxHash) : (Party, Text)
     maintainer key._1
 
     ensure amountPaid > 0.0

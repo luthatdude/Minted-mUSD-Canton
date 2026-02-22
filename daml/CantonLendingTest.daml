@@ -172,12 +172,14 @@ testPriceFeedEmergencyOverride : Script ()
 testPriceFeedEmergencyOverride = do
   setup <- setupTest
   -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  passTime (minutes 31)
+  govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "ctn-flash-crash"
   -- Emergency update bypasses movement cap
   newFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.05       -- 70% drop — would fail normal update
       reason = "Flash crash on Temple DEX"
+      governanceProofCid = govProof
   feed <- queryContractId setup.operator newFeedCid
   assertMsg "Emergency price set" ((fromSome feed).priceUsd == 0.05)
   debug "✅ 4. Emergency price override"
@@ -256,6 +258,7 @@ testDepositSMUSD = do
       shares = 1000.0
       entrySharePrice = 1.05
       stakedAt = datetime 2026 Jan 1 0 0 0
+      complianceRegistryCid = setup.complianceCid
       privacyObservers = []
 
   -- Need sMUSD price feed
@@ -495,11 +498,13 @@ testLiquidation = do
   -- Liquidation threshold = 75% → $1000 * 0.75 = $750
   -- Debt = $1100 → health factor = 750/1100 = 0.68 < 1.0 → liquidatable
   -- Advance time past the 5-minute emergency update cooldown
-  passTime (minutes 6)
+  passTime (minutes 31)
+  govProof <- createGovProof setup.operator setup.governor EmergencyPause "CantonLending" "ctn-crash"
   crashedFeedCid <- submit setup.operator do
     exerciseCmd setup.ctnFeedCid PriceFeed_EmergencyUpdate with
       newPriceUsd = 0.10
       reason = "CTN crash"
+      governanceProofCid = govProof
 
   -- Liquidator gets mUSD to repay
   liqMusdCid <- submitMulti [setup.operator, setup.liquidator] [] do
