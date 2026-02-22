@@ -35,6 +35,7 @@ function fmtAmount(v: string | number, decimals = 2): string {
 
 export function CantonStake() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
+  const { data: operatorData } = useCantonLedger(15_000, null);
 
   const [pool, setPool] = useState<CantonPoolTab>("smusd");
   const [tab, setTab] = useState<StakeAction>("stake");
@@ -49,9 +50,9 @@ export function CantonStake() {
 
   const totalMusd = data ? parseFloat(data.totalBalance) : 0;
   const tokens = data?.tokens || [];
-  const stakingService = data?.stakingService || null;
-  const ethPoolService = data?.ethPoolService || null;
-  const boostPoolService = data?.boostPoolService || null;
+  const stakingService = data?.stakingService || operatorData?.stakingService || null;
+  const ethPoolService = data?.ethPoolService || operatorData?.ethPoolService || null;
+  const boostPoolService = data?.boostPoolService || operatorData?.boostPoolService || null;
   const smusdTokens = data?.smusdTokens || [];
   const totalSmusd = data?.totalSmusd ? parseFloat(data.totalSmusd) : 0;
   const smusdETokens = data?.smusdETokens || [];
@@ -86,7 +87,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Stake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.stakingService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.stakingService || operatorFresh?.stakingService;
       if (!freshService) throw new Error("Staking service not found");
       const freshTokens = fresh.tokens || [];
       const token = freshTokens[selectedMusdIdx] || freshTokens[0];
@@ -107,7 +109,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Unstake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.stakingService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.stakingService || operatorFresh?.stakingService;
       if (!freshService) throw new Error("Staking service not found");
       const freshSmusd = fresh.smusdTokens || [];
       const smusd = freshSmusd[selectedAssetIdx] || freshSmusd[0];
@@ -129,7 +132,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data to avoid stale CIDs (ETHPool choices are consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.ethPoolService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
       if (!freshService) throw new Error("ETH Pool service not found");
 
       // Use fresh token lists
@@ -167,7 +171,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (ETHPool_Unstake is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.ethPoolService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
       if (!freshService) throw new Error("ETH Pool service not found");
       const freshSmusdE = fresh.smusdETokens || [];
       const smusdE = freshSmusdE[selectedAssetIdx] || freshSmusdE[0];
@@ -189,7 +194,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Boost Deposit is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.boostPoolService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshCoins = fresh.cantonCoinTokens || [];
       const coin = freshCoins[selectedAssetIdx] || freshCoins[0];
@@ -216,7 +222,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Boost Withdraw is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.boostPoolService;
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshLP = fresh.boostLPTokens || [];
       const lp = freshLP[selectedAssetIdx] || freshLP[0];

@@ -131,13 +131,22 @@ export interface CantonBalancesData {
 const PARTY_STORAGE_KEY = "minted.canton.party";
 
 function resolvePartyOverride(explicitParty?: string | null): string | undefined {
+  // Explicit null means "use server default/operator party" and bypass
+  // local wallet/storage overrides.
+  if (explicitParty === null) {
+    return undefined;
+  }
+
   const normalizedExplicit = normalizeCantonParty(explicitParty);
   if (normalizedExplicit && normalizedExplicit.trim()) {
     return normalizedExplicit.trim();
   }
-  if (typeof window === "undefined") {
+
+  // Only fall back to local storage when no explicit party argument was provided.
+  if (explicitParty !== undefined || typeof window === "undefined") {
     return undefined;
   }
+
   const stored = window.localStorage.getItem(PARTY_STORAGE_KEY);
   const normalizedStored = normalizeCantonParty(stored);
   if (normalizedStored && normalizedStored.trim()) {
@@ -160,7 +169,10 @@ export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
 
   const refresh = useCallback(async () => {
     try {
-      const selectedParty = party ?? loopWallet.partyId ?? null;
+      // If caller passes `party` (including null), honor it exactly.
+      // If caller omits `party`, default to connected wallet party.
+      const selectedParty =
+        party !== undefined ? party : (loopWallet.partyId ?? undefined);
       const resp = await fetch(buildBalancesUrl(selectedParty));
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: "Unknown error" }));

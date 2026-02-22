@@ -87,7 +87,7 @@ export function CantonBorrow() {
   const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
 
   const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
-  const { data: operatorData } = useCantonLedger(15_000);
+  const { data: operatorData } = useCantonLedger(15_000, null);
 
   const [action, setAction] = useState<ActionTab>("deposit");
   const [amount, setAmount] = useState("");
@@ -218,7 +218,7 @@ export function CantonBorrow() {
 
     try {
       const fresh = await fetchFreshBalances(activeParty);
-      const operatorFresh = await fetchFreshBalances().catch(() => null);
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
       const serviceCid =
         fresh.lendingService?.contractId ||
         operatorFresh?.lendingService?.contractId ||
