@@ -15,7 +15,7 @@ describe("parseRecipientPartyAliases", () => {
     const map = parseRecipientPartyAliases(
       JSON.stringify({
         "dde6467edc610708573d717a53c7c396::12200d9a833bb01839aa0c236eb5fe18008bd21fa980873a0c463ba1866506b4af9e":
-          "minted-user-7de39963::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4",
+          "minted-user-7de39963::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9",
       }),
       "CANTON_RECIPIENT_PARTY_ALIASES"
     );
@@ -49,7 +49,7 @@ describe("resolveRecipientParty", () => {
   const foreign =
     "dde6467edc610708573d717a53c7c396::12200d9a833bb01839aa0c236eb5fe18008bd21fa980873a0c463ba1866506b4af9e";
   const local =
-    "minted-user-7de39963::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+    "minted-user-7de39963::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 
   it("returns direct alias when full party is mapped", () => {
     const out = resolveRecipientParty(foreign, { [foreign]: local });
@@ -65,7 +65,7 @@ describe("resolveRecipientParty", () => {
 
   it("prefers direct alias over hint alias", () => {
     const directLocal =
-      "minted-user-direct::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+      "minted-user-direct::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
     const out = resolveRecipientParty(foreign, {
       [foreign]: directLocal,
       dde6467edc610708573d717a53c7c396: local,
@@ -110,7 +110,7 @@ describe("parseRecipientEthAddresses", () => {
 
 describe("resolveRecipientEthAddress", () => {
   const fullParty =
-    "minted-user-33f97321::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+    "minted-user-33f97321::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
   const mapped = "0x33f97321214b5B8443f6212a05836C8fFE42DdA5";
 
   it("returns direct mapping when full party is present", () => {

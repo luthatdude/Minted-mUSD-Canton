@@ -36,7 +36,7 @@ async function main() {
     baseUrl,
     token,
     userId: "administrator",
-    actAs: "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4",
+    actAs: "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9",
   });
 
   // 1. List users
