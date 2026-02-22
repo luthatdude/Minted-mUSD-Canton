@@ -2008,7 +2008,8 @@ class RelayService {
       // IMPORTANT: Use a delimiter AFTER the nonce to prevent hash collisions.
       // Previously `bridge-in-nonce-1` padded === `bridge-in-nonce-10` padded (same string!)
       const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
-      const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}`;
+      const agreementUri =
+        `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}:recipient:${userParty}`;
 
       // Check for existing CantonMUSD with this agreement hash (idempotency)
       // Primary idempotency key is agreementUri (bridge-address scoped).
@@ -2330,6 +2331,31 @@ class RelayService {
     }
   }
 
+  private async resolveRecipientFromEthereumNonce(nonce: number): Promise<string | null> {
+    if (!this.bridgeContract) return null;
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const lookback = Math.min(this.config.replayLookbackBlocks, currentBlock);
+    const fromBlock = Math.max(0, currentBlock - lookback);
+    const filter = this.bridgeContract.filters.BridgeToCantonRequested();
+    const chunkSize = 10000;
+
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const events = await this.bridgeContract.queryFilter(filter, start, end);
+      for (const event of events) {
+        const args = (event as ethers.EventLog).args;
+        if (!args || Number(args.nonce) !== Number(nonce)) continue;
+
+        const recipient = String(args.cantonRecipient || "");
+        if (!recipient) continue;
+        return resolveRecipientParty(recipient, this.config.recipientPartyAliases);
+      }
+    }
+
+    return null;
+  }
+
   private async recoverOrphanedMusd(): Promise<void> {
     let operatorMusd: ActiveContract<any>[] = [];
     try {
@@ -2366,7 +2392,10 @@ class RelayService {
     try {
       requests = await this.canton.queryContracts(
         TEMPLATES.BridgeInRequest,
-        (p: any) => p.status === "pending" || p.status === "completed"
+        (p: any) =>
+          p.status === "pending" ||
+          p.status === "completed" ||
+          p.status === "cancelled"
       );
     } catch (error: any) {
       console.warn(`[Relay] Orphan recovery could not query BridgeInRequests: ${error?.message || error}`);
@@ -2397,12 +2426,46 @@ class RelayService {
     let recoveredCount = 0;
     for (const orphan of bridgeInOrphans) {
       const agreementUri = String(orphan.payload?.agreementUri || "");
-      const nonceMatch = agreementUri.match(/:nonce:(\d+)$/);
+      const nonceMatch = agreementUri.match(/:nonce:(\d+)(?::recipient:.*)?$/);
       if (!nonceMatch) continue;
 
       const nonce = Number(nonceMatch[1]);
-      const userParty = nonceToUser.get(nonce);
-      if (!userParty || userParty === this.config.cantonParty) continue;
+      let userParty = nonceToUser.get(nonce);
+
+      if (!userParty) {
+        const recipientMatch = agreementUri.match(/:recipient:(.+)$/);
+        if (recipientMatch && recipientMatch[1]) {
+          let decoded = recipientMatch[1];
+          try {
+            decoded = decodeURIComponent(decoded);
+          } catch {
+            // best-effort decode; keep raw when not URI-encoded
+          }
+          userParty = resolveRecipientParty(decoded, this.config.recipientPartyAliases);
+        }
+      }
+
+      if (!userParty) {
+        try {
+          const resolved = await this.resolveRecipientFromEthereumNonce(nonce);
+          if (resolved) userParty = resolved;
+        } catch (ethErr: any) {
+          console.warn(
+            `[Relay] Orphan nonce ${nonce}: Ethereum event scan failed: ${ethErr?.message || ethErr}`
+          );
+        }
+      }
+
+      if (!userParty || userParty === this.config.cantonParty) {
+        if (!userParty) {
+          console.warn(
+            `[Relay] Orphan CantonMUSD nonce ${nonce}: no recipient resolved ` +
+            `(contractId: ${orphan.contractId.slice(0, 20)}...)`
+          );
+          orphanRecoveryTotal.labels("skipped").inc();
+        }
+        continue;
+      }
 
       try {
         const transferResult = await this.canton.exerciseChoice(
