@@ -139,6 +139,16 @@ interface RelayConfig {
   maxRedemptionEthPayoutWei: bigint;
   // Allow relay to self-grant BRIDGE_ROLE if it has DEFAULT_ADMIN_ROLE on mUSD
   autoGrantBridgeRoleForRedemptions: boolean;
+  // Auto-bootstrap required Canton contracts on startup (dev/test convenience).
+  bootstrapLedgerContracts: boolean;
+  // Regulator party used to create ComplianceRegistry (must differ from operator).
+  cantonRegulatorParty: string;
+  // Bootstrap defaults for CantonDirectMintService.
+  cantonDirectMintServiceName: string;
+  cantonUsdcIssuer: string;
+  cantonUsdcxIssuer: string;
+  cantonMpaHash: string;
+  cantonMpaUri: string;
 }
 
 const DEFAULT_CONFIG: RelayConfig = {
@@ -256,6 +266,18 @@ const DEFAULT_CONFIG: RelayConfig = {
     }
     return process.env.NODE_ENV !== "production";
   })(),
+  bootstrapLedgerContracts: (() => {
+    if (process.env.CANTON_BOOTSTRAP_ENABLED) {
+      return process.env.CANTON_BOOTSTRAP_ENABLED === "true";
+    }
+    return process.env.NODE_ENV !== "production";
+  })(),
+  cantonRegulatorParty: process.env.CANTON_REGULATOR_PARTY || "",
+  cantonDirectMintServiceName: process.env.CANTON_DIRECT_MINT_SERVICE_NAME || "CantonDirectMint",
+  cantonUsdcIssuer: process.env.CANTON_USDC_ISSUER || process.env.CANTON_PARTY || "",
+  cantonUsdcxIssuer: process.env.CANTON_USDCX_ISSUER || process.env.CANTON_PARTY || "",
+  cantonMpaHash: process.env.CANTON_MPA_HASH || "minted:default-mpa:v1",
+  cantonMpaUri: process.env.CANTON_MPA_URI || "https://minted.protocol/legal/mpa-v1",
 };
 
 // ============================================================
@@ -339,6 +361,34 @@ interface ComplianceRegistryPayload {
   blacklisted: unknown;
   frozen: unknown;
   lastUpdated: string;
+}
+
+interface CantonDirectMintServicePayload {
+  operator: string;
+  usdcIssuer: string;
+  usdcxIssuer: string | null;
+  mintFeeBps: number;
+  redeemFeeBps: number;
+  minAmount: string;
+  maxAmount: string;
+  supplyCap: string;
+  currentSupply: string;
+  accumulatedFees: string;
+  paused: boolean;
+  validators: string[];
+  targetChainId: number;
+  targetTreasury: string;
+  nextNonce: number;
+  dailyMintLimit: string;
+  dailyMinted: string;
+  dailyBurned: string;
+  lastRateLimitReset: string;
+  complianceRegistryCid: string;
+  mpaHash: string;
+  mpaUri: string;
+  authorizedMinters: string[];
+  cantonCoinPrice: string | null;
+  serviceName: string;
 }
 
 // ============================================================
@@ -690,6 +740,200 @@ class RelayService {
     }
   }
 
+  private cantonBaseUrl(): string {
+    const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
+    return `${protocol}://${this.config.cantonHost}:${this.config.cantonPort}`;
+  }
+
+  private createCantonClientForParty(party: string, readAs: string[] = []): CantonClient {
+    return new CantonClient({
+      baseUrl: this.cantonBaseUrl(),
+      token: this.config.cantonToken,
+      userId: process.env.CANTON_USER_ID || "administrator",
+      actAs: party,
+      readAs,
+      timeoutMs: 30_000,
+      defaultPackageId: process.env.CANTON_PACKAGE_ID || "",
+    });
+  }
+
+  /**
+   * Ensure required bootstrap contracts exist on Canton.
+   * Safe to call every startup; creation is query-first and idempotent.
+   */
+  private async ensureLedgerContracts(): Promise<void> {
+    if (!this.config.bootstrapLedgerContracts) {
+      console.log("[Relay] Canton bootstrap disabled (CANTON_BOOTSTRAP_ENABLED=false)");
+      return;
+    }
+
+    let complianceCid = await this.ensureComplianceRegistry();
+
+    // Re-query in case registry already existed but was invisible during create race.
+    if (!complianceCid) {
+      try {
+        const existing = await this.canton.queryContracts<ComplianceRegistryPayload>(
+          TEMPLATES.ComplianceRegistry,
+          (p) => p.operator === this.config.cantonParty
+        );
+        if (existing.length > 0) {
+          complianceCid = existing[0].contractId;
+        }
+      } catch {
+        // Best-effort only.
+      }
+    }
+
+    await this.ensureDirectMintService(complianceCid);
+  }
+
+  private async ensureComplianceRegistry(): Promise<string | null> {
+    try {
+      const existing = await this.canton.queryContracts<ComplianceRegistryPayload>(
+        TEMPLATES.ComplianceRegistry,
+        (p) => p.operator === this.config.cantonParty
+      );
+      if (existing.length > 0) {
+        console.log(
+          `[Relay] ComplianceRegistry present (${existing[0].contractId.slice(0, 16)}...)`
+        );
+        return existing[0].contractId;
+      }
+    } catch (err: any) {
+      console.warn(
+        `[Relay] ComplianceRegistry pre-check failed: ${err?.message?.slice(0, 120)}`
+      );
+    }
+
+    const regulator = this.config.cantonRegulatorParty;
+    if (!regulator) {
+      console.warn(
+        "[Relay] Cannot bootstrap ComplianceRegistry: CANTON_REGULATOR_PARTY not set"
+      );
+      return null;
+    }
+    if (regulator === this.config.cantonParty) {
+      console.warn(
+        "[Relay] Cannot bootstrap ComplianceRegistry: regulator must differ from operator"
+      );
+      return null;
+    }
+
+    try {
+      const regulatorClient = this.createCantonClientForParty(regulator, [this.config.cantonParty]);
+      const payload = {
+        regulator,
+        operator: this.config.cantonParty,
+        blacklisted: { map: [] as Array<unknown> },
+        frozen: { map: [] as Array<unknown> },
+        lastUpdated: new Date().toISOString(),
+      };
+      await regulatorClient.createContract(TEMPLATES.ComplianceRegistry, payload);
+
+      const created = await this.canton.queryContracts<ComplianceRegistryPayload>(
+        TEMPLATES.ComplianceRegistry,
+        (p) => p.operator === this.config.cantonParty
+      );
+      if (created.length === 0) {
+        console.warn("[Relay] ComplianceRegistry create submitted but contract not found in ACS");
+        return null;
+      }
+
+      console.log(
+        `[Relay] ✅ Bootstrapped ComplianceRegistry (${created[0].contractId.slice(0, 16)}...)`
+      );
+      return created[0].contractId;
+    } catch (err: any) {
+      console.warn(
+        `[Relay] ComplianceRegistry bootstrap failed: ${err?.message?.slice(0, 160)}`
+      );
+      return null;
+    }
+  }
+
+  private async ensureDirectMintService(complianceCid: string | null): Promise<void> {
+    try {
+      const existing = await this.canton.queryContracts<CantonDirectMintServicePayload>(
+        TEMPLATES.CantonDirectMintService,
+        (p) => p.operator === this.config.cantonParty
+      );
+      if (existing.length > 0) {
+        console.log(
+          `[Relay] CantonDirectMintService present (${existing[0].contractId.slice(0, 16)}...)`
+        );
+        return;
+      }
+    } catch (err: any) {
+      console.warn(
+        `[Relay] CantonDirectMintService pre-check failed: ${err?.message?.slice(0, 120)}`
+      );
+    }
+
+    if (!complianceCid) {
+      console.warn("[Relay] Skipping CantonDirectMintService bootstrap: ComplianceRegistry missing");
+      return;
+    }
+
+    let chainId = 1;
+    try {
+      chainId = Number((await this.provider.getNetwork()).chainId);
+    } catch {
+      // Keep default for bootstrap fallback.
+    }
+
+    const validatorParties = Object.keys(this.config.validatorAddresses);
+    if (validatorParties.length === 0) {
+      validatorParties.push(this.config.cantonParty);
+    }
+
+    const payload: CantonDirectMintServicePayload = {
+      operator: this.config.cantonParty,
+      usdcIssuer: this.config.cantonUsdcIssuer || this.config.cantonParty,
+      usdcxIssuer: this.config.cantonUsdcxIssuer || null,
+      mintFeeBps: 30,
+      redeemFeeBps: 30,
+      minAmount: "1.0",
+      maxAmount: "1000000.0",
+      supplyCap: "10000000.0",
+      currentSupply: "0.0",
+      accumulatedFees: "0.0",
+      paused: false,
+      validators: validatorParties,
+      targetChainId: chainId,
+      targetTreasury: this.config.treasuryAddress,
+      nextNonce: 1,
+      dailyMintLimit: "5000000.0",
+      dailyMinted: "0.0",
+      dailyBurned: "0.0",
+      lastRateLimitReset: new Date().toISOString(),
+      complianceRegistryCid: complianceCid,
+      mpaHash: this.config.cantonMpaHash,
+      mpaUri: this.config.cantonMpaUri,
+      authorizedMinters: [],
+      cantonCoinPrice: null,
+      serviceName: this.config.cantonDirectMintServiceName,
+    };
+
+    try {
+      await this.canton.createContract(TEMPLATES.CantonDirectMintService, payload);
+      const created = await this.canton.queryContracts<CantonDirectMintServicePayload>(
+        TEMPLATES.CantonDirectMintService,
+        (p) => p.operator === this.config.cantonParty
+      );
+      if (created.length > 0) {
+        console.log(
+          `[Relay] ✅ Bootstrapped CantonDirectMintService (${created[0].contractId.slice(0, 16)}...)`
+        );
+      } else {
+        console.warn("[Relay] CantonDirectMintService create submitted but contract not found in ACS");
+      }
+    } catch (err: any) {
+      console.warn(
+        `[Relay] CantonDirectMintService bootstrap failed: ${err?.message?.slice(0, 160)}`
+      );
+    }
+  }
+
   /**
    * Initialize Ethereum signer (KMS or raw key)
    * Must be called before start()
@@ -893,6 +1137,9 @@ class RelayService {
     
     // Validate validator addresses against on-chain roles before starting
     await this.validateValidatorAddresses();
+
+    // Ensure baseline Canton contracts exist (idempotent, query-first).
+    await this.ensureLedgerContracts();
     
     this.isRunning = true;
 
@@ -1874,7 +2121,7 @@ class RelayService {
           );
         }
 
-        const payload: Record<string, unknown> = {
+        const basePayload: Record<string, unknown> = {
           operator: this.config.cantonParty,
           user: resolvedRecipient,
           amount: ethers.formatEther(amount),
@@ -1883,11 +2130,15 @@ class RelayService {
           nonce: Number(nonce),
           createdAt: new Date(Number(timestamp) * 1000).toISOString(),
           status: "pending",
-          // NOTE: The deployed DAML package does not include validators/requiredSignatures.
-          // These fields exist in the local V3.daml source but have not been redeployed.
-          // When the DAML package is recompiled and uploaded, re-enable these:
-          // validators: Object.keys(this.config.validatorAddresses),
-          // requiredSignatures: Math.max(1, Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)),
+        };
+        const payloadWithValidators: Record<string, unknown> = {
+          ...basePayload,
+          // Attestation-enabled DAML variant fields.
+          validators: Object.keys(this.config.validatorAddresses),
+          requiredSignatures: Math.max(
+            1,
+            Math.ceil(Object.keys(this.config.validatorAddresses).length / 2)
+          ),
         };
 
         const candidateKeys = this.buildBridgeInRequestCandidateKeys(
@@ -1907,36 +2158,75 @@ class RelayService {
         }
 
         try {
-          // Validate payload against DAML ensure constraints before submission
-          validateCreatePayload("BridgeInRequest", payload);
-          // Create BridgeInRequest on Canton with the original user party
-          await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
+          // Different environments can run different BridgeInRequest shapes.
+          // Select a candidate payload based on local schema validation first,
+          // then retry on Canton INVALID_ARGUMENT shape mismatch if needed.
+          let createPayload = basePayload;
+          try {
+            validateCreatePayload("BridgeInRequest", basePayload);
+          } catch (schemaErr: any) {
+            const msg = schemaErr?.message || String(schemaErr || "");
+            if (msg.includes("validators") || msg.includes("requiredSignatures")) {
+              createPayload = payloadWithValidators;
+            } else {
+              throw schemaErr;
+            }
+          }
+
+          const tryCreate = async (p: Record<string, unknown>) => {
+            await this.canton.createContract(TEMPLATES.BridgeInRequest, p);
+            return p;
+          };
+
+          let createdWith = createPayload;
+          try {
+            createdWith = await tryCreate(createPayload);
+          } catch (createErr: any) {
+            const msg = createErr?.message || String(createErr || "");
+            const usedExtended = createPayload === payloadWithValidators;
+            const hasUnexpectedExtendedFields =
+              msg.includes("INVALID_ARGUMENT") &&
+              (msg.includes("validators") || msg.includes("requiredSignatures") || msg.includes("requiredSignaturesvalidators"));
+            const missingExtendedFields =
+              msg.includes("INVALID_ARGUMENT") &&
+              msg.includes("Missing fields") &&
+              (msg.includes("validators") || msg.includes("requiredSignatures"));
+
+            if (usedExtended && hasUnexpectedExtendedFields) {
+              console.warn(
+                `[Relay] BridgeInRequest extended fields not supported on Canton; retrying legacy payload for bridge-out #${nonce}`
+              );
+              createdWith = await tryCreate(basePayload);
+            } else if (!usedExtended && missingExtendedFields) {
+              console.warn(
+                `[Relay] BridgeInRequest requires validator metadata; retrying extended payload for bridge-out #${nonce}`
+              );
+              createdWith = await tryCreate(payloadWithValidators);
+            } else {
+              throw createErr;
+            }
+          }
+
           console.log(`[Relay] Created BridgeInRequest on Canton for bridge-out #${nonce}`);
           existingBridgeInDedupKeys.add(
             this.buildBridgeInRequestDedupKey(
               Number(nonce),
               amount,
               Number(timestamp),
-              String(payload.user)
+              String(createdWith.user)
             )
           );
         } catch (innerError: any) {
           const errMsg = innerError?.message || "";
-          // If user party is unknown on this participant, fallback to operator as user
+          // If user party is unknown on this participant, defer this bridge-out
+          // rather than minting to operator. This preserves user ownership semantics
+          // and allows safe retry once the party is onboarded.
           if (errMsg.includes("UNKNOWN_INFORMEES") || errMsg.includes("NO_SYNCHRONIZER") || errMsg.includes("PARTY_NOT_KNOWN")) {
-            console.warn(`[Relay] User party not on this participant for bridge-out #${nonce}, using operator as user fallback`);
-            payload.user = this.config.cantonParty;
-            validateCreatePayload("BridgeInRequest", payload);
-            await this.canton.createContract(TEMPLATES.BridgeInRequest, payload);
-            console.log(`[Relay] Created BridgeInRequest (operator-as-user fallback) for bridge-out #${nonce}`);
-            existingBridgeInDedupKeys.add(
-              this.buildBridgeInRequestDedupKey(
-                Number(nonce),
-                amount,
-                Number(timestamp),
-                String(payload.user)
-              )
+            console.warn(
+              `[Relay] User party not hosted on this participant for bridge-out #${nonce} (${resolvedRecipient}). ` +
+              `Deferring until onboarding is complete.`
             );
+            throw new Error(`USER_PARTY_NOT_HOSTED:${resolvedRecipient}`);
           } else {
             throw innerError; // Re-throw non-party errors
           }
@@ -1944,7 +2234,11 @@ class RelayService {
 
         // Step 2: Exercise BridgeIn_Complete to mark as completed
         // Then create CantonMUSD token for the user
-        await this.completeBridgeInAndMintMusd(Number(nonce), ethers.formatEther(amount), String(payload.user));
+        await this.completeBridgeInAndMintMusd(
+          Number(nonce),
+          ethers.formatEther(amount),
+          String(resolvedRecipient)
+        );
 
         // Mark as processed
         this.processedBridgeOuts.add(requestId);
@@ -2013,8 +2307,8 @@ class RelayService {
       // IMPORTANT: Use a delimiter AFTER the nonce to prevent hash collisions.
       // Previously `bridge-in-nonce-1` padded === `bridge-in-nonce-10` padded (same string!)
       const agreementHash = `bridge-in:nonce:${nonce}:`.padEnd(64, "0");
-      const agreementUri =
-        `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}:recipient:${userParty}`;
+      const encodedRecipient = encodeURIComponent(userParty);
+      const agreementUri = `ethereum:bridge-in:${this.config.bridgeContractAddress}:nonce:${nonce}:recipient:${encodedRecipient}`;
 
       // Check for existing CantonMUSD with this agreement hash (idempotency)
       // Primary idempotency key is agreementUri (bridge-address scoped).

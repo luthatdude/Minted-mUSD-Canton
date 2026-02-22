@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { TxButton } from "@/components/TxButton";
@@ -34,6 +34,12 @@ const COLLATERAL_META: Record<CollateralAsset, { symbol: string; collateralType:
   CTN: { symbol: "Canton Coin", collateralType: "CTN_Coin", priceAliases: ["CTN", "CANTON", "CANTONCOIN", "CANTON COIN"] },
   SMUSD: { symbol: "smUSD", collateralType: "CTN_SMUSD", priceAliases: ["SMUSD", "CTN_SMUSD"] },
   SMUSDE: { symbol: "smUSD-E", collateralType: "CTN_SMUSDE", priceAliases: ["SMUSDE", "SMUSD-E", "CTN_SMUSDE"] },
+};
+
+const COLLATERAL_TYPE_TO_ASSET: Record<string, CollateralAsset> = {
+  CTN_Coin: "CTN",
+  CTN_SMUSD: "SMUSD",
+  CTN_SMUSDE: "SMUSDE",
 };
 
 function fmtAmount(value: number, digits = 2): string {
@@ -81,13 +87,67 @@ function pickEscrowForWithdraw(escrows: EscrowInfo[], collateralType: string, re
   return covering || null;
 }
 
+function resolvePriceFeedCidForCollateralType(
+  collateralType: string,
+  feeds: CantonBalancesData["priceFeeds"] | undefined
+): string | null {
+  if (!feeds || feeds.length === 0) return null;
+
+  const aliasMap = new Map<string, string>();
+  for (const feed of feeds) {
+    aliasMap.set(normalizeKey(feed.asset), feed.contractId);
+  }
+
+  const meta = Object.values(COLLATERAL_META).find((row) => row.collateralType === collateralType);
+  if (!meta) return null;
+
+  for (const alias of meta.priceAliases) {
+    const cid = aliasMap.get(normalizeKey(alias));
+    if (cid) return cid;
+  }
+  return null;
+}
+
+function buildEscrowPriceFeedPairs(
+  escrows: EscrowInfo[],
+  feeds: CantonBalancesData["priceFeeds"] | undefined
+): { escrowCids: string[]; priceFeedCids: string[] } {
+  const escrowCids: string[] = [];
+  const priceFeedCids: string[] = [];
+
+  for (const escrow of escrows) {
+    const priceFeedCid = resolvePriceFeedCidForCollateralType(escrow.collateralType, feeds);
+    if (!priceFeedCid) {
+      throw new Error(`Missing price feed for collateral type ${escrow.collateralType}.`);
+    }
+    escrowCids.push(escrow.contractId);
+    priceFeedCids.push(priceFeedCid);
+  }
+
+  return { escrowCids, priceFeedCids };
+}
+
+function mergePriceFeeds(
+  userView: CantonBalancesData,
+  operatorView: CantonBalancesData | null
+): CantonBalancesData["priceFeeds"] {
+  const byId = new Map<string, CantonBalancesData["priceFeeds"][number]>();
+  for (const feed of operatorView?.priceFeeds || []) {
+    if (feed?.contractId) byId.set(feed.contractId, feed);
+  }
+  for (const feed of userView.priceFeeds || []) {
+    if (feed?.contractId) byId.set(feed.contractId, feed);
+  }
+  return Array.from(byId.values());
+}
+
 export function CantonBorrow() {
   const loopWallet = useLoopWallet();
   const activeParty = loopWallet.partyId || null;
   const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
 
   const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
-  const { data: operatorData } = useCantonLedger(15_000);
+  const { data: operatorData } = useCantonLedger(15_000, null);
 
   const [action, setAction] = useState<ActionTab>("deposit");
   const [amount, setAmount] = useState("");
@@ -150,6 +210,20 @@ export function CantonBorrow() {
   }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
 
   const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
+
+  useEffect(() => {
+    if (action !== "withdraw") return;
+    if (userEscrows.length === 0) return;
+    const selectedType = COLLATERAL_META[collateralAsset].collateralType;
+    const hasSelectedEscrow = userEscrows.some((row) => row.collateralType === selectedType);
+    if (hasSelectedEscrow) return;
+    const fallbackAsset = userEscrows
+      .map((row) => COLLATERAL_TYPE_TO_ASSET[row.collateralType])
+      .find((asset): asset is CollateralAsset => Boolean(asset));
+    if (fallbackAsset && fallbackAsset !== collateralAsset) {
+      setCollateralAsset(fallbackAsset);
+    }
+  }, [action, collateralAsset, userEscrows]);
 
   const outstandingDebt = userDebts.reduce(
     (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
@@ -218,17 +292,13 @@ export function CantonBorrow() {
 
     try {
       const fresh = await fetchFreshBalances(activeParty);
-      const operatorFresh = await fetchFreshBalances().catch(() => null);
+      const operatorFresh = await fetchFreshBalances(null).catch(() => null);
       const serviceCid =
         fresh.lendingService?.contractId ||
         operatorFresh?.lendingService?.contractId ||
         lendingService.contractId;
 
       const freshEscrows = (fresh.escrowPositions || []).filter((row) => row.owner === activeParty);
-      const freshEscrowCids = freshEscrows.map((row) => row.contractId);
-      const priceFeedCids = ((fresh.priceFeeds || []).length > 0 ? fresh.priceFeeds : operatorFresh?.priceFeeds || []).map(
-        (row) => row.contractId
-      );
 
       let choice = "";
       let argument: Record<string, unknown> = {};
@@ -259,19 +329,24 @@ export function CantonBorrow() {
         if (parsedAmount <= 0) {
           throw new Error("Enter a valid borrow amount.");
         }
-        if (freshEscrowCids.length === 0) {
+        if (freshEscrows.length === 0) {
           throw new Error("Deposit collateral first.");
-        }
-        if (priceFeedCids.length === 0) {
-          throw new Error("No price feeds available on Canton.");
         }
 
         await refreshPriceFeeds();
+        const postRefresh = await fetchFreshBalances(activeParty);
+        const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
+        const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
+        if (postRefreshEscrows.length === 0) {
+          throw new Error("Deposit collateral first.");
+        }
+        const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
+        const { escrowCids, priceFeedCids } = buildEscrowPriceFeedPairs(postRefreshEscrows, postRefreshFeeds);
         choice = "Lending_Borrow";
         argument = {
           user: activeParty,
           borrowAmount: parsedAmount.toString(),
-          escrowCids: freshEscrowCids,
+          escrowCids,
           priceFeedCids,
         };
       } else if (action === "repay") {
@@ -288,8 +363,14 @@ export function CantonBorrow() {
           const bTotal = parseFloat(b.debtMusd || "0") + parseFloat(b.interestAccrued || "0");
           return bTotal - aTotal;
         })[0];
+        const selectedDebtTotal =
+          parseFloat(selectedDebt.debtMusd || "0") + parseFloat(selectedDebt.interestAccrued || "0");
+        const targetRepayAmount = Math.min(parsedAmount, selectedDebtTotal);
+        if (!(targetRepayAmount > 0)) {
+          throw new Error("Selected debt is already settled.");
+        }
 
-        const selectedMusd = pickContractForAmount(fresh.tokens || [], parsedAmount);
+        const selectedMusd = pickContractForAmount(fresh.tokens || [], targetRepayAmount);
         if (!selectedMusd) {
           const maxAvailable = (fresh.tokens || []).reduce((max, token) => Math.max(max, parseFloat(token.amount || "0")), 0);
           throw new Error(
@@ -299,31 +380,79 @@ export function CantonBorrow() {
           );
         }
 
+        let repayMusdCid = selectedMusd.contractId;
+        let repayMusdAmount = parseFloat(selectedMusd.amount || "0");
+
+        if (repayMusdAmount > targetRepayAmount + 0.000001) {
+          const splitResp = await cantonExercise(
+            "CantonMUSD",
+            selectedMusd.contractId,
+            "CantonMUSD_Split",
+            { splitAmount: targetRepayAmount.toString() },
+            { party: activeParty }
+          );
+          if (!splitResp.success) {
+            throw new Error(splitResp.error || "Failed to split mUSD token for repayment.");
+          }
+
+          const afterSplit = await fetchFreshBalances(activeParty);
+          const splitTokens = afterSplit.tokens || [];
+          const exact = splitTokens.find(
+            (token) => Math.abs(parseFloat(token.amount || "0") - targetRepayAmount) < 0.000001
+          );
+          const covering = [...splitTokens]
+            .sort((a, b) => parseFloat(a.amount || "0") - parseFloat(b.amount || "0"))
+            .find((token) => parseFloat(token.amount || "0") >= targetRepayAmount);
+          const selectedAfterSplit = exact || covering;
+          if (!selectedAfterSplit) {
+            throw new Error("Unable to select split mUSD token for repayment.");
+          }
+
+          repayMusdCid = selectedAfterSplit.contractId;
+          repayMusdAmount = parseFloat(selectedAfterSplit.amount || "0");
+        }
+
+        if (repayMusdAmount > selectedDebtTotal + 0.000001) {
+          throw new Error(
+            `Repay token amount (${fmtAmount(repayMusdAmount)} mUSD) exceeds debt (${fmtAmount(selectedDebtTotal)} mUSD).`
+          );
+        }
+
         choice = "Lending_Repay";
         argument = {
           user: activeParty,
-          musdCid: selectedMusd.contractId,
+          musdCid: repayMusdCid,
           debtCid: selectedDebt.contractId,
         };
       } else {
         if (parsedAmount <= 0) {
           throw new Error("Enter a valid withdraw amount.");
         }
-        if (priceFeedCids.length === 0) {
-          throw new Error("No price feeds available on Canton.");
-        }
 
         await refreshPriceFeeds();
+        const postRefresh = await fetchFreshBalances(activeParty);
+        const postRefreshOperator = await fetchFreshBalances(null).catch(() => operatorFresh);
 
         const collateralType = COLLATERAL_META[collateralAsset].collateralType;
-        const escrow = pickEscrowForWithdraw(freshEscrows, collateralType, parsedAmount);
+        const postRefreshEscrows = (postRefresh.escrowPositions || []).filter((row) => row.owner === activeParty);
+        const escrow = pickEscrowForWithdraw(postRefreshEscrows, collateralType, parsedAmount);
         if (!escrow) {
-          const sameTypeRows = freshEscrows.filter((row) => row.collateralType === collateralType);
+          const sameTypeRows = postRefreshEscrows.filter((row) => row.collateralType === collateralType);
           const maxAvailable = sameTypeRows.reduce((max, row) => Math.max(max, parseFloat(row.amount || "0")), 0);
+          const availableTypes = Array.from(
+            new Set(
+              postRefreshEscrows
+                .map((row) => COLLATERAL_TYPE_TO_ASSET[row.collateralType])
+                .filter((asset): asset is CollateralAsset => Boolean(asset))
+                .map((asset) => COLLATERAL_META[asset].symbol)
+            )
+          );
           throw new Error(
             maxAvailable > 0
               ? `No ${COLLATERAL_META[collateralAsset].symbol} escrow can cover ${fmtAmount(parsedAmount)}. Largest is ${fmtAmount(maxAvailable)}.`
-              : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
+              : availableTypes.length > 0
+                ? `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
+                : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
           );
         }
 
@@ -335,16 +464,31 @@ export function CantonBorrow() {
           choice = "Lending_WithdrawSMUSDE";
         }
 
+        const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
+        const otherEscrows = postRefreshEscrows.filter((row) => row.contractId !== escrow.contractId);
+        const otherEscrowPairs = buildEscrowPriceFeedPairs(otherEscrows, postRefreshFeeds);
+        const expectedWithdrawFeedCid = resolvePriceFeedCidForCollateralType(collateralType, postRefreshFeeds);
+        if (!expectedWithdrawFeedCid) {
+          throw new Error(`Missing price feed for withdraw collateral type ${collateralType}.`);
+        }
+        const withdrawPriceFeedCids = Array.from(new Set((postRefreshFeeds || []).map((feed) => feed.contractId)));
+        if (!withdrawPriceFeedCids.includes(expectedWithdrawFeedCid)) {
+          throw new Error(
+            `Missing required ${COLLATERAL_META[collateralAsset].symbol} price feed for withdraw health check.`
+          );
+        }
+
         argument = {
           user: activeParty,
           escrowCid: escrow.contractId,
           withdrawAmount: parsedAmount.toString(),
-          otherEscrowCids: freshEscrowCids.filter((cid) => cid !== escrow.contractId),
-          priceFeedCids,
+          otherEscrowCids: otherEscrowPairs.escrowCids,
+          // DAML withdraw checks fetch prices for both remaining positions and the current collateral symbol.
+          priceFeedCids: withdrawPriceFeedCids,
         };
       }
 
-      const resp = await cantonExercise("CantonLendingService", serviceCid, choice, argument, activeParty);
+      const resp = await cantonExercise("CantonLendingService", serviceCid, choice, argument, { party: activeParty });
       if (!resp.success) {
         throw new Error(resp.error || "Canton lending action failed");
       }
