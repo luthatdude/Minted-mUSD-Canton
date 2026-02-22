@@ -1,10 +1,8 @@
 {
   "network": "sepolia",
   "chainId": 11155111,
-  "deployedAt": "2026-02-17",
+  "deployedAt": "2026-02-19",
   "deployer": "0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36",
-  "newDeployer": "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0",
-
   "contracts": {
     "GlobalPauseRegistry": "0x471e9dceB2AB7398b63677C70c6C638c7AEA375F",
     "MintedTimelockController": "0xcF1473dFdBFf5BDAd66730a01316d4A74B2dA410",
@@ -16,10 +14,10 @@
     "BorrowModule": "0x58568ea61d414077eC2260448194D49E792D33Dd",
     "LiquidationEngine": "0x94c09a5087271D48AA81868186417d645135B883",
     "SMUSDPriceAdapter": "0x3e318DE7372e26067729f9b44bba87f2ece59fcA",
-    "DirectMintV2": "0xaA3e42f2AfB5DF83d6a33746c2927bce8B22Bae7",
+    "DirectMintV2": "0xd9D4A044c7032d8e5DA65C508F1d51ccCF557c8a",
     "LeverageVault": "0x3b49d47f9714836F2aF21F13cdF79aafd75f1FE4",
-    "TreasuryV2": "0xf2051bDfc738f638668DF2f8c00d01ba6338C513",
-    "BLEBridgeV9": "0x708957bFfA312D1730BdF87467E695D3a9F26b0f",
+    "TreasuryV2": "0x6218782d1699C9DCA2EB16495c6307C3729cC546",
+    "BLEBridgeV9": "0xF0D3CC638a3aB76683F0aFF675329E96d17bf8a7",
     "DepositRouter": "0x531e95585bcDfcB2303511483F232EEF4a0Cd2de",
     "MockUSDC": "0xA1f4ADf3Ea3dBD0D7FdAC7849a807A3f408D7474",
     "MockUSDT": "0xA0a4FAE8DA7892E216dE610cb2E6e800ffeb51D2",
@@ -27,9 +25,9 @@
     "ETHPool": "0x585169661d4B9689B9077d84Ac34B52fA06Df83B",
     "MockWETH": "0x7999F2894290F2Ce34a508eeff776126D9a7D46e",
     "MockWBTC": "0xC0D0618dDBE7407EBFB12ca7d7cD53e90f5BC29F",
-    "MockSwapRouter": "0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e"
+    "MockSwapRouter": "0x510379a06bBb260E0442BCE7e519Fbf7Dd4ba77e",
+    "BLEBridgeSimple": "0x964799a56182aa884A114eb0Dd38746ddb8aebB7"
   },
-
   "strategies": {
     "PendleMarketSelector": "0x17Fb251e4580891590633848f3ea9d8d99DA77F6",
     "PendleStrategyV2": "0xd0055C2002af04BA0622fFA8284767123e70390f",
@@ -40,7 +38,6 @@
     "EulerV2CrossStableLoopStrategy": "0x38e1D17621f73b7Cf3367C5971e05612673de59d",
     "MetaVault": "0xb35Aced17eF8370cbe720d2B56d2273aB6BB12A6"
   },
-
   "mockInfrastructure": {
     "RLUSD": "0x0C943514Ec5b2C6837B367736952926E8c336ed2",
     "USDS": "0x78A37A9A0fc09dd1fCf8A62f88B9ccA08a88D669",
@@ -59,7 +56,6 @@
     "SkyPSM": "0x3b8d152A3Aec8E3df165FCd1A0608CF6804ca7C3",
     "SUSDS": "0x0C63bc44bcc5Ba5154301d4F68eB109d9e76820C"
   },
-
   "canton": {
     "network": "devnet",
     "participantUrl": "http://localhost:7575",

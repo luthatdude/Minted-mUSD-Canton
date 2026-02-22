@@ -1,6 +1,6 @@
 /**
- * AWS KMS DER-to-RSV Signature Utility - Fixed Version
- * Fixes: T-01 (DER buffer overflow), T-02 (Input validation)
+ * AWS KMS DER-to-RSV Signature Utility
+ * Addresses: T-01 (DER buffer overflow), T-02 (Input validation)
  */
 /// <reference types="node" />
 /**

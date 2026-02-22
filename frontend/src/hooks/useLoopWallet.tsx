@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
+import { normalizeCantonParty } from "@/lib/canton-party";
 
 // Types from Loop SDK
 interface Account {
@@ -227,7 +228,7 @@ export function LoopWalletProvider({
   const value: LoopWalletContextType = {
     isConnected,
     isConnecting,
-    partyId: provider?.party_id || null,
+    partyId: normalizeCantonParty(provider?.party_id || null),
     publicKey: provider?.public_key || null,
     email: provider?.email || null,
     account,
