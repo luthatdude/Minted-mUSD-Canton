@@ -44,8 +44,38 @@ const partyRegistry = new Map<
 
 // ── Canton Admin API helpers ──────────────────────────────────
 const CANTON_ADMIN_URL =
-  process.env.CANTON_ADMIN_URL || "http://localhost:6865";
+  process.env.CANTON_ADMIN_URL ||
+  process.env.CANTON_API_URL ||
+  `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
 const CANTON_ADMIN_TOKEN = process.env.CANTON_ADMIN_TOKEN || "";
+const CANTON_OPERATOR_PARTY =
+  process.env.CANTON_PARTY ||
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+
+function partyHintFromEth(ethAddress: string): string {
+  return `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
+}
+
+function authHeaders(): Record<string, string> {
+  return CANTON_ADMIN_TOKEN
+    ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
+    : {};
+}
+
+async function findPartyByHint(partyHint: string): Promise<string | null> {
+  const resp = await fetch(`${CANTON_ADMIN_URL}/v2/parties`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const parties: Array<{ party?: string }> = data.partyDetails || [];
+  const found = parties.find((p) => typeof p.party === "string" && p.party.startsWith(`${partyHint}::`));
+  return found?.party || null;
+}
 
 /**
  * Allocate a party on the Canton participant via the admin API.
@@ -55,25 +85,31 @@ const CANTON_ADMIN_TOKEN = process.env.CANTON_ADMIN_TOKEN || "";
 async function allocateCantonParty(
   ethAddress: string
 ): Promise<string> {
-  const partyHint = `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
+  const partyHint = partyHintFromEth(ethAddress);
   const displayName = `Minted User ${ethAddress.slice(0, 8)}`;
+
+  // If the party already exists on this participant, reuse it.
+  const existingParty = await findPartyByHint(partyHint);
+  if (existingParty) return existingParty;
 
   try {
     const resp = await fetch(`${CANTON_ADMIN_URL}/v2/parties`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(CANTON_ADMIN_TOKEN
-          ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
-          : {}),
+        ...authHeaders(),
       },
       body: JSON.stringify({
-        party_id_hint: partyHint,
-        display_name: displayName,
-        annotations: {
-          "minted.eth_address": ethAddress,
-          "minted.onboarded_at": new Date().toISOString(),
+        partyIdHint: partyHint,
+        displayName,
+        localMetadata: {
+          resourceVersion: "",
+          annotations: {
+            "minted.eth_address": ethAddress,
+            "minted.onboarded_at": new Date().toISOString(),
+          },
         },
+        identityProviderId: "",
       }),
     });
 
@@ -82,9 +118,9 @@ async function allocateCantonParty(
       console.error(
         `[Onboard] Party allocation failed: ${resp.status} ${errorText}`
       );
-      // Fallback: return a deterministic party ID for development
-      if (process.env.NODE_ENV !== "production") {
-        return `${partyHint}::1220${ethAddress.slice(2, 66).padEnd(64, "0")}`;
+      if (resp.status === 400 && errorText.includes("already exists")) {
+        const existing = await findPartyByHint(partyHint);
+        if (existing) return existing;
       }
       throw new Error(`Party allocation failed: ${resp.status}`);
     }
@@ -93,10 +129,6 @@ async function allocateCantonParty(
     return data.party || data.result?.party || `${partyHint}::unknown`;
   } catch (err) {
     console.error("[Onboard] Canton admin request failed:", err);
-    // Development fallback
-    if (process.env.NODE_ENV !== "production") {
-      return `${partyHint}::1220${ethAddress.slice(2, 66).padEnd(64, "0")}`;
-    }
     throw err;
   }
 }
@@ -109,35 +141,46 @@ async function ensureComplianceEntry(
   cantonParty: string
 ): Promise<string> {
   try {
-    // Query for existing ComplianceRegistry
-    const queryResp = await fetch(`${CANTON_ADMIN_URL}/v2/state/active-contracts`, {
+    const ledgerResp = await fetch(`${CANTON_ADMIN_URL}/v2/state/ledger-end`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeaders(),
+      },
+    });
+    if (!ledgerResp.ok) throw new Error("Unable to query Canton ledger end");
+    const { offset } = await ledgerResp.json();
+
+    const queryResp = await fetch(`${CANTON_ADMIN_URL}/v2/state/active-contracts?limit=200`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(CANTON_ADMIN_TOKEN
-          ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
-          : {}),
+        ...authHeaders(),
       },
       body: JSON.stringify({
         filter: {
-          templates: [
-            {
-              module_name: "Compliance",
-              entity_name: "ComplianceRegistry",
+          filtersByParty: {
+            [CANTON_OPERATOR_PARTY]: {
+              identifierFilter: {
+                wildcardFilter: {},
+              },
             },
-          ],
+          },
         },
+        activeAtOffset: offset,
       }),
     });
 
     if (queryResp.ok) {
-      const data = await queryResp.json();
-      const contracts = data.result || data.active_contracts || [];
-      if (contracts.length > 0) {
-        const contractId =
-          contracts[0].contract_id || contracts[0].contractId || "compliance-ok";
-        // Validate the party is not blacklisted by checking the registry
-        return contractId;
+      const entries = await queryResp.json();
+      for (const entry of entries as any[]) {
+        const created = entry?.contractEntry?.JsActiveContract?.createdEvent;
+        if (!created) continue;
+        const templateId = String(created.templateId || "");
+        const entity = templateId.split(":").pop();
+        if (entity === "ComplianceRegistry") {
+          return created.contractId || "compliance-ok";
+        }
       }
     }
 
@@ -172,7 +215,18 @@ export default async function handler(
       return res.status(400).json({ error: "Invalid Ethereum address" });
     }
 
-    const entry = partyRegistry.get(ethAddress);
+    let entry = partyRegistry.get(ethAddress);
+    if (!entry) {
+      const existingParty = await findPartyByHint(partyHintFromEth(ethAddress));
+      if (existingParty) {
+        entry = {
+          cantonParty: existingParty,
+          kycStatus: "approved",
+          complianceCid: "compliance-existing",
+        };
+        partyRegistry.set(ethAddress, entry);
+      }
+    }
 
     return res.status(200).json({
       registered: !!entry,
@@ -196,6 +250,21 @@ export default async function handler(
         success: true,
         cantonParty: existing.cantonParty,
         complianceContractId: existing.complianceCid,
+      });
+    }
+
+    const existingParty = await findPartyByHint(partyHintFromEth(ethAddress));
+    if (existingParty) {
+      const complianceCid = await ensureComplianceEntry(existingParty);
+      partyRegistry.set(ethAddress.toLowerCase(), {
+        cantonParty: existingParty,
+        kycStatus: "approved",
+        complianceCid,
+      });
+      return res.status(200).json({
+        success: true,
+        cantonParty: existingParty,
+        complianceContractId: complianceCid,
       });
     }
 
