@@ -14,7 +14,6 @@ import { BorrowPage } from "./BorrowPage";
 import { BridgePage } from "./BridgePage";
 import { AdminPage } from "./AdminPage";
 import { PointsPage } from "./PointsPage";
-import { FaucetPage } from "./FaucetPage";
 
 // Canton pages
 import { CantonDashboard } from "@/components/canton/CantonDashboard";
@@ -62,8 +61,6 @@ export default function Home() {
           return <CantonBridge />;
         case "admin":
           return <CantonAdmin />;
-        case "faucet":
-          return <FaucetPage />;
         default:
           return <CantonDashboard />;
       }
@@ -85,8 +82,6 @@ export default function Home() {
         return <PointsPage />;
       case "admin":
         return <AdminPage />;
-      case "faucet":
-        return <FaucetPage />;
       default:
         return <DashboardPage />;
     }
@@ -97,12 +92,15 @@ export default function Home() {
       address={wallet.address}
       onConnect={() => wallet.connectMetaMask()}
       onDisconnect={() => wallet.disconnect()}
-      onCantonDisconnect={loopWallet.disconnect ?? (() => {})}
+      isEthConnecting={wallet.isConnecting}
       activePage={page}
       onNavigate={handleNavigate}
       chain={chainState.chain}
       onToggleChain={chainState.toggle}
       cantonParty={loopWallet.partyId}
+      onCantonConnect={() => loopWallet.connect()}
+      onCantonDisconnect={() => loopWallet.disconnect()}
+      isCantonConnecting={loopWallet.isConnecting}
     >
       {wallet.error && chainState.chain === "ethereum" && (
         <div className="mb-6 rounded-lg border border-red-800 bg-red-900/20 p-4 text-sm text-red-400">
