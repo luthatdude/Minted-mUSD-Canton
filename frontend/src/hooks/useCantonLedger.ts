@@ -133,6 +133,15 @@ function partyQueryParam(party?: string | null): string {
   return `?party=${encodeURIComponent(normalized.trim())}`;
 }
 
+type PartyArg = string | null | { party?: string | null } | undefined;
+
+function resolvePartyArg(input?: PartyArg): string | null {
+  if (input && typeof input === "object" && "party" in input) {
+    return normalizeCantonParty(input.party ?? null);
+  }
+  return normalizeCantonParty(input ?? null);
+}
+
 export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
   const effectiveParty = normalizeCantonParty(party);
   const [data, setData] = useState<CantonBalancesData | null>(null);
@@ -178,9 +187,9 @@ export async function cantonExercise(
   contractId: string,
   choice: string,
   argument: Record<string, unknown>,
-  party?: string | null
+  partyOrOptions?: PartyArg
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const effectiveParty = normalizeCantonParty(party);
+  const effectiveParty = resolvePartyArg(partyOrOptions);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -232,9 +241,9 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
 export async function cantonCreate(
   templateId: string,
   payload: Record<string, unknown>,
-  party?: string | null
+  partyOrOptions?: PartyArg
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const effectiveParty = normalizeCantonParty(party);
+  const effectiveParty = resolvePartyArg(partyOrOptions);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
