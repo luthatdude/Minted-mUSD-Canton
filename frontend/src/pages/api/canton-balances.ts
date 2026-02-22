@@ -15,7 +15,37 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
+
+function parseRecipientAliasMap(): Record<string, string> {
+  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
+  try {
+    const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([from, to]) =>
+          typeof from === "string" &&
+          from.trim().length > 0 &&
+          typeof to === "string" &&
+          to.trim().length > 0
+      )
+    ) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
+
+function resolveRequestedParty(req: NextApiRequest): string {
+  const requested = typeof req.query.party === "string" ? req.query.party.trim() : "";
+  if (requested && requested.includes("::")) {
+    return RECIPIENT_ALIAS_MAP[requested] || requested;
+  }
+  return CANTON_PARTY;
+}
 
 interface CantonMUSDToken {
   contractId: string;
@@ -166,13 +196,14 @@ export default async function handler(
   }
 
   try {
+    const effectiveParty = resolveRequestedParty(req);
     // 1. Get current ledger offset
     const { offset } = await cantonRequest<{ offset: number }>("GET", "/v2/state/ledger-end");
 
     // 2. Query all contracts visible to our party
     const filter = {
       filtersByParty: {
-        [CANTON_PARTY]: {
+        [effectiveParty]: {
           identifierFilter: {
             wildcardFilter: {},
           },
@@ -250,7 +281,11 @@ export default async function handler(
           lastNonce: parseInt(String(p.lastNonce || "0"), 10),
         };
       } else if (entityName === "BridgeInRequest") {
-        pendingBridgeIns++;
+        const p = evt.createArgument;
+        const status = String(p.status || "").toLowerCase();
+        if (status === "pending") {
+          pendingBridgeIns++;
+        }
       } else if (entityName === "MUSDSupplyService") {
         supplyService = true;
       } else if (entityName === "CantonStakingService") {
@@ -434,6 +469,76 @@ export default async function handler(
       }
     }
 
+    // Some service contracts (for example CantonDirectMintService) may not be
+    // directly visible to end-user parties even though they are operational.
+    // In that case, fall back to the operator party view for service discovery.
+    if (
+      effectiveParty !== CANTON_PARTY &&
+      (!directMintService || !bridgeService || !supplyService)
+    ) {
+      try {
+        const operatorFilter = {
+          filtersByParty: {
+            [CANTON_PARTY]: {
+              identifierFilter: {
+                wildcardFilter: {},
+              },
+            },
+          },
+        };
+
+        const operatorEntries = await cantonRequest<RawEntry[]>("POST", "/v2/state/active-contracts", {
+          filter: operatorFilter,
+          activeAtOffset: offset,
+        });
+
+        for (const entry of operatorEntries) {
+          const ac = entry.contractEntry?.JsActiveContract;
+          if (!ac) continue;
+          const evt = ac.createdEvent;
+          const tplId = evt.templateId;
+          const parts = tplId.split(":");
+          const entityName = parts[parts.length - 1] || "";
+
+          if (!bridgeService && entityName === "BridgeService") {
+            const p = evt.createArgument;
+            bridgeService = {
+              contractId: evt.contractId,
+              operator: (p.operator as string) || "",
+              lastNonce: parseInt(String(p.lastNonce || "0"), 10),
+            };
+          } else if (!supplyService && entityName === "MUSDSupplyService") {
+            supplyService = true;
+          } else if (entityName === "CantonDirectMintService") {
+            const p = evt.createArgument;
+            const isPaused = p.paused === true || p.paused === "True";
+            const compCid = (p.complianceRegistryCid as string) || "";
+            const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+            const candidate = {
+              contractId: evt.contractId,
+              paused: isPaused,
+              serviceName: (p.serviceName as string) || "",
+              hasValidCompliance,
+            };
+            if (
+              !directMintService ||
+              (hasValidCompliance && !directMintService.hasValidCompliance) ||
+              (hasValidCompliance === directMintService.hasValidCompliance &&
+                !isPaused &&
+                directMintService.paused)
+            ) {
+              directMintService = candidate;
+            }
+          }
+        }
+      } catch (fallbackErr) {
+        console.warn(
+          "Canton balances service fallback failed:",
+          (fallbackErr as Error)?.message || fallbackErr
+        );
+      }
+    }
+
     // Sort tokens by nonce
     tokens.sort((a, b) => a.nonce - b.nonce);
 
@@ -475,7 +580,7 @@ export default async function handler(
       escrowPositions,
       debtPositions,
       ledgerOffset: offset,
-      party: CANTON_PARTY,
+      party: effectiveParty,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 /**
  * Shared hook to fetch Canton mUSD balances from the server-side API route.
@@ -126,14 +127,32 @@ export interface CantonBalancesData {
   timestamp: string;
 }
 
+const PARTY_STORAGE_KEY = "minted.canton.party";
+
+function resolvePartyOverride(explicitParty?: string): string | undefined {
+  if (explicitParty && explicitParty.includes("::")) {
+    return explicitParty;
+  }
+  if (typeof window === "undefined") return undefined;
+  const stored = window.localStorage.getItem(PARTY_STORAGE_KEY);
+  return stored && stored.includes("::") ? stored : undefined;
+}
+
+function buildBalancesUrl(explicitParty?: string): string {
+  const party = resolvePartyOverride(explicitParty);
+  if (!party) return "/api/canton-balances";
+  return `/api/canton-balances?party=${encodeURIComponent(party)}`;
+}
+
 export function useCantonLedger(autoRefreshMs = 15_000) {
+  const loopWallet = useLoopWallet();
   const [data, setData] = useState<CantonBalancesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const resp = await fetch("/api/canton-balances");
+      const resp = await fetch(buildBalancesUrl(loopWallet.partyId || undefined));
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: "Unknown error" }));
         throw new Error(err.error || `HTTP ${resp.status}`);
@@ -146,7 +165,16 @@ export function useCantonLedger(autoRefreshMs = 15_000) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loopWallet.partyId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (loopWallet.partyId && loopWallet.partyId.includes("::")) {
+      window.localStorage.setItem(PARTY_STORAGE_KEY, loopWallet.partyId);
+    } else {
+      window.localStorage.removeItem(PARTY_STORAGE_KEY);
+    }
+  }, [loopWallet.partyId]);
 
   useEffect(() => {
     refresh();
@@ -169,12 +197,14 @@ export async function cantonExercise(
   templateId: string,
   contractId: string,
   choice: string,
-  argument: Record<string, unknown>
+  argument: Record<string, unknown>,
+  options?: { party?: string }
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  const party = resolvePartyOverride(options?.party);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ templateId, contractId, choice, argument }),
+    body: JSON.stringify({ templateId, contractId, choice, argument, party }),
   });
   // Handle non-JSON responses (e.g. Next.js error pages returning HTML)
   const contentType = resp.headers.get("content-type") || "";
@@ -189,8 +219,8 @@ export async function cantonExercise(
  * Fetch fresh balances data inline (not through React state).
  * Use this before exercising consuming choices to ensure the CID is current.
  */
-export async function fetchFreshBalances(): Promise<CantonBalancesData> {
-  const resp = await fetch("/api/canton-balances");
+export async function fetchFreshBalances(party?: string): Promise<CantonBalancesData> {
+  const resp = await fetch(buildBalancesUrl(party));
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: "Unknown error" }));
     throw new Error(err.error || `HTTP ${resp.status}`);
@@ -220,12 +250,14 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
  */
 export async function cantonCreate(
   templateId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  options?: { party?: string }
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
+  const party = resolvePartyOverride(options?.party);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "create", templateId, payload }),
+    body: JSON.stringify({ action: "create", templateId, payload, party }),
   });
   return resp.json();
 }

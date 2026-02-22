@@ -729,6 +729,7 @@ export const TEMPLATES = {
   ComplianceRegistry: { moduleName: "Compliance", entityName: "ComplianceRegistry" } as TemplateId,
   // Standalone module bridge-out requests (from CantonDirectMint USDC/USDCx minting)
   StandaloneBridgeOutRequest: { moduleName: "CantonDirectMint", entityName: "BridgeOutRequest" } as TemplateId,
+  CantonDirectMintService: { moduleName: "CantonDirectMint", entityName: "CantonDirectMintService" } as TemplateId,
   // Standalone module redemption requests (mUSD burned; Canton USDC owed)
   RedemptionRequest: { moduleName: "CantonDirectMint", entityName: "RedemptionRequest" } as TemplateId,
   // On-ledger marker for Ethereum-side redemption settlement idempotency
