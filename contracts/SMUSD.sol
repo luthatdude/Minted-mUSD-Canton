@@ -80,9 +80,11 @@ contract SMUSD is ERC4626, AccessControl, ReentrancyGuard, Pausable {
     event TreasuryUpdated(address indexed oldTreasury, address indexed newTreasury);
     event InterestReceived(address indexed from, uint256 amount, uint256 totalReceived);
 
-    constructor(IERC20 _musd) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
+    constructor(IERC20 _musd, address _globalPauseRegistry) ERC4626(_musd) ERC20("Staked mUSD", "smUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(PAUSER_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
+        globalPauseRegistry = IGlobalPauseRegistry(_globalPauseRegistry);
     }
 
     // Always set cooldown for receiver to prevent bypass via third-party deposit.

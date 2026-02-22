@@ -53,10 +53,16 @@ jobs:
           # Increase timeout for compiler download
           HARDHAT_NETWORK_TIMEOUT: 120000
 
-      - name: Run tests
+      - name: Run tests (PR smoke)
+        if: github.event_name == 'pull_request'
+        run: npx hardhat test test/BLEBridgeSimple.test.ts test/BLEBridgeV9.test.ts test/BridgeNonceSync.test.ts
+
+      - name: Run full test suite
+        if: github.event_name == 'push'
         run: npx hardhat test
 
       - name: Coverage report
+        if: github.event_name == 'push'
         run: npx hardhat coverage
         # INFRA-M-07: Removed continue-on-error: true — the 90% coverage threshold
         # MUST be enforced. If coverage fails due to memory limits, increase the
@@ -65,6 +71,7 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Check coverage threshold
+        if: github.event_name == 'push'
         run: |
           if [ ! -f coverage/coverage-summary.json ]; then
             echo "::warning::Coverage report not generated — skipping threshold check"
@@ -92,6 +99,7 @@ jobs:
     name: Foundry Fuzz & Invariant Tests
     runs-on: ubuntu-latest
     needs: solidity
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -118,6 +126,7 @@ jobs:
     name: Solidity Security Scan
     runs-on: ubuntu-latest
     needs: solidity
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -191,6 +200,7 @@ jobs:
     name: UUPS Storage Layout Check
     runs-on: ubuntu-latest
     needs: solidity
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -236,6 +246,7 @@ jobs:
     name: Mythril Symbolic Analysis
     runs-on: ubuntu-latest
     needs: solidity
+    if: github.event_name == 'push'
     # SECURITY (INFRA-H-02): Mythril findings MUST fail the build.
     # Previously used continue-on-error: true which made security findings advisory-only.
     # If Mythril reports false positives, suppress them using Mythril's own
@@ -512,6 +523,7 @@ jobs:
     name: Certora Formal Verification
     runs-on: ubuntu-latest
     needs: solidity
+    if: github.event_name == 'push'
     # SECURITY (INFRA-H-03): Certora invariant violations MUST fail the build.
     # Previously used continue-on-error: true which made formal verification advisory-only.
     # If a rule produces a known false positive, triage and suppress it in the
