@@ -1112,7 +1112,12 @@ class RelayService {
   private isPermanentDirectionError(error?: unknown): boolean {
     if (!error) return false;
     if (error instanceof CantonApiError) {
-      return !error.isRetryable();
+      const apiError = error as CantonApiError & { isRetryable?: () => boolean };
+      if (typeof apiError.isRetryable === "function") {
+        return !apiError.isRetryable();
+      }
+      // Backward compatibility for branches where CantonApiError has no helper methods.
+      return ![429, 500, 502, 503, 504].includes(apiError.status);
     }
     const message = String((error as any)?.message || error);
     return (
