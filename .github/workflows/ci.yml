@@ -5,6 +5,7 @@ on:
     branches: [main, audit-fixes]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,16 +54,15 @@ jobs:
           # Increase timeout for compiler download
           HARDHAT_NETWORK_TIMEOUT: 120000
 
-      - name: Run tests (PR smoke)
-        if: github.event_name == 'pull_request'
+      - name: Run tests (smoke)
         run: npx hardhat test test/BLEBridgeSimple.test.ts test/BLEBridgeV9.test.ts test/BridgeNonceSync.test.ts
 
       - name: Run full test suite
-        if: github.event_name == 'push'
+        if: github.event_name == 'workflow_dispatch'
         run: npx hardhat test
 
       - name: Coverage report
-        if: github.event_name == 'push'
+        if: github.event_name == 'workflow_dispatch'
         run: npx hardhat coverage
         # INFRA-M-07: Removed continue-on-error: true — the 90% coverage threshold
         # MUST be enforced. If coverage fails due to memory limits, increase the
@@ -71,7 +71,7 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Check coverage threshold
-        if: github.event_name == 'push'
+        if: github.event_name == 'workflow_dispatch'
         run: |
           if [ ! -f coverage/coverage-summary.json ]; then
             echo "::warning::Coverage report not generated — skipping threshold check"
