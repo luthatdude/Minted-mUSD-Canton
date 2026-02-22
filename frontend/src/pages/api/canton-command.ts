@@ -21,7 +21,8 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
 const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
@@ -63,6 +64,27 @@ const TEMPLATE_MAP: Record<string, string> = {
   ComplianceRegistry:      `${PACKAGE_ID}:Compliance:ComplianceRegistry`,
 };
 
+function parseRecipientAliasMap(): Record<string, string> {
+  if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
+  try {
+    const parsed = JSON.parse(RECIPIENT_ALIAS_MAP_RAW);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([from, to]) =>
+          typeof from === "string" &&
+          from.trim().length > 0 &&
+          typeof to === "string" &&
+          to.trim().length > 0
+      )
+    ) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
+
 /** Resolve a short name or pass through a fully-qualified template ID. */
 function resolveTemplateId(tpl: string): string {
   // Already fully qualified (contains ':')
@@ -78,7 +100,7 @@ function resolveRequestedParty(rawParty: unknown): string {
   if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
     throw new Error("Invalid Canton party");
   }
-  return party;
+  return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -127,9 +149,7 @@ export default async function handler(
   } catch (err: any) {
     return res.status(400).json({ error: err.message || "Invalid Canton party" });
   }
-  const readAsParties = actAsParty === CANTON_PARTY
-    ? [actAsParty]
-    : [actAsParty, CANTON_PARTY];
+  const readAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
 
   const commandId = `ui-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 

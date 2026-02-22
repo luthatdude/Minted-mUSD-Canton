@@ -35,7 +35,7 @@ const CANTON_HOST = process.env.CANTON_HOST || "localhost";
 const CANTON_PORT = parseInt(process.env.CANTON_PORT || "7575", 10);
 const CANTON_TOKEN = process.env.CANTON_TOKEN || readTokenFromFile();
 const ETH_RPC = process.env.ETHEREUM_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com";
-const BRIDGE_ADDR = process.env.BRIDGE_CONTRACT_ADDRESS || "0x708957bFfA312D1730BdF87467E695D3a9F26b0f";
+const BRIDGE_ADDR = process.env.BRIDGE_CONTRACT_ADDRESS || "0xF0D3CC638a3aB76683F0aFF675329E96d17bf8a7";
 
 // Parties on devnet
 const PARTIES = {
@@ -91,7 +91,7 @@ async function testCantonConnectivity(): Promise<CantonClient> {
     baseUrl,
     token: CANTON_TOKEN,
     userId: "administrator",
-    actAs: `${PARTIES.relayer}::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4`,
+    actAs: `${PARTIES.relayer}::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9`,
   });
 
   // 1a. Ledger end
@@ -133,10 +133,10 @@ async function testBLEProtocolContracts(): Promise<void> {
     token: CANTON_TOKEN,
     userId: "administrator",
     // Use operator party for broader visibility
-    actAs: `${PARTIES.operator}::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4`,
+    actAs: `${PARTIES.operator}::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9`,
     readAs: [
-      `${PARTIES.governance}::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4`,
-      `${PARTIES.validator1}::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4`,
+      `${PARTIES.governance}::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9`,
+      `${PARTIES.validator1}::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9`,
     ],
   });
 
@@ -239,7 +239,7 @@ async function testEthereumBridge(): Promise<void> {
   // 3d. Relayer role granted
   try {
     const RELAYER_ROLE = await bridge.RELAYER_ROLE();
-    const relayerAddr = "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0";
+    const relayerAddr = "0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36";
     const hasRelayer = await bridge.hasRole(RELAYER_ROLE, relayerAddr);
     if (hasRelayer) {
       pass("RELAYER_ROLE granted", `${relayerAddr}`);
@@ -254,7 +254,7 @@ async function testEthereumBridge(): Promise<void> {
   try {
     const VALIDATOR_ROLE = await bridge.VALIDATOR_ROLE();
     const validatorAddrs = [
-      "0xe640db3Ad56330BFF39Da36Ef01ab3aEB699F8e0",
+      "0x7De39963ee59B0a5e74f36B8BCc0426c286bDd36",
       "0x2Fe44803dfE94c1C911A4733A76b89114D7B6e0D",
     ];
     for (const addr of validatorAddrs) {
@@ -280,7 +280,7 @@ async function testNonceConsistency(): Promise<void> {
       baseUrl: `http://${CANTON_HOST}:${CANTON_PORT}`,
       token: CANTON_TOKEN,
       userId: "administrator",
-      actAs: `${PARTIES.operator}::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4`,
+      actAs: `${PARTIES.operator}::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9`,
     });
     const bridges = await canton.queryContracts(TEMPLATES.BridgeService);
     if (bridges.length > 0) {

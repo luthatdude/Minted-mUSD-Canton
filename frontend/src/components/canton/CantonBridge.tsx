@@ -133,7 +133,7 @@ export function CantonBridge() {
     try {
       const fresh = await fetchFreshBalances(activeParty);
       const freshTokens = fresh.tokens || [];
-      const operatorSnapshot = await fetchFreshBalances();
+      const operatorSnapshot = await fetchFreshBalances(null);
       const directMintService = fresh.directMintService || operatorSnapshot.directMintService;
 
       if (freshTokens.length === 0) {

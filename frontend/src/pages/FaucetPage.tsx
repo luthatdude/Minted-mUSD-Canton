@@ -361,3 +361,5 @@ export function FaucetPage() {
     </div>
   );
 }
+
+export default FaucetPage;
