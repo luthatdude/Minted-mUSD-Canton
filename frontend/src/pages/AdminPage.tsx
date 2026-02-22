@@ -275,8 +275,10 @@ export function AdminPage() {
   const [cantonCoinAmount, setCantonCoinAmount] = useState("1000");
   const [ethUsdcAmount, setEthUsdcAmount] = useState("10000");
   const [ethUsdtAmount, setEthUsdtAmount] = useState("10000");
+  const [ethMusdAmount, setEthMusdAmount] = useState("1000");
   const [evmUsdcBal, setEvmUsdcBal] = useState<bigint | null>(null);
   const [evmUsdtBal, setEvmUsdtBal] = useState<bigint | null>(null);
+  const [evmMusdBal, setEvmMusdBal] = useState<bigint | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -289,7 +291,13 @@ export function AdminPage() {
         if (directMint) {
           vals.mintFee = formatBps(await directMint.mintFeeBps());
           vals.redeemFee = formatBps(await directMint.redeemFeeBps());
-          vals.accFees = formatToken(await directMint.totalAccumulatedFees(), 6);
+          const accumulatedFeesRaw =
+            typeof directMint.accumulatedFees === "function"
+              ? await directMint.accumulatedFees()
+              : typeof directMint.totalAccumulatedFees === "function"
+                ? await directMint.totalAccumulatedFees()
+                : 0n;
+          vals.accFees = formatToken(accumulatedFeesRaw, 6);
           vals.paused = (await directMint.paused()).toString();
         }
         if (treasury) {
@@ -401,16 +409,19 @@ export function AdminPage() {
           if (!cancelled) {
             setEvmUsdcBal(null);
             setEvmUsdtBal(null);
+            setEvmMusdBal(null);
           }
           return;
         }
-        const [usdcBal, usdtBal] = await Promise.all([
+        const [usdcBal, usdtBal, musdBal] = await Promise.all([
           contracts.usdc ? contracts.usdc.balanceOf(address) : Promise.resolve(null),
           contracts.usdt ? contracts.usdt.balanceOf(address) : Promise.resolve(null),
+          contracts.musd ? contracts.musd.balanceOf(address) : Promise.resolve(null),
         ]);
         if (!cancelled) {
           setEvmUsdcBal(usdcBal);
           setEvmUsdtBal(usdtBal);
+          setEvmMusdBal(musdBal);
         }
       } catch (err) {
         console.error("[AdminPage] Failed to load EVM faucet balances:", err);
@@ -418,7 +429,7 @@ export function AdminPage() {
     }
     loadEvmFaucetBalances();
     return () => { cancelled = true; };
-  }, [contracts.usdc, contracts.usdt, address, tx.success, faucetStatus.success]);
+  }, [contracts.usdc, contracts.usdt, contracts.musd, address, tx.success, faucetStatus.success]);
 
   async function mintCantonFaucetToken(
     token: keyof typeof CANTON_FAUCET_TEMPLATES,
@@ -472,7 +483,7 @@ export function AdminPage() {
     }
   }
 
-  async function mintEvmFaucetToken(token: "USDC" | "USDT", amount: string) {
+  async function mintEvmFaucetToken(token: "USDC" | "USDT" | "MUSD", amount: string) {
     const trimmedAmount = amount.trim();
     const numericAmount = Number(trimmedAmount);
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
@@ -487,26 +498,60 @@ export function AdminPage() {
     setFaucetLoadingKey(`eth-${token}`);
     setFaucetStatus({});
     try {
-      const tokenAddress = token === "USDC" ? CONTRACTS.USDC : CONTRACTS.USDT;
-      if (!tokenAddress) {
-        throw new Error(`${token} address is not configured.`);
+      if (token === "MUSD") {
+        if (!CONTRACTS.USDC || !contracts.directMint || !contracts.musd) {
+          throw new Error("USDC, DirectMint, or mUSD contract is not configured.");
+        }
+
+        const usdcMintable = new ethers.Contract(
+          CONTRACTS.USDC,
+          [
+            "function mint(address to, uint256 amount)",
+            "function approve(address spender, uint256 amount) returns (bool)",
+            "function balanceOf(address account) view returns (uint256)",
+          ],
+          signer
+        );
+
+        const usdcAmount = ethers.parseUnits(trimmedAmount, USDC_DECIMALS);
+        const mintUsdcTx = await usdcMintable.mint(address, usdcAmount);
+        await mintUsdcTx.wait(1);
+
+        const approveTx = await usdcMintable.approve(CONTRACTS.DirectMint, usdcAmount);
+        await approveTx.wait(1);
+
+        const mintMusdTx = await contracts.directMint.mint(usdcAmount);
+        await mintMusdTx.wait(1);
+
+        const [newUsdcBalance, newMusdBalance] = await Promise.all([
+          usdcMintable.balanceOf(address),
+          contracts.musd.balanceOf(address),
+        ]);
+        setEvmUsdcBal(newUsdcBalance);
+        setEvmMusdBal(newMusdBalance);
+        setFaucetStatus({ success: `Minted ${trimmedAmount} mUSD on Sepolia (via USDC + DirectMint).` });
+      } else {
+        const tokenAddress = token === "USDC" ? CONTRACTS.USDC : CONTRACTS.USDT;
+        if (!tokenAddress) {
+          throw new Error(`${token} address is not configured.`);
+        }
+
+        const mintableToken = new ethers.Contract(
+          tokenAddress,
+          [
+            "function mint(address to, uint256 amount)",
+            "function balanceOf(address account) view returns (uint256)",
+          ],
+          signer
+        );
+
+        const txResp = await mintableToken.mint(address, ethers.parseUnits(trimmedAmount, USDC_DECIMALS));
+        await txResp.wait(1);
+        const newBalance = await mintableToken.balanceOf(address);
+        if (token === "USDC") setEvmUsdcBal(newBalance);
+        if (token === "USDT") setEvmUsdtBal(newBalance);
+        setFaucetStatus({ success: `Minted ${trimmedAmount} ${token} on Sepolia.` });
       }
-
-      const mintableToken = new ethers.Contract(
-        tokenAddress,
-        [
-          "function mint(address to, uint256 amount)",
-          "function balanceOf(address account) view returns (uint256)",
-        ],
-        signer
-      );
-
-      const txResp = await mintableToken.mint(address, ethers.parseUnits(trimmedAmount, USDC_DECIMALS));
-      await txResp.wait(1);
-      const newBalance = await mintableToken.balanceOf(address);
-      if (token === "USDC") setEvmUsdcBal(newBalance);
-      if (token === "USDT") setEvmUsdtBal(newBalance);
-      setFaucetStatus({ success: `Minted ${trimmedAmount} ${token} on Sepolia.` });
     } catch (err: any) {
       setFaucetStatus({ error: err.message || `${token} mint failed.` });
     } finally {
@@ -1502,7 +1547,7 @@ export function AdminPage() {
 
           <div className="card">
             <h3 className="mb-3 font-semibold text-gray-300">Ethereum Faucet (Sepolia)</h3>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <div>
                 <label className="label">USDC Amount</label>
                 <input className="input" type="number" value={ethUsdcAmount} onChange={(e) => setEthUsdcAmount(e.target.value)} />
@@ -1527,6 +1572,19 @@ export function AdminPage() {
                   disabled={faucetLoadingKey !== null || !signer || !address}
                 >
                   Mint USDT
+                </TxButton>
+              </div>
+              <div>
+                <label className="label">mUSD Amount</label>
+                <input className="input" type="number" value={ethMusdAmount} onChange={(e) => setEthMusdAmount(e.target.value)} />
+                <p className="mt-1 text-xs text-gray-500">Wallet Balance: {evmMusdBal !== null ? formatToken(evmMusdBal, MUSD_DECIMALS) : "..."}</p>
+                <TxButton
+                  className="mt-2 w-full"
+                  onClick={() => mintEvmFaucetToken("MUSD", ethMusdAmount)}
+                  loading={faucetLoadingKey === "eth-MUSD"}
+                  disabled={faucetLoadingKey !== null || !signer || !address || !contracts.directMint || !contracts.musd}
+                >
+                  Mint mUSD
                 </TxButton>
               </div>
             </div>
