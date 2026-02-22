@@ -19,19 +19,29 @@
  *   3. Sync global share price to Canton via SyncGlobalSharePrice
  *   4. Both chains now have identical share price → equal yield for all stakers
  */
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.YieldSyncService = void 0;
 const ethers_1 = require("ethers");
-const ledger_1 = __importDefault(require("@daml/ledger"));
+const canton_client_1 = require("./canton-client");
 const utils_1 = require("./utils");
+// INFRA-H-06: Ensure TLS certificate validation is enforced at process level
+(0, utils_1.enforceTLSSecurity)();
 const DEFAULT_CONFIG = {
-    ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+    // INFRA-H-01 / INFRA-H-03: Read RPC URL from Docker secret (contains API keys), fallback to env var
+    ethereumRpcUrl: (() => {
+        const url = (0, utils_1.readSecret)("ethereum_rpc_url", "ETHEREUM_RPC_URL");
+        if (!url)
+            throw new Error("ETHEREUM_RPC_URL is required");
+        if (!url.startsWith("https://") && process.env.NODE_ENV !== "development") {
+            throw new Error("ETHEREUM_RPC_URL must use HTTPS in production");
+        }
+        return url;
+    })(),
     treasuryAddress: process.env.TREASURY_ADDRESS || "",
     smusdAddress: process.env.SMUSD_ADDRESS || "",
+    metaVault3Address: process.env.META_VAULT3_ADDRESS || "", // Fluid T2/T4 strategy
     bridgePrivateKey: (0, utils_1.readSecret)("bridge_private_key", "BRIDGE_PRIVATE_KEY"),
+    kmsKeyId: process.env.KMS_KEY_ID || "",
     cantonHost: process.env.CANTON_HOST || "localhost",
     cantonPort: parseInt(process.env.CANTON_PORT || "6865", 10),
     cantonToken: (0, utils_1.readSecret)("canton_token", "CANTON_TOKEN"),
@@ -128,6 +138,16 @@ const SMUSD_ABI = [
         "type": "function"
     },
 ];
+// MetaVault #3 (Fluid) ABI — for ETH Pool share price derivation
+const METAVAULT_ABI = [
+    {
+        "inputs": [],
+        "name": "totalValue",
+        "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+        "stateMutability": "view",
+        "type": "function"
+    },
+];
 // ============================================================
 //                     YIELD SYNC SERVICE (UNIFIED)
 // ============================================================
@@ -137,34 +157,55 @@ class YieldSyncService {
     wallet;
     treasury;
     smusd;
-    ledger;
+    metaVault3 = null; // MetaVault #3 (Fluid) for ETH Pool
+    canton;
     isRunning = false;
     // State tracking
     lastSyncedTotalValue = BigInt(0);
     lastGlobalSharePrice = BigInt(0);
+    lastETHPoolSharePrice = BigInt(0); // MetaVault #3 derived share price
     currentEpoch;
     nonce = 1;
     constructor(config) {
         this.config = config;
         this.currentEpoch = config.epochStartNumber;
+        // TS-C-01: Only validate raw private key when KMS is NOT configured
+        if (!config.kmsKeyId) {
+            const keyBytes = Buffer.from(config.bridgePrivateKey.replace(/^0x/, ""), "hex");
+            if (keyBytes.length !== 32) {
+                throw new Error(`[YieldSync] Invalid bridge private key: expected 32 bytes, got ${keyBytes.length}`);
+            }
+            // Validate it's a valid secp256k1 scalar (0 < key < curve order)
+            const SECP256K1_ORDER = BigInt("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
+            const keyBigInt = BigInt("0x" + keyBytes.toString("hex"));
+            if (keyBigInt === BigInt(0) || keyBigInt >= SECP256K1_ORDER) {
+                throw new Error("[YieldSync] Invalid bridge private key: not a valid secp256k1 scalar");
+            }
+        }
         // Ethereum connection with signing capability
         this.provider = new ethers_1.ethers.JsonRpcProvider(config.ethereumRpcUrl);
-        this.wallet = new ethers_1.ethers.Wallet(config.bridgePrivateKey, this.provider);
+        // Wallet initialised asynchronously via init() — use KMS when available
         this.treasury = new ethers_1.ethers.Contract(config.treasuryAddress, TREASURY_ABI, this.provider);
-        this.smusd = new ethers_1.ethers.Contract(config.smusdAddress, SMUSD_ABI, this.wallet // Signing wallet for syncCantonShares()
+        this.smusd = new ethers_1.ethers.Contract(config.smusdAddress, SMUSD_ABI, this.provider // Upgraded to signing wallet in init()
         );
+        // MetaVault #3 (Fluid) — for ETH Pool share price derivation
+        if (config.metaVault3Address) {
+            this.metaVault3 = new ethers_1.ethers.Contract(config.metaVault3Address, METAVAULT_ABI, this.provider);
+        }
         // Canton connection (TLS by default)
         const protocol = process.env.CANTON_USE_TLS === "false" ? "http" : "https";
-        const wsProtocol = process.env.CANTON_USE_TLS === "false" ? "ws" : "wss";
-        this.ledger = new ledger_1.default({
+        this.canton = new canton_client_1.CantonClient({
+            baseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
             token: config.cantonToken,
-            httpBaseUrl: `${protocol}://${config.cantonHost}:${config.cantonPort}`,
-            wsBaseUrl: `${wsProtocol}://${config.cantonHost}:${config.cantonPort}`,
+            userId: "administrator",
+            actAs: config.cantonParty,
+            timeoutMs: 30000,
         });
         console.log("[YieldSync] Initialized (UNIFIED CROSS-CHAIN MODE)");
         console.log(`[YieldSync] Treasury: ${config.treasuryAddress}`);
         console.log(`[YieldSync] SMUSD: ${config.smusdAddress}`);
-        console.log(`[YieldSync] Bridge wallet: ${this.wallet.address}`);
+        console.log(`[YieldSync] MetaVault #3: ${config.metaVault3Address || "(not configured)"}`);
+        console.log(`[YieldSync] Bridge wallet: (deferred until start)`);
         console.log(`[YieldSync] Canton: ${config.cantonHost}:${config.cantonPort}`);
         console.log(`[YieldSync] Operator: ${config.cantonParty}`);
         console.log(`[YieldSync] Sync interval: ${config.syncIntervalMs}ms`);
@@ -173,6 +214,12 @@ class YieldSyncService {
      * Start the yield sync service
      */
     async start() {
+        // Initialise KMS-backed (or fallback) signer
+        this.wallet = await (0, utils_1.createSigner)(this.provider, "bridge_private_key", "BRIDGE_PRIVATE_KEY");
+        // Re-bind smusd with signing capability
+        this.smusd = new ethers_1.ethers.Contract(this.config.smusdAddress, SMUSD_ABI, this.wallet);
+        const walletAddress = await this.wallet.getAddress();
+        console.log(`[YieldSync] Bridge wallet: ${walletAddress}`);
         console.log("[YieldSync] Starting UNIFIED yield sync...");
         this.isRunning = true;
         // Initialize last synced value
@@ -183,7 +230,16 @@ class YieldSyncService {
                 await this.syncUnifiedYield();
             }
             catch (err) {
-                console.error("[YieldSync] Error in sync cycle:", err);
+                console.error("[YieldSync] Error in smUSD sync cycle:", err);
+            }
+            // ETH Pool share price sync (parallel product — MetaVault #3 / Fluid)
+            if (this.metaVault3) {
+                try {
+                    await this.syncETHPoolSharePrice();
+                }
+                catch (err) {
+                    console.error("[YieldSync] Error in ETH Pool sync cycle:", err);
+                }
             }
             await this.sleep(this.config.syncIntervalMs);
         }
@@ -206,7 +262,7 @@ class YieldSyncService {
         const currentSharePrice = await this.smusd.globalSharePrice();
         this.lastGlobalSharePrice = BigInt(currentSharePrice.toString());
         // Get last epoch from Canton staking service
-        const stakingServices = await this.ledger.query("CantonSMUSD:CantonStakingService", { operator: this.config.cantonParty });
+        const stakingServices = await this.canton.queryContracts((0, canton_client_1.parseTemplateId)("CantonSMUSD:CantonStakingService"), (p) => p.operator === this.config.cantonParty);
         if (stakingServices.length > 0) {
             this.currentEpoch = parseInt(stakingServices[0].payload.lastSyncEpoch || "0", 10) + 1;
             console.log(`[YieldSync] Resuming from epoch ${this.currentEpoch}`);
@@ -230,7 +286,7 @@ class YieldSyncService {
         // STEP 1: Read Canton shares and sync to Ethereum
         // ═══════════════════════════════════════════════════════════════════
         console.log(`\n[YieldSync] Step 1: Syncing Canton shares → Ethereum...`);
-        const stakingServices = await this.ledger.query("CantonSMUSD:CantonStakingService", { operator: this.config.cantonParty });
+        const stakingServices = await this.canton.queryContracts((0, canton_client_1.parseTemplateId)("CantonSMUSD:CantonStakingService"), (p) => p.operator === this.config.cantonParty);
         if (stakingServices.length === 0) {
             console.log(`[YieldSync] No Canton staking service found, skipping`);
             return;
@@ -271,7 +327,7 @@ class YieldSyncService {
         // STEP 3: Sync global share price to Canton
         // ═══════════════════════════════════════════════════════════════════
         console.log(`\n[YieldSync] Step 3: Syncing global share price → Canton...`);
-        await this.ledger.exercise("CantonSMUSD:CantonStakingService", cantonService.contractId, "SyncGlobalSharePrice", {
+        await this.canton.exerciseChoice((0, canton_client_1.parseTemplateId)("CantonSMUSD:CantonStakingService"), cantonService.contractId, "SyncGlobalSharePrice", {
             newGlobalSharePrice: this.toNumeric18(globalSharePrice),
             newGlobalTotalAssets: this.toNumeric18(globalTotalAssets),
             newGlobalTotalShares: this.toNumeric18(globalTotalShares),
@@ -291,6 +347,69 @@ class YieldSyncService {
         console.log(`[YieldSync]   - Same share price: ${globalSharePrice}`);
         console.log(`[YieldSync]   - Equal yield rate`);
         console.log(`[YieldSync] Next sync in ${this.config.syncIntervalMs / 1000}s`);
+    }
+    // ============================================================
+    //  ETH POOL SHARE PRICE SYNC (MetaVault #3 / Fluid)
+    // ============================================================
+    /**
+     * Sync ETH Pool share price from Ethereum MetaVault #3 to Canton.
+     *
+     * Share price derivation:
+     *   Canton ETH Pool tracks `pooledUsdc` (deposits + received yield counter)
+     *   and `totalShares` (boosted shares issued to stakers).
+     *   The real value sits in MetaVault #3 on Ethereum.
+     *
+     *   sharePrice = MetaVault3.totalValue() / cantonTotalShares
+     *
+     * This sync updates the informational `sharePrice` field on Canton
+     * so frontends can display accurate yield without querying Ethereum.
+     */
+    async syncETHPoolSharePrice() {
+        console.log(`\n[YieldSync] ── ETH Pool Share Price Sync ──`);
+        // Read Canton ETH Pool state
+        const ethPoolServices = await this.canton.queryContracts((0, canton_client_1.parseTemplateId)("CantonETHPool:CantonETHPoolService"), (p) => p.operator === this.config.cantonParty);
+        if (ethPoolServices.length === 0) {
+            console.log(`[YieldSync] No Canton ETH Pool service found, skipping`);
+            return;
+        }
+        const pool = ethPoolServices[0];
+        const cantonShares = this.parseNumeric18(pool.payload.totalShares);
+        if (cantonShares === BigInt(0)) {
+            console.log(`[YieldSync] ETH Pool has no shares, skipping sync`);
+            return;
+        }
+        // Read MetaVault #3 total value from Ethereum (USDC 6 decimals)
+        const metaVaultValue = BigInt((await this.metaVault3.totalValue()).toString());
+        console.log(`[YieldSync] MetaVault #3 totalValue: $${this.formatUsdc(metaVaultValue)}`);
+        console.log(`[YieldSync] Canton ETH Pool totalShares: ${pool.payload.totalShares}`);
+        // Derive share price: MetaVault3.totalValue() / totalShares
+        // Both in USDC 6-decimal, result is 6-decimal share price
+        // To avoid precision loss: (value * 1e6) / shares gives 6-decimal price
+        const SCALE = BigInt(1000000); // 1e6
+        const sharePrice6 = (metaVaultValue * SCALE) / cantonShares;
+        console.log(`[YieldSync] Derived share price: ${this.formatUsdc(sharePrice6)} USDC/share`);
+        // Check for meaningful change (> 0.01% movement)
+        if (this.lastETHPoolSharePrice > BigInt(0)) {
+            const diff = sharePrice6 > this.lastETHPoolSharePrice
+                ? sharePrice6 - this.lastETHPoolSharePrice
+                : this.lastETHPoolSharePrice - sharePrice6;
+            const bpsChange = (diff * BigInt(10000)) / this.lastETHPoolSharePrice;
+            if (bpsChange < BigInt(1)) {
+                console.log(`[YieldSync] ETH Pool share price change < 0.01%, skipping sync`);
+                return;
+            }
+        }
+        // Generate attestation hash for the sync
+        const attestationData = ethers_1.ethers.solidityPackedKeccak256(["uint256", "uint256", "uint256"], [metaVaultValue, cantonShares, this.currentEpoch]);
+        // Exercise ETHPool_SyncSharePrice on Canton
+        await this.canton.exerciseChoice((0, canton_client_1.parseTemplateId)("CantonETHPool:CantonETHPoolService"), pool.contractId, "ETHPool_SyncSharePrice", {
+            newSharePrice: this.toNumeric18(sharePrice6),
+            epochNumber: this.currentEpoch.toString(),
+            attestationHash: attestationData,
+            validatorCount: this.config.validatorParties.length.toString(),
+        });
+        this.lastETHPoolSharePrice = sharePrice6;
+        console.log(`[YieldSync] ✅ ETH Pool share price synced to Canton: ${this.formatUsdc(sharePrice6)} USDC/share`);
     }
     // ============================================================
     //                     HELPERS

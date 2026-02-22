@@ -9,35 +9,52 @@ const NAV_ITEMS = [
   { key: "stake", label: "Stake", icon: "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" },
   { key: "borrow", label: "Borrow & Lend", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" },
   { key: "bridge", label: "Bridge", icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" },
-  { key: "faucet", label: "Faucet", icon: "M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" },
   { key: "points", label: "Points", icon: "M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" },
   { key: "admin", label: "Admin", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
 ];
 
 interface NavbarProps {
   address: string | null;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onCantonDisconnect: () => void;
+  onEthConnect: () => void;
+  onEthDisconnect: () => void;
+  isEthConnecting?: boolean;
   activePage: string;
   onNavigate: (page: string) => void;
   chain: ActiveChain;
   onToggleChain: () => void;
   cantonParty: string | null;
+  onCantonConnect: () => void;
+  onCantonDisconnect: () => void;
+  isCantonConnecting?: boolean;
 }
 
 export function Navbar({
   address,
-  onConnect,
-  onDisconnect,
-  onCantonDisconnect,
+  onEthConnect,
+  onEthDisconnect,
+  isEthConnecting = false,
   activePage,
   onNavigate,
   chain,
   onToggleChain,
   cantonParty,
+  onCantonConnect,
+  onCantonDisconnect,
+  isCantonConnecting = false,
 }: NavbarProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const loopWalletNumber = React.useMemo(() => {
+    if (!cantonParty) return null;
+    const [partyName] = cantonParty.split("::");
+    if (!partyName) return cantonParty;
+
+    const mintedUserPrefix = "minted-user-";
+    if (partyName.startsWith(mintedUserPrefix)) {
+      return partyName.slice(mintedUserPrefix.length);
+    }
+
+    return partyName;
+  }, [cantonParty]);
 
   return (
     <>
@@ -98,49 +115,69 @@ export function Navbar({
           {/* Right Side */}
           <div className="flex items-center gap-3">
             <ChainToggle chain={chain} onToggle={onToggleChain} />
-            
-            {chain === "ethereum" ? (
+
+            {loopWalletNumber ? (
+              <button
+                onClick={onCantonDisconnect}
+                className="group flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 transition-all duration-300 hover:border-emerald-500/50 hover:bg-emerald-500/20"
+                title={cantonParty ?? "Disconnect Loop wallet"}
+              >
+                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                <span className="max-w-[240px] truncate">Loop #{loopWalletNumber}</span>
+                <svg
+                  className="h-4 w-4 text-emerald-300/80 transition-colors group-hover:text-emerald-200"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                  />
+                </svg>
+              </button>
+            ) : chain === "ethereum" ? (
               address ? (
-                <button 
-                  onClick={onDisconnect} 
-                  className="group flex items-center gap-2 rounded-xl border border-white/10 bg-surface-800/50 px-4 py-2.5 text-sm font-medium text-gray-200 backdrop-blur-sm transition-all duration-300 hover:border-white/20 hover:bg-surface-700/50"
+                <button
+                  onClick={onEthDisconnect}
+                  className="group flex items-center gap-2 rounded-xl border border-white/10 bg-surface-800/50 px-3 py-2 text-xs font-medium text-gray-200 backdrop-blur-sm transition-all duration-300 hover:border-white/20 hover:bg-surface-700/50"
+                  title="Disconnect Ethereum wallet"
                 >
                   <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
-                  {shortenAddress(address)}
-                  <svg className="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  ETH {shortenAddress(address)}
+                  <svg
+                    className="h-4 w-4 text-gray-500 transition-colors group-hover:text-gray-300"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                    />
                   </svg>
                 </button>
               ) : (
-                <button onClick={onConnect} className="btn-primary text-sm">
-                  <span className="flex items-center gap-2">
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                    Connect Wallet
-                  </span>
+                <button
+                  onClick={onEthConnect}
+                  disabled={isEthConnecting}
+                  className="rounded-xl border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-xs font-semibold text-brand-300 transition-all duration-300 hover:border-brand-500/50 hover:bg-brand-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isEthConnecting ? "Connecting ETH..." : "Connect ETH"}
                 </button>
               )
             ) : (
-              cantonParty ? (
-                <button
-                  onClick={onCantonDisconnect}
-                  className="group flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 backdrop-blur-sm transition-all duration-300 hover:border-red-500/30 hover:bg-red-500/10"
-                  title="Disconnect Canton Wallet"
-                >
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)] group-hover:bg-red-400 group-hover:shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-                  <span className="text-sm font-medium text-emerald-400 group-hover:text-red-400">
-                    {cantonParty.length > 16 ? cantonParty.slice(0, 16) + "..." : cantonParty}
-                  </span>
-                  <svg className="h-4 w-4 text-emerald-500/50 transition-colors group-hover:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                  </svg>
-                </button>
-              ) : (
-                <span className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2.5 text-sm font-medium text-yellow-400">
-                  Canton Disconnected
-                </span>
-              )
+              <button
+                onClick={onCantonConnect}
+                disabled={isCantonConnecting}
+                className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-300 transition-all duration-300 hover:border-emerald-500/50 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isCantonConnecting ? "Connecting Loop..." : "Connect Loop"}
+              </button>
             )}
 
             {/* Mobile Menu Button */}

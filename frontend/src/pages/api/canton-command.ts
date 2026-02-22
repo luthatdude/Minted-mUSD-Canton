@@ -23,6 +23,7 @@ const CANTON_PARTY =
   process.env.CANTON_PARTY ||
   "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
+const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
@@ -93,6 +94,15 @@ function resolveTemplateId(tpl: string): string {
   return resolved;
 }
 
+function resolveRequestedParty(rawParty: unknown): string {
+  if (typeof rawParty !== "string" || !rawParty.trim()) return CANTON_PARTY;
+  const party = rawParty.trim();
+  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
+    throw new Error("Invalid Canton party");
+  }
+  return RECIPIENT_ALIAS_MAP[party] || party;
+}
+
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
     method,
@@ -120,13 +130,7 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { action, templateId, contractId, choice, argument, payload, party } = req.body;
-  const requestedParty =
-    typeof party === "string" && party.includes("::") ? party : CANTON_PARTY;
-  const normalizedParty = RECIPIENT_ALIAS_MAP[requestedParty] || requestedParty;
-  const actAsParty =
-    normalizedParty;
-  const readAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
+  const { action, templateId, contractId, choice, argument, payload, party } = req.body || {};
 
   if (!templateId) {
     return res.status(400).json({ error: "Missing templateId" });
@@ -138,6 +142,14 @@ export default async function handler(
   } catch (err: any) {
     return res.status(400).json({ error: err.message });
   }
+
+  let actAsParty: string;
+  try {
+    actAsParty = resolveRequestedParty(party);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || "Invalid Canton party" });
+  }
+  const readAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
 
   const commandId = `ui-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 

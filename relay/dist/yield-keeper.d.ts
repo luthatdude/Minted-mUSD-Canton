@@ -22,10 +22,14 @@ declare const DEFAULT_CONFIG: KeeperConfig;
 declare class YieldKeeper {
     private provider;
     private wallet;
+    private walletAddress;
     private treasury;
     private config;
     private running;
+    private metricsServer;
     constructor(config: KeeperConfig);
+    /** Initialise the KMS-backed (or fallback) signer */
+    init(): Promise<void>;
     /**
      * Start the keeper loop
      */
@@ -44,12 +48,9 @@ declare class YieldKeeper {
     private checkAndDeploy;
     /**
      * Format USDC amount for display (6 decimals → human readable)
+     * TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
      */
     private formatUsdc;
-    /**
-     * Log metrics (placeholder for Prometheus/DataDog integration)
-     */
-    private logMetrics;
     /**
      * Sleep helper
      */

@@ -70,13 +70,6 @@ declare class RelayService {
     private activeProviderIndex;
     private consecutiveFailures;
     private readonly MAX_CONSECUTIVE_FAILURES;
-    private static readonly DIRECTION_NAMES;
-    private static readonly MAX_DIRECTION_FAILURES;
-    private static readonly DEGRADED_POLL_INTERVAL;
-    private static readonly FAILED_POLL_INTERVAL;
-    private static readonly ORPHAN_RECOVERY_INTERVAL;
-    private directionHealth;
-    private pollCycleCount;
     private rateLimiter;
     private anomalyDetector;
     private submittedNonces;
@@ -96,7 +89,7 @@ declare class RelayService {
     initSigner(): Promise<void>;
     /**
      * Shape of the persisted relay state file.
-     * Stores processed IDs and last scanned block numbers
+     * Stores processed epoch/attestation IDs and last scanned block numbers
      * so the relay can survive restarts without re-processing events.
      */
     private static readonly STATE_VERSION;
@@ -132,10 +125,6 @@ declare class RelayService {
     stop(): void;
     /** Sync in-memory relay state into exported Prometheus gauges. */
     private updateMetricsSnapshot;
-    private shouldPollDirection;
-    private isPermanentDirectionError;
-    private recordDirectionFailure;
-    private recordDirectionSuccess;
     /**
      * Check if a transaction is allowed under rate limits.
      * Returns true if allowed, false if rate-limited.
@@ -205,10 +194,6 @@ declare class RelayService {
     /**
      * Load bridge-out request IDs that have already been relayed to Canton
      */
-    private buildBridgeInRequestDedupKey;
-    private parseBridgeInRequestDedupKeyFromPayload;
-    private buildBridgeInRequestDedupIndex;
-    private buildBridgeInRequestCandidateKeys;
     private loadProcessedBridgeOuts;
     /**
      * Watch Ethereum for BridgeToCantonRequested events and relay to Canton.
@@ -238,7 +223,6 @@ declare class RelayService {
      * Called on startup to catch up on any missed completions.
      */
     private processPendingBridgeInRequests;
-    private recoverOrphanedMusd;
     /**
      * Load already-processed yield epochs from chain to prevent replay on restart.
      */
@@ -316,8 +300,6 @@ declare class RelayService {
      * If configured and possible, self-grants BRIDGE_ROLE.
      */
     private ensureBridgeRoleForRedemptionPayouts;
-    private getMusdCapState;
-    private decodeMusdMintError;
     /**
      * Settle pending RedemptionRequests by minting mUSD on Ethereum.
      * Requests remain pending on Canton; idempotency is enforced by local persistence.

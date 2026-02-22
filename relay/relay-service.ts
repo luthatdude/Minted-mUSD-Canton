@@ -1359,7 +1359,12 @@ class RelayService {
   private isPermanentDirectionError(error?: unknown): boolean {
     if (!error) return false;
     if (error instanceof CantonApiError) {
-      return !error.isRetryable();
+      const apiError = error as CantonApiError & { isRetryable?: () => boolean };
+      if (typeof apiError.isRetryable === "function") {
+        return !apiError.isRetryable();
+      }
+      // Backward compatibility for branches where CantonApiError has no helper methods.
+      return ![429, 500, 502, 503, 504].includes(apiError.status);
     }
     const message = String((error as any)?.message || error);
     return (
@@ -2625,6 +2630,31 @@ class RelayService {
     }
   }
 
+  private async resolveRecipientFromEthereumNonce(nonce: number): Promise<string | null> {
+    if (!this.bridgeContract) return null;
+
+    const currentBlock = await this.provider.getBlockNumber();
+    const lookback = Math.min(this.config.replayLookbackBlocks, currentBlock);
+    const fromBlock = Math.max(0, currentBlock - lookback);
+    const filter = this.bridgeContract.filters.BridgeToCantonRequested();
+    const chunkSize = 10000;
+
+    for (let start = fromBlock; start <= currentBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, currentBlock);
+      const events = await this.bridgeContract.queryFilter(filter, start, end);
+      for (const event of events) {
+        const args = (event as ethers.EventLog).args;
+        if (!args || Number(args.nonce) !== Number(nonce)) continue;
+
+        const recipient = String(args.cantonRecipient || "");
+        if (!recipient) continue;
+        return resolveRecipientParty(recipient, this.config.recipientPartyAliases);
+      }
+    }
+
+    return null;
+  }
+
   private async recoverOrphanedMusd(): Promise<void> {
     let operatorMusd: ActiveContract<any>[] = [];
     try {
@@ -2661,7 +2691,10 @@ class RelayService {
     try {
       requests = await this.canton.queryContracts(
         TEMPLATES.BridgeInRequest,
-        (p: any) => p.status === "pending" || p.status === "completed" || p.status === "cancelled"
+        (p: any) =>
+          p.status === "pending" ||
+          p.status === "completed" ||
+          p.status === "cancelled"
       );
     } catch (error: any) {
       console.warn(`[Relay] Orphan recovery could not query BridgeInRequests: ${error?.message || error}`);
@@ -2697,17 +2730,41 @@ class RelayService {
 
       const nonce = Number(nonceMatch[1]);
       let userParty = nonceToUser.get(nonce);
+
       if (!userParty) {
         const recipientMatch = agreementUri.match(/:recipient:(.+)$/);
-        if (recipientMatch) {
+        if (recipientMatch && recipientMatch[1]) {
+          let decoded = recipientMatch[1];
           try {
-            userParty = decodeURIComponent(recipientMatch[1]);
+            decoded = decodeURIComponent(decoded);
           } catch {
-            userParty = recipientMatch[1];
+            // best-effort decode; keep raw when not URI-encoded
           }
+          userParty = resolveRecipientParty(decoded, this.config.recipientPartyAliases);
         }
       }
-      if (!userParty || userParty === this.config.cantonParty) continue;
+
+      if (!userParty) {
+        try {
+          const resolved = await this.resolveRecipientFromEthereumNonce(nonce);
+          if (resolved) userParty = resolved;
+        } catch (ethErr: any) {
+          console.warn(
+            `[Relay] Orphan nonce ${nonce}: Ethereum event scan failed: ${ethErr?.message || ethErr}`
+          );
+        }
+      }
+
+      if (!userParty || userParty === this.config.cantonParty) {
+        if (!userParty) {
+          console.warn(
+            `[Relay] Orphan CantonMUSD nonce ${nonce}: no recipient resolved ` +
+            `(contractId: ${orphan.contractId.slice(0, 20)}...)`
+          );
+          orphanRecoveryTotal.labels("skipped").inc();
+        }
+        continue;
+      }
 
       try {
         const transferResult = await this.canton.exerciseChoice(

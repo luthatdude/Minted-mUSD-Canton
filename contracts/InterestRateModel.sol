@@ -85,13 +85,13 @@ contract InterestRateModel is AccessControl {
     constructor(address _admin) {
         // Validate admin address to prevent permanently bricked governance
         if (_admin == address(0)) revert InvalidAddress();
-        // Default: 2% base, 10% at 80% util, jumps to 50% additional above 80%
-        // At 100% util: 2% + (80% * 10%) + (20% * 50%) = 2% + 8% + 10% = 20% APR
-        baseRateBps = 200;           // 2% base rate
+        // Default: 5% base, 10% at 80% util, jumps to 50% additional above 80%
+        // At 100% util: 5% + (80% * 10%) + (20% * 50%) = 5% + 8% + 10% = 23% APR
+        baseRateBps = 500;           // 5% base rate
         multiplierBps = 1000;        // 10% at 100% utilization (pre-kink slope)
         kinkBps = 8000;              // 80% utilization kink point
         jumpMultiplierBps = 5000;    // 50% additional above kink
-        reserveFactorBps = 1000;     // 10% to protocol reserves
+        reserveFactorBps = 4000;     // 40% to protocol reserves
 
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(RATE_ADMIN_ROLE, _admin);

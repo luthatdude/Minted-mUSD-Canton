@@ -4,7 +4,7 @@ import * as path from "path";
 import { ethers } from "ethers";
 
 const TEST_PARTY =
-  "minted-user-33f97321::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-user-33f97321::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 
 type RelayModule = {
   RelayService: new (config: any) => any;
