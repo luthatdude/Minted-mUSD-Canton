@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { TxButton } from "@/components/TxButton";
@@ -34,6 +34,12 @@ const COLLATERAL_META: Record<CollateralAsset, { symbol: string; collateralType:
   CTN: { symbol: "Canton Coin", collateralType: "CTN_Coin", priceAliases: ["CTN", "CANTON", "CANTONCOIN", "CANTON COIN"] },
   SMUSD: { symbol: "smUSD", collateralType: "CTN_SMUSD", priceAliases: ["SMUSD", "CTN_SMUSD"] },
   SMUSDE: { symbol: "smUSD-E", collateralType: "CTN_SMUSDE", priceAliases: ["SMUSDE", "SMUSD-E", "CTN_SMUSDE"] },
+};
+
+const COLLATERAL_TYPE_TO_ASSET: Record<string, CollateralAsset> = {
+  CTN_Coin: "CTN",
+  CTN_SMUSD: "SMUSD",
+  CTN_SMUSDE: "SMUSDE",
 };
 
 function fmtAmount(value: number, digits = 2): string {
@@ -121,6 +127,20 @@ function buildEscrowPriceFeedPairs(
   return { escrowCids, priceFeedCids };
 }
 
+function mergePriceFeeds(
+  userView: CantonBalancesData,
+  operatorView: CantonBalancesData | null
+): CantonBalancesData["priceFeeds"] {
+  const byId = new Map<string, CantonBalancesData["priceFeeds"][number]>();
+  for (const feed of operatorView?.priceFeeds || []) {
+    if (feed?.contractId) byId.set(feed.contractId, feed);
+  }
+  for (const feed of userView.priceFeeds || []) {
+    if (feed?.contractId) byId.set(feed.contractId, feed);
+  }
+  return Array.from(byId.values());
+}
+
 export function CantonBorrow() {
   const loopWallet = useLoopWallet();
   const activeParty = loopWallet.partyId || null;
@@ -190,6 +210,20 @@ export function CantonBorrow() {
   }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
 
   const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
+
+  useEffect(() => {
+    if (action !== "withdraw") return;
+    if (userEscrows.length === 0) return;
+    const selectedType = COLLATERAL_META[collateralAsset].collateralType;
+    const hasSelectedEscrow = userEscrows.some((row) => row.collateralType === selectedType);
+    if (hasSelectedEscrow) return;
+    const fallbackAsset = userEscrows
+      .map((row) => COLLATERAL_TYPE_TO_ASSET[row.collateralType])
+      .find((asset): asset is CollateralAsset => Boolean(asset));
+    if (fallbackAsset && fallbackAsset !== collateralAsset) {
+      setCollateralAsset(fallbackAsset);
+    }
+  }, [action, collateralAsset, userEscrows]);
 
   const outstandingDebt = userDebts.reduce(
     (sum, row) => sum + parseFloat(row.debtMusd || "0") + parseFloat(row.interestAccrued || "0"),
@@ -264,9 +298,6 @@ export function CantonBorrow() {
         operatorFresh?.lendingService?.contractId ||
         lendingService.contractId;
 
-      const pickVisibleFeeds = (userView: CantonBalancesData, operatorView: CantonBalancesData | null) =>
-        ((userView.priceFeeds || []).length > 0 ? userView.priceFeeds : operatorView?.priceFeeds || []);
-
       const freshEscrows = (fresh.escrowPositions || []).filter((row) => row.owner === activeParty);
 
       let choice = "";
@@ -309,7 +340,7 @@ export function CantonBorrow() {
         if (postRefreshEscrows.length === 0) {
           throw new Error("Deposit collateral first.");
         }
-        const postRefreshFeeds = pickVisibleFeeds(postRefresh, postRefreshOperator);
+        const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const { escrowCids, priceFeedCids } = buildEscrowPriceFeedPairs(postRefreshEscrows, postRefreshFeeds);
         choice = "Lending_Borrow";
         argument = {
@@ -408,10 +439,20 @@ export function CantonBorrow() {
         if (!escrow) {
           const sameTypeRows = postRefreshEscrows.filter((row) => row.collateralType === collateralType);
           const maxAvailable = sameTypeRows.reduce((max, row) => Math.max(max, parseFloat(row.amount || "0")), 0);
+          const availableTypes = Array.from(
+            new Set(
+              postRefreshEscrows
+                .map((row) => COLLATERAL_TYPE_TO_ASSET[row.collateralType])
+                .filter((asset): asset is CollateralAsset => Boolean(asset))
+                .map((asset) => COLLATERAL_META[asset].symbol)
+            )
+          );
           throw new Error(
             maxAvailable > 0
               ? `No ${COLLATERAL_META[collateralAsset].symbol} escrow can cover ${fmtAmount(parsedAmount)}. Largest is ${fmtAmount(maxAvailable)}.`
-              : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
+              : availableTypes.length > 0
+                ? `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found. Available escrow types: ${availableTypes.join(", ")}.`
+                : `No active ${COLLATERAL_META[collateralAsset].symbol} escrow positions found.`
           );
         }
 
@@ -423,16 +464,27 @@ export function CantonBorrow() {
           choice = "Lending_WithdrawSMUSDE";
         }
 
+        const postRefreshFeeds = mergePriceFeeds(postRefresh, postRefreshOperator);
         const otherEscrows = postRefreshEscrows.filter((row) => row.contractId !== escrow.contractId);
-        const postRefreshFeeds = pickVisibleFeeds(postRefresh, postRefreshOperator);
         const otherEscrowPairs = buildEscrowPriceFeedPairs(otherEscrows, postRefreshFeeds);
+        const expectedWithdrawFeedCid = resolvePriceFeedCidForCollateralType(collateralType, postRefreshFeeds);
+        if (!expectedWithdrawFeedCid) {
+          throw new Error(`Missing price feed for withdraw collateral type ${collateralType}.`);
+        }
+        const withdrawPriceFeedCids = Array.from(new Set((postRefreshFeeds || []).map((feed) => feed.contractId)));
+        if (!withdrawPriceFeedCids.includes(expectedWithdrawFeedCid)) {
+          throw new Error(
+            `Missing required ${COLLATERAL_META[collateralAsset].symbol} price feed for withdraw health check.`
+          );
+        }
 
         argument = {
           user: activeParty,
           escrowCid: escrow.contractId,
           withdrawAmount: parsedAmount.toString(),
           otherEscrowCids: otherEscrowPairs.escrowCids,
-          priceFeedCids: otherEscrowPairs.priceFeedCids,
+          // DAML withdraw checks fetch prices for both remaining positions and the current collateral symbol.
+          priceFeedCids: withdrawPriceFeedCids,
         };
       }
 
