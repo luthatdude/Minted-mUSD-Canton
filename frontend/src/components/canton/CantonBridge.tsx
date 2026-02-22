@@ -1,87 +1,190 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { ethers } from "ethers";
+import { BLE_BRIDGE_V9_ABI } from "@/abis/BLEBridgeV9";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useCantonLedger, cantonExercise, fetchFreshBalances } from "@/hooks/useCantonLedger";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { CONTRACTS } from "@/lib/config";
+import { formatTimestamp, formatUSD } from "@/lib/format";
+
+type TxStatus = "idle" | "bridging" | "success" | "error";
+type EthereumBridgeData = {
+  attestedAssets: bigint;
+  supplyCap: bigint;
+  remainingMintable: bigint;
+  lastAttestation: bigint;
+  paused: boolean;
+};
+
+function shortenParty(party?: string | null): string {
+  if (!party) return "\u2014";
+  return party.length > 36 ? `${party.slice(0, 24)}\u2026${party.slice(-8)}` : party;
+}
 
 export function CantonBridge() {
-  const { data, loading, error, refresh } = useCantonLedger(15_000);
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
 
-  const [tab, setTab] = useState<"bridge-to-eth" | "status">("bridge-to-eth");
-  const [bridgeAmount, setBridgeAmount] = useState("");
-  const [txStatus, setTxStatus] = useState<"idle" | "processing" | "success" | "error">("idle");
+  const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
+
+  const [amount, setAmount] = useState("");
+  const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [txError, setTxError] = useState<string | null>(null);
+  const [ethBridge, setEthBridge] = useState<EthereumBridgeData>({
+    attestedAssets: 0n,
+    supplyCap: 0n,
+    remainingMintable: 0n,
+    lastAttestation: 0n,
+    paused: false,
+  });
 
-  const totalMusd = data ? parseFloat(data.totalBalance) : 0;
-  const tokens = data?.tokens || [];
+  const totalMusd = hasConnectedUserParty && data ? parseFloat(data.totalBalance) : 0;
 
-  // ── Bridge Canton → Ethereum ──────────────────────────────
-  async function handleBridgeToEthereum() {
-    if (!bridgeAmount || parseFloat(bridgeAmount) <= 0) {
-      setTxError("Enter a valid amount to bridge");
+  const loadEthereumBridgeData = useCallback(async () => {
+    if (!CONTRACTS.BLEBridgeV9 || !ethers.isAddress(CONTRACTS.BLEBridgeV9)) {
       return;
     }
-    if (parseFloat(bridgeAmount) > totalMusd) {
+
+    try {
+      const rpcUrl =
+        process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ||
+        process.env.NEXT_PUBLIC_ETH_RPC_URL ||
+        "https://ethereum-sepolia-rpc.publicnode.com";
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const bridge = new ethers.Contract(CONTRACTS.BLEBridgeV9, BLE_BRIDGE_V9_ABI, provider);
+
+      const [attestedAssets, supplyCap, remainingMintable, lastAttestation, paused] =
+        (await Promise.all([
+          bridge.attestedCantonAssets(),
+          bridge.getCurrentSupplyCap(),
+          bridge.getRemainingMintable(),
+          bridge.lastAttestationTime(),
+          bridge.paused(),
+        ])) as [bigint, bigint, bigint, bigint, boolean];
+
+      setEthBridge({
+        attestedAssets,
+        supplyCap,
+        remainingMintable,
+        lastAttestation,
+        paused,
+      });
+    } catch (err) {
+      console.error("[CantonBridge] Ethereum bridge metrics load failed:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadEthereumBridgeData();
+    const timer = setInterval(() => {
+      void loadEthereumBridgeData();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [loadEthereumBridgeData]);
+
+  const parsedAmount = (() => {
+    const n = Number(amount);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
+
+  const hasEnoughBalance = parsedAmount > 0 && parsedAmount <= totalMusd;
+  const canRedeem = hasConnectedUserParty && parsedAmount > 0 && hasEnoughBalance && txStatus === "idle";
+  const timeSinceAttestation = ethBridge.lastAttestation > 0n
+    ? Math.round((Date.now() / 1000) - Number(ethBridge.lastAttestation))
+    : 0;
+  const attestationAge = ethBridge.lastAttestation === 0n
+    ? "Never"
+    : timeSinceAttestation < 60
+    ? `${timeSinceAttestation}s ago`
+    : timeSinceAttestation < 3600
+    ? `${Math.round(timeSinceAttestation / 60)}m ago`
+    : `${Math.round(timeSinceAttestation / 3600)}h ago`;
+  const attestationFresh = ethBridge.lastAttestation > 0n && timeSinceAttestation < 3600;
+
+  async function handleRefresh() {
+    refresh();
+    await loadEthereumBridgeData();
+  }
+
+  async function handleRedeem() {
+    if (!hasConnectedUserParty || !activeParty) {
+      setTxError("Connect your Loop wallet first.");
+      setTxStatus("error");
+      return;
+    }
+
+    if (parsedAmount <= 0) {
+      setTxError("Enter a valid amount");
+      setTxStatus("error");
+      return;
+    }
+
+    if (!hasEnoughBalance) {
       setTxError("Insufficient CantonMUSD balance");
+      setTxStatus("error");
       return;
     }
 
-    setTxStatus("processing");
+    setTxStatus("bridging");
     setTxError(null);
 
     try {
-      // Fetch fresh balances to get current contract IDs
-      const fresh = await fetchFreshBalances();
+      const fresh = await fetchFreshBalances(activeParty);
       const freshTokens = fresh.tokens || [];
+      const operatorSnapshot = await fetchFreshBalances();
+      const directMintService = fresh.directMintService || operatorSnapshot.directMintService;
 
       if (freshTokens.length === 0) {
         throw new Error("No CantonMUSD tokens available");
       }
-      if (!fresh.directMintService) {
-        throw new Error("DirectMintService not deployed — cannot redeem");
+
+      if (!directMintService) {
+        throw new Error("DirectMintService not available \u2014 cannot redeem");
       }
 
-      const targetAmount = parseFloat(bridgeAmount);
-
-      // Find a token with enough balance
-      let selectedToken = freshTokens.find((t: any) => parseFloat(t.amount) >= targetAmount);
+      let selectedToken = freshTokens.find((t: any) => parseFloat(t.amount) >= parsedAmount);
       if (!selectedToken) {
-        throw new Error(`No single token has ${bridgeAmount} mUSD. Largest token has ${Math.max(...freshTokens.map((t: any) => parseFloat(t.amount)))} mUSD.`);
+        const largest = Math.max(...freshTokens.map((t: any) => parseFloat(t.amount)));
+        throw new Error(`No single token has ${amount} mUSD. Largest token has ${largest} mUSD.`);
       }
 
-      let cidToBridge = selectedToken.contractId;
+      let cidToRedeem = selectedToken.contractId;
       const tokenAmount = parseFloat(selectedToken.amount);
 
-      // If the token has more than we need, split first to get exact amount
-      if (tokenAmount > targetAmount + 0.001) {
+      if (tokenAmount > parsedAmount + 0.001) {
         const splitResp = await cantonExercise(
           "CantonMUSD",
           selectedToken.contractId,
           "CantonMUSD_Split",
-          { splitAmount: bridgeAmount }
+          { splitAmount: parsedAmount.toString() },
+          activeParty
         );
+
         if (!splitResp.success) {
           throw new Error(splitResp.error || "Failed to split token");
         }
-        // After split, refetch to get new CIDs
-        const afterSplit = await fetchFreshBalances();
+
+        const afterSplit = await fetchFreshBalances(activeParty);
         const exactToken = (afterSplit.tokens || []).find(
-          (t: any) => Math.abs(parseFloat(t.amount) - targetAmount) < 0.01
+          (t: any) => Math.abs(parseFloat(t.amount) - parsedAmount) < 0.01
         );
+
         if (exactToken) {
-          cidToBridge = exactToken.contractId;
+          cidToRedeem = exactToken.contractId;
         }
       }
 
-      // Exercise DirectMint_Redeem — burns CantonMUSD and creates RedemptionRequest
-      // The relay service picks up the redemption and settles on Ethereum automatically
       const redeemResp = await cantonExercise(
         "CantonDirectMintService",
-        fresh.directMintService.contractId,
+        directMintService.contractId,
         "DirectMint_Redeem",
         {
-          user: fresh.party || "",
-          musdCid: cidToBridge,
-        }
+          user: activeParty,
+          musdCid: cidToRedeem,
+        },
+        activeParty
       );
 
       if (!redeemResp.success) {
@@ -89,16 +192,21 @@ export function CantonBridge() {
       }
 
       setTxStatus("success");
-      setBridgeAmount("");
+      setAmount("");
       setTimeout(() => {
-        refresh();
+        void handleRefresh();
         setTxStatus("idle");
       }, 4000);
     } catch (err: any) {
-      console.error("[CantonBridge] Bridge to ETH failed:", err);
-      setTxError(err.message || "Bridge transaction failed");
+      console.error("[CantonBridge] Redeem failed:", err);
+      setTxError(err.message || "Redemption failed");
       setTxStatus("error");
     }
+  }
+
+  function handleReset() {
+    setTxStatus("idle");
+    setTxError(null);
   }
 
   if (loading && !data) {
@@ -106,7 +214,7 @@ export function CantonBridge() {
       <div className="flex min-h-[400px] items-center justify-center">
         <div className="text-center">
           <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-4 border-purple-500/20 border-t-purple-500" />
-          <p className="text-gray-400">Loading Canton bridge data…</p>
+          <p className="text-gray-400">Loading Canton bridge data\u2026</p>
         </div>
       </div>
     );
@@ -118,21 +226,26 @@ export function CantonBridge() {
         <div className="max-w-md space-y-4 text-center">
           <h3 className="text-xl font-semibold text-white">Canton Unavailable</h3>
           <p className="text-sm text-gray-400">{error}</p>
-          <button onClick={refresh} className="rounded-xl bg-purple-600 px-6 py-2 font-medium text-white hover:bg-purple-500">Retry</button>
+          <button onClick={() => void handleRefresh()} className="rounded-xl bg-purple-600 px-6 py-2 font-medium text-white hover:bg-purple-500">
+            Retry
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader
         title="Canton Bridge"
-        subtitle="Bridge mUSD seamlessly between Canton Network and Ethereum"
-        badge="Canton"
-        badgeColor="purple"
+        subtitle="Real-time view of Canton Network attestations governing mUSD supply cap on Ethereum"
+        badge={ethBridge.paused ? "PAUSED" : "Active"}
+        badgeColor={ethBridge.paused ? "warning" : "emerald"}
         action={
-          <button onClick={refresh} className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2 text-sm font-medium text-purple-400 hover:bg-purple-500/20">
+          <button
+            onClick={() => void handleRefresh()}
+            className="flex items-center gap-2 rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-2 text-sm font-medium text-purple-400 hover:bg-purple-500/20"
+          >
             <svg className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
@@ -141,213 +254,218 @@ export function CantonBridge() {
         }
       />
 
-      {/* Primary Stats */}
+      {ethBridge.paused && (
+        <div className="alert-error flex items-center gap-3">
+          <svg className="h-5 w-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-sm font-medium">Bridge is currently paused. Attestation submissions and minting are disabled.</span>
+        </div>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Canton mUSD Balance" value={totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} color="green" variant="glow"
-          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
-        <StatCard label="Token Contracts" value={String(tokens.length)} color="purple"
-          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>} />
-        <StatCard label="Bridge Service" value={data?.bridgeService ? "Active" : "—"} color={data?.bridgeService ? "green" : "default"}
-          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>} />
-        <StatCard label="Pending Transfers" value={String(data?.pendingBridgeIns || 0)} color={data?.pendingBridgeIns ? "yellow" : "default"}
-          icon={<svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
+        <StatCard
+          label="Attested Canton Assets"
+          value={formatUSD(ethBridge.attestedAssets)}
+          color="blue"
+          variant="glow"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Current Supply Cap"
+          value={formatUSD(ethBridge.supplyCap)}
+          color="purple"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Remaining Mintable"
+          value={formatUSD(ethBridge.remainingMintable)}
+          color="green"
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Last Attestation"
+          value={attestationAge}
+          color={attestationFresh ? "green" : "yellow"}
+          subValue={ethBridge.lastAttestation > 0n ? formatTimestamp(Number(ethBridge.lastAttestation)) : "Never"}
+          icon={
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
       </div>
 
-      {/* Tabs */}
       <div className="card-gradient-border overflow-hidden">
-        <div className="flex border-b border-white/10">
-          {[
-            { key: "bridge-to-eth" as const, label: "Bridge to Ethereum", icon: "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" },
-            { key: "status" as const, label: "Bridge Status", icon: "M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" },
-          ].map(({ key, label, icon }) => (
-            <button
-              key={key}
-              className={`relative flex-1 px-6 py-4 text-center text-sm font-semibold transition-all ${tab === key ? "text-white" : "text-gray-400 hover:text-white"}`}
-              onClick={() => { setTab(key); setTxError(null); }}
-            >
-              <span className="flex items-center justify-center gap-2">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
-                </svg>
-                {label}
-              </span>
-              {tab === key && <span className="absolute bottom-0 left-1/2 h-0.5 w-20 -translate-x-1/2 rounded-full bg-gradient-to-r from-purple-500 to-pink-500" />}
-            </button>
-          ))}
-        </div>
-
-        <div className="p-6">
-          {/* Bridge to Ethereum Tab */}
-          {tab === "bridge-to-eth" && (
-            <div className="space-y-6">
-              <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-purple-500/20 flex-shrink-0">
-                    <svg className="h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-white mb-2">Bridge mUSD to Ethereum</h3>
-                    <p className="text-sm text-gray-300 mb-4">
-                      Redeem your CantonMUSD to receive mUSD directly in your Ethereum wallet. The relay service handles settlement automatically — no manual claiming needed.
-                    </p>
-
-                    {/* Amount Input */}
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3">
-                        <div className="relative flex-1">
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            value={bridgeAmount}
-                            onChange={(e) => setBridgeAmount(e.target.value)}
-                            className="w-full rounded-xl border border-white/10 bg-surface-800/80 px-4 py-3 text-white placeholder-gray-500 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
-                            disabled={txStatus === "processing"}
-                          />
-                          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">mUSD</span>
-                        </div>
-                        <button
-                          onClick={() => setBridgeAmount(totalMusd.toString())}
-                          className="rounded-lg border border-purple-500/30 bg-purple-500/10 px-3 py-3 text-xs font-medium text-purple-400 hover:bg-purple-500/20"
-                        >
-                          MAX
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">Available: {totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} mUSD</span>
-                        {bridgeAmount && parseFloat(bridgeAmount) > totalMusd && (
-                          <span className="text-red-400">Insufficient balance</span>
-                        )}
-                      </div>
-
-                      {/* Bridge Button */}
-                      <button
-                        onClick={handleBridgeToEthereum}
-                        disabled={txStatus === "processing" || !bridgeAmount || parseFloat(bridgeAmount) <= 0 || parseFloat(bridgeAmount) > totalMusd}
-                        className={`w-full rounded-xl py-3 font-semibold transition-all ${
-                          txStatus === "processing"
-                            ? "bg-purple-500/50 text-purple-200 cursor-wait"
-                            : txStatus === "success"
-                            ? "bg-emerald-600 text-white"
-                            : "bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-500 hover:to-pink-500 disabled:opacity-40 disabled:cursor-not-allowed"
-                        }`}
-                      >
-                        {txStatus === "processing" ? (
-                          <span className="flex items-center justify-center gap-2">
-                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                            Bridging to Ethereum…
-                          </span>
-                        ) : txStatus === "success" ? (
-                          "✅ Bridge initiated — mUSD will arrive in your ETH wallet"
-                        ) : (
-                          "Bridge to Ethereum"
-                        )}
-                      </button>
-
-                      {!data?.directMintService && (
-                        <p className="text-xs text-yellow-400 text-center">DirectMint service not available — cannot bridge</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Info Card */}
-              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
-                <p className="text-sm text-blue-300 font-medium mb-1">Seamless bridging</p>
-                <p className="text-xs text-gray-400">
-                  When you bridge, your CantonMUSD is redeemed and a RedemptionRequest is created on Canton. The relay service automatically settles it on Ethereum —
-                  mUSD appears directly in your connected wallet. No locking or claiming steps required.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Status Tab */}
-          {tab === "status" && (
-            <div className="space-y-6">
-              {/* Current Holdings Summary */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                  <p className="text-xs text-gray-500 mb-1">Canton mUSD Balance</p>
-                  <p className="text-2xl font-bold text-emerald-400">{totalMusd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
-                  <p className="text-xs text-gray-500 mt-1">{tokens.length} contract{tokens.length !== 1 ? "s" : ""}</p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-                  <p className="text-xs text-gray-500 mb-1">Pending Transfers</p>
-                  <p className="text-2xl font-bold text-yellow-400">{data?.pendingBridgeIns || 0}</p>
-                  <p className="text-xs text-gray-500 mt-1">Awaiting relay settlement</p>
-                </div>
-              </div>
-
-              {/* Bridge Service Info */}
-              {data?.bridgeService && (
-                <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 space-y-2">
-                  <h4 className="text-sm font-medium text-gray-400">Bridge Service</h4>
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div>
-                      <p className="text-xs text-gray-500">Status</p>
-                      <p className="text-sm font-medium text-emerald-400">Active</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Last Nonce</p>
-                      <p className="text-sm font-medium text-white">{data.bridgeService.lastNonce}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">Contract ID</p>
-                      <p className="font-mono text-xs text-gray-400">{data.bridgeService.contractId.slice(0, 24)}…</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Staking Info */}
-              {data?.stakingService && (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <p className="text-sm text-emerald-300 font-medium mb-1">Earn yield on Canton</p>
-                  <p className="text-xs text-gray-400">
-                    Stake your CantonMUSD into smUSD for yield,
-                    or deposit into the ETH Pool. Visit the <strong className="text-white">Stake</strong> page to get started.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {txError && (
-            <div className="alert-error mt-4 text-sm flex items-center justify-between">
-              <span>{txError}</span>
-              <button onClick={() => { setTxError(null); setTxStatus("idle"); }} className="text-xs underline opacity-70 hover:opacity-100">Dismiss</button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* How Canton Bridge Works — seamless 4-step flow */}
-      <div className="card">
-        <div className="flex items-center gap-3 mb-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
-            <svg className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        <div className="flex items-center gap-3 mb-6">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-500">
+            <svg className="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
           </div>
-          <h2 className="text-lg font-semibold text-white">How Canton Bridge Works</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-white">Bridge to Ethereum</h2>
+            <p className="text-sm text-gray-400">Burn mUSD on Canton \u2192 Mint on Ethereum</p>
+          </div>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { step: "1", title: "Bridge from Ethereum", desc: "Deposit mUSD into the BLE Bridge contract on Ethereum. The relay detects the event automatically.", color: "purple" },
-            { step: "2", title: "Instant Canton Mint", desc: "The relay service creates CantonMUSD on the Canton ledger — no manual steps needed.", color: "emerald" },
-            { step: "3", title: "Hold & Earn", desc: "Your mUSD lives on Canton as CantonMUSD. Stake into smUSD or ETH Pool for yield.", color: "green" },
-            { step: "4", title: "Bridge Back Seamlessly", desc: "Redeem CantonMUSD to bridge back. mUSD arrives directly in your Ethereum wallet.", color: "blue" },
-          ].map(({ step, title, desc, color }) => (
-            <div key={step} className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
-              <div className={`flex h-8 w-8 items-center justify-center rounded-full bg-${color}-500/20 text-${color}-400 font-bold text-sm mb-3`}>{step}</div>
-              <h3 className="font-medium text-white mb-1 text-sm">{title}</h3>
-              <p className="text-xs text-gray-400">{desc}</p>
+
+        <div className="mb-6">
+          {hasConnectedUserParty ? (
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-sm font-medium text-emerald-300">Loop Wallet Connected</span>
+                </div>
+                <span className="text-xs font-mono text-gray-500">{shortenParty(activeParty)}</span>
+              </div>
             </div>
-          ))}
+          ) : (
+            <button
+              onClick={loopWallet.connect}
+              disabled={loopWallet.isConnecting}
+              className="w-full rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-4 py-3 text-sm font-semibold text-white transition-all hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50"
+            >
+              {loopWallet.isConnecting ? "Connecting\u2026" : "Connect Loop Wallet"}
+            </button>
+          )}
+
+          {loopWallet.error && (
+            <p className="mt-2 text-xs text-red-300">{loopWallet.error}</p>
+          )}
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium text-gray-300">Amount (mUSD)</label>
+              <button
+                onClick={() => setAmount(totalMusd.toFixed(6))}
+                className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
+              >
+                Max: {totalMusd.toLocaleString(undefined, { maximumFractionDigits: 2 })} mUSD
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type="text"
+                value={amount}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === "" || /^\d*\.?\d*$/.test(val)) {
+                    setAmount(val);
+                  }
+                }}
+                placeholder="0.00"
+                disabled={!hasConnectedUserParty || txStatus === "bridging"}
+                className="w-full rounded-xl bg-surface-800 border border-white/10 px-4 py-3.5 text-lg font-medium text-white placeholder-gray-600 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50 transition-colors"
+              />
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-gray-500">mUSD</span>
+            </div>
+
+            {parsedAmount > 0 && !hasEnoughBalance && (
+              <p className="mt-1 text-xs text-red-400">Insufficient mUSD balance</p>
+            )}
+          </div>
+
+          <div className="flex items-center justify-center gap-4 py-2">
+            <div className="flex items-center gap-2 rounded-lg bg-surface-800/50 border border-white/5 px-3 py-2">
+              <div className="h-3 w-3 rounded-full bg-emerald-400" />
+              <span className="text-xs font-medium text-gray-400">Canton</span>
+            </div>
+            <svg className="h-5 w-5 text-brand-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+            <div className="flex items-center gap-2 rounded-lg bg-surface-800/50 border border-white/5 px-3 py-2">
+              <div className="h-3 w-3 rounded-full bg-blue-400" />
+              <span className="text-xs font-medium text-gray-400">Ethereum</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <button
+              onClick={handleRedeem}
+              disabled={!canRedeem}
+              className="w-full rounded-xl bg-gradient-to-r from-brand-500 to-purple-500 px-6 py-3.5 font-semibold text-white transition-all hover:from-brand-400 hover:to-purple-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {txStatus === "bridging" ? (
+                <span className="flex items-center justify-center gap-2">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Submitting\u2026
+                </span>
+              ) : !hasConnectedUserParty ? (
+                "Connect Loop Wallet First"
+              ) : parsedAmount <= 0 ? (
+                "Enter Amount"
+              ) : !hasEnoughBalance ? (
+                "Insufficient Balance"
+              ) : (
+                `Bridge ${amount} mUSD to Ethereum`
+              )}
+            </button>
+          </div>
+
+          {txStatus === "success" && (
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4">
+              <div className="flex items-start gap-3">
+                <svg className="h-5 w-5 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-emerald-300">Redemption Submitted</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Your Canton redemption request was created. The relay will settle it by minting mUSD on Ethereum.
+                  </p>
+                </div>
+                <button onClick={handleReset} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {txStatus === "error" && txError && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4">
+              <div className="flex items-start gap-3">
+                <svg className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-red-300">Transaction Failed</p>
+                  <p className="text-xs text-gray-400 mt-1 break-all">{txError}</p>
+                </div>
+                <button onClick={handleReset} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-xl bg-surface-800/50 border border-white/5 p-4 space-y-2">
+            <p className="text-xs font-medium text-gray-400">How it works</p>
+            <ol className="text-xs text-gray-500 space-y-1 list-decimal list-inside">
+              <li>Your CantonMUSD is consumed by DirectMint_Redeem on Canton</li>
+              <li>A RedemptionRequest is created on the Canton ledger</li>
+              <li>The relay detects the request and mints mUSD on Ethereum</li>
+              <li>Typical completion time: 10\u201390 seconds</li>
+            </ol>
+          </div>
         </div>
       </div>
     </div>

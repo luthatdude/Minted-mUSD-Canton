@@ -15,13 +15,29 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEFAULT_CONFIG = exports.YieldKeeper = exports.getKeeperStatus = void 0;
 const ethers_1 = require("ethers");
 const utils_1 = require("./utils");
+const metrics_1 = require("./metrics");
+// INFRA-H-01 / INFRA-H-06: Enforce TLS certificate validation at process level
+(0, utils_1.enforceTLSSecurity)();
 const DEFAULT_CONFIG = {
-    ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || "http://localhost:8545",
+    // INFRA-H-01: No insecure fallback — require explicit RPC URL
+    ethereumRpcUrl: (() => {
+        const url = process.env.ETHEREUM_RPC_URL;
+        if (!url)
+            throw new Error("ETHEREUM_RPC_URL is required (no insecure default)");
+        (0, utils_1.requireHTTPS)(url, "ETHEREUM_RPC_URL");
+        return url;
+    })(),
     treasuryAddress: process.env.TREASURY_ADDRESS || "",
     keeperPrivateKey: (0, utils_1.readSecret)("keeper_private_key", "KEEPER_PRIVATE_KEY"),
     pollIntervalMs: parseInt(process.env.KEEPER_POLL_MS || "60000", 10), // 1 minute
     maxGasPriceGwei: parseInt(process.env.MAX_GAS_PRICE_GWEI || "50", 10),
-    minProfitUsd: parseFloat(process.env.MIN_PROFIT_USD || "10"),
+    // TS-H-01: Use Number() + validation instead of parseFloat
+    minProfitUsd: (() => {
+        const v = Number(process.env.MIN_PROFIT_USD || "10");
+        if (Number.isNaN(v) || v < 0)
+            throw new Error("MIN_PROFIT_USD must be a non-negative number");
+        return v;
+    })(),
 };
 exports.DEFAULT_CONFIG = DEFAULT_CONFIG;
 // ============================================================
@@ -96,25 +112,40 @@ const TREASURY_ABI = [
 class YieldKeeper {
     provider;
     wallet;
+    walletAddress = "";
     treasury;
     config;
     running = false;
+    metricsServer = null;
     constructor(config) {
         this.config = config;
         this.provider = new ethers_1.ethers.JsonRpcProvider(config.ethereumRpcUrl);
-        this.wallet = new ethers_1.ethers.Wallet(config.keeperPrivateKey, this.provider);
-        this.treasury = new ethers_1.ethers.Contract(config.treasuryAddress, TREASURY_ABI, this.wallet);
+        // Signer is initialised asynchronously via init()
+        this.treasury = new ethers_1.ethers.Contract(config.treasuryAddress, TREASURY_ABI, this.provider);
+    }
+    /** Initialise the KMS-backed (or fallback) signer */
+    async init() {
+        this.wallet = await (0, utils_1.createSigner)(this.provider, "keeper_private_key", "KEEPER_PRIVATE_KEY");
+        this.walletAddress = await this.wallet.getAddress();
+        // Re-bind treasury with signing capability
+        this.treasury = new ethers_1.ethers.Contract(this.config.treasuryAddress, TREASURY_ABI, this.wallet);
     }
     /**
      * Start the keeper loop
      */
     async start() {
+        // Initialise signer (KMS or fallback)
+        await this.init();
         console.log("🚀 Yield Keeper starting...");
         console.log(`   Treasury: ${this.config.treasuryAddress}`);
-        console.log(`   Keeper wallet: ${this.wallet.address}`);
+        const walletAddress = await this.wallet.getAddress();
+        console.log(`   Keeper wallet: ${walletAddress}`);
         console.log(`   Poll interval: ${this.config.pollIntervalMs}ms`);
         // Verify connection and configuration
         await this.verifySetup();
+        const metricsPort = parseInt(process.env.KEEPER_METRICS_PORT || "9094", 10);
+        const metricsHost = process.env.KEEPER_METRICS_HOST || "0.0.0.0";
+        this.metricsServer = (0, metrics_1.startMetricsServer)(metricsPort, metricsHost);
         this.running = true;
         while (this.running) {
             try {
@@ -132,6 +163,10 @@ class YieldKeeper {
     stop() {
         console.log("🛑 Yield Keeper stopping...");
         this.running = false;
+        if (this.metricsServer) {
+            this.metricsServer.close();
+            this.metricsServer = null;
+        }
     }
     /**
      * Verify setup is correct
@@ -162,23 +197,31 @@ class YieldKeeper {
             return;
         }
         console.log(`💰 Deploy opportunity: $${this.formatUsdc(deployable)} deployable`);
-        // 2. Check gas price
+        // 2. Check gas price (TS-M-03: use BigInt comparison to avoid precision loss)
         const feeData = await this.provider.getFeeData();
         const gasPrice = feeData.gasPrice || 0n;
-        const gasPriceGwei = Number(gasPrice) / 1e9;
-        if (gasPriceGwei > this.config.maxGasPriceGwei) {
-            console.log(`⛽ Gas too high (${gasPriceGwei.toFixed(1)} gwei > ${this.config.maxGasPriceGwei}), skipping`);
+        const maxGasPriceWei = BigInt(this.config.maxGasPriceGwei) * 1000000000n;
+        if (gasPrice > maxGasPriceWei) {
+            console.log(`⛽ Gas too high (${ethers_1.ethers.formatUnits(gasPrice, "gwei")} gwei > ${this.config.maxGasPriceGwei}), skipping`);
             return;
         }
         // 3. Estimate gas and check profitability
         try {
             const gasEstimate = await this.treasury.keeperTriggerAutoDeploy.estimateGas();
             const gasCostWei = gasEstimate * gasPrice;
-            const gasCostEth = Number(gasCostWei) / 1e18;
-            // Rough ETH price assumption ($2000) - in production, fetch from oracle
-            const gasCostUsd = gasCostEth * 2000;
+            // TS-M-03: Use ethers.formatUnits for safe BigInt → decimal conversion
+            const gasCostEth = parseFloat(ethers_1.ethers.formatUnits(gasCostWei, 18));
+            // TS-H-02: Use configurable ETH price from env/oracle instead of hardcoded $2000
+            // In production, this should be fetched from the price oracle service
+            const ethPriceUsd = Number(process.env.ETH_PRICE_USD || "0");
+            if (ethPriceUsd <= 0) {
+                console.warn("⚠️  ETH_PRICE_USD not set or invalid — skipping profitability check");
+                return;
+            }
+            const gasCostUsd = gasCostEth * ethPriceUsd;
             // Estimate daily yield on deployed amount (assume 10% APY)
-            const deployableUsd = Number(deployable) / 1e6;
+            // TS-M-04: Use ethers.formatUnits for safe BigInt → decimal conversion
+            const deployableUsd = parseFloat(ethers_1.ethers.formatUnits(deployable, 6));
             const dailyYieldUsd = (deployableUsd * 0.10) / 365;
             console.log(`   Gas cost: $${gasCostUsd.toFixed(2)} | Daily yield: $${dailyYieldUsd.toFixed(2)}`);
             if (dailyYieldUsd < this.config.minProfitUsd) {
@@ -187,6 +230,7 @@ class YieldKeeper {
             }
             // 4. Execute deployment
             console.log("🔄 Triggering auto-deploy...");
+            const observeDuration = metrics_1.yieldDistributionDuration.startTimer();
             const tx = await this.treasury.keeperTriggerAutoDeploy({
                 gasLimit: gasEstimate * 12n / 10n, // 20% buffer
             });
@@ -194,38 +238,28 @@ class YieldKeeper {
             const receipt = await tx.wait(2); // Wait for 2 confirmations
             if (receipt?.status === 1) {
                 console.log(`✅ Deployed $${this.formatUsdc(deployable)} to strategy`);
-                this.logMetrics("deploy_success", deployable);
+                metrics_1.yieldDistributionsTotal.labels("usdc", "success").inc();
             }
             else {
                 console.error("❌ TX reverted");
-                this.logMetrics("deploy_failed", 0n);
+                metrics_1.yieldDistributionsTotal.labels("usdc", "revert").inc();
             }
+            observeDuration();
         }
         catch (err) {
             console.error("❌ Deploy failed:", err);
-            this.logMetrics("deploy_error", 0n);
+            metrics_1.yieldDistributionsTotal.labels("usdc", "error").inc();
         }
     }
     /**
      * Format USDC amount for display (6 decimals → human readable)
+     * TS-M-04: Use ethers.formatUnits to avoid precision loss on large amounts
      */
     formatUsdc(amount) {
-        return (Number(amount) / 1e6).toLocaleString(undefined, {
+        return parseFloat(ethers_1.ethers.formatUnits(amount, 6)).toLocaleString(undefined, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
         });
-    }
-    /**
-     * Log metrics (placeholder for Prometheus/DataDog integration)
-     */
-    logMetrics(event, amount) {
-        const metrics = {
-            timestamp: new Date().toISOString(),
-            event,
-            amountUsdc: Number(amount) / 1e6,
-            keeper: this.wallet.address,
-        };
-        console.log("📈 METRICS:", JSON.stringify(metrics));
     }
     /**
      * Sleep helper
@@ -253,13 +287,14 @@ async function getKeeperStatus(config) {
         treasury.deployedToStrategies(),
         treasury.shouldAutoDeploy(),
     ]);
+    // TS-M-04: Use ethers.formatUnits to avoid precision loss on large USDC amounts
     return {
         autoDeployEnabled: enabled,
         defaultStrategy: strategy,
-        threshold: (Number(threshold) / 1e6).toFixed(2),
-        deployable: (Number(deployable) / 1e6).toFixed(2),
-        availableReserves: (Number(reserves) / 1e6).toFixed(2),
-        deployedToStrategies: (Number(deployed) / 1e6).toFixed(2),
+        threshold: parseFloat(ethers_1.ethers.formatUnits(threshold, 6)).toFixed(2),
+        deployable: parseFloat(ethers_1.ethers.formatUnits(deployable, 6)).toFixed(2),
+        availableReserves: parseFloat(ethers_1.ethers.formatUnits(reserves, 6)).toFixed(2),
+        deployedToStrategies: parseFloat(ethers_1.ethers.formatUnits(deployed, 6)).toFixed(2),
         shouldDeploy,
     };
 }
