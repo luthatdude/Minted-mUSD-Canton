@@ -45,8 +45,8 @@ interface KeeperBotConfig {
 interface DebtPosition {
     contractId: string;
     borrower: string;
-    principalDebt: number;
-    accruedInterest: number;
+    principalDebt: string;
+    accruedInterest: string;
     lastAccrualTime: string;
     interestRateBps: number;
 }
@@ -54,7 +54,7 @@ interface EscrowPosition {
     contractId: string;
     owner: string;
     collateralType: string;
-    amount: number;
+    amount: string;
 }
 interface LiquidationCandidate {
     borrower: string;
@@ -76,7 +76,7 @@ interface KeeperStats {
 }
 export declare class LendingKeeperBot {
     private config;
-    private ledger;
+    private canton;
     private oracle;
     private running;
     private lastLiquidationTime;
@@ -103,15 +103,22 @@ export declare class LendingKeeperBot {
      * Calculate health factor for a borrower:
      * healthFactor = Σ(collateral × price × liqThreshold) / totalDebt
      * If < 1.0, position is liquidatable
+     *
+     * Uses BigInt fixed-point (18 decimals) to avoid float precision loss
+     * on positions > $10M where 64-bit float loses sub-cent accuracy.
      */
     private calculateHealthFactor;
     /**
      * Calculate total debt including projected interest since last accrual
+     *
+     * Uses BigInt fixed-point to prevent precision loss on large debts
      */
     private calculateTotalDebt;
     /**
      * Find the most profitable collateral to seize for a given position.
      * Prefers CTN (highest penalty = highest keeper bonus).
+     *
+     * Uses BigInt fixed-point for seize/bonus calculations
      */
     private selectBestTarget;
     /**

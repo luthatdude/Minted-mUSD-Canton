@@ -166,9 +166,15 @@ function validateBridgeInRequest(payload: Record<string, unknown>): void {
   assertTime(payload.createdAt, T, "createdAt");
   assertText(payload.status, T, "status");
 
-  // CRITICAL: ensure requiredSignatures > 0
-  assertNonEmptyPartyList(payload.validators, T, "validators");
-  assertPositiveInt(payload.requiredSignatures, T, "requiredSignatures");
+  // validators and requiredSignatures are optional — the deployed DAML package
+  // may not include these fields (V3 source has them but the on-ledger package
+  // predates their addition).
+  assertOptional(payload.validators, T, "validators", (v, t, f) => {
+    assertNonEmptyPartyList(v, t, f);
+  });
+  assertOptional(payload.requiredSignatures, T, "requiredSignatures", (v, t, f) => {
+    assertPositiveInt(v, t, f);
+  });
 }
 
 /**

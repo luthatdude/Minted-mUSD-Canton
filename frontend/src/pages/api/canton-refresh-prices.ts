@@ -61,18 +61,38 @@ async function getActivePriceFeeds(): Promise<PriceFeedContract[]> {
     };
   };
 
-  const entries = await cantonRequest<RawEntry[]>("POST", "/v2/state/active-contracts", {
-    filter: {
+  const raw = await cantonRequest<unknown>("POST", "/v2/state/active-contracts?limit=200", {
+    eventFormat: {
       filtersByParty: {
         [CANTON_PARTY]: {
-          identifierFilter: {
-            wildcardFilter: {},
-          },
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: {
+                  value: {
+                    templateId: PRICE_FEED_TEMPLATE,
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
+          ],
         },
       },
+      verbose: true,
     },
     activeAtOffset: offset,
   });
+
+  // Normalize: response may be array or { result: [...] }
+  let entries: RawEntry[];
+  if (Array.isArray(raw)) {
+    entries = raw;
+  } else if (raw && typeof raw === "object" && Array.isArray((raw as any).result)) {
+    entries = (raw as any).result;
+  } else {
+    entries = [];
+  }
 
   const feeds: PriceFeedContract[] = [];
   for (const entry of entries) {

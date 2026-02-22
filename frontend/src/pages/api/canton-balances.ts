@@ -17,6 +17,11 @@ const CANTON_PARTY =
   process.env.CANTON_PARTY ||
   "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 const RECIPIENT_ALIAS_MAP_RAW = process.env.CANTON_RECIPIENT_PARTY_ALIASES || "";
+const PACKAGE_ID =
+  process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
+  process.env.CANTON_PACKAGE_ID ||
+  "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 
 function parseRecipientAliasMap(): Record<string, string> {
   if (!RECIPIENT_ALIAS_MAP_RAW.trim()) return {};
@@ -39,12 +44,14 @@ function parseRecipientAliasMap(): Record<string, string> {
 
 const RECIPIENT_ALIAS_MAP = parseRecipientAliasMap();
 
-function resolveRequestedParty(req: NextApiRequest): string {
-  const requested = typeof req.query.party === "string" ? req.query.party.trim() : "";
-  if (requested && requested.includes("::")) {
-    return RECIPIENT_ALIAS_MAP[requested] || requested;
+function resolveRequestedParty(rawParty: string | string[] | undefined): string {
+  const candidate = Array.isArray(rawParty) ? rawParty[0] : rawParty;
+  if (!candidate || !candidate.trim()) return CANTON_PARTY;
+  const party = candidate.trim();
+  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
+    throw new Error("Invalid Canton party");
   }
-  return CANTON_PARTY;
+  return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
 interface CantonMUSDToken {
@@ -168,6 +175,78 @@ interface BalancesResponse {
   timestamp: string;
 }
 
+type RawEntry = {
+  contractEntry: {
+    JsActiveContract?: {
+      createdEvent: {
+        contractId: string;
+        templateId: string;
+        createArgument: Record<string, unknown>;
+        createdAt: string;
+        offset: number;
+        signatories: string[];
+        observers: string[];
+      };
+    };
+  };
+};
+
+function templateId(moduleName: string, entityName: string): string {
+  return `${PACKAGE_ID}:${moduleName}:${entityName}`;
+}
+
+function buildEventFormat(party: string, fullTemplateId: string): Record<string, unknown> {
+  return {
+    filtersByParty: {
+      [party]: {
+        cumulative: [
+          {
+            identifierFilter: {
+              TemplateFilter: {
+                value: {
+                  templateId: fullTemplateId,
+                  includeCreatedEventBlob: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    },
+    verbose: true,
+  };
+}
+
+function normalizeEntries(payload: unknown): RawEntry[] {
+  if (Array.isArray(payload)) return payload as RawEntry[];
+  if (payload && typeof payload === "object") {
+    const obj = payload as { result?: unknown };
+    if (Array.isArray(obj.result)) return obj.result as RawEntry[];
+  }
+  return [];
+}
+
+async function queryTemplateEntries(
+  party: string,
+  activeAtOffset: number,
+  fullTemplateId: string
+): Promise<RawEntry[]> {
+  try {
+    const raw = await cantonRequest<unknown>("POST", "/v2/state/active-contracts?limit=200", {
+      eventFormat: buildEventFormat(party, fullTemplateId),
+      activeAtOffset,
+    });
+    return normalizeEntries(raw);
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    // Some optional templates may not exist on this package/version.
+    if (msg.includes("Canton API 404")) {
+      return [];
+    }
+    throw err;
+  }
+}
+
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
     method,
@@ -195,42 +274,44 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  let actAsParty: string;
   try {
-    const effectiveParty = resolveRequestedParty(req);
+    actAsParty = resolveRequestedParty(req.query.party);
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Invalid Canton party" });
+  }
+
+  try {
+    const effectiveParty = actAsParty;
     // 1. Get current ledger offset
     const { offset } = await cantonRequest<{ offset: number }>("GET", "/v2/state/ledger-end");
 
-    // 2. Query all contracts visible to our party
-    const filter = {
-      filtersByParty: {
-        [effectiveParty]: {
-          identifierFilter: {
-            wildcardFilter: {},
-          },
-        },
-      },
-    };
+    // 2. Query template-scoped slices to avoid wildcard ACS 413 at 200-element node cap.
+    const templates = [
+      templateId("CantonDirectMint", "CantonMUSD"),
+      templateId("Minted.Protocol.V3", "BridgeService"),
+      templateId("Minted.Protocol.V3", "BridgeInRequest"),
+      templateId("Minted.Protocol.V3", "MUSDSupplyService"),
+      templateId("CantonSMUSD", "CantonStakingService"),
+      templateId("CantonETHPool", "CantonETHPoolService"),
+      templateId("CantonBoostPool", "CantonBoostPoolService"),
+      templateId("CantonLending", "CantonLendingService"),
+      templateId("CantonLending", "CantonPriceFeed"),
+      templateId("CantonETHPool", "CantonSMUSD_E"),
+      templateId("CantonBoostPool", "BoostPoolLP"),
+      templateId("CantonLending", "EscrowedCollateral"),
+      templateId("CantonLending", "CantonDebtPosition"),
+      templateId("CantonDirectMint", "CantonDirectMintService"),
+      templateId("CantonSMUSD", "CantonSMUSD"),
+      templateId("CantonCoinToken", "CantonCoin"),
+      templateId("CantonDirectMint", "CantonUSDC"),
+      templateId("CantonDirectMint", "USDCx"),
+    ] as const;
 
-    type RawEntry = {
-      contractEntry: {
-        JsActiveContract?: {
-          createdEvent: {
-            contractId: string;
-            templateId: string;
-            createArgument: Record<string, unknown>;
-            createdAt: string;
-            offset: number;
-            signatories: string[];
-            observers: string[];
-          };
-        };
-      };
-    };
-
-    const entries = await cantonRequest<RawEntry[]>("POST", "/v2/state/active-contracts", {
-      filter,
-      activeAtOffset: offset,
-    });
+    const entryGroups = await Promise.all(
+      templates.map((tpl) => queryTemplateEntries(actAsParty, offset, tpl))
+    );
+    const entries = entryGroups.flat();
 
     // 3. Parse contracts by template
     const tokens: CantonMUSDToken[] = [];
@@ -477,20 +558,16 @@ export default async function handler(
       (!directMintService || !bridgeService || !supplyService)
     ) {
       try {
-        const operatorFilter = {
-          filtersByParty: {
-            [CANTON_PARTY]: {
-              identifierFilter: {
-                wildcardFilter: {},
-              },
-            },
-          },
-        };
+        const operatorTemplates = [
+          templateId("Minted.Protocol.V3", "BridgeService"),
+          templateId("Minted.Protocol.V3", "MUSDSupplyService"),
+          templateId("CantonDirectMint", "CantonDirectMintService"),
+        ] as const;
 
-        const operatorEntries = await cantonRequest<RawEntry[]>("POST", "/v2/state/active-contracts", {
-          filter: operatorFilter,
-          activeAtOffset: offset,
-        });
+        const operatorGroups = await Promise.all(
+          operatorTemplates.map((tpl) => queryTemplateEntries(CANTON_PARTY, offset, tpl))
+        );
+        const operatorEntries = operatorGroups.flat();
 
         for (const entry of operatorEntries) {
           const ac = entry.contractEntry?.JsActiveContract;
@@ -580,7 +657,7 @@ export default async function handler(
       escrowPositions,
       debtPositions,
       ledgerOffset: offset,
-      party: effectiveParty,
+      party: actAsParty,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {

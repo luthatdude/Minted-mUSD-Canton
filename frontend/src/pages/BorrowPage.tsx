@@ -10,6 +10,7 @@ import { ERC20_ABI } from "@/abis/ERC20";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
 import WalletConnector from "@/components/WalletConnector";
+import { SlippageInput } from "@/components/SlippageInput";
 
 interface CollateralInfo {
   token: string;
@@ -21,6 +22,7 @@ interface CollateralInfo {
   factorBps: bigint;
   liqThreshold: bigint;
   liqPenalty: bigint;
+  usedFallbackPrice: boolean;
 }
 
 type TabType = "deposit" | "borrow" | "repay" | "withdraw";
@@ -38,8 +40,10 @@ export function BorrowPage() {
   const [interestRate, setInterestRate] = useState(0n);
   const [isLiquidatable, setIsLiquidatable] = useState(false);
   const [musdBalance, setMusdBalance] = useState(0n);
-  const [walletBalances, setWalletBalances] = useState<Record<string, bigint>>({});
+  const [oracleDegraded, setOracleDegraded] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const tx = useTx();
+  const [slippageBps, setSlippageBps] = useState(50);
 
   const { vault, borrow, oracle, musd, liquidation } = contracts;
 
@@ -72,6 +76,7 @@ export function BorrowPage() {
             deposited,
             price,
             valueUsd,
+            usedFallbackPrice: false,
             // getConfig returns (enabled, factorBps, liqThreshold, liqPenalty)
             // Previously mapped [0]→factor, [1]→threshold, [2]→penalty (off-by-one, skipping enabled)
             factorBps: config[1],
@@ -80,19 +85,6 @@ export function BorrowPage() {
           });
         }
         setCollaterals(infos);
-
-        // Load wallet balances for each collateral token
-        const balances: Record<string, bigint> = {};
-        for (const token of tokens) {
-          const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
-          try {
-            balances[token] = BigInt(await erc20.balanceOf(address));
-          } catch {
-            balances[token] = 0n;
-          }
-        }
-        setWalletBalances(balances);
-
         if (tokens.length > 0 && !selectedToken) setSelectedToken(tokens[0]);
 
         const [d, hf, mb, ir, bal] = await Promise.all([
@@ -118,7 +110,7 @@ export function BorrowPage() {
       }
     }
     load();
-  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success]);
+  }, [vault, oracle, borrow, musd, liquidation, address, signer, tx.success, reloadKey]);
 
   async function handleDeposit() {
     if (!vault || !signer || !selectedToken) return;
@@ -147,12 +139,10 @@ export function BorrowPage() {
   async function handleRepay() {
     if (!borrow || !musd || !address) return;
     const parsed = ethers.parseUnits(amount, MUSD_DECIMALS);
-    // Approve MaxUint256 so contract's dust auto-close (which may bump the amount)
-    // doesn't fail due to insufficient allowance from interest accrual
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < parsed) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, parsed);
         await approveTx.wait();
       }
       return borrow.repay(parsed);
@@ -162,16 +152,13 @@ export function BorrowPage() {
 
   async function handleRepayMax() {
     if (!borrow || !musd || !address || debt === 0n) return;
-    // Use the larger of debt or balance, capped. Add 1% buffer for interest accrual
-    // between read and TX execution. Contract caps at actual debt, so overpaying is safe.
-    const bufferedDebt = debt + (debt / 100n); // +1% buffer for accruing interest
-    const repayAmount = musdBalance < bufferedDebt ? musdBalance : bufferedDebt;
+    const repayAmount = musdBalance < debt ? musdBalance : debt;
     if (repayAmount === 0n) return;
 
     await tx.send(async () => {
       const allowance = await musd.allowance(address, CONTRACTS.BorrowModule);
       if (allowance < repayAmount) {
-        const approveTx = await musd.approve(CONTRACTS.BorrowModule, ethers.MaxUint256);
+        const approveTx = await musd.approve(CONTRACTS.BorrowModule, repayAmount);
         await approveTx.wait();
       }
       return borrow.repay(repayAmount);
@@ -188,10 +175,7 @@ export function BorrowPage() {
   }
 
   // Health factor thresholds
-  // Contract returns health factor in basis points (10000 = 1.0x)
-  const hfValue = healthFactor >= BigInt("0xffffffffffffffffffffffffffffffff")
-    ? Infinity
-    : Number(healthFactor) / 10000;
+  const hfValue = Number(ethers.formatUnits(healthFactor, 18));
   const hfColor = hfValue < 1.0 ? "red" : hfValue < 1.2 ? "red" : hfValue < 1.5 ? "yellow" : "green";
   const isAtRisk = hfValue < 1.5 && debt > 0n;
   const isCritical = hfValue < 1.2 && debt > 0n;
@@ -204,6 +188,56 @@ export function BorrowPage() {
     ? Math.min(100, Number((debt * 10000n) / totalCollateralUsd) / 100)
     : 0;
 
+  // Weighted LTV thresholds across deposited collateral
+  const weightedMaxLtvBps = totalCollateralUsd > 0n
+    ? collaterals.reduce((sum, c) => sum + (c.valueUsd * c.factorBps), 0n) / totalCollateralUsd
+    : 0n;
+  const weightedLiqThresholdBps = totalCollateralUsd > 0n
+    ? collaterals.reduce((sum, c) => sum + (c.valueUsd * c.liqThreshold), 0n) / totalCollateralUsd
+    : 0n;
+  const currentLtvBps = totalCollateralUsd > 0n && debt > 0n
+    ? (debt * 10000n) / totalCollateralUsd
+    : 0n;
+  const currentLtvPct = Number(currentLtvBps) / 100;
+  const weightedMaxLtvPct = Number(weightedMaxLtvBps) / 100;
+  const weightedLiqThresholdPct = Number(weightedLiqThresholdBps) / 100;
+  const ltvGaugePct = weightedLiqThresholdBps > 0n
+    ? Math.min(100, Math.max(0, Number((currentLtvBps * 10000n) / weightedLiqThresholdBps) / 100))
+    : 0;
+  const ltvColorClass =
+    currentLtvBps >= weightedLiqThresholdBps && weightedLiqThresholdBps > 0n
+      ? "text-red-400"
+      : currentLtvBps >= weightedMaxLtvBps && weightedMaxLtvBps > 0n
+      ? "text-yellow-400"
+      : "text-emerald-400";
+  const ltvGaugeGradient =
+    currentLtvBps >= weightedLiqThresholdBps && weightedLiqThresholdBps > 0n
+      ? "from-red-500 to-red-400"
+      : currentLtvBps >= weightedMaxLtvBps && weightedMaxLtvBps > 0n
+      ? "from-yellow-500 to-yellow-400"
+      : "from-emerald-500 to-teal-400";
+
+  // Testnet faucet: mint test collateral tokens (MockERC20 has public mint)
+  const [faucetLoading, setFaucetLoading] = useState(false);
+  async function handleFaucetMint() {
+    if (!signer || !selectedToken) return;
+    setFaucetLoading(true);
+    try {
+      const info = collaterals.find(c => c.token === selectedToken);
+      const decimals = info?.decimals ?? 18;
+      const faucetAmount = ethers.parseUnits("10", decimals); // 10 tokens
+      const erc20 = new ethers.Contract(selectedToken, [...ERC20_ABI, "function mint(address to, uint256 amount)"], signer);
+      const mintTx = await erc20.mint(address, faucetAmount, { gasLimit: 100_000 });
+      await mintTx.wait();
+      // Trigger data reload
+      setReloadKey(k => k + 1);
+    } catch (e: any) {
+      console.error("Faucet mint failed:", e);
+    } finally {
+      setFaucetLoading(false);
+    }
+  }
+
   // Health factor gauge (map from 1.0-3.0 to 0%-100%)
   const hfGaugePct = debt > 0n
     ? Math.min(100, Math.max(0, ((Math.min(hfValue, 3) - 1) / 2) * 100))
@@ -211,7 +245,12 @@ export function BorrowPage() {
   const hfGaugeColor = hfValue < 1.2 ? "from-red-500 to-red-400" : hfValue < 1.5 ? "from-yellow-500 to-yellow-400" : "from-emerald-500 to-teal-400";
 
   if (!isConnected) {
-    return <WalletConnector mode="ethereum" />;
+    return (
+      <div className="mx-auto max-w-6xl space-y-8">
+        <PageHeader title="Borrow & Lend" subtitle="Deposit collateral to borrow mUSD with overcollateralization" badge="Borrow" badgeColor="brand" />
+        <WalletConnector mode="ethereum" />
+      </div>
+    );
   }
 
   return (
@@ -342,6 +381,16 @@ export function BorrowPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
+                  {/* Testnet Faucet */}
+                  {action === "deposit" && selectedToken && (
+                    <button
+                      className="mt-2 w-full rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 transition-colors hover:bg-blue-500/20 disabled:opacity-50"
+                      onClick={handleFaucetMint}
+                      disabled={faucetLoading}
+                    >
+                      {faucetLoading ? "Minting..." : `🚰 Get 10 Test ${collaterals.find(c => c.token === selectedToken)?.symbol || "Tokens"}`}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -351,12 +400,6 @@ export function BorrowPage() {
                   <label className="text-sm font-medium text-gray-400">
                     {action === "deposit" ? "Deposit Amount" : action === "borrow" ? "Borrow Amount (mUSD)" : action === "repay" ? "Repay Amount (mUSD)" : "Withdraw Amount"}
                   </label>
-                  {action === "deposit" && selectedToken && (
-                    <span className="text-xs text-gray-500">Balance: {formatToken(walletBalances[selectedToken] ?? 0n, collaterals.find(c => c.token === selectedToken)?.decimals ?? 18)}</span>
-                  )}
-                  {action === "withdraw" && selectedToken && (
-                    <span className="text-xs text-gray-500">Deposited: {formatToken(collaterals.find(c => c.token === selectedToken)?.deposited ?? 0n, collaterals.find(c => c.token === selectedToken)?.decimals ?? 18)}</span>
-                  )}
                   {action === "borrow" && (
                     <span className="text-xs text-gray-500">Max: {formatUSD(maxBorrowable)}</span>
                   )}
@@ -374,31 +417,6 @@ export function BorrowPage() {
                       onChange={(e) => setAmount(e.target.value)}
                     />
                     <div className="flex items-center gap-2">
-                      {action === "deposit" && selectedToken && (walletBalances[selectedToken] ?? 0n) > 0n && (
-                        <button
-                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => {
-                            const info = collaterals.find(c => c.token === selectedToken);
-                            if (info) setAmount(ethers.formatUnits(walletBalances[selectedToken], info.decimals));
-                          }}
-                        >
-                          MAX
-                        </button>
-                      )}
-                      {action === "withdraw" && selectedToken && (() => {
-                        const info = collaterals.find(c => c.token === selectedToken);
-                        return info && info.deposited > 0n;
-                      })() && (
-                        <button
-                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => {
-                            const info = collaterals.find(c => c.token === selectedToken);
-                            if (info) setAmount(ethers.formatUnits(info.deposited, info.decimals));
-                          }}
-                        >
-                          MAX
-                        </button>
-                      )}
                       {action === "borrow" && maxBorrowable > 0n && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
@@ -410,13 +428,7 @@ export function BorrowPage() {
                       {action === "repay" && debt > 0n && (
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
-                          onClick={() => {
-                            // Add 1% buffer for interest that accrues between read and TX.
-                            // Contract caps repay at actual debt, so overpaying is safe.
-                            const buffered = debt + (debt / 100n);
-                            const repayAmt = musdBalance < buffered ? musdBalance : buffered;
-                            setAmount(ethers.formatUnits(repayAmt, MUSD_DECIMALS));
-                          }}
+                          onClick={() => setAmount(ethers.formatUnits(musdBalance < debt ? musdBalance : debt, MUSD_DECIMALS))}
                         >
                           MAX
                         </button>
@@ -488,6 +500,11 @@ export function BorrowPage() {
                 </span>
               </TxButton>
 
+              {/* Slippage Tolerance (withdraw tab) */}
+              {action === "withdraw" && (
+                <SlippageInput value={slippageBps} onChange={setSlippageBps} compact />
+              )}
+
               {/* Transaction Status */}
               {tx.error && (
                 <div className="alert-error flex items-center gap-3">
@@ -504,7 +521,7 @@ export function BorrowPage() {
                   </svg>
                   <span className="text-sm">
                     Transaction confirmed! {tx.hash && (
-                      <a href={`https://etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
+                      <a href={`https://sepolia.etherscan.io/tx/${tx.hash}`} target="_blank" rel="noopener noreferrer" className="underline">
                         View on Etherscan
                       </a>
                     )}
@@ -558,6 +575,34 @@ export function BorrowPage() {
                 </svg>
               }
             />
+          </div>
+
+          {/* LTV Health Gauge */}
+          <div className="card-gradient-border overflow-hidden p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-400">LTV Health Gauge</p>
+                <p className={`text-3xl font-bold ${ltvColorClass}`}>{currentLtvPct.toFixed(2)}%</p>
+              </div>
+              <div className="text-right text-xs text-gray-400">
+                <p>Max Borrow: {weightedMaxLtvPct.toFixed(2)}%</p>
+                <p>Liq. Threshold: {weightedLiqThresholdPct.toFixed(2)}%</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="progress">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r ${ltvGaugeGradient} transition-all duration-1000`}
+                  style={{ width: `${ltvGaugePct}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-xs text-gray-500">
+                <span className="text-emerald-400">Safe</span>
+                <span className="text-yellow-400">Borrow Limit</span>
+                <span className="text-red-400">Liquidation</span>
+              </div>
+            </div>
           </div>
 
           {/* Health Factor & Position Overview */}
