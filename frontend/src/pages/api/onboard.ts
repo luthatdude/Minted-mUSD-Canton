@@ -68,6 +68,34 @@ const CANTON_ADMIN_URL =
   process.env.CANTON_API_URL ||
   `http://${process.env.CANTON_HOST || "localhost"}:${process.env.CANTON_PORT || "7575"}`;
 const CANTON_ADMIN_TOKEN = process.env.CANTON_ADMIN_TOKEN || "";
+const CANTON_OPERATOR_PARTY =
+  process.env.CANTON_PARTY ||
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+
+function partyHintFromEth(ethAddress: string): string {
+  return `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
+}
+
+function authHeaders(): Record<string, string> {
+  return CANTON_ADMIN_TOKEN
+    ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
+    : {};
+}
+
+async function findPartyByHint(partyHint: string): Promise<string | null> {
+  const resp = await fetch(`${CANTON_ADMIN_URL}/v2/parties`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+    },
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const parties: Array<{ party?: string }> = data.partyDetails || [];
+  const found = parties.find((p) => typeof p.party === "string" && p.party.startsWith(`${partyHint}::`));
+  return found?.party || null;
+}
 
 function getLocalPartyNamespace(): string {
   const fallback =
@@ -106,17 +134,19 @@ async function verifyPartyExists(party: string): Promise<boolean> {
 async function allocateCantonParty(
   ethAddress: string
 ): Promise<string> {
-  const partyHint = `minted-user-${ethAddress.toLowerCase().slice(2, 10)}`;
+  const partyHint = partyHintFromEth(ethAddress);
   const displayName = `Minted User ${ethAddress.slice(0, 8)}`;
+
+  // If the party already exists on this participant, reuse it.
+  const existingParty = await findPartyByHint(partyHint);
+  if (existingParty) return existingParty;
 
   try {
     const resp = await fetch(`${CANTON_ADMIN_URL}/v2/parties`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(CANTON_ADMIN_TOKEN
-          ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
-          : {}),
+        ...authHeaders(),
       },
       body: JSON.stringify({
         partyIdHint: partyHint,
@@ -131,7 +161,7 @@ async function allocateCantonParty(
       );
       // Idempotent path: if party already exists on this participant, reuse it.
       if (resp.status === 400) {
-        if (/already allocated/i.test(errorText)) {
+        if (/already allocated/i.test(errorText) || /already exists/i.test(errorText)) {
           // Build deterministic local party from hint + participant namespace.
           const candidate = `${partyHint}::${getLocalPartyNamespace()}`;
           if (await verifyPartyExists(candidate)) {
@@ -145,6 +175,8 @@ async function allocateCantonParty(
             return alreadyAllocatedMatch[1];
           }
         }
+        const existing = await findPartyByHint(partyHint);
+        if (existing) return existing;
       }
       throw new Error(`Party allocation failed: ${resp.status}`);
     }
@@ -193,14 +225,12 @@ async function ensureComplianceEntry(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...(CANTON_ADMIN_TOKEN
-          ? { Authorization: `Bearer ${CANTON_ADMIN_TOKEN}` }
-          : {}),
+        ...authHeaders(),
       },
       body: JSON.stringify({
         eventFormat: {
           filtersByParty: {
-            [cantonParty]: {
+            [CANTON_OPERATOR_PARTY]: {
               cumulative: [
                 {
                   identifierFilter: {
@@ -293,6 +323,20 @@ export default async function handler(
       });
     }
 
+    const existingParty = await findPartyByHint(partyHintFromEth(ethAddress));
+    if (existingParty) {
+      partyRegistry.set(ethAddress, {
+        cantonParty: existingParty,
+        kycStatus: "approved",
+        complianceCid: "compliance-existing",
+      });
+      return res.status(200).json({
+        registered: true,
+        cantonParty: existingParty,
+        kycStatus: "approved",
+      });
+    }
+
     return res.status(200).json({
       registered: false,
       cantonParty: null,
@@ -328,6 +372,21 @@ export default async function handler(
         success: true,
         cantonParty: existing.cantonParty,
         complianceContractId: existing.complianceCid,
+      });
+    }
+
+    const existingParty = await findPartyByHint(partyHintFromEth(ethAddress));
+    if (existingParty) {
+      const complianceCid = await ensureComplianceEntry(existingParty);
+      partyRegistry.set(ethAddress.toLowerCase(), {
+        cantonParty: existingParty,
+        kycStatus: "approved",
+        complianceCid,
+      });
+      return res.status(200).json({
+        success: true,
+        cantonParty: existingParty,
+        complianceContractId: complianceCid,
       });
     }
 
