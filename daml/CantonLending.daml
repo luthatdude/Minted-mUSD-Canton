@@ -61,6 +61,8 @@ data CollateralConfig = CollateralConfig with
     liquidationPenaltyBps  : Bps    -- Penalty on seized collateral. e.g. 500 = 5%
     liquidationBonusBps    : Bps    -- Keeper bonus from penalty. e.g. 250 = 2.5%
     maxStalenessSecs       : Int    -- DAML-M-03: Per-asset max price staleness in seconds
+    supplyEnabled          : Bool   -- Whether this asset can be supplied for yield
+    supplyRateBps          : Bps    -- Annual supply rate (e.g. 200 = 2% APY)
   deriving (Eq, Show)
 
 -- | Default configs for each collateral type
@@ -73,36 +75,44 @@ defaultCTNConfig = CollateralConfig with
     liquidationPenaltyBps = 1000     -- 10% penalty
     liquidationBonusBps = 500        -- 5% keeper bonus
     maxStalenessSecs = 300           -- DAML-M-03: 5 min — volatile asset needs fresh prices
+    supplyEnabled = True             -- Canton Coin can be supplied for yield
+    supplyRateBps = 200              -- 2% APY — base rate for volatile asset supply
 
 defaultUSDCConfig : CollateralConfig
 defaultUSDCConfig = CollateralConfig with
     collateralType = CTN_USDC
-    enabled = True
-    collateralFactorBps = 9500       -- 95% LTV — stable
-    liquidationThresholdBps = 9700   -- 97% — tight spread
+    enabled = False                  -- DISABLED: No incentive to borrow mUSD against USDC (DirectMint does 1:1)
+    collateralFactorBps = 9500       -- 95% LTV — stable (inactive)
+    liquidationThresholdBps = 9700   -- 97% — tight spread (inactive)
     liquidationPenaltyBps = 300      -- 3% penalty
     liquidationBonusBps = 150        -- 1.5% keeper bonus
     maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
+    supplyEnabled = False
+    supplyRateBps = 0
 
 defaultUSDCxConfig : CollateralConfig
 defaultUSDCxConfig = CollateralConfig with
     collateralType = CTN_USDCx
-    enabled = True
+    enabled = False                  -- DISABLED: No incentive to borrow mUSD against USDCx (DirectMint does 1:1)
     collateralFactorBps = 9500
     liquidationThresholdBps = 9700
     liquidationPenaltyBps = 300
     liquidationBonusBps = 150
     maxStalenessSecs = 3600          -- DAML-M-03: 1h — stable asset
+    supplyEnabled = False
+    supplyRateBps = 0
 
 defaultSMUSDConfig : CollateralConfig
 defaultSMUSDConfig = CollateralConfig with
     collateralType = CTN_SMUSD
     enabled = True
-    collateralFactorBps = 9000       -- 90% LTV — yield-bearing, slight cooldown risk
-    liquidationThresholdBps = 9300   -- 93%
-    liquidationPenaltyBps = 400      -- 4% penalty
-    liquidationBonusBps = 200        -- 2% keeper bonus
+    collateralFactorBps = 5500       -- 55% LTV — reflexive loop risk requires wide buffer
+    liquidationThresholdBps = 6500   -- 65% — 15.4% depeg buffer before liquidation
+    liquidationPenaltyBps = 800      -- 8% penalty — higher to discourage over-leverage
+    liquidationBonusBps = 400        -- 4% keeper bonus
     maxStalenessSecs = 1800          -- DAML-M-03: 30 min — yield-bearing, moderate refresh
+    supplyEnabled = True             -- smUSD can be supplied for yield
+    supplyRateBps = 350              -- 3.5% APY — yield-bearing stablecoin supply
 
 -- | Default config for smUSD-E (ETH Pool variant — lending/borrowing enabled)
 -- Slightly lower LTV than smUSD due to ETH price exposure and time-lock risk
@@ -110,11 +120,13 @@ defaultSMUSDEConfig : CollateralConfig
 defaultSMUSDEConfig = CollateralConfig with
     collateralType = CTN_SMUSDE
     enabled = True
-    collateralFactorBps = 8500       -- 85% LTV — ETH price exposure + time-lock risk
-    liquidationThresholdBps = 9000   -- 90%
-    liquidationPenaltyBps = 500      -- 5% penalty
-    liquidationBonusBps = 250        -- 2.5% keeper bonus
+    collateralFactorBps = 7000       -- 70% LTV — ETH price exposure + time-lock risk + reflexivity
+    liquidationThresholdBps = 7800   -- 78% — 10.3% drawdown buffer
+    liquidationPenaltyBps = 600      -- 6% penalty
+    liquidationBonusBps = 300        -- 3% keeper bonus
     maxStalenessSecs = 1800          -- 30 min — synced from ETH pool share price
+    supplyEnabled = True             -- smUSD-E can be supplied for yield
+    supplyRateBps = 450              -- 4.5% APY — higher yield for ETH exposure risk
 
 -- ============================================================
 --                     SECTION 2: CANTON PRICE FEED
@@ -484,6 +496,184 @@ template LendingCollateralAggregate
           lastUpdatedAt = now
 
 -- ============================================================
+--                     SECTION 4C: SUPPLY POSITION
+-- ============================================================
+
+-- | CantonSupplyPosition — Tracks a user's supply of assets into the lending pool.
+-- Suppliers deposit smUSD, smUSD-E, or Canton Coin to earn interest from borrower
+-- interest payments. Interest accrues per-second based on the asset's supply rate.
+-- Unlike collateral deposits (which back borrows), supply positions earn passive yield.
+template CantonSupplyPosition
+  with
+    operator        : Party
+    supplier        : Party
+    supplyType      : CollateralType  -- CTN_Coin, CTN_SMUSD, or CTN_SMUSDE
+    amount          : Money           -- Supplied amount (principal)
+    earnedInterest  : Money           -- Accrued interest (paid on withdrawal)
+    lastAccrualTime : Time
+    suppliedAt      : Time            -- First supply time
+    supplyRateBps   : Bps             -- Current annual supply rate
+    privacyObservers : [Party]
+  where
+    signatory operator, supplier
+    observer privacyObservers
+
+    ensure amount > 0.0 && earnedInterest >= 0.0
+
+    key (operator, supplier, supplyType) : (Party, Party, CollateralType)
+    maintainer key._1
+
+    -- | Get total value (principal + earned interest)
+    nonconsuming choice Supply_GetTotalValue : Money
+      with
+        requester : Party
+      controller requester
+      do
+        assertMsg "NOT_AUTHORIZED" (requester == supplier || requester == operator)
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        return (amount + earnedInterest + newInterest)
+
+    -- | Accrue interest (called before supply/withdraw operations)
+    choice Supply_AccrueInterest : ContractId CantonSupplyPosition
+      with
+        caller : Party
+      controller operator
+      do
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        create this with
+          earnedInterest = earnedInterest + newInterest
+          lastAccrualTime = now
+
+    -- | Add more supply to existing position (accrues interest first)
+    choice Supply_AddMore : ContractId CantonSupplyPosition
+      with
+        addAmount : Money
+        caller    : Party
+      controller operator
+      do
+        assertMsg "ADD_AMOUNT_POSITIVE" (addAmount > 0.0)
+        assertMsg "CALLER_MUST_BE_SUPPLIER" (caller == supplier)
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        create this with
+          amount = amount + addAmount
+          earnedInterest = earnedInterest + newInterest
+          lastAccrualTime = now
+
+    -- | Withdraw partial supply (returns withdrawn principal + all accrued interest)
+    choice Supply_WithdrawPartial : (ContractId CantonSupplyPosition, Money, Money)
+      with
+        withdrawAmount : Money
+        caller         : Party
+      controller operator
+      do
+        assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
+        assertMsg "INSUFFICIENT_SUPPLY" (amount > withdrawAmount)
+        assertMsg "CALLER_MUST_BE_SUPPLIER" (caller == supplier)
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        let totalInterest = earnedInterest + newInterest
+        newPos <- create this with
+          amount = amount - withdrawAmount
+          earnedInterest = 0.0
+          lastAccrualTime = now
+        return (newPos, withdrawAmount, totalInterest)
+
+    -- | Withdraw all supply + earned interest (consuming)
+    choice Supply_WithdrawAll : (Money, Money)
+      with
+        caller : Party
+      controller operator
+      do
+        assertMsg "CALLER_MUST_BE_SUPPLIER" (caller == supplier)
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        return (amount, earnedInterest + newInterest)
+
+    -- | Update supply rate (operator syncs from interest model)
+    choice Supply_UpdateRate : ContractId CantonSupplyPosition
+      with
+        newRateBps : Bps
+      controller operator
+      do
+        now <- getTime
+        let elapsed = convertRelTimeToMicroseconds (subTime now lastAccrualTime)
+        let secondsElapsed : Money = intToNumeric (elapsed / 1000000)
+        let yearSeconds = 31536000.0 : Money
+        let newInterest = amount * intToNumeric supplyRateBps * secondsElapsed / (10000.0 * yearSeconds)
+        create this with
+          supplyRateBps = newRateBps
+          earnedInterest = earnedInterest + newInterest
+          lastAccrualTime = now
+
+    -- | Update observers
+    choice Supply_UpdateObservers : ContractId CantonSupplyPosition
+      with
+        newObservers : [Party]
+      controller supplier
+      do create this with privacyObservers = newObservers
+
+-- | LendingSupplyAggregate — Tracks total supply per asset type.
+-- Used for protocol analytics and utilization rate computation.
+template LendingSupplyAggregate
+  with
+    operator      : Party
+    supplyType    : CollateralType
+    totalSupplied : Money
+    supplierCount : Int
+    lastUpdatedAt : Time
+  where
+    signatory operator
+
+    key (operator, supplyType) : (Party, CollateralType)
+    maintainer key._1
+
+    ensure totalSupplied >= 0.0 && supplierCount >= 0
+
+    choice SupplyAgg_AddSupply : ContractId LendingSupplyAggregate
+      with
+        addAmount     : Money
+        isNewSupplier : Bool
+      controller operator
+      do
+        now <- getTime
+        create this with
+          totalSupplied = totalSupplied + addAmount
+          supplierCount = if isNewSupplier then supplierCount + 1 else supplierCount
+          lastUpdatedAt = now
+
+    choice SupplyAgg_RemoveSupply : ContractId LendingSupplyAggregate
+      with
+        removeAmount     : Money
+        isFullWithdrawal : Bool
+      controller operator
+      do
+        now <- getTime
+        let newTotal = if removeAmount >= totalSupplied then 0.0 else totalSupplied - removeAmount
+        let newCount = if isFullWithdrawal && supplierCount > 0 then supplierCount - 1 else supplierCount
+        create this with
+          totalSupplied = newTotal
+          supplierCount = newCount
+          lastUpdatedAt = now
+
+-- ============================================================
 --                     SECTION 5: LENDING SERVICE
 -- ============================================================
 
@@ -592,7 +782,7 @@ template CantonLendingService
         archive coinCid
 
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_Coin)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -647,7 +837,7 @@ template CantonLendingService
         archive usdcCid
 
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDC)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -702,7 +892,7 @@ template CantonLendingService
         archive usdcxCid
 
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_USDCx)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -758,7 +948,7 @@ template CantonLendingService
 
         now <- getTime
         -- sMUSD amount = shares (valued at share price via price feed)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSD)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -814,7 +1004,7 @@ template CantonLendingService
 
         now <- getTime
         -- smUSD-E amount = shares (valued at smUSD-E share price via price feed)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         existingEscrowOpt <- lookupByKey @EscrowedCollateral (operator, user, CTN_SMUSDE)
         escrowCid <- case existingEscrowOpt of
           Some existCid -> exercise existCid Escrow_AddCollateral with
@@ -848,6 +1038,170 @@ template CantonLendingService
             pure ()
 
         return (self, escrowCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  SUPPLY ASSETS (earn yield from borrower interest)
+    -- ──────────────────────────────────────────────────────
+
+    -- | Supply Canton Coin to the lending pool to earn yield.
+    -- The coin is escrowed and the supplier earns interest from protocol revenue.
+    nonconsuming choice Lending_SupplyCTN : (ContractId CantonLendingService, ContractId CantonSupplyPosition)
+      with
+        user    : Party
+        coinCid : ContractId CantonCoin
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        coin <- fetch coinCid
+        assertMsg "NOT_OWNER" (coin.owner == user)
+        let cfg = getConfig CTN_Coin configs
+        assertMsg "CTN_SUPPLY_NOT_ENABLED" cfg.supplyEnabled
+        assertMsg "CTN_ISSUER_MUST_BE_OPERATOR" (coin.issuer == operator)
+
+        archive coinCid
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user None
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_Coin)
+        supplyCid <- case existingSupplyOpt of
+          Some existCid -> exercise existCid Supply_AddMore with
+            addAmount = coin.amount
+            caller = user
+          None -> create CantonSupplyPosition with
+            operator
+            supplier = user
+            supplyType = CTN_Coin
+            amount = coin.amount
+            earnedInterest = 0.0
+            lastAccrualTime = now
+            suppliedAt = now
+            supplyRateBps = cfg.supplyRateBps
+            privacyObservers = observers <> userObs
+
+        let isNew = case existingSupplyOpt of { None -> True; Some _ -> False }
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_Coin)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_AddSupply with
+              addAmount = coin.amount
+              isNewSupplier = isNew
+            pure ()
+          None -> do
+            _ <- create LendingSupplyAggregate with
+              operator
+              supplyType = CTN_Coin
+              totalSupplied = coin.amount
+              supplierCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, supplyCid)
+
+    -- | Supply CantonSMUSD (smUSD) to the lending pool to earn yield.
+    nonconsuming choice Lending_SupplySMUSD : (ContractId CantonLendingService, ContractId CantonSupplyPosition)
+      with
+        user     : Party
+        smusdCid : ContractId CantonSMUSD
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        smusd <- fetch smusdCid
+        assertMsg "NOT_OWNER" (smusd.owner == user)
+        let cfg = getConfig CTN_SMUSD configs
+        assertMsg "SMUSD_SUPPLY_NOT_ENABLED" cfg.supplyEnabled
+        assertMsg "SMUSD_ISSUER_MUST_BE_OPERATOR" (smusd.issuer == operator)
+
+        archive smusdCid
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user None
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_SMUSD)
+        supplyCid <- case existingSupplyOpt of
+          Some existCid -> exercise existCid Supply_AddMore with
+            addAmount = smusd.shares
+            caller = user
+          None -> create CantonSupplyPosition with
+            operator
+            supplier = user
+            supplyType = CTN_SMUSD
+            amount = smusd.shares
+            earnedInterest = 0.0
+            lastAccrualTime = now
+            suppliedAt = now
+            supplyRateBps = cfg.supplyRateBps
+            privacyObservers = observers <> userObs
+
+        let isNew = case existingSupplyOpt of { None -> True; Some _ -> False }
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_SMUSD)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_AddSupply with
+              addAmount = smusd.shares
+              isNewSupplier = isNew
+            pure ()
+          None -> do
+            _ <- create LendingSupplyAggregate with
+              operator
+              supplyType = CTN_SMUSD
+              totalSupplied = smusd.shares
+              supplierCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, supplyCid)
+
+    -- | Supply CantonSMUSD_E (smUSD-E) to the lending pool to earn yield.
+    nonconsuming choice Lending_SupplySMUSDE : (ContractId CantonLendingService, ContractId CantonSupplyPosition)
+      with
+        user      : Party
+        smusdeCid : ContractId CantonSMUSD_E
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        smusde <- fetch smusdeCid
+        assertMsg "NOT_OWNER" (smusde.owner == user)
+        let cfg = getConfig CTN_SMUSDE configs
+        assertMsg "SMUSDE_SUPPLY_NOT_ENABLED" cfg.supplyEnabled
+        assertMsg "SMUSDE_ISSUER_MUST_BE_OPERATOR" (smusde.issuer == operator)
+
+        archive smusdeCid
+
+        now <- getTime
+        userObs <- lookupUserObservers operator user None
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_SMUSDE)
+        supplyCid <- case existingSupplyOpt of
+          Some existCid -> exercise existCid Supply_AddMore with
+            addAmount = smusde.shares
+            caller = user
+          None -> create CantonSupplyPosition with
+            operator
+            supplier = user
+            supplyType = CTN_SMUSDE
+            amount = smusde.shares
+            earnedInterest = 0.0
+            lastAccrualTime = now
+            suppliedAt = now
+            supplyRateBps = cfg.supplyRateBps
+            privacyObservers = observers <> userObs
+
+        let isNew = case existingSupplyOpt of { None -> True; Some _ -> False }
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_SMUSDE)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_AddSupply with
+              addAmount = smusde.shares
+              isNewSupplier = isNew
+            pure ()
+          None -> do
+            _ <- create LendingSupplyAggregate with
+              operator
+              supplyType = CTN_SMUSDE
+              totalSupplied = smusde.shares
+              supplierCount = 1
+              lastUpdatedAt = now
+            pure ()
+
+        return (self, supplyCid)
 
     -- ──────────────────────────────────────────────────────
     --  BORROW mUSD
@@ -907,7 +1261,7 @@ template CantonLendingService
         assertMsg "INSUFFICIENT_COLLATERAL_VALUE" (totalWeightedValue >= totalDebtAfter)
 
         -- Mint mUSD to borrower
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         musdCid <- create CantonMUSD with
           issuer = operator
           owner = user
@@ -1029,7 +1383,7 @@ template CantonLendingService
           pure ()
 
         -- Recreate the CantonCoin token for the user
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         coinCid <- create CantonCoin with
           issuer = operator
           owner = user
@@ -1094,7 +1448,7 @@ template CantonLendingService
             caller = user
           pure ()
 
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         usdcCid <- create CantonUSDC with
           issuer = operator
           owner = user
@@ -1156,7 +1510,7 @@ template CantonLendingService
             caller = user
           pure ()
 
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         usdcxCid <- create USDCx with
           issuer = operator
           owner = user
@@ -1223,13 +1577,14 @@ template CantonLendingService
         -- rather than resetting to now (which would unfairly restart cooldown timers)
         -- DAML-M-03: Use current sMUSD price from feed instead of hardcoded 1.0
         currentSharePrice <- getCtxPrice operator "sMUSD" priceFeedCids True (seconds (getConfig CTN_SMUSD configs).maxStalenessSecs)
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         smusdCid <- create CantonSMUSD with
           issuer = operator
           owner = user
           shares = withdrawAmount
           entrySharePrice = currentSharePrice  -- DAML-M-03: Use live share price from price feed
           stakedAt = escrow.depositedAt
+          complianceRegistryCid = complianceRegistryCid
           privacyObservers = userObs
 
         -- DAML-H-03: Update collateral aggregate tracking
@@ -1289,7 +1644,7 @@ template CantonLendingService
         -- Recreate CantonSMUSD_E with current share price from feed
         currentSharePrice <- getCtxPrice operator "sMUSD-E" priceFeedCids True (seconds (getConfig CTN_SMUSDE configs).maxStalenessSecs)
         now <- getTime
-        userObs <- lookupUserObservers operator user
+        userObs <- lookupUserObservers operator user None
         smusdeCid <- create CantonSMUSD_E with
           issuer = operator
           owner = user
@@ -1308,6 +1663,170 @@ template CantonLendingService
           Some aggCid -> do
             _ <- exercise aggCid Aggregate_RemoveDeposit with
               amount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, smusdeCid)
+
+    -- ──────────────────────────────────────────────────────
+    --  WITHDRAW SUPPLY (reclaim supplied assets + earned yield)
+    -- ──────────────────────────────────────────────────────
+
+    -- | Withdraw supplied Canton Coin + earned yield.
+    -- Returns a single CantonCoin with principal + accrued interest.
+    nonconsuming choice Lending_WithdrawSupplyCTN : (ContractId CantonLendingService, ContractId CantonCoin)
+      with
+        user           : Party
+        withdrawAmount : Money
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
+
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_Coin)
+        supplyCid <- case existingSupplyOpt of
+          None -> abort "NO_CTN_SUPPLY_POSITION"
+          Some cid -> return cid
+        supply <- fetch supplyCid
+        assertMsg "NOT_SUPPLIER" (supply.supplier == user)
+        assertMsg "WITHDRAW_EXCEEDS_SUPPLY" (withdrawAmount <= supply.amount)
+
+        userObs <- lookupUserObservers operator user None
+
+        (returnAmount, isFullW) <- if withdrawAmount >= supply.amount then do
+          (principal, interest) <- exercise supplyCid Supply_WithdrawAll with caller = user
+          return (principal + interest, True)
+        else do
+          (_, withdrawn, interest) <- exercise supplyCid Supply_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          return (withdrawn + interest, False)
+
+        coinCid <- create CantonCoin with
+          issuer = operator
+          owner = user
+          amount = returnAmount
+          privacyObservers = userObs
+
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_Coin)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_RemoveSupply with
+              removeAmount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, coinCid)
+
+    -- | Withdraw supplied smUSD + earned yield.
+    -- Returns a CantonSMUSD token with principal + accrued interest shares.
+    nonconsuming choice Lending_WithdrawSupplySMUSD : (ContractId CantonLendingService, ContractId CantonSMUSD)
+      with
+        user           : Party
+        withdrawAmount : Money
+        priceFeedCids  : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
+
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_SMUSD)
+        supplyCid <- case existingSupplyOpt of
+          None -> abort "NO_SMUSD_SUPPLY_POSITION"
+          Some cid -> return cid
+        supply <- fetch supplyCid
+        assertMsg "NOT_SUPPLIER" (supply.supplier == user)
+        assertMsg "WITHDRAW_EXCEEDS_SUPPLY" (withdrawAmount <= supply.amount)
+
+        userObs <- lookupUserObservers operator user None
+
+        (returnShares, isFullW) <- if withdrawAmount >= supply.amount then do
+          (principal, interest) <- exercise supplyCid Supply_WithdrawAll with caller = user
+          return (principal + interest, True)
+        else do
+          (_, withdrawn, interest) <- exercise supplyCid Supply_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          return (withdrawn + interest, False)
+
+        -- Get current share price for entrySharePrice
+        let cfg = getConfig CTN_SMUSD configs
+        currentSharePrice <- getCtxPrice operator "sMUSD" priceFeedCids True (seconds cfg.maxStalenessSecs)
+
+        smusdCid <- create CantonSMUSD with
+          issuer = operator
+          owner = user
+          shares = returnShares
+          entrySharePrice = currentSharePrice
+          stakedAt = supply.suppliedAt
+          complianceRegistryCid = complianceRegistryCid
+          privacyObservers = userObs
+
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_SMUSD)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_RemoveSupply with
+              removeAmount = withdrawAmount
+              isFullWithdrawal = isFullW
+            pure ()
+          None -> pure ()
+
+        return (self, smusdCid)
+
+    -- | Withdraw supplied smUSD-E + earned yield.
+    -- Returns a CantonSMUSD_E token with principal + accrued interest shares.
+    nonconsuming choice Lending_WithdrawSupplySMUSDE : (ContractId CantonLendingService, ContractId CantonSMUSD_E)
+      with
+        user           : Party
+        withdrawAmount : Money
+        priceFeedCids  : [ContractId CantonPriceFeed]
+      controller user
+      do
+        assertMsg "SERVICE_PAUSED" (not paused)
+        assertMsg "WITHDRAW_POSITIVE" (withdrawAmount > 0.0)
+
+        existingSupplyOpt <- lookupByKey @CantonSupplyPosition (operator, user, CTN_SMUSDE)
+        supplyCid <- case existingSupplyOpt of
+          None -> abort "NO_SMUSDE_SUPPLY_POSITION"
+          Some cid -> return cid
+        supply <- fetch supplyCid
+        assertMsg "NOT_SUPPLIER" (supply.supplier == user)
+        assertMsg "WITHDRAW_EXCEEDS_SUPPLY" (withdrawAmount <= supply.amount)
+
+        userObs <- lookupUserObservers operator user None
+
+        (returnShares, isFullW) <- if withdrawAmount >= supply.amount then do
+          (principal, interest) <- exercise supplyCid Supply_WithdrawAll with caller = user
+          return (principal + interest, True)
+        else do
+          (_, withdrawn, interest) <- exercise supplyCid Supply_WithdrawPartial with
+            withdrawAmount
+            caller = user
+          return (withdrawn + interest, False)
+
+        -- Get current share price
+        let cfg = getConfig CTN_SMUSDE configs
+        currentSharePrice <- getCtxPrice operator "sMUSD-E" priceFeedCids True (seconds cfg.maxStalenessSecs)
+        now <- getTime
+
+        smusdeCid <- create CantonSMUSD_E with
+          issuer = operator
+          owner = user
+          shares = returnShares
+          entrySharePrice = currentSharePrice
+          musdStaked = returnShares * currentSharePrice
+          tier = NoLock
+          stakedAt = supply.suppliedAt
+          unlockAt = None
+          privacyObservers = userObs
+
+        supAggOpt <- lookupByKey @LendingSupplyAggregate (operator, CTN_SMUSDE)
+        case supAggOpt of
+          Some aggCid -> do
+            _ <- exercise aggCid SupplyAgg_RemoveSupply with
+              removeAmount = withdrawAmount
               isFullWithdrawal = isFullW
             pure ()
           None -> pure ()
@@ -1396,7 +1915,7 @@ template CantonLendingService
           exercise musdCid CantonMUSD_Burn
 
         -- (Seized amount is now minted as a new token for the liquidator)
-        userObs <- lookupUserObservers operator liquidator
+        userObs <- lookupUserObservers operator liquidator None
         case targetEscrow.collateralType of
           CTN_Coin -> do
             create CantonCoin with
@@ -1429,6 +1948,7 @@ template CantonLendingService
               shares = actualSeize
               entrySharePrice = colPrice
               stakedAt = now2
+              complianceRegistryCid = complianceRegistryCid
               privacyObservers = userObs
             pure ()
           CTN_SMUSDE -> do
@@ -1555,6 +2075,24 @@ template CantonLendingService
         assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
         assertMsg "CLOSE_FACTOR_RANGE" (newCloseFactorBps > 0 && newCloseFactorBps <= 10000)
         create this with closeFactorBps = newCloseFactorBps
+
+    -- | Update supply rate for a given collateral type
+    choice Lending_UpdateSupplyRate : ContractId CantonLendingService
+      with
+        targetType : CollateralType
+        newSupplyRateBps : Bps
+        governanceProofCid : ContractId GovernanceActionLog
+      controller operator
+      do
+        proof <- exercise governanceProofCid ConsumeProof with consumedBy = operator
+        assertMsg "WRONG_ACTION_TYPE" (proof.actionType == ParameterUpdate)
+        assertMsg "WRONG_TARGET_MODULE" (proof.targetModule == "CantonLending")
+        assertMsg "SUPPLY_RATE_NON_NEGATIVE" (newSupplyRateBps >= 0)
+        assertMsg "SUPPLY_RATE_MAX_50_PERCENT" (newSupplyRateBps <= 5000)
+        let updatedConfigs = map (\c -> if c.collateralType == targetType
+              then c with supplyRateBps = newSupplyRateBps
+              else c) configs
+        create this with configs = updatedConfigs
 
     -- | Withdraw protocol reserves
     choice Lending_WithdrawReserves : (ContractId CantonLendingService, ContractId CantonMUSD)
