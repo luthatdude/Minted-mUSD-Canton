@@ -21,7 +21,8 @@ const CANTON_BASE_URL =
 const CANTON_TOKEN = process.env.CANTON_TOKEN || "dummy-no-auth";
 const CANTON_PARTY =
   process.env.CANTON_PARTY ||
-  "minted-validator-1::12203f16a8f4b26778d5c8c6847dc055acf5db91e0c5b0846de29ba5ea272ab2a0e4";
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+const CANTON_PARTY_PATTERN = /^[A-Za-z0-9._:-]+::1220[0-9a-f]{64}$/i;
 const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
@@ -71,6 +72,15 @@ function resolveTemplateId(tpl: string): string {
   return resolved;
 }
 
+function resolveRequestedParty(rawParty: unknown): string {
+  if (typeof rawParty !== "string" || !rawParty.trim()) return CANTON_PARTY;
+  const party = rawParty.trim();
+  if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
+    throw new Error("Invalid Canton party");
+  }
+  return party;
+}
+
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
     method,
@@ -98,7 +108,7 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { action, templateId, contractId, choice, argument, payload } = req.body;
+  const { action, templateId, contractId, choice, argument, payload, party } = req.body || {};
 
   if (!templateId) {
     return res.status(400).json({ error: "Missing templateId" });
@@ -111,6 +121,16 @@ export default async function handler(
     return res.status(400).json({ error: err.message });
   }
 
+  let actAsParty: string;
+  try {
+    actAsParty = resolveRequestedParty(party);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || "Invalid Canton party" });
+  }
+  const readAsParties = actAsParty === CANTON_PARTY
+    ? [actAsParty]
+    : [actAsParty, CANTON_PARTY];
+
   const commandId = `ui-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
   try {
@@ -122,8 +142,8 @@ export default async function handler(
 
       const body = {
         userId: CANTON_USER,
-        actAs: [CANTON_PARTY],
-        readAs: [CANTON_PARTY],
+        actAs: [actAsParty],
+        readAs: readAsParties,
         commandId,
         commands: [
           {
@@ -147,8 +167,8 @@ export default async function handler(
 
       const body = {
         userId: CANTON_USER,
-        actAs: [CANTON_PARTY],
-        readAs: [CANTON_PARTY],
+        actAs: [actAsParty],
+        readAs: readAsParties,
         commandId,
         commands: [
           {
