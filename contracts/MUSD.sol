@@ -15,6 +15,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
     bytes32 public constant BRIDGE_ROLE = keccak256("BRIDGE_ROLE");
     bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
     bytes32 public constant CAP_MANAGER_ROLE = keccak256("CAP_MANAGER_ROLE");
+    bytes32 public constant TIMELOCK_ROLE = keccak256("TIMELOCK_ROLE");
     bytes32 public constant EMERGENCY_ROLE = keccak256("EMERGENCY_ROLE");
     /// @dev LiquidationEngine needs burn permission
     bytes32 public constant LIQUIDATOR_ROLE = keccak256("LIQUIDATOR_ROLE");
@@ -44,6 +45,7 @@ contract MUSD is ERC20, AccessControl, Pausable {
 
     constructor(uint256 _initialSupplyCap) ERC20("Minted USD", "mUSD") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TIMELOCK_ROLE, msg.sender);
         if (_initialSupplyCap == 0) revert InvalidSupplyCap();
         supplyCap = _initialSupplyCap;
         emit SupplyCapUpdated(0, _initialSupplyCap);

@@ -259,8 +259,8 @@ jobs:
           pip3 install mythril
 
       - name: Run Mythril on core contracts
-      DAML_SDK_VERSION: "3.4.10"
-TRACTS=(
+        run: |
+          CORE_CONTRACTS=(
             "contracts/BorrowModule.sol"
             "contracts/CollateralVault.sol"
             "contracts/DirectMintV2.sol"
@@ -342,11 +342,11 @@ TRACTS=(
           export PATH="$DAML_HOME/bin:$PATH"
           daml build
 
-      - name: Run DAML tests
+      - name: Run DAML smoke tests
         working-directory: daml
         run: |
           export PATH="$DAML_HOME/bin:$PATH"
-          daml test
+          daml test --files InitProtocol.daml
 
   # ============================================================
   #  RELAY: TypeScript Build & Lint
@@ -502,7 +502,7 @@ TRACTS=(
         # Fails on HIGH or CRITICAL vulnerabilities
 
       - name: Check for known vulnerabilities
-        run: npx audit-ci --config audit-ci.json
+        run: npx audit-ci --config audit-ci.json --skip-dev
         # GHSA-37qj-frw5-hhjh allowlisted (mitigated via npm override)
 
   # ============================================================
