@@ -6,7 +6,7 @@ import {
   useCantonLedger,
   cantonExercise,
   fetchFreshBalances,
-  type CantonMUSDToken,
+  type CantonBalancesData,
   type SimpleToken,
 } from "@/hooks/useCantonLedger";
 
@@ -33,13 +33,35 @@ function fmtAmount(v: string | number, decimals = 2): string {
   return n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+function toInputAmount(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  return v.toFixed(18).replace(/\.?0+$/, "");
+}
+
+const EPSILON = 0.000000001;
+
+function parseTokenAmount(token?: { amount: string }): number {
+  return token ? parseFloat(token.amount || "0") : 0;
+}
+
+function pickCoveringToken(tokens: SimpleToken[], requested: number): SimpleToken | null {
+  if (tokens.length === 0) return null;
+  const sorted = [...tokens].sort((a, b) => parseTokenAmount(a) - parseTokenAmount(b));
+  return sorted.find((token) => parseTokenAmount(token) + EPSILON >= requested) || null;
+}
+
+function pickExactOrCoveringToken(tokens: SimpleToken[], requested: number): SimpleToken | null {
+  const exact = tokens.find((token) => Math.abs(parseTokenAmount(token) - requested) <= 0.000001);
+  if (exact) return exact;
+  return pickCoveringToken(tokens, requested);
+}
+
 export function CantonStake() {
   const { data, loading, error, refresh } = useCantonLedger(15_000);
 
   const [pool, setPool] = useState<CantonPoolTab>("smusd");
   const [tab, setTab] = useState<StakeAction>("stake");
   const [amount, setAmount] = useState("");
-  const [selectedMusdIdx, setSelectedMusdIdx] = useState(0);
   const [depositAsset, setDepositAsset] = useState<DepositAsset>("USDC");
   const [selectedAssetIdx, setSelectedAssetIdx] = useState(0);
   const [lockTier, setLockTier] = useState("NoLock");
@@ -68,6 +90,12 @@ export function CantonStake() {
   const usdcxTokens = usdcTokens.filter(t => t.template === "USDCx");
   const totalPureUsdc = pureUsdcTokens.reduce((s, t) => s + parseFloat(t.amount), 0);
   const totalUsdcx = usdcxTokens.reduce((s, t) => s + parseFloat(t.amount), 0);
+  const selectedDepositTokens = depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens;
+  const selectedDepositBalance = depositAsset === "CTN" ? totalCoin : depositAsset === "USDCx" ? totalUsdcx : totalPureUsdc;
+  const parsedAmount = (() => {
+    const n = Number(amount);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  })();
 
   const smusdSharePrice = stakingService ? parseFloat(stakingService.sharePrice) : 1.0;
   const smusdTVL = stakingService ? parseFloat(stakingService.pooledMusd) : 0;
@@ -79,23 +107,73 @@ export function CantonStake() {
   const ethPoolCapNum = ethPoolService ? parseFloat(ethPoolService.poolCap) : 10_000_000;
   const ethPoolUtil = ethPoolCapNum > 0 ? (ethPoolTVL / ethPoolCapNum) * 100 : 0;
 
+  async function selectTokenForRequestedAmount(
+    party: string,
+    templateId: "CantonMUSD" | "CantonUSDC" | "USDCx" | "CantonCoin",
+    splitChoice: "CantonMUSD_Split" | "CantonUSDC_Split" | "USDCx_Split" | "CantonCoin_Split",
+    tokensList: SimpleToken[],
+    requested: number,
+    getTokens: (fresh: CantonBalancesData) => SimpleToken[],
+    symbol: string
+  ): Promise<SimpleToken> {
+    const covering = pickCoveringToken(tokensList, requested);
+    if (!covering) {
+      const largest = tokensList.reduce((max, t) => Math.max(max, parseTokenAmount(t)), 0);
+      throw new Error(
+        largest > 0
+          ? `No ${symbol} contract large enough. Largest available is ${fmtAmount(largest)} ${symbol}.`
+          : `No ${symbol} token available.`
+      );
+    }
+    const coveringAmt = parseTokenAmount(covering);
+    if (coveringAmt <= requested + EPSILON) {
+      return covering;
+    }
+    const splitResp = await cantonExercise(
+      templateId,
+      covering.contractId,
+      splitChoice,
+      { splitAmount: requested.toString() },
+      { party }
+    );
+    if (!splitResp.success) {
+      throw new Error(splitResp.error || `Failed to split ${symbol} token.`);
+    }
+    const refreshed = await fetchFreshBalances(party);
+    const refreshedTokens = getTokens(refreshed);
+    const selected = pickExactOrCoveringToken(refreshedTokens, requested);
+    if (!selected) {
+      throw new Error(`Unable to select ${symbol} token after split.`);
+    }
+    return selected;
+  }
+
   /* ── smUSD Staking handlers ── */
   async function handleSmusdStake() {
-    if (!stakingService || tokens.length === 0) return;
+    if (!stakingService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (parsedAmount <= 0) throw new Error("Enter a valid mUSD amount.");
       // Fetch fresh data (Stake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.stakingService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.stakingService || operatorFresh?.stakingService;
       if (!freshService) throw new Error("Staking service not found");
       const freshTokens = fresh.tokens || [];
-      const token = freshTokens[selectedMusdIdx] || freshTokens[0];
-      if (!token) throw new Error("No mUSD token available");
+      const token = await selectTokenForRequestedAmount(
+        fresh.party,
+        "CantonMUSD",
+        "CantonMUSD_Split",
+        freshTokens,
+        parsedAmount,
+        (refreshed) => refreshed.tokens || [],
+        "mUSD"
+      );
       const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Stake", {
         user: fresh.party, musdCid: token.contractId,
-      });
+      }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Stake failed");
-      setTxSuccess(`Staked ${fmtAmount(token.amount)} mUSD → smUSD shares`);
+      setTxSuccess(`Staked ${fmtAmount(parsedAmount)} mUSD → smUSD shares`);
       setAmount(""); await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -107,7 +185,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Unstake is consuming on CantonStakingService)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.stakingService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.stakingService || operatorFresh?.stakingService;
       if (!freshService) throw new Error("Staking service not found");
       const freshSmusd = fresh.smusdTokens || [];
       const smusd = freshSmusd[selectedAssetIdx] || freshSmusd[0];
@@ -127,9 +206,11 @@ export function CantonStake() {
     if (!ethPoolService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (parsedAmount <= 0) throw new Error(`Enter a valid ${depositAsset} amount.`);
       // Fetch fresh data to avoid stale CIDs (ETHPool choices are consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.ethPoolService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
       if (!freshService) throw new Error("ETH Pool service not found");
 
       // Use fresh token lists
@@ -140,21 +221,42 @@ export function CantonStake() {
       let choice = "";
       const args: Record<string, unknown> = { user: fresh.party, selectedTier: lockTier };
       if (depositAsset === "USDC") {
-        const token = freshPureUsdc[selectedAssetIdx] || freshPureUsdc[0];
-        if (!token) throw new Error("No USDC token available");
+        const token = await selectTokenForRequestedAmount(
+          fresh.party,
+          "CantonUSDC",
+          "CantonUSDC_Split",
+          freshPureUsdc,
+          parsedAmount,
+          (refreshed) => (refreshed.usdcTokens || []).filter((t) => t.template !== "USDCx"),
+          "USDC"
+        );
         choice = "ETHPool_StakeWithUSDC"; args.usdcCid = token.contractId;
       } else if (depositAsset === "USDCx") {
-        const token = freshUsdcx[selectedAssetIdx] || freshUsdcx[0];
-        if (!token) throw new Error("No USDCx token available");
+        const token = await selectTokenForRequestedAmount(
+          fresh.party,
+          "USDCx",
+          "USDCx_Split",
+          freshUsdcx,
+          parsedAmount,
+          (refreshed) => (refreshed.usdcTokens || []).filter((t) => t.template === "USDCx"),
+          "USDCx"
+        );
         choice = "ETHPool_StakeWithUSDCx"; args.usdcxCid = token.contractId;
       } else {
-        const token = freshCoins[selectedAssetIdx] || freshCoins[0];
-        if (!token) throw new Error("No Canton Coin available");
+        const token = await selectTokenForRequestedAmount(
+          fresh.party,
+          "CantonCoin",
+          "CantonCoin_Split",
+          freshCoins,
+          parsedAmount,
+          (refreshed) => refreshed.cantonCoinTokens || [],
+          "CTN"
+        );
         choice = "ETHPool_StakeWithCantonCoin"; args.coinCid = token.contractId;
       }
-      const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, choice, args);
+      const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, choice, args, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Stake failed");
-      setTxSuccess(`Deposited ${depositAsset} → smUSD-E shares`);
+      setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} ${depositAsset} → smUSD-E shares`);
       setAmount(""); await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -167,7 +269,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (ETHPool_Unstake is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.ethPoolService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
       if (!freshService) throw new Error("ETH Pool service not found");
       const freshSmusdE = fresh.smusdETokens || [];
       const smusdE = freshSmusdE[selectedAssetIdx] || freshSmusdE[0];
@@ -187,13 +290,22 @@ export function CantonStake() {
     if (!boostPoolService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (parsedAmount <= 0) throw new Error("Enter a valid CTN amount.");
       // Fetch fresh data (Boost Deposit is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.boostPoolService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshCoins = fresh.cantonCoinTokens || [];
-      const coin = freshCoins[selectedAssetIdx] || freshCoins[0];
-      if (!coin) throw new Error("No Canton Coin available");
+      const coin = await selectTokenForRequestedAmount(
+        fresh.party,
+        "CantonCoin",
+        "CantonCoin_Split",
+        freshCoins,
+        parsedAmount,
+        (refreshed) => refreshed.cantonCoinTokens || [],
+        "CTN"
+      );
       // Boost Pool requires smUSD stake — pick LARGEST for maximum deposit cap
       const freshSmusd = [...(fresh.smusdTokens || [])].sort((a, b) => parseFloat(b.amount) - parseFloat(a.amount));
       const smusd = freshSmusd.length > 0 ? freshSmusd[0] : null;
@@ -202,9 +314,9 @@ export function CantonStake() {
         user: fresh.party,
         cantonCid: coin.contractId,
         smusdCid: smusd.contractId,
-      });
+      }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Deposit failed");
-      setTxSuccess(`Deposited ${fmtAmount(coin.amount)} CTN → Boost LP`);
+      setTxSuccess(`Deposited ${fmtAmount(parsedAmount)} CTN → Boost LP`);
       setAmount(""); await refresh();
     } catch (err: any) { setTxError(err.message); }
     finally { setTxLoading(false); }
@@ -216,7 +328,8 @@ export function CantonStake() {
     try {
       // Fetch fresh data (Boost Withdraw is consuming)
       const fresh = await fetchFreshBalances();
-      const freshService = fresh.boostPoolService;
+      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
+      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshLP = fresh.boostLPTokens || [];
       const lp = freshLP[selectedAssetIdx] || freshLP[0];
@@ -326,19 +439,39 @@ export function CantonStake() {
                       tokens.length > 0 ? (
                         <>
                           <div className="space-y-3">
-                            <label className="text-sm font-medium text-gray-400">Select mUSD Contract to Stake</label>
-                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-emerald-500/50 focus:outline-none"
-                              value={selectedMusdIdx} onChange={(e) => setSelectedMusdIdx(Number(e.target.value))}>
-                              {tokens.map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} mUSD — nonce {t.nonce} — {t.contractId.slice(0, 12)}…</option>
-                              ))}
-                            </select>
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-medium text-gray-400">You Stake</label>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(totalMusd)} mUSD</span>
+                            </div>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-emerald-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(16,185,129,0.3)]">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-xs font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/30"
+                                    onClick={() => setAmount(toInputAmount(totalMusd))}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <div className="h-6 w-6 rounded-full bg-gradient-to-br from-brand-500 to-purple-500" />
+                                    <span className="font-semibold text-white">mUSD</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           <div className="rounded-xl border border-white/10 bg-surface-800/30 p-4">
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-sm text-gray-400">You Stake</p>
-                                <p className="text-2xl font-semibold text-white">{fmtAmount(tokens[selectedMusdIdx]?.amount || "0")} mUSD</p>
+                                <p className="text-2xl font-semibold text-white">{fmtAmount(parsedAmount)} mUSD</p>
                               </div>
                               <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                                 <div className="h-6 w-6 rounded-full bg-gradient-to-br from-brand-500 to-purple-500" />
@@ -355,7 +488,7 @@ export function CantonStake() {
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-sm text-gray-400">You Receive</p>
-                                <p className="text-2xl font-semibold text-white">~{fmtAmount(parseFloat(tokens[selectedMusdIdx]?.amount || "0") / smusdSharePrice, 4)} smUSD</p>
+                                <p className="text-2xl font-semibold text-white">~{fmtAmount(parsedAmount / smusdSharePrice, 4)} smUSD</p>
                               </div>
                               <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                                 <div className="h-6 w-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500" />
@@ -378,7 +511,7 @@ export function CantonStake() {
                               <span className="text-gray-300">{fmtAmount(stakingService?.minDeposit || "0.01")} mUSD</span>
                             </div>
                           </div>
-                          <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0} className="w-full">
+                          <TxButton onClick={handleSmusdStake} loading={txLoading} disabled={tokens.length === 0 || parsedAmount <= 0} className="w-full">
                             <span className="flex items-center justify-center gap-2">
                               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" /></svg>
                               Stake mUSD → smUSD
@@ -464,7 +597,7 @@ export function CantonStake() {
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500/20 text-brand-400 font-bold text-sm mb-3">1</div>
                 <h3 className="font-medium text-white mb-1">Deposit mUSD</h3>
-                <p className="text-sm text-gray-400">Select a CantonMUSD contract and stake it into the vault.</p>
+                <p className="text-sm text-gray-400">Enter an mUSD amount and stake it into the vault.</p>
               </div>
               <div className="rounded-xl bg-surface-800/50 p-4 border border-white/5">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 font-bold text-sm mb-3">2</div>
@@ -536,26 +669,42 @@ export function CantonStake() {
                             ))}
                           </div>
                         </div>
-                        {/* Contract Selector */}
-                        {(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).length > 0 ? (
+                        {/* Amount Input */}
+                        {selectedDepositTokens.length > 0 ? (
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                              <label className="text-sm font-medium text-gray-400">Select {depositAsset} Contract</label>
-                              <span className="text-xs text-gray-500">Balance: {fmtAmount(depositAsset === "CTN" ? totalCoin : depositAsset === "USDCx" ? totalUsdcx : totalPureUsdc)} {depositAsset}</span>
+                              <label className="text-sm font-medium text-gray-400">Deposit Amount</label>
+                              <span className="text-xs text-gray-500">Balance: {fmtAmount(selectedDepositBalance)} {depositAsset}</span>
                             </div>
-                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-blue-500/50 focus:outline-none"
-                              value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
-                              {(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} {depositAsset} — {t.contractId.slice(0, 12)}…</option>
-                              ))}
-                            </select>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-blue-500/50">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-blue-500/20 px-3 py-1.5 text-xs font-semibold text-blue-300 transition-colors hover:bg-blue-500/30"
+                                    onClick={() => setAmount(toInputAmount(selectedDepositBalance))}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <span className="font-semibold text-white">{depositAsset}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         ) : (
                           <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-center">
                             <p className="text-sm text-gray-400">No {depositAsset} tokens available on Canton</p>
                           </div>
                         )}
-                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={(depositAsset === "CTN" ? coinTokens : depositAsset === "USDCx" ? usdcxTokens : pureUsdcTokens).length === 0} className="w-full">
+                        <TxButton onClick={handleEthPoolStake} loading={txLoading} disabled={selectedDepositTokens.length === 0 || parsedAmount <= 0} className="w-full">
                           Deposit {depositAsset} → smUSD-E
                         </TxButton>
                       </>
@@ -687,15 +836,31 @@ export function CantonStake() {
                         <>
                           <div className="space-y-3">
                             <div className="flex items-center justify-between">
-                              <label className="text-sm font-medium text-gray-400">Select Canton Coin</label>
+                              <label className="text-sm font-medium text-gray-400">Deposit CTN Amount</label>
                               <span className="text-xs text-gray-500">Balance: {fmtAmount(totalCoin)} CTN</span>
                             </div>
-                            <select className="w-full rounded-xl border border-white/10 bg-surface-800/50 px-4 py-3 text-sm text-white focus:border-yellow-500/50 focus:outline-none"
-                              value={selectedAssetIdx} onChange={(e) => setSelectedAssetIdx(Number(e.target.value))}>
-                              {coinTokens.map((t, i) => (
-                                <option key={t.contractId} value={i}>{fmtAmount(t.amount)} CTN \u2014 {t.contractId.slice(0, 12)}\u2026</option>
-                              ))}
-                            </select>
+                            <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-yellow-500/50">
+                              <div className="flex items-center gap-4">
+                                <input
+                                  type="number"
+                                  className="flex-1 bg-transparent text-2xl font-semibold text-white placeholder-gray-600 focus:outline-none"
+                                  placeholder="0.00"
+                                  value={amount}
+                                  onChange={(e) => setAmount(e.target.value)}
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="rounded-lg bg-yellow-500/20 px-3 py-1.5 text-xs font-semibold text-yellow-300 transition-colors hover:bg-yellow-500/30"
+                                    onClick={() => setAmount(toInputAmount(totalCoin))}
+                                  >
+                                    MAX
+                                  </button>
+                                  <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
+                                    <span className="font-semibold text-white">CTN</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           {smusdTokens.length === 0 && (
                             <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4">
@@ -716,7 +881,7 @@ export function CantonStake() {
                               <span className="text-white font-medium">{parseFloat(boostPoolService.cantonPriceMusd).toFixed(4)} mUSD</span>
                             </div>
                           </div>
-                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0} className="w-full">
+                          <TxButton onClick={handleBoostDeposit} loading={txLoading} disabled={coinTokens.length === 0 || smusdTokens.length === 0 || parsedAmount <= 0} className="w-full">
                             Deposit CTN \u2192 Boost LP
                           </TxButton>
                         </>
