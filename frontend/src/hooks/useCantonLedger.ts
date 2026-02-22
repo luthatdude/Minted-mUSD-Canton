@@ -161,6 +161,15 @@ function buildBalancesUrl(explicitParty?: string | null): string {
   return `/api/canton-balances?party=${encodeURIComponent(party)}`;
 }
 
+type PartyArg = string | null | { party?: string | null } | undefined;
+
+function resolvePartyArg(input?: PartyArg): string | undefined {
+  if (input && typeof input === "object" && "party" in input) {
+    return resolvePartyOverride(input.party);
+  }
+  return resolvePartyOverride(input ?? undefined);
+}
+
 export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
   const loopWallet = useLoopWallet();
   const [data, setData] = useState<CantonBalancesData | null>(null);
@@ -220,9 +229,9 @@ export async function cantonExercise(
   contractId: string,
   choice: string,
   argument: Record<string, unknown>,
-  options?: { party?: string | null }
+  partyOrOptions?: PartyArg
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const party = resolvePartyOverride(options?.party);
+  const party = resolvePartyArg(partyOrOptions);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -273,9 +282,9 @@ export async function refreshPriceFeeds(): Promise<{ success: boolean; refreshed
 export async function cantonCreate(
   templateId: string,
   payload: Record<string, unknown>,
-  options?: { party?: string | null }
+  partyOrOptions?: PartyArg
 ): Promise<{ success: boolean; result?: unknown; error?: string }> {
-  const party = resolvePartyOverride(options?.party);
+  const party = resolvePartyArg(partyOrOptions);
   const resp = await fetch("/api/canton-command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
