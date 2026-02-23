@@ -5,11 +5,18 @@ import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
+import { useChainState } from "@/hooks/useChain";
 import WalletConnector from "@/components/WalletConnector";
 
 export function PointsPage() {
   const { address, isConnected } = useUnifiedWallet();
+  const loopWallet = useLoopWallet();
+  const chainState = useChainState();
   const [referralCode, setReferralCode] = useState("");
+  const isCanton = chainState.chain === "canton";
+  const isWalletConnected = isCanton ? Boolean(loopWallet.partyId) : isConnected;
+  const walletMode = isCanton ? "canton" : "ethereum";
 
   return (
     <div className="space-y-6">
@@ -18,8 +25,8 @@ export function PointsPage() {
         description="Earn points by minting, staking, borrowing, and bridging mUSD"
       />
 
-      {!isConnected ? (
-        <WalletConnector />
+      {!isWalletConnected ? (
+        <WalletConnector mode={walletMode} />
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

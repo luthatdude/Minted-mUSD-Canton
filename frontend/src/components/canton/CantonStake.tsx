@@ -109,8 +109,6 @@ export function CantonStake() {
 
   const ethPoolSharePrice = ethPoolService ? parseFloat(ethPoolService.sharePrice) : 1.0;
   const ethPoolTVL = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : 0;
-  const ethPoolCapNum = ethPoolService ? parseFloat(ethPoolService.poolCap) : 10_000_000;
-  const ethPoolUtil = ethPoolCapNum > 0 ? (ethPoolTVL / ethPoolCapNum) * 100 : 0;
   const boostSharePrice = boostPoolService ? parseFloat(boostPoolService.globalSharePrice) : 1.0;
   const boostApy = Math.max(0, (boostSharePrice - 1) * 100);
 
@@ -799,9 +797,21 @@ export function CantonStake() {
               <div className="space-y-4">
                 <div className="grid gap-4 grid-cols-2">
                   <StatCard label="Share Price" value={`${ethPoolSharePrice.toFixed(4)} mUSD`} subValue="per smUSD-E" color="blue" />
-                  <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " USDC"} color="green" />
-                  <StatCard label="Pool Utilization" value={`${ethPoolUtil.toFixed(1)}%`} color="yellow" />
-                  <StatCard label="Pool Cap" value={fmtAmount(ethPoolCapNum, 0) + " USDC"} color="purple" />
+                  <StatCard label="Estimated APY" value={`${Math.max(0, (ethPoolSharePrice - 1) * 100).toFixed(2)}%`} color="green" />
+                  <StatCard
+                    label={`Available ${depositAsset}`}
+                    value={fmtAmount(selectedDepositBalance)}
+                    subValue={`${selectedDepositTokens.length} contracts`}
+                    color="blue"
+                  />
+                  <StatCard
+                    label="Your smUSD-E"
+                    value={fmtAmount(totalSmusdE, 4)}
+                    subValue={totalSmusdE > 0 ? `≈ ${fmtAmount(totalSmusdE * ethPoolSharePrice)} mUSD` : undefined}
+                    color="purple"
+                  />
+                  <StatCard label="Pool TVL" value={fmtAmount(ethPoolTVL) + " mUSD"} color="blue" />
+                  <StatCard label="Total Shares" value={fmtAmount(parseFloat(ethPoolService?.totalShares || "0"), 4)} color="purple" />
                 </div>
                 <div className="card overflow-hidden">
                   <h3 className="text-sm font-medium text-gray-400 mb-3">Your Canton Assets</h3>
