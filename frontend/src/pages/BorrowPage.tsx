@@ -16,6 +16,7 @@ interface CollateralInfo {
   token: string;
   symbol: string;
   decimals: number;
+  walletBalance: bigint;
   deposited: bigint;
   price: bigint;
   valueUsd: bigint;
@@ -56,15 +57,17 @@ export function BorrowPage() {
 
         for (const token of tokens) {
           const erc20 = new ethers.Contract(token, ERC20_ABI, signer);
-          const [symbol, dec, dep, prc, config] = await Promise.all([
+          const [symbol, dec, dep, bal, prc, config] = await Promise.all([
             erc20.symbol(),
             erc20.decimals(),
             vault.getDeposit(address, token),
+            erc20.balanceOf(address),
             oracle.getPrice(token).catch(() => 0n),
             vault.getConfig(token),
           ]);
           const decimals = Number(dec);
           const deposited = BigInt(dep);
+          const walletBalance = BigInt(bal);
           const price = BigInt(prc);
           const valueUsd = deposited > 0n && price > 0n
             ? (deposited * price) / (10n ** BigInt(decimals))
@@ -73,6 +76,7 @@ export function BorrowPage() {
             token,
             symbol,
             decimals,
+            walletBalance,
             deposited,
             price,
             valueUsd,
@@ -243,6 +247,11 @@ export function BorrowPage() {
     ? Math.min(100, Math.max(0, ((Math.min(hfValue, 3) - 1) / 2) * 100))
     : 100;
   const hfGaugeColor = hfValue < 1.2 ? "from-red-500 to-red-400" : hfValue < 1.5 ? "from-yellow-500 to-yellow-400" : "from-emerald-500 to-teal-400";
+  const selectedCollateral = collaterals.find((c) => c.token === selectedToken) || null;
+  const selectedSymbol = selectedCollateral?.symbol || "Token";
+  const selectedDecimals = selectedCollateral?.decimals || 18;
+  const selectedWalletBalance = selectedCollateral?.walletBalance || 0n;
+  const selectedDeposited = selectedCollateral?.deposited || 0n;
 
   if (!isConnected) {
     return (
@@ -406,6 +415,16 @@ export function BorrowPage() {
                   {action === "repay" && (
                     <span className="text-xs text-gray-500">Debt: {formatUSD(debt)}</span>
                   )}
+                  {action === "deposit" && (
+                    <span className="text-xs text-gray-500">
+                      Available: {formatToken(selectedWalletBalance, selectedDecimals)} {selectedSymbol}
+                    </span>
+                  )}
+                  {action === "withdraw" && (
+                    <span className="text-xs text-gray-500">
+                      Deposited: {formatToken(selectedDeposited, selectedDecimals)} {selectedSymbol}
+                    </span>
+                  )}
                 </div>
                 <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
                   <div className="flex items-center gap-4">
@@ -433,6 +452,22 @@ export function BorrowPage() {
                           MAX
                         </button>
                       )}
+                      {action === "deposit" && selectedWalletBalance > 0n && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(ethers.formatUnits(selectedWalletBalance, selectedDecimals))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "withdraw" && selectedDeposited > 0n && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(ethers.formatUnits(selectedDeposited, selectedDecimals))}
+                        >
+                          MAX
+                        </button>
+                      )}
                       <div className="flex items-center gap-2 rounded-full bg-surface-700/50 px-3 py-1.5">
                         <div className={`h-6 w-6 rounded-full ${
                           action === "borrow" || action === "repay"
@@ -440,7 +475,7 @@ export function BorrowPage() {
                             : "bg-gradient-to-br from-blue-500 to-cyan-500"
                         }`} />
                         <span className="font-semibold text-white">
-                          {action === "borrow" || action === "repay" ? "mUSD" : collaterals.find(c => c.token === selectedToken)?.symbol || "Token"}
+                          {action === "borrow" || action === "repay" ? "mUSD" : selectedSymbol}
                         </span>
                       </div>
                     </div>

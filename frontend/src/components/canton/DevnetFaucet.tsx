@@ -6,6 +6,7 @@ import { TxButton } from "@/components/TxButton";
 import { useCantonLedger, cantonCreate } from "@/hooks/useCantonLedger";
 import { useUnifiedWallet } from "@/hooks/useUnifiedWallet";
 import { useWCContracts } from "@/hooks/useWCContracts";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 import { CONTRACTS, USDC_DECIMALS, CHAIN_ID } from "@/lib/config";
 import { formatToken } from "@/lib/format";
 
@@ -42,7 +43,9 @@ const TOKEN_INFO: Record<TokenType, { label: string; description: string; gradie
 };
 
 export function DevnetFaucet() {
-  const { data, loading, refresh } = useCantonLedger(15_000);
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const { data, loading, refresh } = useCantonLedger(15_000, activeParty);
   const { address, isConnected } = useUnifiedWallet();
   const contracts = useWCContracts();
 
@@ -67,7 +70,7 @@ export function DevnetFaucet() {
     load();
   }, [contracts.usdc, address]);
 
-  const party = data?.party || "";
+  const party = activeParty || "";
 
   async function handleCantonMint(tokenType: TokenType) {
     const amt = amounts[tokenType];
@@ -109,7 +112,7 @@ export function DevnetFaucet() {
         };
       }
 
-      const resp = await cantonCreate(templateId, payload);
+      const resp = await cantonCreate(templateId, payload, { party });
       if (!resp.success) throw new Error(resp.error || "Canton create failed");
 
       setResult(`✅ Minted ${amt} ${TOKEN_INFO[tokenType].label} on Canton`);

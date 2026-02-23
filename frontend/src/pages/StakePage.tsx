@@ -602,7 +602,7 @@ export function StakePage() {
         <>
           {/* Two-column layout: Action left, Stats right */}
           <div className="grid gap-8 lg:grid-cols-2">
-            {/* Left column: Deposit / Withdraw Card */}
+            {/* Left column: Deposit / Unstake Card */}
             <div>
               <div className="card-gradient-border overflow-hidden">
                 <div className="flex border-b border-white/10">
@@ -622,7 +622,7 @@ export function StakePage() {
                   >
                     <span className="relative z-10 flex items-center justify-center gap-2">
                       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                      Withdraw
+                      Unstake
                     </span>
                     {tab === "unstake" && <span className="absolute bottom-0 left-1/2 h-0.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500" />}
                   </button>
@@ -763,6 +763,9 @@ export function StakePage() {
                         </div>
                       ) : (
                         <div className="space-y-3">
+                          <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
+                            ETH Pool is position-based. Each deposit creates its own position, so unstaking is done per position.
+                          </div>
                           <label className="text-sm font-medium text-gray-400">Select Position to Unstake</label>
                           {positions.map(pos => {
                             const isETH = pos.depositAsset === ethers.ZeroAddress;

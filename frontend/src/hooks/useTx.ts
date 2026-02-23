@@ -8,6 +8,59 @@ interface TxState {
   success: boolean;
 }
 
+const CUSTOM_ERROR_LABELS: Array<[string, string]> = [
+  ["InvalidPrice()", "Oracle price is invalid."],
+  ["StalePrice()", "Oracle price is stale. Refresh feeds and retry."],
+  ["FeedNotEnabled()", "Price feed is not enabled for this asset."],
+  ["CircuitBreakerActive()", "Oracle circuit breaker is active for this asset."],
+  ["TokenNotSupported()", "Token is not supported for this action."],
+  ["ExceedsBorrowCapacity()", "Borrow amount exceeds your collateral capacity."],
+  ["WithdrawalWouldUndercollateralize()", "Withdrawal would undercollateralize your position."],
+  ["NoPosition()", "No active position found."],
+  ["InsufficientBalance()", "Insufficient balance for this action."],
+  ["InsufficientDeposit()", "Insufficient deposited collateral."],
+  ["CooldownActive()", "Cooldown is active. Please wait before withdrawing."],
+  ["ExceedsSupplyCap()", "Pool supply cap reached."],
+  ["FeedNotFound()", "Price feed not found for this asset."],
+];
+
+const CUSTOM_ERROR_MESSAGES: Record<string, string> = CUSTOM_ERROR_LABELS.reduce((acc, [sig, msg]) => {
+  acc[ethers.id(sig).slice(0, 10).toLowerCase()] = msg;
+  return acc;
+}, {} as Record<string, string>);
+
+function extractRevertData(err: any): string | null {
+  const directCandidates = [
+    err?.data,
+    err?.error?.data,
+    err?.info?.error?.data,
+    err?.error?.error?.data,
+    err?.cause?.data,
+  ];
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.startsWith("0x")) {
+      return candidate;
+    }
+    if (candidate && typeof candidate === "object" && typeof candidate.data === "string" && candidate.data.startsWith("0x")) {
+      return candidate.data;
+    }
+  }
+  return null;
+}
+
+function decodeCustomErrorMessage(err: any): string | null {
+  const data = extractRevertData(err);
+  if (!data || data.length < 10) return null;
+  const selector = data.slice(0, 10).toLowerCase();
+  return CUSTOM_ERROR_MESSAGES[selector] || null;
+}
+
+function friendlyErrorMessage(err: any, prefix?: string): string {
+  const custom = decodeCustomErrorMessage(err);
+  const base = custom || err?.reason || err?.shortMessage || err?.message || "Transaction failed";
+  return prefix ? `${prefix}${base}` : base;
+}
+
 /**
  * Hook for sending Ethereum transactions with loading/error/success tracking.
  * Added transaction simulation before signing to catch reverts early.
@@ -34,9 +87,8 @@ export function useTx() {
         await simulateFn();
         return true;
       } catch (err: any) {
-        const message =
-          err.reason || err.shortMessage || err.message || "Simulation failed";
-        setState({ loading: false, hash: null, error: `Simulation: ${message}`, success: false });
+        const message = friendlyErrorMessage(err, "Simulation: ");
+        setState({ loading: false, hash: null, error: message, success: false });
         return false;
       }
     },
@@ -65,8 +117,7 @@ export function useTx() {
         setState({ loading: false, hash: tx.hash, error: null, success: true });
         return receipt;
       } catch (err: any) {
-        const message =
-          err.reason || err.shortMessage || err.message || "Transaction failed";
+        const message = friendlyErrorMessage(err);
         setState({ loading: false, hash: null, error: message, success: false });
         return null;
       }

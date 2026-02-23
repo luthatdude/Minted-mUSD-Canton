@@ -136,10 +136,11 @@ function partyQueryParam(party?: string | null): string {
 type PartyArg = string | null | { party?: string | null } | undefined;
 
 function resolvePartyArg(input?: PartyArg): string | null {
-  if (input && typeof input === "object" && "party" in input) {
-    return normalizeCantonParty(input.party ?? null);
-  }
-  return normalizeCantonParty(input ?? null);
+  const rawParty: string | null =
+    input && typeof input === "object"
+      ? (input.party ?? null)
+      : (input ?? null);
+  return normalizeCantonParty(rawParty);
 }
 
 export function useCantonLedger(autoRefreshMs = 15_000, party?: string | null) {
