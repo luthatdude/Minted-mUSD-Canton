@@ -14,6 +14,7 @@ import { BorrowPage } from "./BorrowPage";
 import { BridgePage } from "./BridgePage";
 import { AdminPage } from "./AdminPage";
 import { PointsPage } from "./PointsPage";
+import { FaucetPage } from "./FaucetPage";
 
 // Canton pages
 import { CantonDashboard } from "@/components/canton/CantonDashboard";
@@ -22,6 +23,7 @@ import { CantonStake } from "@/components/canton/CantonStake";
 import { CantonBorrow } from "@/components/canton/CantonBorrow";
 import { CantonBridge } from "@/components/canton/CantonBridge";
 import { CantonAdmin } from "@/components/canton/CantonAdmin";
+import { DevnetFaucet } from "@/components/canton/DevnetFaucet";
 
 export default function Home() {
   const router = useRouter();
@@ -59,6 +61,8 @@ export default function Home() {
           return <CantonBorrow />;
         case "bridge":
           return <CantonBridge />;
+        case "faucet":
+          return <DevnetFaucet />;
         case "admin":
           return <CantonAdmin />;
         default:
@@ -78,6 +82,8 @@ export default function Home() {
         return <BorrowPage />;
       case "bridge":
         return <BridgePage />;
+      case "faucet":
+        return <FaucetPage />;
       case "points":
         return <PointsPage />;
       case "admin":
