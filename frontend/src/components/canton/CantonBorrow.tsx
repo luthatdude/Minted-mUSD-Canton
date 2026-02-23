@@ -210,6 +210,31 @@ export function CantonBorrow() {
   }, [data?.priceFeeds, userEscrows, lendingService?.configs]);
 
   const selectedCollateralInfo = collateralInfos.find((info) => info.key === collateralAsset) || null;
+  const selectedAssetContracts = getAssetContracts(collateralAsset, data);
+  const selectedAssetAvailable = selectedAssetContracts.reduce(
+    (sum, token) => sum + parseFloat(token.amount || "0"),
+    0
+  );
+  const selectedAssetDeposited = selectedCollateralInfo?.deposited || 0;
+  const selectedAssetLargestContract = selectedAssetContracts.reduce<SimpleToken | null>((largest, token) => {
+    if (!largest) return token;
+    return parseFloat(token.amount || "0") > parseFloat(largest.amount || "0") ? token : largest;
+  }, null);
+  const selectedAssetMaxSingle = selectedAssetLargestContract
+    ? parseFloat(selectedAssetLargestContract.amount || "0")
+    : 0;
+  const selectedAssetMaxInput = selectedAssetLargestContract?.amount || "0";
+  const selectedEscrows = userEscrows.filter(
+    (escrow) => escrow.collateralType === COLLATERAL_META[collateralAsset].collateralType
+  );
+  const selectedLargestEscrow = selectedEscrows.reduce<EscrowInfo | null>((largest, escrow) => {
+    if (!largest) return escrow;
+    return parseFloat(escrow.amount || "0") > parseFloat(largest.amount || "0") ? escrow : largest;
+  }, null);
+  const selectedEscrowMaxSingle = selectedLargestEscrow
+    ? parseFloat(selectedLargestEscrow.amount || "0")
+    : 0;
+  const selectedEscrowMaxInput = selectedLargestEscrow?.amount || "0";
 
   useEffect(() => {
     if (action !== "withdraw") return;
@@ -689,6 +714,16 @@ export function CantonBorrow() {
                   {action === "repay" && (
                     <span className="text-xs text-gray-500">Debt: {fmtUSD(outstandingDebt)}</span>
                   )}
+                  {action === "deposit" && (
+                    <span className="text-xs text-gray-500">
+                      Available: {fmtAmount(selectedAssetAvailable, 4)} {selectedCollateralInfo?.symbol || COLLATERAL_META[collateralAsset].symbol}
+                    </span>
+                  )}
+                  {action === "withdraw" && (
+                    <span className="text-xs text-gray-500">
+                      Deposited: {fmtAmount(selectedAssetDeposited, 4)} {selectedCollateralInfo?.symbol || COLLATERAL_META[collateralAsset].symbol}
+                    </span>
+                  )}
                 </div>
                 <div className="relative rounded-xl border border-white/10 bg-surface-800/50 p-4 transition-all duration-300 focus-within:border-brand-500/50 focus-within:shadow-[0_0_20px_-5px_rgba(51,139,255,0.3)]">
                   <div className="flex items-center gap-4">
@@ -712,6 +747,22 @@ export function CantonBorrow() {
                         <button
                           className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
                           onClick={() => setAmount(Math.min(userMusdBalance, outstandingDebt).toFixed(4))}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "deposit" && selectedAssetMaxSingle > 0 && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(selectedAssetMaxInput)}
+                        >
+                          MAX
+                        </button>
+                      )}
+                      {action === "withdraw" && selectedEscrowMaxSingle > 0 && (
+                        <button
+                          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-400 transition-colors hover:bg-brand-500/30"
+                          onClick={() => setAmount(selectedEscrowMaxInput)}
                         >
                           MAX
                         </button>

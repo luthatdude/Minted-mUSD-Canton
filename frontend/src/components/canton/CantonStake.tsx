@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { TxButton } from "@/components/TxButton";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 import {
   useCantonLedger,
   cantonExercise,
@@ -57,7 +58,11 @@ function pickExactOrCoveringToken(tokens: SimpleToken[], requested: number): Sim
 }
 
 export function CantonStake() {
-  const { data, loading, error, refresh } = useCantonLedger(15_000);
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const hasConnectedUserParty = Boolean(activeParty && activeParty.trim());
+
+  const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
 
   const [pool, setPool] = useState<CantonPoolTab>("smusd");
   const [tab, setTab] = useState<StakeAction>("stake");
@@ -153,11 +158,15 @@ export function CantonStake() {
     if (!stakingService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       if (parsedAmount <= 0) throw new Error("Enter a valid mUSD amount.");
       // Fetch fresh data (Stake is consuming on CantonStakingService)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.stakingService || operatorFresh?.stakingService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.stakingService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.stakingService || null;
+      }
       if (!freshService) throw new Error("Staking service not found");
       const freshTokens = fresh.tokens || [];
       const token = await selectTokenForRequestedAmount(
@@ -183,17 +192,21 @@ export function CantonStake() {
     if (!stakingService || smusdTokens.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       // Fetch fresh data (Unstake is consuming on CantonStakingService)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.stakingService || operatorFresh?.stakingService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.stakingService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.stakingService || null;
+      }
       if (!freshService) throw new Error("Staking service not found");
       const freshSmusd = fresh.smusdTokens || [];
       const smusd = freshSmusd[selectedAssetIdx] || freshSmusd[0];
       if (!smusd) throw new Error("No smUSD shares available");
       const resp = await cantonExercise("CantonStakingService", freshService.contractId, "Unstake", {
         user: fresh.party, smusdCid: smusd.contractId,
-      });
+      }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
       setTxSuccess(`Unstaked ${fmtAmount(smusd.amount)} smUSD → mUSD`);
       await refresh();
@@ -206,11 +219,15 @@ export function CantonStake() {
     if (!ethPoolService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       if (parsedAmount <= 0) throw new Error(`Enter a valid ${depositAsset} amount.`);
       // Fetch fresh data to avoid stale CIDs (ETHPool choices are consuming)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.ethPoolService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.ethPoolService || null;
+      }
       if (!freshService) throw new Error("ETH Pool service not found");
 
       // Use fresh token lists
@@ -267,17 +284,21 @@ export function CantonStake() {
     if (!ethPoolService || smusdETokens.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       // Fetch fresh data (ETHPool_Unstake is consuming)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.ethPoolService || operatorFresh?.ethPoolService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.ethPoolService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.ethPoolService || null;
+      }
       if (!freshService) throw new Error("ETH Pool service not found");
       const freshSmusdE = fresh.smusdETokens || [];
       const smusdE = freshSmusdE[selectedAssetIdx] || freshSmusdE[0];
       if (!smusdE) throw new Error("No smUSD-E shares found");
       const resp = await cantonExercise("CantonETHPoolService", freshService.contractId, "ETHPool_Unstake", {
         user: fresh.party, smusdeCid: smusdE.contractId,
-      });
+      }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Unstake failed");
       setTxSuccess(`Unstaked ${fmtAmount(smusdE.amount)} smUSD-E → mUSD`);
       await refresh();
@@ -290,11 +311,15 @@ export function CantonStake() {
     if (!boostPoolService) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       if (parsedAmount <= 0) throw new Error("Enter a valid CTN amount.");
       // Fetch fresh data (Boost Deposit is consuming)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.boostPoolService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.boostPoolService || null;
+      }
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshCoins = fresh.cantonCoinTokens || [];
       const coin = await selectTokenForRequestedAmount(
@@ -326,17 +351,21 @@ export function CantonStake() {
     if (!boostPoolService || boostLPTokens.length === 0) return;
     setTxLoading(true); setTxError(null); setTxSuccess(null);
     try {
+      if (!hasConnectedUserParty || !activeParty) throw new Error("Connect your Loop wallet party first.");
       // Fetch fresh data (Boost Withdraw is consuming)
-      const fresh = await fetchFreshBalances();
-      const operatorFresh = await fetchFreshBalances(undefined).catch(() => null);
-      const freshService = fresh.boostPoolService || operatorFresh?.boostPoolService;
+      const fresh = await fetchFreshBalances(activeParty);
+      let freshService = fresh.boostPoolService;
+      if (!freshService) {
+        const operatorFresh = await fetchFreshBalances(null).catch(() => null);
+        freshService = operatorFresh?.boostPoolService || null;
+      }
       if (!freshService) throw new Error("Boost Pool service not found");
       const freshLP = fresh.boostLPTokens || [];
       const lp = freshLP[selectedAssetIdx] || freshLP[0];
       if (!lp) throw new Error("No Boost LP found");
       const resp = await cantonExercise("CantonBoostPoolService", freshService.contractId, "Withdraw", {
         user: fresh.party, lpCid: lp.contractId,
-      });
+      }, { party: fresh.party });
       if (!resp.success) throw new Error(resp.error || "Withdraw failed");
       setTxSuccess(`Withdrew Boost LP → CTN`);
       await refresh();

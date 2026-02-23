@@ -29,6 +29,7 @@ coverage.json
 credentials.json
 secrets/
 relay/secrets/
+relay/relay-state.json
 
 # IDE
 .vscode/
