@@ -108,6 +108,23 @@ function resolveRequestedParty(rawParty: unknown): string {
   return RECIPIENT_ALIAS_MAP[party] || party;
 }
 
+function shouldOperatorCosignCreate(
+  resolvedTemplateId: string,
+  payload: Record<string, unknown>,
+  actAsParty: string
+): boolean {
+  // Devnet faucet mint flow: create operator-issued user-owned token contracts.
+  const entityName = resolvedTemplateId.split(":").pop() || "";
+  const faucetEntities = new Set(["CantonCoin", "CantonUSDC", "USDCx"]);
+  if (!faucetEntities.has(entityName)) return false;
+
+  const issuer = typeof payload.issuer === "string" ? payload.issuer : "";
+  const owner = typeof payload.owner === "string" ? payload.owner : "";
+  if (!issuer || !owner) return false;
+
+  return issuer === CANTON_PARTY && owner === actAsParty && actAsParty !== CANTON_PARTY;
+}
+
 async function cantonRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   const resp = await fetch(`${CANTON_BASE_URL}${path}`, {
     method,
@@ -154,7 +171,7 @@ export default async function handler(
   } catch (err: any) {
     return res.status(400).json({ error: err.message || "Invalid Canton party" });
   }
-  const readAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
+  const baseReadAsParties = Array.from(new Set([actAsParty, CANTON_PARTY]));
 
   const commandId = `ui-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
@@ -165,16 +182,22 @@ export default async function handler(
         return res.status(400).json({ error: "Missing payload for create" });
       }
 
+      const createPayload = payload as Record<string, unknown>;
+      const createActAs = shouldOperatorCosignCreate(resolvedTemplateId, createPayload, actAsParty)
+        ? Array.from(new Set([actAsParty, CANTON_PARTY]))
+        : [actAsParty];
+      const createReadAs = Array.from(new Set([...baseReadAsParties, ...createActAs]));
+
       const body = {
         userId: CANTON_USER,
-        actAs: [actAsParty],
-        readAs: readAsParties,
+        actAs: createActAs,
+        readAs: createReadAs,
         commandId,
         commands: [
           {
             CreateCommand: {
               templateId: resolvedTemplateId,
-              createArguments: payload,
+              createArguments: createPayload,
             },
           },
         ],
@@ -193,7 +216,7 @@ export default async function handler(
       const body = {
         userId: CANTON_USER,
         actAs: [actAsParty],
-        readAs: readAsParties,
+        readAs: baseReadAsParties,
         commandId,
         commands: [
           {

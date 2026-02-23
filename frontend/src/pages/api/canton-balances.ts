@@ -334,6 +334,15 @@ export default async function handler(
     const escrowPositions: EscrowInfo[] = [];
     const debtPositions: DebtPositionInfo[] = [];
 
+    const matchesActingOwner = (payload: Record<string, unknown>, field: "owner" | "borrower" = "owner"): boolean => {
+      const owner = (payload[field] as string) || "";
+      return !owner || owner === actAsParty;
+    };
+    const matchesOperatorIssuer = (payload: Record<string, unknown>): boolean => {
+      const issuer = (payload.issuer as string) || "";
+      return !issuer || issuer === CANTON_PARTY;
+    };
+
     for (const entry of entries) {
       const ac = entry.contractEntry?.JsActiveContract;
       if (!ac) continue;
@@ -345,6 +354,8 @@ export default async function handler(
 
       if (entityName === "CantonMUSD") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         tokens.push({
           contractId: evt.contractId,
           owner: (p.owner as string) || "",
@@ -474,18 +485,22 @@ export default async function handler(
         });
       } else if (entityName === "CantonSMUSD_E") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         smusdETokens.push({
           contractId: evt.contractId,
           amount: (p.shares as string) || (p.amount as string) || "0",
         });
       } else if (entityName === "BoostPoolLP") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
         boostLPTokens.push({
           contractId: evt.contractId,
           amount: (p.shares as string) || (p.amount as string) || "0",
         });
       } else if (entityName === "EscrowedCollateral") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
         escrowPositions.push({
           contractId: evt.contractId,
           owner: (p.owner as string) || "",
@@ -494,6 +509,7 @@ export default async function handler(
         });
       } else if (entityName === "CantonDebtPosition") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "borrower")) continue;
         debtPositions.push({
           contractId: evt.contractId,
           owner: (p.borrower as string) || "",
@@ -522,18 +538,24 @@ export default async function handler(
         }
       } else if (entityName === "CantonSMUSD") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         smusdTokens.push({
           contractId: evt.contractId,
           amount: (p.shares as string) || (p.amount as string) || "0",
         });
       } else if (entityName === "CantonCoin") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         cantonCoinTokens.push({
           contractId: evt.contractId,
           amount: (p.amount as string) || "0",
         });
       } else if (entityName === "CantonUSDC") {
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         usdcTokens.push({
           contractId: evt.contractId,
           amount: (p.amount as string) || "0",
@@ -542,6 +564,8 @@ export default async function handler(
         // USDCx is a separate template; track separately so DirectMint_Mint
         // (which expects CantonUSDC) doesn't accidentally receive a USDCx CID.
         const p = evt.createArgument;
+        if (!matchesActingOwner(p, "owner")) continue;
+        if (!matchesOperatorIssuer(p)) continue;
         usdcTokens.push({
           contractId: evt.contractId,
           amount: (p.amount as string) || "0",
