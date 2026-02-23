@@ -11,6 +11,7 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import WalletConnector from "@/components/WalletConnector";
 import { useVaultAPY } from "@/hooks/useVaultAPY";
 import { cantonCreate, useCantonLedger } from "@/hooks/useCantonLedger";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 
 type AdminSection = "emergency" | "musd" | "directmint" | "treasury" | "vaults" | "bridge" | "borrow" | "oracle" | "faucet";
 
@@ -206,12 +207,14 @@ function isValidBps(v: string): boolean {
 
 export function AdminPage() {
   const { address, isConnected, signer } = useUnifiedWallet();
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
   const contracts = useWCContracts();
   const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
   const [section, setSection] = useState<AdminSection>("treasury");
   const tx = useTx();
   const { vaultAPYs, treasuryAPY, pendingYield, loading: apyLoading } = useVaultAPY();
-  const { data: cantonData, refresh: refreshCantonData } = useCantonLedger(0);
+  const { data: cantonData, refresh: refreshCantonData } = useCantonLedger(0, activeParty);
 
   // ── All state hooks (must precede conditional returns — Rules of Hooks) ──
 
@@ -445,9 +448,9 @@ export function AdminPage() {
       setFaucetStatus({ error: "NEXT_PUBLIC_DAML_PACKAGE_ID is missing." });
       return;
     }
-    const party = cantonData?.party;
+    const party = activeParty;
     if (!party) {
-      setFaucetStatus({ error: "Canton party is not connected yet." });
+      setFaucetStatus({ error: "Connect your Loop wallet party before using the Canton faucet." });
       return;
     }
 

@@ -28,6 +28,8 @@ const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+const ALLOW_OPERATOR_FALLBACK =
+  (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
 
 /**
  * Map short template names to fully-qualified Canton template IDs.
@@ -95,7 +97,10 @@ function resolveTemplateId(tpl: string): string {
 }
 
 function resolveRequestedParty(rawParty: unknown): string {
-  if (typeof rawParty !== "string" || !rawParty.trim()) return CANTON_PARTY;
+  if (typeof rawParty !== "string" || !rawParty.trim()) {
+    if (ALLOW_OPERATOR_FALLBACK) return CANTON_PARTY;
+    throw new Error("Missing Canton party for command submission");
+  }
   const party = rawParty.trim();
   if (party.length > 200 || !CANTON_PARTY_PATTERN.test(party)) {
     throw new Error("Invalid Canton party");
