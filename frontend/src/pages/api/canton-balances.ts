@@ -579,13 +579,25 @@ export default async function handler(
     // In that case, fall back to the operator party view for service discovery.
     if (
       effectiveParty !== CANTON_PARTY &&
-      (!directMintService || !bridgeService || !supplyService)
+      (
+        !directMintService ||
+        !bridgeService ||
+        !supplyService ||
+        !stakingService ||
+        !ethPoolService ||
+        !boostPoolService ||
+        !lendingService
+      )
     ) {
       try {
         const operatorTemplates = [
           templateId("Minted.Protocol.V3", "BridgeService"),
           templateId("Minted.Protocol.V3", "MUSDSupplyService"),
           templateId("CantonDirectMint", "CantonDirectMintService"),
+          templateId("CantonSMUSD", "CantonStakingService"),
+          templateId("CantonETHPool", "CantonETHPoolService"),
+          templateId("CantonBoostPool", "CantonBoostPoolService"),
+          templateId("CantonLending", "CantonLendingService"),
         ] as const;
 
         const operatorGroups = await Promise.all(
@@ -610,6 +622,100 @@ export default async function handler(
             };
           } else if (!supplyService && entityName === "MUSDSupplyService") {
             supplyService = true;
+          } else if (entityName === "CantonStakingService") {
+            const p = evt.createArgument;
+            const ts = parseFloat(String(p.totalShares || "0"));
+            const gsp = parseFloat(String(p.globalSharePrice || "1.0"));
+            const pm = parseFloat(String(p.pooledMusd || "0"));
+            const tvl = pm > 0 ? pm : ts * gsp;
+            const sharePrice = pm > 0 && ts > 0 ? pm / ts : gsp;
+            const isPaused = p.paused === true || p.paused === "True";
+            const compCid = (p.complianceRegistryCid as string) || "";
+            const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+            const candidate: StakingServiceInfo = {
+              contractId: evt.contractId,
+              totalShares: String(ts),
+              pooledMusd: String(tvl),
+              sharePrice: String(sharePrice),
+              cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
+              minDeposit: String(p.minDeposit || "0.01"),
+              paused: isPaused,
+            };
+            const prevTvl = stakingService ? parseFloat(stakingService.pooledMusd) : -1;
+            if (
+              !stakingService ||
+              (hasValidCompliance && !stakingHasValidCompliance) ||
+              (hasValidCompliance === stakingHasValidCompliance && !isPaused && stakingService.paused) ||
+              (hasValidCompliance === stakingHasValidCompliance && isPaused === stakingService.paused && tvl > prevTvl)
+            ) {
+              stakingService = candidate;
+              stakingHasValidCompliance = hasValidCompliance;
+            }
+          } else if (entityName === "CantonETHPoolService") {
+            const p = evt.createArgument;
+            const isPaused = p.paused === true || p.paused === "True";
+            const compCid = (p.complianceRegistryCid as string) || "";
+            const hasValidCompliance = compCid.length > 10 && !compCid.match(/^0+$/);
+            const tvl = parseFloat((p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0");
+            const candidate: ETHPoolServiceInfo = {
+              contractId: evt.contractId,
+              totalShares: (p.totalShares as string) || "0",
+              poolCap: (p.poolCap as string) || "0",
+              sharePrice: (p.sharePrice as string) || "1.0",
+              pooledUsdc: (p.pooledUsdc as string) || "0",
+              paused: isPaused,
+              totalMusdStaked: (p.totalUsdcStaked as string) || (p.totalMusdStaked as string) || "0",
+            };
+            const prevTvl = ethPoolService ? parseFloat(ethPoolService.totalMusdStaked) : -1;
+            if (
+              !ethPoolService ||
+              (hasValidCompliance && !ethPoolHasValidCompliance) ||
+              (hasValidCompliance === ethPoolHasValidCompliance && !isPaused && ethPoolService.paused) ||
+              (hasValidCompliance === ethPoolHasValidCompliance && isPaused === ethPoolService.paused && tvl > prevTvl)
+            ) {
+              ethPoolService = candidate;
+              ethPoolHasValidCompliance = hasValidCompliance;
+            }
+          } else if (entityName === "CantonBoostPoolService") {
+            const p = evt.createArgument;
+            boostPoolService = {
+              contractId: evt.contractId,
+              totalCantonDeposited: (p.totalCantonDeposited as string) || "0",
+              totalLPShares: (p.totalLPShares as string) || "0",
+              cantonPriceMusd: (p.cantonPriceMusd as string) || "1.0",
+              globalSharePrice: (p.globalSharePrice as string) || "1.0",
+              entryFeeBps: parseInt(String(p.entryFeeBps || "25"), 10),
+              exitFeeBps: parseInt(String(p.exitFeeBps || "50"), 10),
+              cooldownSeconds: parseInt(String(p.cooldownSeconds || "86400"), 10),
+              paused: p.paused === true || p.paused === "True",
+            };
+          } else if (entityName === "CantonLendingService") {
+            const p = evt.createArgument;
+            const rawConfigs = (p.configs as Array<Record<string, unknown>>) || [];
+            const configs: Record<string, { ltvBps: number; liqThresholdBps: number; liqPenaltyBps: number }> = {};
+            for (const val of rawConfigs) {
+              const key = (val.collateralType as string) || "";
+              if (key) {
+                configs[key] = {
+                  ltvBps: parseInt(String(val.collateralFactorBps || "0"), 10),
+                  liqThresholdBps: parseInt(String(val.liquidationThresholdBps || "0"), 10),
+                  liqPenaltyBps: parseInt(String(val.liquidationPenaltyBps || "0"), 10),
+                };
+              }
+            }
+            lendingService = {
+              contractId: evt.contractId,
+              totalBorrows: (p.totalBorrows as string) || "0",
+              interestRateBps: parseInt(String(p.interestRateBps || "500"), 10),
+              reserveFactorBps: parseInt(String(p.reserveFactorBps || "1000"), 10),
+              protocolReserves: (p.protocolReserves as string) || "0",
+              minBorrow: (p.minBorrow as string) || "100",
+              closeFactorBps: parseInt(String(p.closeFactorBps || "5000"), 10),
+              paused: p.paused === true || p.paused === "True",
+              cantonSupplyCap: (p.cantonSupplyCap as string) || "0",
+              cantonCurrentSupply: (p.cantonCurrentSupply as string) || "0",
+              configs,
+            };
           } else if (entityName === "CantonDirectMintService") {
             const p = evt.createArgument;
             const isPaused = p.paused === true || p.paused === "True";
