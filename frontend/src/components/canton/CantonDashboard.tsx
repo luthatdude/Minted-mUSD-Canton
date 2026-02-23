@@ -3,11 +3,14 @@ import { StatCard } from "@/components/StatCard";
 import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
 import { useCantonLedger } from "@/hooks/useCantonLedger";
+import { useLoopWallet } from "@/hooks/useLoopWallet";
 
-type DashboardTab = "mint" | "portfolio" | "protocol";
+type DashboardTab = "protocol" | "portfolio" | "mint";
 
 export function CantonDashboard() {
-  const { data, loading, error, refresh } = useCantonLedger(15_000);
+  const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const { data, loading, error, refresh } = useCantonLedger(15_000, activeParty);
   const [activeTab, setActiveTab] = useState<DashboardTab>("protocol");
 
   if (loading && !data) {
@@ -46,32 +49,12 @@ export function CantonDashboard() {
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <PageHeader
-          title="Canton Dashboard"
-          subtitle="Real-time overview of Minted Protocol on the Canton Network"
-          badge="Live"
+          title="Dashboard"
+          subtitle={`Welcome back${activeParty ? `, ${activeParty.split("::")[0]}` : ""}`}
+          badge="Canton"
           badgeColor="emerald"
         />
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveTab("mint")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === "mint"
-                ? "bg-brand-500 text-white"
-                : "bg-slate-800 text-gray-400 hover:text-white"
-            }`}
-          >
-            Mint & Redeem
-          </button>
-          <button
-            onClick={() => setActiveTab("portfolio")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === "portfolio"
-                ? "bg-brand-500 text-white"
-                : "bg-slate-800 text-gray-400 hover:text-white"
-            }`}
-          >
-            My Portfolio
-          </button>
           <button
             onClick={() => setActiveTab("protocol")}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -81,6 +64,26 @@ export function CantonDashboard() {
             }`}
           >
             Protocol Stats
+          </button>
+          <button
+            onClick={() => setActiveTab("portfolio")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === "portfolio"
+                ? "bg-brand-500 text-white"
+                : "bg-slate-800 text-gray-400 hover:text-white"
+            }`}
+          >
+            Portfolio Stats
+          </button>
+          <button
+            onClick={() => setActiveTab("mint")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === "mint"
+                ? "bg-brand-500 text-white"
+                : "bg-slate-800 text-gray-400 hover:text-white"
+            }`}
+          >
+            Mint & Redeem
           </button>
         </div>
       </div>
