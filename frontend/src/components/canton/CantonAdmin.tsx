@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Section } from "@/components/Section";
 import { StatCard } from "@/components/StatCard";
 import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
+import { cantonCreate, useCantonLedger } from "@/hooks/useCantonLedger";
 import WalletConnector from "@/components/WalletConnector";
 
 // DAML template IDs
@@ -15,10 +16,22 @@ const templates = {
   LiquidityPool: `${PACKAGE_ID}:Minted.Protocol.V3:LiquidityPool`,
 };
 
+const CANTON_OPERATOR_PARTY =
+  process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
+
+const CANTON_FAUCET_TEMPLATES = {
+  CantonUSDC: `${PACKAGE_ID}:CantonDirectMint:CantonUSDC`,
+  USDCx: `${PACKAGE_ID}:CantonDirectMint:USDCx`,
+  CantonCoin: `${PACKAGE_ID}:CantonCoinToken:CantonCoin`,
+} as const;
+
 export function CantonAdmin() {
   const loopWallet = useLoopWallet();
+  const activeParty = loopWallet.partyId || null;
+  const { data: balances, refresh: refreshBalances } = useCantonLedger(15_000, activeParty);
   
-  const [section, setSection] = useState<"issuer" | "oracle" | "mint" | "pool">("issuer");
+  const [section, setSection] = useState<"issuer" | "oracle" | "mint" | "pool" | "faucet">("issuer");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +54,8 @@ export function CantonAdmin() {
   // Pool
   const [pools, setPools] = useState<LoopContract[]>([]);
   const [swapAmount, setSwapAmount] = useState("");
+  const [faucetLoadingKey, setFaucetLoadingKey] = useState<string | null>(null);
+  const [faucetAmount, setFaucetAmount] = useState("1000");
 
   const loadContracts = useCallback(async () => {
     if (!loopWallet.isConnected) return;
@@ -63,6 +78,49 @@ export function CantonAdmin() {
   useEffect(() => {
     loadContracts();
   }, [loadContracts]);
+
+  async function handleFaucetMint(token: keyof typeof CANTON_FAUCET_TEMPLATES, amount: string) {
+    const party = activeParty;
+    const trimmed = amount.trim();
+    const numeric = Number(trimmed);
+    if (!party) {
+      setError("Connect your Loop wallet party first.");
+      return;
+    }
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      setError("Enter a valid faucet amount.");
+      return;
+    }
+    setFaucetLoadingKey(token);
+    setError(null);
+    setResult(null);
+    try {
+      const payload: Record<string, unknown> =
+        token === "USDCx"
+          ? {
+              issuer: CANTON_OPERATOR_PARTY,
+              owner: party,
+              amount: trimmed,
+              sourceChain: "canton-admin-faucet",
+              cctpNonce: Date.now(),
+              privacyObservers: [] as string[],
+            }
+          : {
+              issuer: CANTON_OPERATOR_PARTY,
+              owner: party,
+              amount: trimmed,
+              privacyObservers: [] as string[],
+            };
+      const resp = await cantonCreate(CANTON_FAUCET_TEMPLATES[token], payload, { party });
+      if (!resp.success) throw new Error(resp.error || "Canton faucet mint failed");
+      await Promise.all([refreshBalances(), loadContracts()]);
+      setResult(`Minted ${trimmed} ${token} to ${party.split("::")[0]}.`);
+    } catch (err: any) {
+      setError(err?.message || "Canton faucet mint failed");
+    } finally {
+      setFaucetLoadingKey(null);
+    }
+  }
 
   async function handleExercise(templateId: string, cid: string, choice: string, args: any) {
     setLoading(true);
@@ -98,6 +156,7 @@ export function CantonAdmin() {
     { key: "oracle" as const, label: "Price Oracle" },
     { key: "mint" as const, label: "Mint Service" },
     { key: "pool" as const, label: "Liquidity Pool" },
+    { key: "faucet" as const, label: "Faucet" },
   ];
 
   return (
@@ -340,6 +399,59 @@ export function CantonAdmin() {
             </>
           )}
         </div>
+      )}
+
+      {section === "faucet" && (
+        <Section
+          title="Canton Faucet"
+          subtitle="Devnet-only operator-issued test assets for Canton staking/lending"
+        >
+          <div className="grid gap-4 sm:grid-cols-4">
+            <StatCard label="mUSD" value={balances?.totalBalance || "0"} subValue={`${balances?.tokenCount || 0} contracts`} />
+            <StatCard label="USDC + USDCx" value={balances?.totalUsdc || "0"} subValue={`${balances?.usdcTokens?.length || 0} contracts`} />
+            <StatCard label="Canton Coin" value={balances?.totalCoin || "0"} subValue={`${balances?.cantonCoinTokens?.length || 0} contracts`} />
+            <StatCard label="Active Party" value={activeParty ? activeParty.split("::")[0] : "Disconnected"} />
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div className="card">
+              <h3 className="mb-2 font-semibold text-gray-200">Canton USDC</h3>
+              <input className="input" type="number" value={faucetAmount} onChange={(e) => setFaucetAmount(e.target.value)} />
+              <TxButton
+                onClick={() => handleFaucetMint("CantonUSDC", faucetAmount)}
+                loading={faucetLoadingKey === "CantonUSDC"}
+                disabled={Boolean(faucetLoadingKey)}
+                className="mt-3 w-full"
+              >
+                Mint USDC
+              </TxButton>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 font-semibold text-gray-200">USDCx</h3>
+              <input className="input" type="number" value={faucetAmount} onChange={(e) => setFaucetAmount(e.target.value)} />
+              <TxButton
+                onClick={() => handleFaucetMint("USDCx", faucetAmount)}
+                loading={faucetLoadingKey === "USDCx"}
+                disabled={Boolean(faucetLoadingKey)}
+                className="mt-3 w-full"
+              >
+                Mint USDCx
+              </TxButton>
+            </div>
+            <div className="card">
+              <h3 className="mb-2 font-semibold text-gray-200">Canton Coin</h3>
+              <input className="input" type="number" value={faucetAmount} onChange={(e) => setFaucetAmount(e.target.value)} />
+              <TxButton
+                onClick={() => handleFaucetMint("CantonCoin", faucetAmount)}
+                loading={faucetLoadingKey === "CantonCoin"}
+                disabled={Boolean(faucetLoadingKey)}
+                className="mt-3 w-full"
+              >
+                Mint CTN
+              </TxButton>
+            </div>
+          </div>
+        </Section>
       )}
     </div>
   );

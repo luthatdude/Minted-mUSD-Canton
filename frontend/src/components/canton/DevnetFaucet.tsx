@@ -11,6 +11,9 @@ import { CONTRACTS, USDC_DECIMALS, CHAIN_ID } from "@/lib/config";
 import { formatToken } from "@/lib/format";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const CANTON_OPERATOR_PARTY =
+  process.env.NEXT_PUBLIC_CANTON_OPERATOR_PARTY ||
+  "minted-validator-1::122038887449dad08a7caecd8acf578db26b02b61773070bfa7013f7563d2c01adb9";
 
 /** Fully-qualified DAML template IDs */
 const CANTON_TEMPLATES = {
@@ -88,7 +91,7 @@ export function DevnetFaucet() {
 
       if (tokenType === "USDCx") {
         payload = {
-          issuer: party,
+          issuer: CANTON_OPERATOR_PARTY,
           owner: party,
           amount: amt,
           sourceChain: "devnet-faucet",
@@ -97,7 +100,7 @@ export function DevnetFaucet() {
         };
       } else if (tokenType === "CantonCoin") {
         payload = {
-          issuer: party,
+          issuer: CANTON_OPERATOR_PARTY,
           owner: party,
           amount: amt,
           privacyObservers: [] as string[],
@@ -105,7 +108,7 @@ export function DevnetFaucet() {
       } else {
         // CantonUSDC
         payload = {
-          issuer: party,
+          issuer: CANTON_OPERATOR_PARTY,
           owner: party,
           amount: amt,
           privacyObservers: [] as string[],
