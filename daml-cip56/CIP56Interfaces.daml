@@ -1,0 +1,387 @@
+-- | CIP-56 Transfer + Allocation interfaces for mUSD.
+--
+-- This package runs on SDK 3.4.10 (LF 2.x) as a standalone CIP-56 module.
+-- It does NOT data-depend on the main protocol DAR (SDK 2.10.3, LF 1.x)
+-- because SDK 3.4.10 cannot read LF 1.x archives.
+--
+-- Compliance validation is enforced by the relay service layer before
+-- submitting CIP-56 exercises, rather than in the Daml contract layer.
+-- See RISK-REGISTER.md RISK-001 (TOCTOU window) for details.
+--
+-- CIP56MintedMUSD is a separate holding template from V3.MintedMUSD because
+-- the main DAR cannot import CIP-56 splice DARs (LF 2.x incompatible with
+-- SDK 2.10.3). Both represent valid mUSD on the Canton ledger.
+
+module CIP56Interfaces where
+
+import DA.Numeric (castAndRound)
+import DA.Text qualified as T
+import DA.Action (foldlA)
+import Splice.Api.Token.HoldingV1 qualified as CIP56
+import Splice.Api.Token.MetadataV1 qualified as Meta
+import Splice.Api.Token.TransferInstructionV1 qualified as TI
+import Splice.Api.Token.AllocationV1 qualified as Alloc
+import Splice.Api.Token.AllocationInstructionV1 qualified as AI
+
+type Money = Decimal
+
+-- ============================================================
+--              CIP-56 HOLDING (mUSD)
+-- ============================================================
+
+-- | CIP-56-compatible mUSD holding.
+-- Mirror of V3.MintedMUSD with CIP-56 Holding interface instance.
+-- Created by CIP-56 factories; consumed by CIP-56 transfer/allocation flows.
+template CIP56MintedMUSD
+  with
+    issuer : Party
+    owner : Party
+    amount : Money
+    blacklisted : Bool
+    agreementHash : Text
+    agreementUri : Text
+    observers : [Party]
+  where
+    signatory issuer, owner
+    observer observers
+
+    ensure amount > 0.0
+      && T.length agreementHash == 64
+      && T.length agreementUri > 0
+
+    interface instance CIP56.Holding for CIP56MintedMUSD where
+      view = CIP56.HoldingView with
+        owner = owner
+        instrumentId = CIP56.InstrumentId with
+          admin = issuer
+          id = "mUSD"
+        amount = castAndRound amount
+        lock = None
+        meta = Meta.emptyMetadata
+
+-- ============================================================
+--              CIP-56 TRANSFER FACTORY
+-- ============================================================
+
+-- | MUSDTransferFactory — CIP-56 TransferFactory implementation for mUSD.
+-- Wallets discover this contract and call TransferFactory_Transfer to initiate
+-- peer-to-peer transfers. The factory creates an MUSDTransferInstruction
+-- (pending receiver acceptance) or completes immediately if pre-approved.
+--
+-- Compliance note: validation is performed by the relay service before
+-- submitting CIP-56 exercises. The factory validates instrument, amount,
+-- and deadline constraints at the Daml layer.
+template MUSDTransferFactory
+  with
+    admin : Party
+    observers : [Party]
+  where
+    signatory admin
+    observer observers
+
+    interface instance TI.TransferFactory for MUSDTransferFactory where
+      view = TI.TransferFactoryView with
+        admin
+        meta = Meta.emptyMetadata
+
+      transferFactory_transferImpl _cid arg = do
+        assertMsg "ADMIN_MISMATCH" (arg.expectedAdmin == admin)
+        let t = arg.transfer
+        assertMsg "AMOUNT_POSITIVE" (t.amount > 0.0)
+        assertMsg "SENDER_NOT_RECEIVER" (t.sender /= t.receiver)
+        assertMsg "INSTRUMENT_ADMIN_MISMATCH" (t.instrumentId.admin == admin)
+        assertMsg "INSTRUMENT_ID_MISMATCH" (t.instrumentId.id == "mUSD")
+        now <- getTime
+        assertMsg "REQUESTED_AT_FUTURE" (t.requestedAt <= now)
+        assertMsg "EXECUTE_BEFORE_PAST" (t.executeBefore > now)
+
+        -- Archive input holdings and accumulate amount
+        totalInput <- foldlA (\acc hCid -> do
+          let musdCid = coerceContractId @CIP56.Holding @CIP56MintedMUSD hCid
+          h <- fetch musdCid
+          assertMsg "INPUT_OWNER_MISMATCH" (h.owner == t.sender)
+          assertMsg "INPUT_ISSUER_MISMATCH" (h.issuer == admin)
+          archive musdCid
+          pure (acc + castAndRound h.amount)
+          ) 0.0 t.inputHoldingCids
+
+        assertMsg "INSUFFICIENT_INPUT" (totalInput >= t.amount)
+
+        -- Create the transfer instruction (pending receiver acceptance)
+        let senderMusd = CIP56MintedMUSD with
+              issuer = admin
+              owner = t.sender
+              amount = castAndRound (totalInput - t.amount) : Money
+              blacklisted = False
+              agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+              agreementUri = "https://minted.app/terms"
+              observers = []
+
+        instrCid <- create MUSDTransferInstruction with
+          admin
+          transfer = t
+          originalInstructionCid = None
+
+        -- Return change to sender if any
+        changeCids <- if totalInput > t.amount
+          then do
+            changeCid <- create senderMusd
+            pure [toInterfaceContractId @CIP56.Holding changeCid]
+          else pure []
+
+        pure TI.TransferInstructionResult with
+          output = TI.TransferInstructionResult_Pending with
+            transferInstructionCid = toInterfaceContractId @TI.TransferInstruction instrCid
+          senderChangeCids = changeCids
+          meta = Meta.emptyMetadata
+
+      transferFactory_publicFetchImpl _cid arg = do
+        assertMsg "ADMIN_MISMATCH" (arg.expectedAdmin == admin)
+        pure TI.TransferFactoryView with
+          admin
+          meta = Meta.emptyMetadata
+
+-- ============================================================
+--              CIP-56 TRANSFER INSTRUCTION
+-- ============================================================
+
+-- | MUSDTransferInstruction — CIP-56 TransferInstruction for mUSD.
+-- Tracks a pending transfer awaiting receiver acceptance.
+template MUSDTransferInstruction
+  with
+    admin : Party
+    transfer : TI.Transfer
+    originalInstructionCid : Optional (ContractId TI.TransferInstruction)
+  where
+    signatory admin, transfer.sender
+    observer transfer.receiver
+
+    ensure transfer.amount > 0.0
+
+    interface instance TI.TransferInstruction for MUSDTransferInstruction where
+      view = TI.TransferInstructionView with
+        originalInstructionCid
+        transfer
+        status = TI.TransferPendingReceiverAcceptance
+        meta = Meta.emptyMetadata
+
+      -- Receiver accepts: create CIP56MintedMUSD for receiver
+      transferInstruction_acceptImpl self _arg = do
+        now <- getTime
+        let t = transfer
+        assertMsg "TRANSFER_EXPIRED" (t.executeBefore > now)
+
+        receiverMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = t.receiver
+          amount = castAndRound t.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure TI.TransferInstructionResult with
+          output = TI.TransferInstructionResult_Completed with
+            receiverHoldingCids = [toInterfaceContractId @CIP56.Holding receiverMusd]
+          senderChangeCids = []
+          meta = Meta.emptyMetadata
+
+      -- Receiver rejects: return tokens to sender
+      transferInstruction_rejectImpl self _arg = do
+        senderMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = transfer.sender
+          amount = castAndRound transfer.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure TI.TransferInstructionResult with
+          output = TI.TransferInstructionResult_Failed
+          senderChangeCids = [toInterfaceContractId @CIP56.Holding senderMusd]
+          meta = Meta.emptyMetadata
+
+      -- Sender withdraws: return tokens to sender
+      transferInstruction_withdrawImpl self _arg = do
+        senderMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = transfer.sender
+          amount = castAndRound transfer.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure TI.TransferInstructionResult with
+          output = TI.TransferInstructionResult_Failed
+          senderChangeCids = [toInterfaceContractId @CIP56.Holding senderMusd]
+          meta = Meta.emptyMetadata
+
+      -- Update: re-create instruction (consuming choice requires fresh contract)
+      transferInstruction_updateImpl self _arg = do
+        newCid <- create MUSDTransferInstruction with
+          admin
+          transfer
+          originalInstructionCid
+        pure TI.TransferInstructionResult with
+          output = TI.TransferInstructionResult_Pending with
+            transferInstructionCid = toInterfaceContractId @TI.TransferInstruction newCid
+          senderChangeCids = []
+          meta = Meta.emptyMetadata
+
+-- ============================================================
+--              CIP-56 ALLOCATION FACTORY
+-- ============================================================
+
+-- | MUSDAllocationFactory — CIP-56 AllocationFactory implementation for mUSD.
+-- Used by settlement apps (e.g., Tradecraft DEX) to request asset allocation
+-- from wallets for atomic multi-leg settlement.
+--
+-- Compliance note: validation is performed by the relay service before
+-- submitting CIP-56 exercises. The factory validates instrument, amount,
+-- and deadline constraints at the Daml layer.
+template MUSDAllocationFactory
+  with
+    admin : Party
+    observers : [Party]
+  where
+    signatory admin
+    observer observers
+
+    interface instance AI.AllocationFactory for MUSDAllocationFactory where
+      view = AI.AllocationFactoryView with
+        admin
+        meta = Meta.emptyMetadata
+
+      allocationFactory_allocateImpl _cid arg = do
+        assertMsg "ADMIN_MISMATCH" (arg.expectedAdmin == admin)
+        let spec = arg.allocation
+        let leg = spec.transferLeg
+        assertMsg "AMOUNT_POSITIVE" (leg.amount > 0.0)
+        assertMsg "INSTRUMENT_ADMIN_MISMATCH" (leg.instrumentId.admin == admin)
+        assertMsg "INSTRUMENT_ID_MISMATCH" (leg.instrumentId.id == "mUSD")
+        now <- getTime
+        assertMsg "REQUESTED_AT_FUTURE" (arg.requestedAt <= now)
+        assertMsg "ALLOCATE_BEFORE_PAST" (spec.settlement.allocateBefore > now)
+
+        -- Archive input holdings and accumulate amount
+        totalInput <- foldlA (\acc hCid -> do
+          let musdCid = coerceContractId @CIP56.Holding @CIP56MintedMUSD hCid
+          h <- fetch musdCid
+          assertMsg "INPUT_OWNER_MISMATCH" (h.owner == leg.sender)
+          assertMsg "INPUT_ISSUER_MISMATCH" (h.issuer == admin)
+          archive musdCid
+          pure (acc + castAndRound h.amount)
+          ) 0.0 arg.inputHoldingCids
+
+        assertMsg "INSUFFICIENT_INPUT" (totalInput >= leg.amount)
+
+        -- Create the allocation (assets reserved)
+        allocCid <- create MUSDAllocation with
+          admin
+          allocation = spec
+
+        -- Return change to sender if any
+        changeCids <- if totalInput > leg.amount
+          then do
+            changeCid <- create CIP56MintedMUSD with
+              issuer = admin
+              owner = leg.sender
+              amount = castAndRound (totalInput - leg.amount) : Money
+              blacklisted = False
+              agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+              agreementUri = "https://minted.app/terms"
+              observers = []
+            pure [toInterfaceContractId @CIP56.Holding changeCid]
+          else pure []
+
+        pure AI.AllocationInstructionResult with
+          output = AI.AllocationInstructionResult_Completed with
+            allocationCid = toInterfaceContractId @Alloc.Allocation allocCid
+          senderChangeCids = changeCids
+          meta = Meta.emptyMetadata
+
+      allocationFactory_publicFetchImpl _cid arg = do
+        assertMsg "ADMIN_MISMATCH" (arg.expectedAdmin == admin)
+        pure AI.AllocationFactoryView with
+          admin
+          meta = Meta.emptyMetadata
+
+-- ============================================================
+--              CIP-56 ALLOCATION
+-- ============================================================
+
+-- | MUSDAllocation — CIP-56 Allocation for mUSD.
+-- Represents reserved assets for a settlement leg. The settlement executor,
+-- sender, and receiver jointly control execution and cancellation.
+template MUSDAllocation
+  with
+    admin : Party
+    allocation : Alloc.AllocationSpecification
+  where
+    signatory admin, allocation.transferLeg.sender
+    observer allocation.settlement.executor, allocation.transferLeg.receiver
+
+    ensure allocation.transferLeg.amount > 0.0
+
+    interface instance Alloc.Allocation for MUSDAllocation where
+      view = Alloc.AllocationView with
+        allocation
+        holdingCids = []
+        meta = Meta.emptyMetadata
+
+      -- Execute the transfer: create holding for receiver
+      allocation_executeTransferImpl self _arg = do
+        let leg = allocation.transferLeg
+        now <- getTime
+        assertMsg "SETTLEMENT_EXPIRED" (allocation.settlement.settleBefore > now)
+
+        receiverMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = leg.receiver
+          amount = castAndRound leg.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure Alloc.Allocation_ExecuteTransferResult with
+          senderHoldingCids = []
+          receiverHoldingCids = [toInterfaceContractId @CIP56.Holding receiverMusd]
+          meta = Meta.emptyMetadata
+
+      -- Cancel: return assets to sender
+      allocation_cancelImpl self _arg = do
+        let leg = allocation.transferLeg
+        senderMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = leg.sender
+          amount = castAndRound leg.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure Alloc.Allocation_CancelResult with
+          senderHoldingCids = [toInterfaceContractId @CIP56.Holding senderMusd]
+          meta = Meta.emptyMetadata
+
+      -- Withdraw: sender reclaims assets before settlement
+      allocation_withdrawImpl self _arg = do
+        let leg = allocation.transferLeg
+        now <- getTime
+        assertMsg "ALLOCATE_DEADLINE_PASSED" (allocation.settlement.allocateBefore > now)
+
+        senderMusd <- create CIP56MintedMUSD with
+          issuer = admin
+          owner = leg.sender
+          amount = castAndRound leg.amount
+          blacklisted = False
+          agreementHash = "0000000000000000000000000000000000000000000000000000000000000000"
+          agreementUri = "https://minted.app/terms"
+          observers = []
+
+        pure Alloc.Allocation_WithdrawResult with
+          senderHoldingCids = [toInterfaceContractId @CIP56.Holding senderMusd]
+          meta = Meta.emptyMetadata

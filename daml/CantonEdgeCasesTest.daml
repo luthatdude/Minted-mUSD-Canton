@@ -87,11 +87,11 @@ test_bridgeQuorumBoundary = do
   selfAttest_v2 <- submit v2 do
     createCmd ValidatorSelfAttestation with validator = v2; aggregator; attestationId = payload.attestationId; ecdsaSignature = sig2; signedAt = now
   att2 <- submit v2 do
-    exerciseCmd att1 Attestation_Sign with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2
+    exerciseCmd att1 SignedAttestation_AddSignature with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2
   selfAttest_v3 <- submit v3 do
     createCmd ValidatorSelfAttestation with validator = v3; aggregator; attestationId = payload.attestationId; ecdsaSignature = sig3; signedAt = now
   att3 <- submit v3 do
-    exerciseCmd att2 Attestation_Sign with validator = v3; ecdsaSignature = sig3; selfAttestationCid = selfAttest_v3
+    exerciseCmd att2 SignedAttestation_AddSignature with validator = v3; ecdsaSignature = sig3; selfAttestationCid = selfAttest_v3
 
   -- 3 of 5 signed, need 4 => must fail
   submitMustFail aggregator do
@@ -100,7 +100,7 @@ test_bridgeQuorumBoundary = do
   selfAttest_v4 <- submit v4 do
     createCmd ValidatorSelfAttestation with validator = v4; aggregator; attestationId = payload.attestationId; ecdsaSignature = sig4; signedAt = now
   att4 <- submit v4 do
-    exerciseCmd att3 Attestation_Sign with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4
+    exerciseCmd att3 SignedAttestation_AddSignature with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4
 
   -- 4 of 5 signed, need 4 => must succeed
   submit aggregator do
@@ -268,27 +268,27 @@ test_concurrentOverlappingAttestations = do
   selfAttest_v1_A <- submit v1 do
     createCmd ValidatorSelfAttestation with validator = v1; aggregator; attestationId = payloadA.attestationId; ecdsaSignature = sig1; signedAt = now
   attA2 <- submit v1 do
-    exerciseCmd attA1 Attestation_Sign with validator = v1; ecdsaSignature = sig1; selfAttestationCid = selfAttest_v1_A
+    exerciseCmd attA1 SignedAttestation_AddSignature with validator = v1; ecdsaSignature = sig1; selfAttestationCid = selfAttest_v1_A
   selfAttest_v4_B <- submit v4 do
     createCmd ValidatorSelfAttestation with validator = v4; aggregator; attestationId = payloadB.attestationId; ecdsaSignature = sig4; signedAt = now
   attB2 <- submit v4 do
-    exerciseCmd attB1 Attestation_Sign with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4_B
+    exerciseCmd attB1 SignedAttestation_AddSignature with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4_B
   selfAttest_v2_A <- submit v2 do
     createCmd ValidatorSelfAttestation with validator = v2; aggregator; attestationId = payloadA.attestationId; ecdsaSignature = sig2; signedAt = now
   attA3 <- submit v2 do
-    exerciseCmd attA2 Attestation_Sign with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2_A
+    exerciseCmd attA2 SignedAttestation_AddSignature with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2_A
   selfAttest_v5_B <- submit v5 do
     createCmd ValidatorSelfAttestation with validator = v5; aggregator; attestationId = payloadB.attestationId; ecdsaSignature = sig5; signedAt = now
   attB3 <- submit v5 do
-    exerciseCmd attB2 Attestation_Sign with validator = v5; ecdsaSignature = sig5; selfAttestationCid = selfAttest_v5_B
+    exerciseCmd attB2 SignedAttestation_AddSignature with validator = v5; ecdsaSignature = sig5; selfAttestationCid = selfAttest_v5_B
   selfAttest_v4_A <- submit v4 do
     createCmd ValidatorSelfAttestation with validator = v4; aggregator; attestationId = payloadA.attestationId; ecdsaSignature = sig4; signedAt = now
   attA4 <- submit v4 do
-    exerciseCmd attA3 Attestation_Sign with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4_A
+    exerciseCmd attA3 SignedAttestation_AddSignature with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4_A
   selfAttest_v6_B <- submit v6 do
     createCmd ValidatorSelfAttestation with validator = v6; aggregator; attestationId = payloadB.attestationId; ecdsaSignature = sig6; signedAt = now
   attB4 <- submit v6 do
-    exerciseCmd attB3 Attestation_Sign with validator = v6; ecdsaSignature = sig6; selfAttestationCid = selfAttest_v6_B
+    exerciseCmd attB3 SignedAttestation_AddSignature with validator = v6; ecdsaSignature = sig6; selfAttestationCid = selfAttest_v6_B
 
   -- Verify both attestations can complete independently
   attA4View <- queryContractId aggregator attA4
@@ -600,15 +600,15 @@ test_attestationExpiration = do
   selfAttest_v2 <- submit v2 do
     createCmd ValidatorSelfAttestation with validator = v2; aggregator; attestationId = payload1.attestationId; ecdsaSignature = sig2; signedAt = now
   att2 <- submit v2 do
-    exerciseCmd att1 Attestation_Sign with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2
+    exerciseCmd att1 SignedAttestation_AddSignature with validator = v2; ecdsaSignature = sig2; selfAttestationCid = selfAttest_v2
   selfAttest_v3 <- submit v3 do
     createCmd ValidatorSelfAttestation with validator = v3; aggregator; attestationId = payload1.attestationId; ecdsaSignature = sig3; signedAt = now
   att3 <- submit v3 do
-    exerciseCmd att2 Attestation_Sign with validator = v3; ecdsaSignature = sig3; selfAttestationCid = selfAttest_v3
+    exerciseCmd att2 SignedAttestation_AddSignature with validator = v3; ecdsaSignature = sig3; selfAttestationCid = selfAttest_v3
   selfAttest_v4 <- submit v4 do
     createCmd ValidatorSelfAttestation with validator = v4; aggregator; attestationId = payload1.attestationId; ecdsaSignature = sig4; signedAt = now
   att4 <- submit v4 do
-    exerciseCmd att3 Attestation_Sign with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4
+    exerciseCmd att3 SignedAttestation_AddSignature with validator = v4; ecdsaSignature = sig4; selfAttestationCid = selfAttest_v4
 
   -- Before expiry: must succeed
   submit aggregator do

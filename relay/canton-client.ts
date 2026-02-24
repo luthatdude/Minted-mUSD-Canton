@@ -401,6 +401,7 @@ export function parseTemplateId(qualified: string): TemplateId {
 /** Well-known template IDs for Minted Protocol */
 export const TEMPLATES = {
   AttestationRequest: { moduleName: "Minted.Protocol.V3", entityName: "AttestationRequest" } as TemplateId,
+  SignedAttestation:  { moduleName: "Minted.Protocol.V3", entityName: "SignedAttestation" } as TemplateId,
   ValidatorSignature: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSignature" } as TemplateId,
   BridgeService:      { moduleName: "Minted.Protocol.V3", entityName: "BridgeService" } as TemplateId,
   BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
@@ -423,4 +424,10 @@ export const TEMPLATES = {
   CantonStakingService:   { moduleName: "CantonSMUSD", entityName: "CantonStakingService" } as TemplateId,
   // ETH Pool service (yield → pooledUsdc counter, share price ↑)
   CantonETHPoolService:   { moduleName: "CantonETHPool", entityName: "CantonETHPoolService" } as TemplateId,
+  // CIP-56 factories and instructions (ble-protocol-cip56 package, SDK 3.4.10)
+  CIP56MintedMUSD:            { moduleName: "CIP56Interfaces", entityName: "CIP56MintedMUSD" } as TemplateId,
+  MUSDTransferFactory:        { moduleName: "CIP56Interfaces", entityName: "MUSDTransferFactory" } as TemplateId,
+  MUSDTransferInstruction:    { moduleName: "CIP56Interfaces", entityName: "MUSDTransferInstruction" } as TemplateId,
+  MUSDAllocationFactory:      { moduleName: "CIP56Interfaces", entityName: "MUSDAllocationFactory" } as TemplateId,
+  MUSDAllocation:             { moduleName: "CIP56Interfaces", entityName: "MUSDAllocation" } as TemplateId,
 } as const;

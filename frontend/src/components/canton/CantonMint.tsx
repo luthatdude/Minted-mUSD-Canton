@@ -5,6 +5,7 @@ import { useLoopWallet, LoopContract } from "@/hooks/useLoopWallet";
 import WalletConnector from "@/components/WalletConnector";
 
 const PACKAGE_ID = process.env.NEXT_PUBLIC_DAML_PACKAGE_ID || "";
+const CIP56_PACKAGE_ID = process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
 type CantonMintAsset = "USDC" | "USDCX" | "CANTON_COIN";
 
 const templateCandidates = {
@@ -29,6 +30,15 @@ const templateCandidates = {
   CoinMintService: [
     `${PACKAGE_ID}:CantonCoinMint:CoinMintService`,
   ],
+  // CIP-56 factories (ble-protocol-cip56 package, enabled when CIP56_PACKAGE_ID is set)
+  ...(CIP56_PACKAGE_ID ? {
+    TransferFactory: [
+      `${CIP56_PACKAGE_ID}:CIP56Interfaces:MUSDTransferFactory`,
+    ],
+    CIP56MUSD: [
+      `${CIP56_PACKAGE_ID}:CIP56Interfaces:CIP56MintedMUSD`,
+    ],
+  } : {}),
 };
 
 export function CantonMint() {

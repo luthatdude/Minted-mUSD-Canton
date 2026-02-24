@@ -1,0 +1,394 @@
+-- | CIP-56 Transfer and Allocation interface tests.
+-- Verifies the MUSDTransferFactory, MUSDTransferInstruction,
+-- MUSDAllocationFactory, and MUSDAllocation implementations.
+
+module CIP56TransferAllocationTest where
+
+import Daml.Script
+import DA.Optional (fromSome)
+import DA.Time (hours, addRelTime)
+import DA.Numeric (castAndRound)
+import CIP56Interfaces
+import Splice.Api.Token.TransferInstructionV1 qualified as TI
+import Splice.Api.Token.AllocationV1 qualified as Alloc
+import Splice.Api.Token.AllocationInstructionV1 qualified as AI
+import Splice.Api.Token.HoldingV1 qualified as CIP56
+import Splice.Api.Token.MetadataV1 qualified as Meta
+
+hash64 : Text
+hash64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+-- Helper: mint CIP56MintedMUSD for a user (issuer+owner as co-signatories)
+mintMusd : Party -> Party -> Decimal -> Script (ContractId CIP56MintedMUSD)
+mintMusd issuer owner amt = do
+  submitMulti [issuer, owner] [] do
+    createCmd CIP56MintedMUSD with
+      issuer; owner
+      amount = castAndRound amt
+      blacklisted = False
+      agreementHash = hash64
+      agreementUri = "https://minted.app/terms"
+      observers = []
+
+-- ============================================================
+-- TEST: TransferFactory_Transfer — happy path
+-- ============================================================
+test_transferFactory_happyPath : Script ()
+test_transferFactory_happyPath = do
+  issuer <- allocateParty "TFIssuer"
+  sender <- allocateParty "TFSender"
+  receiver <- allocateParty "TFReceiver"
+
+  -- Create the factory
+  factoryCid <- submit issuer do
+    createCmd MUSDTransferFactory with
+      admin = issuer
+      observers = [sender]
+
+  -- Mint 1000 mUSD for sender
+  holdingCid <- mintMusd issuer sender 1000.0
+
+  now <- getTime
+  let transfer = TI.Transfer with
+        sender
+        receiver
+        amount = 400.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        requestedAt = now
+        executeBefore = addRelTime now (hours 1)
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        meta = Meta.emptyMetadata
+
+  -- Sender initiates transfer
+  result <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @TI.TransferFactory factoryCid)
+      TI.TransferFactory_Transfer with
+        expectedAdmin = issuer
+        transfer
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  -- Result should be Pending with a transfer instruction
+  case result.output of
+    TI.TransferInstructionResult_Pending instrRef -> do
+      -- Verify change was returned (600 mUSD)
+      assertMsg "Change returned" (length result.senderChangeCids == 1)
+
+      -- Receiver accepts the transfer
+      acceptResult <- submit receiver do
+        exerciseCmd instrRef
+          TI.TransferInstruction_Accept with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      case acceptResult.output of
+        TI.TransferInstructionResult_Completed recvHoldings -> do
+          assertMsg "Receiver got 1 holding" (length recvHoldings == 1)
+          debug "CIP-56 TransferFactory happy path: sender->receiver transfer completed"
+        _ -> abort "Expected Completed result"
+    _ -> abort "Expected Pending result"
+
+-- ============================================================
+-- TEST: TransferInstruction_Reject — receiver rejects
+-- ============================================================
+test_transferInstruction_reject : Script ()
+test_transferInstruction_reject = do
+  issuer <- allocateParty "TRIssuer"
+  sender <- allocateParty "TRSender"
+  receiver <- allocateParty "TRReceiver"
+
+  factoryCid <- submit issuer do
+    createCmd MUSDTransferFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 500.0
+
+  now <- getTime
+  let transfer = TI.Transfer with
+        sender; receiver
+        amount = 500.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        requestedAt = now
+        executeBefore = addRelTime now (hours 1)
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        meta = Meta.emptyMetadata
+
+  result <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @TI.TransferFactory factoryCid)
+      TI.TransferFactory_Transfer with
+        expectedAdmin = issuer; transfer
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case result.output of
+    TI.TransferInstructionResult_Pending instrRef -> do
+      -- Receiver rejects
+      rejectResult <- submit receiver do
+        exerciseCmd instrRef
+          TI.TransferInstruction_Reject with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      case rejectResult.output of
+        TI.TransferInstructionResult_Failed -> do
+          assertMsg "Sender gets refund" (length rejectResult.senderChangeCids == 1)
+          debug "CIP-56 TransferInstruction reject: tokens returned to sender"
+        _ -> abort "Expected Failed result on reject"
+    _ -> abort "Expected Pending result"
+
+-- ============================================================
+-- TEST: TransferInstruction_Withdraw — sender cancels
+-- ============================================================
+test_transferInstruction_withdraw : Script ()
+test_transferInstruction_withdraw = do
+  issuer <- allocateParty "TWIssuer"
+  sender <- allocateParty "TWSender"
+  receiver <- allocateParty "TWReceiver"
+
+  factoryCid <- submit issuer do
+    createCmd MUSDTransferFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 300.0
+
+  now <- getTime
+  let transfer = TI.Transfer with
+        sender; receiver
+        amount = 300.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        requestedAt = now
+        executeBefore = addRelTime now (hours 1)
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        meta = Meta.emptyMetadata
+
+  result <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @TI.TransferFactory factoryCid)
+      TI.TransferFactory_Transfer with
+        expectedAdmin = issuer; transfer
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case result.output of
+    TI.TransferInstructionResult_Pending instrRef -> do
+      -- Sender withdraws
+      withdrawResult <- submitMulti [sender] [issuer] do
+        exerciseCmd instrRef
+          TI.TransferInstruction_Withdraw with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      case withdrawResult.output of
+        TI.TransferInstructionResult_Failed -> do
+          assertMsg "Sender gets refund" (length withdrawResult.senderChangeCids == 1)
+          debug "CIP-56 TransferInstruction withdraw: sender reclaims tokens"
+        _ -> abort "Expected Failed result on withdraw"
+    _ -> abort "Expected Pending result"
+
+-- ============================================================
+-- TEST: AllocationFactory — happy path with settlement execution
+-- ============================================================
+test_allocationFactory_happyPath : Script ()
+test_allocationFactory_happyPath = do
+  issuer <- allocateParty "AFIssuer"
+  sender <- allocateParty "AFSender"
+  receiver <- allocateParty "AFReceiver"
+  executor <- allocateParty "AFExecutor"
+
+  allocFactoryCid <- submit issuer do
+    createCmd MUSDAllocationFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 750.0
+
+  now <- getTime
+  let settlement = Alloc.SettlementInfo with
+        executor
+        settlementRef = Alloc.Reference with id = "settlement-001"; cid = None
+        requestedAt = now
+        allocateBefore = addRelTime now (hours 1)
+        settleBefore = addRelTime now (hours 2)
+        meta = Meta.emptyMetadata
+  let leg = Alloc.TransferLeg with
+        sender; receiver
+        amount = 500.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        meta = Meta.emptyMetadata
+  let spec = Alloc.AllocationSpecification with
+        settlement; transferLegId = "leg-001"; transferLeg = leg
+
+  -- Sender allocates
+  allocResult <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @AI.AllocationFactory allocFactoryCid)
+      AI.AllocationFactory_Allocate with
+        expectedAdmin = issuer
+        allocation = spec
+        requestedAt = now
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case allocResult.output of
+    AI.AllocationInstructionResult_Completed allocRef -> do
+      -- Verify change was returned (250 mUSD)
+      assertMsg "Change returned" (length allocResult.senderChangeCids == 1)
+
+      -- Execute the settlement transfer (requires sender + receiver + executor)
+      execResult <- submitMulti [sender, receiver, executor] [] do
+        exerciseCmd allocRef
+          Alloc.Allocation_ExecuteTransfer with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      assertMsg "Receiver got holdings" (length execResult.receiverHoldingCids == 1)
+      debug "CIP-56 Allocation: allocate -> execute settlement"
+    _ -> abort "Expected Completed allocation result"
+
+-- ============================================================
+-- TEST: Allocation_Cancel — settlement aborted
+-- ============================================================
+test_allocation_cancel : Script ()
+test_allocation_cancel = do
+  issuer <- allocateParty "ACIssuer"
+  sender <- allocateParty "ACSender"
+  receiver <- allocateParty "ACReceiver"
+  executor <- allocateParty "ACExecutor"
+
+  allocFactoryCid <- submit issuer do
+    createCmd MUSDAllocationFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 200.0
+
+  now <- getTime
+  let settlement = Alloc.SettlementInfo with
+        executor
+        settlementRef = Alloc.Reference with id = "settlement-cancel"; cid = None
+        requestedAt = now
+        allocateBefore = addRelTime now (hours 1)
+        settleBefore = addRelTime now (hours 2)
+        meta = Meta.emptyMetadata
+  let leg = Alloc.TransferLeg with
+        sender; receiver
+        amount = 200.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        meta = Meta.emptyMetadata
+  let spec = Alloc.AllocationSpecification with
+        settlement; transferLegId = "leg-cancel"; transferLeg = leg
+
+  allocResult <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @AI.AllocationFactory allocFactoryCid)
+      AI.AllocationFactory_Allocate with
+        expectedAdmin = issuer; allocation = spec; requestedAt = now
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case allocResult.output of
+    AI.AllocationInstructionResult_Completed allocRef -> do
+      -- Cancel the allocation (sender + receiver + executor)
+      cancelResult <- submitMulti [sender, receiver, executor] [] do
+        exerciseCmd allocRef
+          Alloc.Allocation_Cancel with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      assertMsg "Sender gets refund" (length cancelResult.senderHoldingCids == 1)
+      debug "CIP-56 Allocation cancel: assets returned to sender"
+    _ -> abort "Expected Completed allocation result"
+
+-- ============================================================
+-- TEST: Allocation_Withdraw — sender reclaims before deadline
+-- ============================================================
+test_allocation_withdraw : Script ()
+test_allocation_withdraw = do
+  issuer <- allocateParty "AWIssuer"
+  sender <- allocateParty "AWSender"
+  receiver <- allocateParty "AWReceiver"
+  executor <- allocateParty "AWExecutor"
+
+  allocFactoryCid <- submit issuer do
+    createCmd MUSDAllocationFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 100.0
+
+  now <- getTime
+  let settlement = Alloc.SettlementInfo with
+        executor
+        settlementRef = Alloc.Reference with id = "settlement-wd"; cid = None
+        requestedAt = now
+        allocateBefore = addRelTime now (hours 1)
+        settleBefore = addRelTime now (hours 2)
+        meta = Meta.emptyMetadata
+  let leg = Alloc.TransferLeg with
+        sender; receiver
+        amount = 100.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        meta = Meta.emptyMetadata
+  let spec = Alloc.AllocationSpecification with
+        settlement; transferLegId = "leg-wd"; transferLeg = leg
+
+  allocResult <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @AI.AllocationFactory allocFactoryCid)
+      AI.AllocationFactory_Allocate with
+        expectedAdmin = issuer; allocation = spec; requestedAt = now
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case allocResult.output of
+    AI.AllocationInstructionResult_Completed allocRef -> do
+      -- Sender withdraws before allocateBefore deadline
+      withdrawResult <- submitMulti [sender] [issuer] do
+        exerciseCmd allocRef
+          Alloc.Allocation_Withdraw with
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      assertMsg "Sender gets refund" (length withdrawResult.senderHoldingCids == 1)
+      debug "CIP-56 Allocation withdraw: sender reclaims before deadline"
+    _ -> abort "Expected Completed allocation result"
+
+-- ============================================================
+-- TEST: TransferInstruction_Update — returns a live CID
+-- ============================================================
+test_transferInstruction_update : Script ()
+test_transferInstruction_update = do
+  issuer <- allocateParty "TUIssuer"
+  sender <- allocateParty "TUSender"
+  receiver <- allocateParty "TUReceiver"
+
+  factoryCid <- submit issuer do
+    createCmd MUSDTransferFactory with
+      admin = issuer; observers = [sender]
+
+  holdingCid <- mintMusd issuer sender 500.0
+
+  now <- getTime
+  let transfer = TI.Transfer with
+        sender; receiver
+        amount = 500.0
+        instrumentId = CIP56.InstrumentId with admin = issuer; id = "mUSD"
+        requestedAt = now
+        executeBefore = addRelTime now (hours 1)
+        inputHoldingCids = [toInterfaceContractId @CIP56.Holding holdingCid]
+        meta = Meta.emptyMetadata
+
+  result <- submitMulti [sender] [issuer] do
+    exerciseCmd (toInterfaceContractId @TI.TransferFactory factoryCid)
+      TI.TransferFactory_Transfer with
+        expectedAdmin = issuer; transfer
+        extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+  case result.output of
+    TI.TransferInstructionResult_Pending instrRef -> do
+      -- Exercise Update — should return a fresh live CID
+      updateResult <- submitMulti [sender, issuer] [] do
+        exerciseCmd instrRef
+          TI.TransferInstruction_Update with
+            extraActors = []
+            extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+      case updateResult.output of
+        TI.TransferInstructionResult_Pending newInstrRef -> do
+          -- Prove the returned CID is live by accepting the transfer
+          acceptResult <- submit receiver do
+            exerciseCmd newInstrRef
+              TI.TransferInstruction_Accept with
+                extraArgs = Meta.ExtraArgs Meta.emptyChoiceContext Meta.emptyMetadata
+
+          case acceptResult.output of
+            TI.TransferInstructionResult_Completed recvHoldings -> do
+              assertMsg "Receiver got 1 holding" (length recvHoldings == 1)
+              debug "CIP-56 TransferInstruction update: returns live CID, accept succeeds"
+            _ -> abort "Expected Completed after accept"
+        _ -> abort "Expected Pending result from update"
+    _ -> abort "Expected Pending result"

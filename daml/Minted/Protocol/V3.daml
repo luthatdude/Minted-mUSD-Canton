@@ -1646,7 +1646,7 @@ template BridgeService
     -- parties from receiving mUSD via bridge. Previously skipped compliance entirely.
     choice Bridge_ReceiveFromEthereum : (ContractId BridgeService, ContractId MintedMUSD, ContractId MUSDSupplyService)
       with
-        attestationCid : ContractId AttestationRequest
+        attestationCid : ContractId SignedAttestation
         recipient : Party
         amount : Money
         mpaHash : Text
@@ -1686,8 +1686,10 @@ template BridgeService
         let sigCount = Set.size attestation.collectedSignatures
         assertMsg "INSUFFICIENT_SIGNATURES" (sigCount >= requiredSignatures)
 
-        -- Archive attestation (consumed)
-        archive attestationCid
+        -- Consume attestation via Attestation_Complete (aggregator-controlled choice).
+        -- Cannot use `archive` because SignedAttestation co-signatories include validators
+        -- who aren't party to BridgeService. Attestation_Complete is aggregator-controlled.
+        exercise attestationCid Attestation_Complete
 
         -- DAML-C-02: Mint mUSD through supply service to enforce global supply cap.
         -- Previously created MintedMUSD directly, bypassing supply cap checks entirely.
@@ -1831,7 +1833,9 @@ template AttestationRequest
     -- CRIT-01 FIX: Requires ValidatorSelfAttestation as proof the validator independently
     -- committed to sign. The self-attestation is signatory-gated (only the validator's
     -- participant node can create it), so the aggregator cannot forge participation.
-    choice Attestation_Sign : ContractId AttestationRequest
+    -- Produces a SignedAttestation (allows accumulated signatures without violating
+    -- the empty-sigs ensure on AttestationRequest).
+    choice Attestation_Sign : ContractId SignedAttestation
       with
         validator : Party
         ecdsaSignature : Text
@@ -1858,13 +1862,80 @@ template AttestationRequest
         archive selfAttestationCid
 
         -- BRIDGE-C-01: Store both party and ECDSA signature bytes
+        create SignedAttestation with
+          aggregator
+          validatorGroup
+          payload
+          collectedSignatures = Set.insert validator collectedSignatures
+          ecdsaSignatures = (validator, ecdsaSignature) :: ecdsaSignatures
+          requiredSignatures
+          direction
+
+    -- | Cancel attestation
+    choice Attestation_Cancel : ()
+      controller aggregator
+      do return ()
+
+-- | SignedAttestation - An AttestationRequest with accumulated validator signatures.
+-- CRIT-01 HARDENED: Validators who signed are CO-SIGNATORIES. This means the
+-- aggregator CANNOT create this contract via Ledger API with fake signatures,
+-- because Daml requires all signatories to authorize contract creation.
+-- The only code paths that produce SignedAttestation are:
+--   1. Attestation_Sign (first signature) — validator is controller, providing auth
+--   2. SignedAttestation_AddSignature — new validator is controller, previous
+--      validators' auth flows from the consumed SignedAttestation contract
+-- Bridge completion paths (BridgeOut_Complete, BridgeIn_Complete,
+-- Bridge_ReceiveFromEthereum) accept ContractId SignedAttestation.
+template SignedAttestation
+  with
+    aggregator : Party
+    validatorGroup : [Party]
+    payload : AttestationPayload
+    collectedSignatures : Set.Set Party
+    ecdsaSignatures : [(Party, Text)]
+    requiredSignatures : Int
+    direction : BridgeDirection
+  where
+    -- CRIT-01 HARDENED: Each signing validator is a co-signatory.
+    -- Aggregator cannot forge this — creating requires auth from ALL signatories.
+    signatory aggregator :: Set.toList collectedSignatures
+    observer validatorGroup
+
+    ensure length validatorGroup > 0 && length validatorGroup <= 100
+        && requiredSignatures > 0 && requiredSignatures <= length validatorGroup
+        && not (Set.null collectedSignatures)
+        && not (Prelude.null ecdsaSignatures)
+        && Set.size collectedSignatures <= length validatorGroup
+        && length ecdsaSignatures <= length validatorGroup
+
+    -- | Add another validator signature to an in-progress attestation
+    choice SignedAttestation_AddSignature : ContractId SignedAttestation
+      with
+        validator : Party
+        ecdsaSignature : Text
+        selfAttestationCid : ContractId ValidatorSelfAttestation
+      controller validator
+      do
+        assertMsg "VALIDATOR_ALREADY_SIGNED" (not (Set.member validator collectedSignatures))
+        assertMsg "UNAUTHORIZED_VALIDATOR" (validator `elem` validatorGroup)
+        assertMsg "SIGNATURE_COUNT_EXCEEDS_VALIDATORS" (Set.size collectedSignatures < length validatorGroup)
+        assertMsg "INVALID_SIGNATURE_FORMAT" (T.length ecdsaSignature >= 130)
+
+        now <- getTime
+        assertMsg "ATTESTATION_EXPIRED" (now < payload.expiresAt)
+
+        selfAttestation <- fetch selfAttestationCid
+        assertMsg "SELF_ATTEST_WRONG_VALIDATOR" (selfAttestation.validator == validator)
+        assertMsg "SELF_ATTEST_WRONG_AGGREGATOR" (selfAttestation.aggregator == aggregator)
+        assertMsg "SELF_ATTEST_WRONG_ATTESTATION" (selfAttestation.attestationId == payload.attestationId)
+        assertMsg "SELF_ATTEST_SIG_MISMATCH" (selfAttestation.ecdsaSignature == ecdsaSignature)
+        archive selfAttestationCid
+
         create this with
           collectedSignatures = Set.insert validator collectedSignatures
           ecdsaSignatures = (validator, ecdsaSignature) :: ecdsaSignatures
 
     -- | Complete attestation (called by aggregator after sufficient signatures)
-    -- BRIDGE-H-01: Use stored requiredSignatures (from BridgeService, matching Solidity
-    -- BLEBridgeV9.minSignatures()) instead of computing a separate BFT formula.
     choice Attestation_Complete : ()
       controller aggregator
       do
@@ -1877,7 +1948,7 @@ template AttestationRequest
         return ()
 
     -- | Cancel attestation
-    choice Attestation_Cancel : ()
+    choice SignedAttestation_Cancel : ()
       controller aggregator
       do return ()
 
@@ -1928,7 +1999,7 @@ template BridgeOutRequest
     -- CRIT-03 FIX: attestationCid is now mandatory (was Optional, allowing bypass)
     choice BridgeOut_Complete : ContractId BridgeOutRequest
       with
-        attestationCid : ContractId AttestationRequest  -- CRIT-03: Mandatory — no bypass path
+        attestationCid : ContractId SignedAttestation  -- CRIT-03: Mandatory — no bypass path
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
@@ -1949,8 +2020,9 @@ template BridgeOutRequest
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
 
-        -- Consume attestation
-        archive attestationCid
+        -- Consume attestation via aggregator-controlled choice (cannot use archive
+        -- because SignedAttestation co-signatories include validators)
+        exercise attestationCid Attestation_Complete
 
         create this with status = "bridged"
 
@@ -1990,7 +2062,7 @@ template BridgeInRequest
     -- and expiry before marking as completed.
     choice BridgeIn_Complete : ContractId BridgeInRequest
       with
-        attestationCid : ContractId AttestationRequest  -- CRIT-02: Required attestation proof
+        attestationCid : ContractId SignedAttestation  -- CRIT-02: Required attestation proof
       controller operator
       do
         assertMsg "MUST_BE_PENDING" (status == "pending")
@@ -2010,8 +2082,9 @@ template BridgeInRequest
         now <- getTime
         assertMsg "ATTESTATION_EXPIRED" (now < attestation.payload.expiresAt)
 
-        -- Consume attestation
-        archive attestationCid
+        -- Consume attestation via aggregator-controlled choice (cannot use archive
+        -- because SignedAttestation co-signatories include validators)
+        exercise attestationCid Attestation_Complete
 
         create this with status = "completed"
 

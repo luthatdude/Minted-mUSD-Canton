@@ -28,6 +28,8 @@ const CANTON_USER = process.env.CANTON_USER || "administrator";
 const PACKAGE_ID =
   process.env.NEXT_PUBLIC_DAML_PACKAGE_ID ||
   "0489a86388cc81e3e0bee8dc8f6781229d0e01451c1f2d19deea594255e5993b";
+const CIP56_PACKAGE_ID =
+  process.env.NEXT_PUBLIC_CIP56_PACKAGE_ID || "";
 const ALLOW_OPERATOR_FALLBACK =
   (process.env.CANTON_ALLOW_OPERATOR_FALLBACK || "").toLowerCase() === "true";
 
@@ -64,6 +66,14 @@ const TEMPLATE_MAP: Record<string, string> = {
   MintedMUSD:              `${PACKAGE_ID}:Minted.Protocol.V3:MintedMUSD`,
   // Compliance module
   ComplianceRegistry:      `${PACKAGE_ID}:Compliance:ComplianceRegistry`,
+  // CIP-56 interfaces (ble-protocol-cip56 package, SDK 3.4.10)
+  ...(CIP56_PACKAGE_ID ? {
+    CIP56MintedMUSD:         `${CIP56_PACKAGE_ID}:CIP56Interfaces:CIP56MintedMUSD`,
+    MUSDTransferFactory:     `${CIP56_PACKAGE_ID}:CIP56Interfaces:MUSDTransferFactory`,
+    MUSDTransferInstruction: `${CIP56_PACKAGE_ID}:CIP56Interfaces:MUSDTransferInstruction`,
+    MUSDAllocationFactory:   `${CIP56_PACKAGE_ID}:CIP56Interfaces:MUSDAllocationFactory`,
+    MUSDAllocation:          `${CIP56_PACKAGE_ID}:CIP56Interfaces:MUSDAllocation`,
+  } : {}),
 };
 
 function parseRecipientAliasMap(): Record<string, string> {

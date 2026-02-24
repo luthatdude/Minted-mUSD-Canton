@@ -608,6 +608,9 @@ class RelayService {
   // Canton redemption -> Ethereum payout tracking (idempotency across restarts)
   private processedRedemptionRequests: Set<string> = new Set();
 
+  // CIP-56: Cached transfer factory contract ID (null = not deployed, use legacy)
+  private cip56TransferFactoryCid: string | null = null;
+
   // BRIDGE-M-05: Named constant for the expiry-to-timestamp offset.
   // The DAML attestation carries an `expiresAt` timestamp (when the attestation becomes invalid).
   // The Solidity contract expects a `timestamp` representing when the attestation was *created*.
@@ -1140,7 +1143,23 @@ class RelayService {
 
     // Ensure baseline Canton contracts exist (idempotent, query-first).
     await this.ensureLedgerContracts();
-    
+
+    // CIP-56: Detect if TransferFactory is deployed and cache for dual-path routing
+    try {
+      const cip56Factories = await this.canton.queryContracts(
+        TEMPLATES.MUSDTransferFactory,
+        (p: any) => true
+      );
+      if (cip56Factories.length > 0) {
+        this.cip56TransferFactoryCid = cip56Factories[0].contractId;
+        console.log(`[Relay] CIP-56 MUSDTransferFactory detected (cid: ${this.cip56TransferFactoryCid.slice(0, 20)}...). CIP-56 transfers enabled.`);
+      } else {
+        console.log("[Relay] CIP-56 MUSDTransferFactory not found. Using legacy CantonMUSD_Transfer flow.");
+      }
+    } catch {
+      console.log("[Relay] CIP-56 factory detection skipped (query failed). Using legacy flow.");
+    }
+
     this.isRunning = true;
 
     // MEDIUM-02: Load persisted state from disk BEFORE chain scanning.
@@ -2366,10 +2385,23 @@ class RelayService {
         }
       }
 
+      // CIP-56: Also check CIP56MintedMUSD for duplicates when factory is deployed
+      if (this.cip56TransferFactoryCid && existingMusd.length === 0) {
+        try {
+          const cip56Existing = await this.canton.queryContracts(
+            TEMPLATES.CIP56MintedMUSD,
+            (payload: any) => payload.agreementUri === agreementUri
+          );
+          if (cip56Existing.length > 0) {
+            existingMusd = cip56Existing;
+          }
+        } catch { /* CIP56MintedMUSD duplicate check failed — proceed with create */ }
+      }
+
       const musdAlreadyExists = existingMusd.length > 0;
       if (musdAlreadyExists) {
         console.log(
-          `[Relay] CantonMUSD for bridge #${nonce} already exists ` +
+          `[Relay] mUSD for bridge #${nonce} already exists ` +
           `(${existingMusd[0].contractId.slice(0, 16)}...) — skipping duplicate create`
         );
       } else {
@@ -2379,7 +2411,111 @@ class RelayService {
             `continuing create because agreementUri differs`
           );
         }
-        // FIX: Create CantonMUSD with operator as BOTH issuer AND owner.
+        // ===== CIP-56 DUAL-PATH =====
+        // When MUSDTransferFactory is deployed, mint CIP56MintedMUSD and use
+        // CIP-56 TransferFactory_Transfer instead of legacy CantonMUSD_Transfer.
+        // Falls back to legacy path on any CIP-56 error.
+        let mintAndTransferDone = false;
+        if (this.cip56TransferFactoryCid) {
+          try {
+            const cip56Payload = {
+              issuer: this.config.cantonParty,
+              owner: this.config.cantonParty,
+              amount: amountStr,
+              blacklisted: false,
+              agreementHash,
+              agreementUri,
+              observers: [] as string[],
+            };
+            const cip56CreateResult = await this.canton.createContract(
+              TEMPLATES.CIP56MintedMUSD,
+              cip56Payload
+            );
+            console.log(`[Relay] Created CIP56MintedMUSD (operator-owned) for bridge-in #${nonce}: ${amountStr} mUSD`);
+
+            if (userParty !== this.config.cantonParty) {
+              let holdingCid = this.extractCreatedContractId(cip56CreateResult, "CIP56MintedMUSD");
+              if (!holdingCid) {
+                const cip56Created = await this.canton.queryContracts(
+                  TEMPLATES.CIP56MintedMUSD,
+                  (p: any) => p.owner === this.config.cantonParty && p.agreementUri === agreementUri
+                ).catch(() => []);
+                if (cip56Created.length > 0) {
+                  holdingCid = cip56Created[0].contractId;
+                }
+              }
+
+              if (holdingCid) {
+                const now = new Date().toISOString();
+                const executeBefore = new Date(Date.now() + 3600_000).toISOString();
+                const transferResult = await this.canton.exerciseChoice(
+                  TEMPLATES.MUSDTransferFactory,
+                  this.cip56TransferFactoryCid!,
+                  "TransferFactory_Transfer",
+                  {
+                    expectedAdmin: this.config.cantonParty,
+                    transfer: {
+                      sender: this.config.cantonParty,
+                      receiver: userParty,
+                      amount: amountStr,
+                      instrumentId: { admin: this.config.cantonParty, id: "mUSD" },
+                      requestedAt: now,
+                      executeBefore,
+                      inputHoldingCids: [holdingCid],
+                      meta: { values: [] },
+                    },
+                    extraArgs: {
+                      choiceContext: { values: [] },
+                      meta: { values: [] },
+                    },
+                  }
+                );
+                console.log(`[Relay] ✅ CIP-56 TransferFactory_Transfer created for bridge #${nonce} → ${userParty.slice(0, 30)}...`);
+
+                // Auto-accept the CIP-56 TransferInstruction
+                if (this.config.autoAcceptMusdTransferProposals) {
+                  try {
+                    const instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+                    if (instrCid) {
+                      await this.canton.exerciseChoice(
+                        TEMPLATES.MUSDTransferInstruction,
+                        instrCid,
+                        "TransferInstruction_Accept",
+                        {
+                          extraArgs: {
+                            choiceContext: { values: [] },
+                            meta: { values: [] },
+                          },
+                        },
+                        [userParty]
+                      );
+                      console.log(`[Relay] ✅ CIP-56 transfer accepted for bridge #${nonce}; mUSD delivered to user`);
+                    } else {
+                      console.warn(`[Relay] Could not resolve CIP-56 TransferInstruction CID for bridge #${nonce}; user must accept via wallet`);
+                    }
+                  } catch (acceptErr: any) {
+                    console.warn(`[Relay] CIP-56 auto-accept failed for bridge #${nonce}: ${acceptErr.message?.slice(0, 120)}`);
+                  }
+                }
+              } else {
+                console.warn(`[Relay] Could not find CIP56MintedMUSD CID for bridge #${nonce}; falling back to legacy`);
+                throw new Error("CIP56MintedMUSD CID not found");
+              }
+            } else {
+              console.log(`[Relay] ✅ CIP56MintedMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
+            }
+            mintAndTransferDone = true;
+          } catch (cip56Err: any) {
+            if (!mintAndTransferDone) {
+              console.warn(
+                `[Relay] CIP-56 mint/transfer failed for bridge #${nonce}, falling back to legacy: ${(cip56Err as Error).message?.slice(0, 120)}`
+              );
+            }
+          }
+        }
+
+        if (!mintAndTransferDone) {
+        // LEGACY PATH: Create CantonMUSD with operator as BOTH issuer AND owner.
         // CantonMUSD template requires `signatory issuer, owner` — if the user party
         // is not known on this Canton participant, creation fails with UNKNOWN_INFORMEES.
         // Instead: operator mints (both signatory slots satisfied), then transfers to user.
@@ -2490,6 +2626,7 @@ class RelayService {
         } else {
           console.log(`[Relay] ✅ CantonMUSD for bridge-in #${nonce}: ${amountStr} mUSD → operator (user = operator)`);
         }
+        } // end if (!mintAndTransferDone) — legacy path
       }
 
       // Exercise BridgeIn_Complete properly: create an AttestationRequest on Canton,
@@ -2814,7 +2951,103 @@ class RelayService {
     if (recoveredCount === 0) {
       orphanRecoveryTotal.labels("skipped").inc();
     } else {
-      console.log(`[Relay] Orphan recovery transferred ${recoveredCount} contract(s) this cycle`);
+      console.log(`[Relay] Orphan recovery transferred ${recoveredCount} legacy contract(s) this cycle`);
+    }
+
+    // ===== CIP-56 Orphan Recovery =====
+    // Scan for operator-owned CIP56MintedMUSD that failed delivery (same pattern as legacy).
+    // Only runs when CIP-56 factory is deployed.
+    if (this.cip56TransferFactoryCid) {
+      let cip56Orphans: ActiveContract[] = [];
+      try {
+        const operatorCip56 = await this.canton.queryContracts(
+          TEMPLATES.CIP56MintedMUSD,
+          (p: any) => p.owner === this.config.cantonParty && p.issuer === this.config.cantonParty
+        );
+        cip56Orphans = operatorCip56.filter((c: any) => {
+          const uri = c.payload?.agreementUri;
+          return typeof uri === "string" && uri.startsWith("ethereum:bridge-in:");
+        });
+      } catch {
+        // CIP56MintedMUSD query failed — skip CIP-56 orphan recovery this cycle
+      }
+
+      let cip56Recovered = 0;
+      for (const orphan of cip56Orphans) {
+        const uri = String(orphan.payload?.agreementUri || "");
+        const nonceMatch = uri.match(/:nonce:(\d+)(?::recipient:.*)?$/);
+        if (!nonceMatch) continue;
+
+        const orphanNonce = Number(nonceMatch[1]);
+        let orphanUser = nonceToUser.get(orphanNonce);
+
+        if (!orphanUser) {
+          const recipientMatch = uri.match(/:recipient:(.+)$/);
+          if (recipientMatch && recipientMatch[1]) {
+            let decoded = recipientMatch[1];
+            try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
+            orphanUser = resolveRecipientParty(decoded, this.config.recipientPartyAliases);
+          }
+        }
+
+        if (!orphanUser || orphanUser === this.config.cantonParty) continue;
+
+        try {
+          const now = new Date().toISOString();
+          const executeBefore = new Date(Date.now() + 3600_000).toISOString();
+          const transferResult = await this.canton.exerciseChoice(
+            TEMPLATES.MUSDTransferFactory,
+            this.cip56TransferFactoryCid!,
+            "TransferFactory_Transfer",
+            {
+              expectedAdmin: this.config.cantonParty,
+              transfer: {
+                sender: this.config.cantonParty,
+                receiver: orphanUser,
+                amount: String(orphan.payload?.amount || "0"),
+                instrumentId: { admin: this.config.cantonParty, id: "mUSD" },
+                requestedAt: now,
+                executeBefore,
+                inputHoldingCids: [orphan.contractId],
+                meta: { values: [] },
+              },
+              extraArgs: {
+                choiceContext: { values: [] },
+                meta: { values: [] },
+              },
+            }
+          );
+
+          if (this.config.autoAcceptMusdTransferProposals) {
+            const instrCid = this.extractCreatedContractId(transferResult, "MUSDTransferInstruction");
+            if (instrCid) {
+              await this.canton.exerciseChoice(
+                TEMPLATES.MUSDTransferInstruction,
+                instrCid,
+                "TransferInstruction_Accept",
+                {
+                  extraArgs: {
+                    choiceContext: { values: [] },
+                    meta: { values: [] },
+                  },
+                },
+                [orphanUser]
+              );
+            }
+          }
+
+          cip56Recovered++;
+          orphanRecoveryTotal.labels("success").inc();
+          console.log(`[Relay] CIP-56 orphan recovery: bridge #${orphanNonce} → ${orphanUser.slice(0, 36)}...`);
+        } catch (error: any) {
+          orphanRecoveryTotal.labels("error").inc();
+          console.warn(`[Relay] CIP-56 orphan recovery failed for nonce #${orphanNonce}: ${error?.message || error}`);
+        }
+      }
+
+      if (cip56Recovered > 0) {
+        console.log(`[Relay] CIP-56 orphan recovery transferred ${cip56Recovered} contract(s) this cycle`);
+      }
     }
   }
 
