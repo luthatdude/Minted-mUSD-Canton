@@ -310,7 +310,6 @@ interface AttestationRequest {
   aggregator: string;
   validatorGroup: string[];
   payload: AttestationPayload;
-  positionCids: string[];
   collectedSignatures: { map: [string, Record<string, never>][] };  // Set.Set Party — Canton JSON API v2 encoding
   // BRIDGE-C-01: ECDSA signatures stored alongside party set on DAML ledger.
   // Each entry is [Party, hex-encoded ECDSA signature].
@@ -1763,21 +1762,16 @@ class RelayService {
    * Processes up to MAX_BATCH_SIZE attestations per cycle, prioritizing by nonce.
    */
   private async pollForAttestations(): Promise<void> {
-    // Query both AttestationRequest (unsigned) and SignedAttestation (signed) contracts.
-    // After CRIT-01, Attestation_Sign consumes AttestationRequest and creates SignedAttestation.
-    // Only SignedAttestation can have enough signatures for Ethereum submission.
+    // Query SignedAttestation contracts (fixed f9481d29 package: Attestation_Sign
+    // returns ContractId SignedAttestation). For outbound bridging, we need attestations
+    // that have accumulated sufficient signatures.
     let attestations: ActiveContract<AttestationRequest>[];
 
     try {
-      const unsigned = await this.canton.queryContracts<AttestationRequest>(
-        TEMPLATES.AttestationRequest,
-        (payload) => payload.aggregator === this.config.cantonParty
-      );
-      const signed = await this.canton.queryContracts<AttestationRequest>(
+      attestations = await this.canton.queryContracts<AttestationRequest>(
         TEMPLATES.SignedAttestation,
         (payload) => payload.aggregator === this.config.cantonParty
       );
-      attestations = [...unsigned, ...signed];
     } catch (error: any) {
       console.error(`[Relay] Failed to query attestations: ${error}`);
       throw error;
@@ -2738,7 +2732,6 @@ class RelayService {
                   aggregator: this.config.cantonParty,
                   validatorGroup: req.payload.validators,
                   payload: attestationPayload,
-                  positionCids: [],
                   collectedSignatures: { map: [] },    // CRIT-01: empty Set.Set Party
                   ecdsaSignatures: [],                  // CRIT-01: empty
                   requiredSignatures: Number(req.payload.requiredSignatures) || 1,
@@ -2763,9 +2756,11 @@ class RelayService {
               if (!attestCid) {
                 console.warn(`[Relay] Could not find AttestationRequest CID for BridgeIn_Complete #${nonce}`);
               } else {
-                // Step 2: Sign via ValidatorSelfAttestation + Attestation_Sign per validator
-                // Placeholder ECDSA sig (bridge-in doesn't verify ECDSA on-chain; must be >= 130 chars)
-                const dummyEcdsaSig = "0x" + "00".repeat(65);
+                // Step 2: Sign via ValidatorSelfAttestation + Attestation_Sign per validator.
+                // Fixed f9481d29 package: Attestation_Sign returns ContractId SignedAttestation.
+                // First validator uses Attestation_Sign on AttestationRequest.
+                // Subsequent validators use SignedAttestation_AddSignature on SignedAttestation.
+                const dummyEcdsaSig = "0x" + "00".repeat(65); // >= 130 hex chars
                 const validators: string[] = req.payload.validators;
                 let signedAttestCid: string | null = null;
 
@@ -2797,8 +2792,8 @@ class RelayService {
                     break;
                   }
 
-                  // b) Exercise Attestation_Sign (first) or SignedAttestation_AddSignature (subsequent)
                   if (vi === 0) {
+                    // b) First validator: Exercise Attestation_Sign on AttestationRequest → SignedAttestation
                     const signResult = await this.canton.exerciseChoice(
                       TEMPLATES.AttestationRequest,
                       attestCid,
@@ -2811,6 +2806,7 @@ class RelayService {
                     );
                     signedAttestCid = this.extractCreatedContractId(signResult, "SignedAttestation");
                     if (!signedAttestCid) {
+                      // Fallback: query for SignedAttestation by attestationId
                       const signedContracts = await this.canton.queryContracts(
                         TEMPLATES.SignedAttestation,
                         (p: any) => p.payload?.attestationId === attestationPayload.attestationId
@@ -2818,7 +2814,11 @@ class RelayService {
                       if (signedContracts.length > 0) signedAttestCid = signedContracts[signedContracts.length - 1].contractId;
                     }
                   } else {
-                    if (!signedAttestCid) break;
+                    // c) Subsequent validators: Exercise SignedAttestation_AddSignature → new SignedAttestation
+                    if (!signedAttestCid) {
+                      console.warn(`[Relay] No SignedAttestation CID from prior validator; cannot add signature for validator ${vi + 1}`);
+                      break;
+                    }
                     const addResult = await this.canton.exerciseChoice(
                       TEMPLATES.SignedAttestation,
                       signedAttestCid,
@@ -2829,19 +2829,13 @@ class RelayService {
                         selfAttestationCid: selfAttestCid,
                       }
                     );
-                    signedAttestCid = this.extractCreatedContractId(addResult, "SignedAttestation");
-                    if (!signedAttestCid) {
-                      const signedContracts = await this.canton.queryContracts(
-                        TEMPLATES.SignedAttestation,
-                        (p: any) => p.payload?.attestationId === attestationPayload.attestationId
-                      ).catch(() => []);
-                      if (signedContracts.length > 0) signedAttestCid = signedContracts[signedContracts.length - 1].contractId;
-                    }
+                    const newCid = this.extractCreatedContractId(addResult, "SignedAttestation");
+                    if (newCid) signedAttestCid = newCid;
                   }
-                  console.log(`[Relay] Attestation_Sign: validator ${vi + 1}/${validators.length} signed for #${nonce}`);
+                  console.log(`[Relay] Attestation signed: validator ${vi + 1}/${validators.length} for #${nonce}`);
                 }
 
-                // Step 3: Exercise BridgeIn_Complete with SignedAttestation CID
+                // Step 3: Exercise BridgeIn_Complete with SignedAttestation CID.
                 if (signedAttestCid) {
                   const completeArgs = { attestationCid: signedAttestCid };
                   validateExerciseArgs("BridgeIn_Complete", completeArgs);
@@ -2851,9 +2845,9 @@ class RelayService {
                     "BridgeIn_Complete",
                     completeArgs
                   );
-                  console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with signed attestation ${signedAttestCid.slice(0, 16)}...`);
+                  console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with attestation ${signedAttestCid.slice(0, 16)}...`);
                 } else {
-                  console.warn(`[Relay] Could not obtain SignedAttestation CID for BridgeIn_Complete #${nonce}; request remains pending for retry`);
+                  console.warn(`[Relay] Attestation signing did not produce SignedAttestation CID for BridgeIn_Complete #${nonce}; request remains pending for retry`);
                 }
               }
             } catch (attestErr: any) {
@@ -4475,8 +4469,7 @@ class RelayService {
         } catch { /* non-blocking */ }
 
         // BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive.
-        // After CRIT-01, signed attestations are SignedAttestation contracts
-        // (Attestation_Complete is a choice on SignedAttestation, not AttestationRequest).
+        // Fixed f9481d29 package: Attestation_Complete is a choice on SignedAttestation.
         try {
           await this.canton.exerciseChoice(
             TEMPLATES.SignedAttestation,

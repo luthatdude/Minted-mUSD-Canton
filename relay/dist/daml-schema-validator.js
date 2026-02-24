@@ -223,9 +223,6 @@ function validateAttestationRequest(payload) {
     if (!payload.payload || typeof payload.payload !== "object") {
         throw new DamlValidationError(T, "payload", "expected attestation payload object");
     }
-    if (!Array.isArray(payload.positionCids)) {
-        throw new DamlValidationError(T, "positionCids", "expected [ContractId] array");
-    }
     // collectedSignatures is Set.Set Party — Canton JSON API v2 encodes as {"map": [...]}
     assertSetParty(payload.collectedSignatures, T, "collectedSignatures");
     if (payload.ecdsaSignatures !== undefined && !Array.isArray(payload.ecdsaSignatures)) {
