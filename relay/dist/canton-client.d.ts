@@ -131,6 +131,7 @@ export declare const TEMPLATES: {
     readonly AttestationRequest: TemplateId;
     readonly SignedAttestation: TemplateId;
     readonly ValidatorSignature: TemplateId;
+    readonly ValidatorSelfAttestation: TemplateId;
     readonly BridgeService: TemplateId;
     readonly BridgeOutRequest: TemplateId;
     readonly BridgeInRequest: TemplateId;

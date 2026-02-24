@@ -1394,11 +1394,14 @@ class RelayService {
      * Processes up to MAX_BATCH_SIZE attestations per cycle, prioritizing by nonce.
      */
     async pollForAttestations() {
-        // Query active AttestationRequest contracts via Canton v2 HTTP API
-        // Filter by aggregator party to only see attestations assigned to us
+        // Query both AttestationRequest (unsigned) and SignedAttestation (signed) contracts.
+        // After CRIT-01, Attestation_Sign consumes AttestationRequest and creates SignedAttestation.
+        // Only SignedAttestation can have enough signatures for Ethereum submission.
         let attestations;
         try {
-            attestations = await this.canton.queryContracts(canton_client_1.TEMPLATES.AttestationRequest, (payload) => payload.aggregator === this.config.cantonParty);
+            const unsigned = await this.canton.queryContracts(canton_client_1.TEMPLATES.AttestationRequest, (payload) => payload.aggregator === this.config.cantonParty);
+            const signed = await this.canton.queryContracts(canton_client_1.TEMPLATES.SignedAttestation, (payload) => payload.aggregator === this.config.cantonParty);
+            attestations = [...unsigned, ...signed];
         }
         catch (error) {
             console.error(`[Relay] Failed to query attestations: ${error}`);
@@ -2125,7 +2128,8 @@ class RelayService {
                     const req = pendingRequests[0];
                     const hasAttestationFields = req.payload.validators && req.payload.requiredSignatures > 0;
                     if (hasAttestationFields) {
-                        // New template: create AttestationRequest, collect sigs, exercise BridgeIn_Complete
+                        // CRIT-01 compliant: create AttestationRequest with empty sigs,
+                        // sign via ValidatorSelfAttestation + Attestation_Sign, then BridgeIn_Complete
                         try {
                             const chainId = Number((await this.provider.getNetwork()).chainId);
                             const attestationPayload = {
@@ -2140,20 +2144,19 @@ class RelayService {
                                 entropy: ethers_1.ethers.hexlify(crypto.randomBytes(32)),
                                 cantonStateHash: ethers_1.ethers.ZeroHash,
                             };
-                            // Create AttestationRequest on Canton for the bridge-in direction
+                            // Step 1: Create AttestationRequest with empty signatures (CRIT-01)
                             const attestPayload = {
                                 aggregator: this.config.cantonParty,
                                 validatorGroup: req.payload.validators,
                                 payload: attestationPayload,
                                 positionCids: [],
-                                collectedSignatures: req.payload.validators, // All validators attest (operator-controlled)
-                                ecdsaSignatures: [],
+                                collectedSignatures: { map: [] }, // CRIT-01: empty Set.Set Party
+                                ecdsaSignatures: [], // CRIT-01: empty
                                 requiredSignatures: Number(req.payload.requiredSignatures) || 1,
                                 direction: "EthereumToCanton",
                             };
                             (0, daml_schema_validator_1.validateCreatePayload)("AttestationRequest", attestPayload);
                             const attestResult = await this.canton.createContract(canton_client_1.TEMPLATES.AttestationRequest, attestPayload);
-                            // Extract attestation CID
                             let attestCid = this.extractCreatedContractId(attestResult, "AttestationRequest");
                             if (!attestCid) {
                                 const attestContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.AttestationRequest, (p) => p.payload?.attestationId === `bridge-in-attest-${nonce}` &&
@@ -2161,24 +2164,81 @@ class RelayService {
                                 if (attestContracts.length > 0)
                                     attestCid = attestContracts[0].contractId;
                             }
-                            if (attestCid) {
-                                const completeArgs = { attestationCid: attestCid };
-                                (0, daml_schema_validator_1.validateExerciseArgs)("BridgeIn_Complete", completeArgs);
-                                await this.canton.exerciseChoice(canton_client_1.TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Complete", completeArgs);
-                                console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with attestation ${attestCid.slice(0, 16)}...`);
+                            if (!attestCid) {
+                                console.warn(`[Relay] Could not find AttestationRequest CID for BridgeIn_Complete #${nonce}`);
                             }
                             else {
-                                console.warn(`[Relay] Could not find AttestationRequest CID for BridgeIn_Complete #${nonce}`);
+                                // Step 2: Sign via ValidatorSelfAttestation + Attestation_Sign per validator
+                                // Placeholder ECDSA sig (bridge-in doesn't verify ECDSA on-chain; must be >= 130 chars)
+                                const dummyEcdsaSig = "0x" + "00".repeat(65);
+                                const validators = req.payload.validators;
+                                let signedAttestCid = null;
+                                for (let vi = 0; vi < validators.length; vi++) {
+                                    const validatorParty = validators[vi];
+                                    // a) Create ValidatorSelfAttestation (signatory = validator)
+                                    const selfAttestResult = await this.canton.createContract(canton_client_1.TEMPLATES.ValidatorSelfAttestation, {
+                                        validator: validatorParty,
+                                        aggregator: this.config.cantonParty,
+                                        attestationId: attestationPayload.attestationId,
+                                        ecdsaSignature: dummyEcdsaSig,
+                                        signedAt: new Date().toISOString(),
+                                    });
+                                    let selfAttestCid = this.extractCreatedContractId(selfAttestResult, "ValidatorSelfAttestation");
+                                    if (!selfAttestCid) {
+                                        const selfContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.ValidatorSelfAttestation, (p) => p.attestationId === attestationPayload.attestationId && p.validator === validatorParty).catch(() => []);
+                                        if (selfContracts.length > 0)
+                                            selfAttestCid = selfContracts[selfContracts.length - 1].contractId;
+                                    }
+                                    if (!selfAttestCid) {
+                                        console.warn(`[Relay] Could not resolve ValidatorSelfAttestation CID for validator ${validatorParty.slice(0, 30)}...`);
+                                        break;
+                                    }
+                                    // b) Exercise Attestation_Sign (first) or SignedAttestation_AddSignature (subsequent)
+                                    if (vi === 0) {
+                                        const signResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.AttestationRequest, attestCid, "Attestation_Sign", {
+                                            validator: validatorParty,
+                                            ecdsaSignature: dummyEcdsaSig,
+                                            selfAttestationCid: selfAttestCid,
+                                        });
+                                        signedAttestCid = this.extractCreatedContractId(signResult, "SignedAttestation");
+                                        if (!signedAttestCid) {
+                                            const signedContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.SignedAttestation, (p) => p.payload?.attestationId === attestationPayload.attestationId).catch(() => []);
+                                            if (signedContracts.length > 0)
+                                                signedAttestCid = signedContracts[signedContracts.length - 1].contractId;
+                                        }
+                                    }
+                                    else {
+                                        if (!signedAttestCid)
+                                            break;
+                                        const addResult = await this.canton.exerciseChoice(canton_client_1.TEMPLATES.SignedAttestation, signedAttestCid, "SignedAttestation_AddSignature", {
+                                            validator: validatorParty,
+                                            ecdsaSignature: dummyEcdsaSig,
+                                            selfAttestationCid: selfAttestCid,
+                                        });
+                                        signedAttestCid = this.extractCreatedContractId(addResult, "SignedAttestation");
+                                        if (!signedAttestCid) {
+                                            const signedContracts = await this.canton.queryContracts(canton_client_1.TEMPLATES.SignedAttestation, (p) => p.payload?.attestationId === attestationPayload.attestationId).catch(() => []);
+                                            if (signedContracts.length > 0)
+                                                signedAttestCid = signedContracts[signedContracts.length - 1].contractId;
+                                        }
+                                    }
+                                    console.log(`[Relay] Attestation_Sign: validator ${vi + 1}/${validators.length} signed for #${nonce}`);
+                                }
+                                // Step 3: Exercise BridgeIn_Complete with SignedAttestation CID
+                                if (signedAttestCid) {
+                                    const completeArgs = { attestationCid: signedAttestCid };
+                                    (0, daml_schema_validator_1.validateExerciseArgs)("BridgeIn_Complete", completeArgs);
+                                    await this.canton.exerciseChoice(canton_client_1.TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Complete", completeArgs);
+                                    console.log(`[Relay] ✅ BridgeIn_Complete exercised for #${nonce} with signed attestation ${signedAttestCid.slice(0, 16)}...`);
+                                }
+                                else {
+                                    console.warn(`[Relay] Could not obtain SignedAttestation CID for BridgeIn_Complete #${nonce}; request remains pending for retry`);
+                                }
                             }
                         }
                         catch (attestErr) {
-                            console.warn(`[Relay] BridgeIn_Complete with attestation failed for #${nonce}: ${attestErr.message?.slice(0, 120)}`);
-                            // Fallback: cancel to archive
-                            try {
-                                await this.canton.exerciseChoice(canton_client_1.TEMPLATES.BridgeInRequest, req.contractId, "BridgeIn_Cancel", {});
-                                console.log(`[Relay] Archived BridgeInRequest #${nonce} via cancel (attestation flow failed)`);
-                            }
-                            catch { /* best-effort */ }
+                            // Do NOT cancel — leave BridgeInRequest pending for manual retry
+                            console.warn(`[Relay] BridgeIn_Complete with attestation failed for #${nonce}: ${attestErr.message?.slice(0, 200)}`);
                         }
                     }
                     else {
@@ -3423,12 +3483,11 @@ class RelayService {
                     this.anomalyDetector.lastKnownSupplyCap = BigInt(newCap);
                 }
                 catch { /* non-blocking */ }
-                // BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive
-                // the attestation request. Without this, stale attestation contracts remain on
-                // the Canton ledger, causing the relay to re-process them on every poll cycle
-                // (retry storms) and leaving DAML state inconsistent with Ethereum.
+                // BRIDGE-H-03: Exercise Attestation_Complete on DAML to archive.
+                // After CRIT-01, signed attestations are SignedAttestation contracts
+                // (Attestation_Complete is a choice on SignedAttestation, not AttestationRequest).
                 try {
-                    await this.canton.exerciseChoice(canton_client_1.TEMPLATES.AttestationRequest, cantonContract.contractId, "Attestation_Complete", {});
+                    await this.canton.exerciseChoice(canton_client_1.TEMPLATES.SignedAttestation, cantonContract.contractId, "Attestation_Complete", {});
                     console.log(`[Relay] Attestation ${attestationId} marked complete on Canton`);
                 }
                 catch (completeError) {

@@ -403,6 +403,7 @@ export const TEMPLATES = {
   AttestationRequest: { moduleName: "Minted.Protocol.V3", entityName: "AttestationRequest" } as TemplateId,
   SignedAttestation:  { moduleName: "Minted.Protocol.V3", entityName: "SignedAttestation" } as TemplateId,
   ValidatorSignature: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSignature" } as TemplateId,
+  ValidatorSelfAttestation: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSelfAttestation" } as TemplateId,
   BridgeService:      { moduleName: "Minted.Protocol.V3", entityName: "BridgeService" } as TemplateId,
   BridgeOutRequest:   { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" } as TemplateId,
   BridgeInRequest:    { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" } as TemplateId,

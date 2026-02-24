@@ -313,6 +313,7 @@ exports.TEMPLATES = {
     AttestationRequest: { moduleName: "Minted.Protocol.V3", entityName: "AttestationRequest" },
     SignedAttestation: { moduleName: "Minted.Protocol.V3", entityName: "SignedAttestation" },
     ValidatorSignature: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSignature" },
+    ValidatorSelfAttestation: { moduleName: "Minted.Protocol.V3", entityName: "ValidatorSelfAttestation" },
     BridgeService: { moduleName: "Minted.Protocol.V3", entityName: "BridgeService" },
     BridgeOutRequest: { moduleName: "Minted.Protocol.V3", entityName: "BridgeOutRequest" },
     BridgeInRequest: { moduleName: "Minted.Protocol.V3", entityName: "BridgeInRequest" },

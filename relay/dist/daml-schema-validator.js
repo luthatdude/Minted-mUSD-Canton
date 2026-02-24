@@ -114,6 +114,25 @@ function assertPartyList(value, template, field) {
         }
     }
 }
+/**
+ * Validate Set.Set Party encoding for Canton JSON API v2.
+ * Canton encodes Set.Set Party as {"map": [["party", {}], ...]} (empty: {"map": []}).
+ */
+function assertSetParty(value, template, field) {
+    if (value === null || value === undefined || typeof value !== "object") {
+        throw new DamlValidationError(template, field, `expected Set.Set Party ({"map": [...]}), got ${typeof value}`);
+    }
+    const obj = value;
+    if (!Array.isArray(obj.map)) {
+        throw new DamlValidationError(template, field, `expected Set.Set Party with "map" key, got ${JSON.stringify(Object.keys(obj))}`);
+    }
+    for (let i = 0; i < obj.map.length; i++) {
+        const entry = obj.map[i];
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+            throw new DamlValidationError(template, `${field}.map[${i}]`, `expected [Party, {}] tuple`);
+        }
+    }
+}
 function assertNonEmptyPartyList(value, template, field) {
     assertPartyList(value, template, field);
     if (value.length === 0) {
@@ -207,7 +226,8 @@ function validateAttestationRequest(payload) {
     if (!Array.isArray(payload.positionCids)) {
         throw new DamlValidationError(T, "positionCids", "expected [ContractId] array");
     }
-    assertPartyList(payload.collectedSignatures, T, "collectedSignatures");
+    // collectedSignatures is Set.Set Party — Canton JSON API v2 encodes as {"map": [...]}
+    assertSetParty(payload.collectedSignatures, T, "collectedSignatures");
     if (payload.ecdsaSignatures !== undefined && !Array.isArray(payload.ecdsaSignatures)) {
         throw new DamlValidationError(T, "ecdsaSignatures", "expected [Text] array");
     }
